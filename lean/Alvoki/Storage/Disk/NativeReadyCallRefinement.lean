@@ -19,9 +19,9 @@ abbrev NativeReadyWriteCalls.StorageAt (writes : NativeReadyWriteCalls opened)
   position.WriteStorageEntry view (writes.cacheAtPosition position)
     (storage position.reached) (visible position.reached)
 
-/-- The phase-cell update that registers a snapshot keeps these physical
-observations. The installed table and its pin registry may change. -/
-structure NativeReadyWriteCalls.SnapshotFrame (writes : NativeReadyWriteCalls opened)
+/-- An in-memory table update or metadata lookup can advance the heap
+while preserving the files and references used by the next write. -/
+structure NativeReadyWriteCalls.StorageFrame (writes : NativeReadyWriteCalls opened)
     (view : OpenCloseHeapView heap image) (storage : heap → CheckpointStorageObservation)
     (visible : heap → Nat → ByteArray) (start : NativeOpenedPosition opened) (reached : heap) : Prop where
   census : view.descriptors reached = view.descriptors start.reached
@@ -32,12 +32,12 @@ structure NativeReadyWriteCalls.SnapshotFrame (writes : NativeReadyWriteCalls op
     (start.current.ready.state.session.directory.file (.walSegment start.current.ready.state.writer.wal.active.first)) =
       some inode → visible reached inode = visible start.reached inode
 
-private theorem NativeReadyWriteCalls.keepsStorageOnSnapshot (writes : NativeReadyWriteCalls opened)
+private theorem NativeReadyWriteCalls.keepsStorage (writes : NativeReadyWriteCalls opened)
     (view : OpenCloseHeapView heap image) (storage : heap → CheckpointStorageObservation)
     (visible : heap → Nat → ByteArray) {start next : NativeOpenedPosition opened} {table : PackedTable}
     (initial : writes.StorageAt view storage visible start)
     (updated : next.current.ready.state = start.current.ready.state.withTable table)
-    (frame : writes.SnapshotFrame view storage visible start next.reached) :
+    (frame : writes.StorageFrame view storage visible start next.reached) :
     writes.StorageAt view storage visible next := by
   have retained := initial.physical.frame frame.files
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
@@ -67,14 +67,65 @@ private theorem NativeReadyWriteCalls.keepsStorageOnSnapshot (writes : NativeRea
       exact (frame.files.visible _ (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr (.inl rfl))))).1.trans
         (initial.root original previous)
 
-/-- The ready continuation currently covers acknowledged nonempty
-writes, successful latest acquisitions and local reads. Admission still
-retains empty writes and ordinary errors for later refinements. -/
-def NativeReturnedCall.ReadyContinuation (call : NativeReturnedCall opened) : Prop :=
+private theorem NativeReadyState.withInstalledTable {state : NativeReadyState}
+    (valid : state.Valid) : state.withTable state.writer.installed.table = state := by
+  cases state with
+  | mk session writer census cache owner directorySlot =>
+    cases writer
+    cases session
+    simp [NativeReadyState.withTable, SegmentedWriterState.withTable]
+    exact valid.phase.symm
+
+/-- The no-follow check uses exactly one observed metadata lookup.
+Its pure decision uses that response, and both outcomes retain that
+lookup's returned heap. -/
+private theorem NativeReadyWriteCalls.rawGuardResult (writes : NativeReadyWriteCalls opened)
+    (start : NativeOpenedPosition opened) :
+    let installed := start.current.ready.state.writer.installed
+    let lookup := nativeWriteLookupAt writes.lookup start.reached
+    let reached := (lookup (opened.directory.file (.walSegment installed.activeFirst))).2
+    checkActiveSegmentWith opened.directory installed writes.lookup start.reached =
+      match (checkActiveSegmentWith opened.directory installed (fun path => (lookup path).1) :
+        Except IO.Error Unit) with
+      | .ok value => .ok value reached
+      | .error cause => .error cause reached := by
+  intro installed lookup reached
+  rw [checkActiveSegmentWith_rawResult]
+  cases observed : writes.lookup (opened.directory.file (.walSegment installed.activeFirst)) start.reached with
+  | error cause heap =>
+    simp [checkActiveSegmentWith, lookup, reached, nativeWriteLookupAt, observed, Bind.bind, Except.bind]
+  | ok metadata heap =>
+    simp [checkActiveSegmentWith, lookup, reached, nativeWriteLookupAt, observed, Bind.bind, Except.bind]
+    split <;> simp_all
+
+/-- Successful writes and local snapshot calls continue the ready proof.
+For a rejected write whose nonempty preparation fits and succeeds, the
+literal guard must itself reject at the call's reached heap. A setter
+failure with the same error tag cannot meet that condition. Admission
+remains the independent raw call relation. -/
+def NativeReturnedCall.ReadyContinuation (call : NativeReturnedCall opened)
+    (writes : NativeReadyWriteCalls opened) (entry reached : heap) : Prop :=
   match call with
-  | .write request (.ok _) => request.rows ≠ []
-  | .acquire (.ok _) | .read _ _ (.ok _) => True
+  | .write _ (.ok _) | .acquire (.ok _) | .read _ _ (.ok _) => True
+  | .write request (.error (.rejected cause)) =>
+    ∀ {installed : Installed}, opened.contents entry opened.phase = some (.ready installed) →
+      request.rows ≠ [] →
+      installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size →
+      ∀ {batch table}, prepareBatch installed.table request.rows = some (batch, table) →
+        checkActiveSegmentWith opened.directory installed writes.lookup entry = .error cause reached
   | _ => False
+
+/-- Authorize only occurrences following a literal prefix of this same
+sequence. Two instances of the same request and diagnostic can reach
+different guards or setters. -/
+def NativeReturnedCalls.ReadyFrom (writes : NativeReadyWriteCalls opened) (issuer : opened.LatestIssuer)
+    (entry : heap) (known : List DiskSnapshotPin) (calls : List (NativeReturnedCall opened)) : Prop :=
+  ∀ {prior : List (NativeReturnedCall opened)} {call : NativeReturnedCall opened}
+    {later : List (NativeReturnedCall opened)} {before after : heap},
+    calls = prior ++ call :: later →
+    NativeReturnedCalls writes issuer entry known prior before →
+    call.Reaches writes issuer (prior.foldl (fun pins call => call.pinsAfter pins) known) before after →
+    call.ReadyContinuation writes before after
 
 /-- These laws concern the reached native primitives. The raw call
 chronology supplies the actual request, response and endpoint. -/
@@ -94,7 +145,13 @@ structure NativeReadyWriteCalls.ReturnEffects (writes : NativeReadyWriteCalls op
   acquire : ∀ (start : NativeOpenedPosition opened) {table : PackedTable} {reached : heap},
     opened.set opened.phase (.ready { start.current.ready.state.writer.installed with table })
       start.reached = .ok () reached →
-    writes.SnapshotFrame view storage (fun atHeap => (inodes atHeap).visible) start reached
+    writes.StorageFrame view storage (fun atHeap => (inodes atHeap).visible) start reached
+  guardLookup : ∀ (start : NativeOpenedPosition opened) {cause : IO.Error} {reached : heap},
+    reached ≠ start.reached →
+    checkActiveSegmentWith opened.directory start.current.ready.state.writer.installed writes.lookup start.reached =
+      .error cause reached →
+    opened.contents reached opened.phase = opened.contents start.reached opened.phase ∧
+    writes.StorageFrame view storage (fun atHeap => (inodes atHeap).visible) start reached
   read : ∀ (start : NativeOpenedPosition opened) {α : Type} (pin : NativeOpenedPin opened)
       (request : SnapshotReadRequest α) {response reached},
     opened.readPinRaw pin request start.reached = .ok response reached →
@@ -106,11 +163,74 @@ inductive NativeReturnedCall.Records : NativeReturnedCall opened → NativeExecu
   | write (rows : batch.map (fun entry : WAL.Write => (entry.key, entry.value)) = request.rows)
       (sequence : batch.getLast?.map WAL.Write.sequence = some number) :
       Records (.write request (.ok number)) (.acknowledged request batch)
+  | preflight {state : NativeReadyState} (seen : NativeWritePreflightObservation state request) :
+      Records (.write request (seen.response.mapError DiskWriteError.rejected)) (.writePreflight request seen.response)
   | acquire (pin : NativeOpenedPin opened) :
       Records (.acquire (.ok pin.raw)) (.snapshotControl .acquire (.ok (session, pin.localPin)))
   | read (pin : NativeOpenedPin opened) :
       Records (.read pin request (.ok response))
         (.snapshotHandleRead session pin.localPin.handle request response recorded)
+
+private theorem NativeReadyWriteCalls.refinesQuietWrite (writes : NativeReadyWriteCalls opened)
+    (issuer : opened.LatestIssuer) (view : OpenCloseHeapView heap image)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
+    (buffered : heap → IO.FS.Handle → ByteArray)
+    (effects : writes.ReturnEffects view inodes runs storage inode buffered)
+    (start : NativeOpenedPosition opened) {request : WriteRequest} {result : Except DiskWriteError UInt64}
+    (seen : NativeWritePreflightObservation start.current.ready.state request)
+    (coherent : seen.lookup = fun path => (nativeWriteLookupAt writes.lookup start.reached path).1)
+    {known : List DiskSnapshotPin} {reached : heap}
+    (observed : (NativeReturnedCall.write request result).Reaches writes issuer known start.reached reached)
+    (initial : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) start) :
+    ∃ (next : NativeOpenedPosition opened) (event : NativeExecutionEvent),
+      next.reached = reached ∧ next.pins.map NativeOpenedPin.raw = start.pins.map NativeOpenedPin.raw ∧
+      writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) next ∧
+      (NativeReturnedCall.write (opened := opened) request result).Records event ∧ start.current.LedgerSuffix [event] next.current := by
+  let state := start.current.ready.state
+  have valid := start.current.ready.readPrefix.refines.1
+  have load := opened.phaseEffects.reads start.reached opened.phase state.session.phase start.stored
+  rw [valid.phase] at load
+  obtain ⟨quietHeap, _, preflight⟩ := request.runOnRawOpenPhase_preflight opened.directory writes.lookup
+    (writes.appender.run writes.cache.active) (writes.stager.run writes.cache.pending)
+    (writes.syncer.group opened.directory.path writes.cache.directory writes.cache.active writes.cache.pending)
+    writes.rename opened.phase opened.get opened.set valid seen load start.directory coherent
+  have exactResult : result = seen.response.mapError DiskWriteError.rejected := by
+    let atReturn : Except DiskWriteError UInt64 → EStateM.Result DiskWriteError heap UInt64
+      | .ok value => .ok value reached
+      | .error cause => .error cause reached
+    have same : seen.resultAt quietHeap = atReturn result := preflight.symm.trans (by
+      cases result <;> exact observed)
+    cases result <;> cases response : seen.response <;>
+      simp [atReturn, NativeWritePreflightObservation.resultAt, response, Except.mapError] at same ⊢
+    all_goals exact same.1.symm
+  subst result
+  let lookedUp := (nativeWriteLookupAt writes.lookup start.reached
+    (opened.directory.file (.walSegment state.writer.installed.activeFirst))).2
+  have lookupFrame (different : reached ≠ start.reached) (path : seen.ReturnHeap start.reached lookedUp reached) :
+      opened.contents reached opened.phase = opened.contents start.reached opened.phase ∧
+      writes.StorageFrame view storage (fun atHeap => (inodes atHeap).visible) start reached := by
+    rcases path with unchanged | ⟨cause, _, rejected, exactHeap⟩
+    · exact False.elim (different unchanged)
+    · rw [start.directory, coherent] at rejected
+      have actual : checkActiveSegmentWith opened.directory state.writer.installed writes.lookup start.reached =
+          .error cause reached := by
+        rw [writes.rawGuardResult start, rejected, exactHeap]
+      exact effects.guardLookup start different actual
+  obtain ⟨next, nextHeap, current, pins, ledger, path⟩ :=
+    start.preflightsReturnedWrite writes issuer known seen coherent observed
+      (fun different path => (lookupFrame different path).1)
+  have frame : writes.StorageFrame view storage (fun atHeap => (inodes atHeap).visible) start next.reached := by
+    rw [nextHeap]
+    by_cases same : reached = start.reached
+    · rw [same]
+      exact ⟨rfl, rfl, .refl _ _, fun _ _ => rfl⟩
+    · exact (lookupFrame same path).2
+  have updated : next.current.ready.state = state.withTable state.writer.installed.table :=
+    (congrArg (fun position : NativeExecutionPosition => position.ready.state) current).trans
+      (NativeReadyState.withInstalledTable valid).symm
+  exact ⟨next, .writePreflight request seen.response, nextHeap, congrArg (List.map NativeOpenedPin.raw) pins,
+    writes.keepsStorage view storage _ initial updated frame, .preflight seen, ledger⟩
 
 private theorem NativeReturnedCall.refinesReady
     (call : NativeReturnedCall opened) (writes : NativeReadyWriteCalls opened) (issuer : opened.LatestIssuer)
@@ -119,7 +239,7 @@ private theorem NativeReturnedCall.refinesReady
     (buffered : heap → IO.FS.Handle → ByteArray)
     (effects : writes.ReturnEffects view inodes runs storage inode buffered)
     (start : NativeOpenedPosition opened) {known : List DiskSnapshotPin} {reached : heap}
-    (observed : call.Reaches writes issuer known start.reached reached) (covered : call.ReadyContinuation)
+    (observed : call.Reaches writes issuer known start.reached reached) (covered : call.ReadyContinuation writes start.reached reached)
     (initial : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) start) :
     ∃ (next : NativeOpenedPosition opened) (event : NativeExecutionEvent),
       next.reached = reached ∧
@@ -128,47 +248,90 @@ private theorem NativeReturnedCall.refinesReady
       call.Records event ∧ start.current.LedgerSuffix [event] next.current := by
   cases call with
   | write request result =>
+    let state := start.current.ready.state
+    let lookup := fun path => (nativeWriteLookupAt writes.lookup start.reached path).1
     cases result with
-    | error => exact False.elim covered
+    | error failure =>
+      cases failure with
+      | commitUnknown => exact False.elim covered
+      | rejected cause =>
+        have quiet : ∃ seen : NativeWritePreflightObservation state request, seen.lookup = lookup := by
+          by_cases empty : request.rows = []
+          · exact ⟨⟨lookup, .ok state.writer.installed.table.committed, .empty empty⟩, rfl⟩
+          by_cases fits : state.writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size
+          · cases prepared : prepareBatch state.writer.installed.table request.rows with
+            | none => exact ⟨⟨lookup, _, .rejected (.sequence empty fits prepared)⟩, rfl⟩
+            | some ready =>
+              obtain ⟨batch, table⟩ := ready
+              have stored : opened.contents start.reached opened.phase = some (.ready state.writer.installed) :=
+                start.stored.trans (congrArg some start.current.ready.readPrefix.refines.1.phase)
+              have actual := covered stored empty fits prepared
+              rw [writes.rawGuardResult start] at actual
+              have pureGuard : (checkActiveSegmentWith state.session.directory state.writer.installed lookup :
+                  Except IO.Error Unit) = .error cause := by
+                rw [start.directory]
+                let decision := (checkActiveSegmentWith opened.directory state.writer.installed lookup :
+                  Except IO.Error Unit)
+                change decision = .error cause
+                change (match decision with
+                  | .ok value => .ok value _
+                  | .error diagnostic => .error diagnostic _) =
+                  EStateM.Result.error cause reached at actual
+                cases outcome : decision with
+                | ok value => rw [outcome] at actual; cases actual
+                | error diagnostic =>
+                  rw [outcome] at actual
+                  exact congrArg Except.error (EStateM.Result.error.inj actual).1
+              exact ⟨⟨lookup, .error cause, .rejected (.active empty fits prepared pureGuard)⟩, rfl⟩
+          · exact ⟨⟨lookup, _, .rejected (.byteCount empty (Nat.le_of_not_gt fits))⟩, rfl⟩
+        obtain ⟨seen, coherence⟩ := quiet
+        exact writes.refinesQuietWrite issuer view inodes runs storage inode buffered effects start
+          seen coherence observed initial
     | ok sequence =>
-      obtain ⟨files, sameStorage, callbacks⟩ := effects.write start request covered observed
-      let cache := writes.cacheAtPosition start
-      let dir := start.current.ready.state.session.directory
-      have raw : request.runOnRawOpenPhase dir writes.lookup (writes.appender.run cache.active)
-          (writes.stager.run cache.pending) (writes.syncer.group dir.path cache.directory cache.active cache.pending)
-          writes.rename opened.phase opened.get opened.set start.reached = .ok sequence reached := by
-        change request.runOnRawOpenPhase start.current.ready.state.session.directory writes.lookup
-          (writes.appender.run writes.cache.active) (writes.stager.run writes.cache.pending)
-          (writes.syncer.group start.current.ready.state.session.directory.path writes.cache.directory writes.cache.active
-            writes.cache.pending) writes.rename opened.phase opened.get opened.set start.reached = .ok sequence reached
-        rw [start.directory]
-        exact observed
-      have seen : start.ObservesPublishedWrite writes.appender writes.stager writes.syncer view cache inodes runs
-          storage inode buffered request writes.lookup writes.rename sequence reached :=
-        ⟨files, sameStorage, raw, callbacks⟩
-      obtain ⟨_, _, batch, table, next, _, prepared, committed, atHeap, pins, _, ledger, ready, _⟩ :=
-        start.acknowledgesObservedWrite writes.appender writes.stager writes.syncer view cache inodes runs
-          storage inode buffered request writes.lookup writes.rename covered initial seen
-      obtain ⟨length, replayed, rows, numbered⟩ := prepareBatch_spec prepared
-      have lastSequence : batch.getLast?.map WAL.Write.sequence = some sequence := by
-        rcases List.eq_nil_or_concat batch with empty | ⟨earlier, last, appended⟩
-        · exfalso
-          apply covered
-          apply List.length_eq_zero_iff.mp
-          simpa only [empty, List.length_nil] using length.symm
-        · subst batch
-          rw [List.concat_eq_append] at numbered replayed ⊢
-          obtain ⟨ordinal, _⟩ : last.sequence.toNat =
-              start.current.ready.state.writer.installed.table.committed.toNat + 1 + earlier.length ∧ True :=
-            ((ordinals_append_iff _ earlier [last]).mp numbered).2
-          have count := replay_committed_count _ replayed
-          simp only [List.length_append, List.length_cons, List.length_nil] at count
-          have number : last.sequence = sequence := UInt64.toNat_inj.mp (by
-            rw [committed]
-            omega)
-          simp [number]
-      exact ⟨next, .acknowledged request batch, atHeap, congrArg (List.map NativeOpenedPin.raw) pins, ready,
-        .write rows lastSequence, ledger⟩
+      by_cases empty : request.rows = []
+      · let seen : NativeWritePreflightObservation state request :=
+          ⟨lookup, .ok state.writer.installed.table.committed, .empty empty⟩
+        exact writes.refinesQuietWrite issuer view inodes runs storage inode buffered effects start
+          seen rfl observed initial
+      · have nonempty : request.rows ≠ [] := empty
+        obtain ⟨files, sameStorage, callbacks⟩ := effects.write start request nonempty observed
+        let cache := writes.cacheAtPosition start
+        let dir := start.current.ready.state.session.directory
+        have raw : request.runOnRawOpenPhase dir writes.lookup (writes.appender.run cache.active)
+            (writes.stager.run cache.pending) (writes.syncer.group dir.path cache.directory cache.active cache.pending)
+            writes.rename opened.phase opened.get opened.set start.reached = .ok sequence reached := by
+          change request.runOnRawOpenPhase start.current.ready.state.session.directory writes.lookup
+            (writes.appender.run writes.cache.active) (writes.stager.run writes.cache.pending)
+            (writes.syncer.group start.current.ready.state.session.directory.path writes.cache.directory writes.cache.active
+              writes.cache.pending) writes.rename opened.phase opened.get opened.set start.reached = .ok sequence reached
+          rw [start.directory]
+          exact observed
+        have seen : start.ObservesPublishedWrite writes.appender writes.stager writes.syncer view cache inodes runs
+            storage inode buffered request writes.lookup writes.rename sequence reached :=
+          ⟨files, sameStorage, raw, callbacks⟩
+        obtain ⟨_, _, batch, table, next, _, prepared, committed, atHeap, pins, _, ledger, ready, _⟩ :=
+          start.acknowledgesObservedWrite writes.appender writes.stager writes.syncer view cache inodes runs
+            storage inode buffered request writes.lookup writes.rename nonempty initial seen
+        obtain ⟨length, replayed, rows, numbered⟩ := prepareBatch_spec prepared
+        have lastSequence : batch.getLast?.map WAL.Write.sequence = some sequence := by
+          rcases List.eq_nil_or_concat batch with empty | ⟨earlier, last, appended⟩
+          · exfalso
+            apply nonempty
+            apply List.length_eq_zero_iff.mp
+            simpa only [empty, List.length_nil] using length.symm
+          · subst batch
+            rw [List.concat_eq_append] at numbered replayed ⊢
+            obtain ⟨ordinal, _⟩ : last.sequence.toNat =
+                start.current.ready.state.writer.installed.table.committed.toNat + 1 + earlier.length ∧ True :=
+              ((ordinals_append_iff _ earlier [last]).mp numbered).2
+            have count := replay_committed_count _ replayed
+            simp only [List.length_append, List.length_cons, List.length_nil] at count
+            have number : last.sequence = sequence := UInt64.toNat_inj.mp (by
+              rw [committed]
+              omega)
+            simp [number]
+        exact ⟨next, .acknowledged request batch, atHeap, congrArg (List.map NativeOpenedPin.raw) pins, ready,
+          .write rows lastSequence, ledger⟩
   | acquire result =>
     cases result with
     | error => exact False.elim covered
@@ -180,7 +343,7 @@ private theorem NativeReturnedCall.refinesReady
       obtain ⟨_, _, table, _, _, _, _, setter, _, updated, _⟩ := acquired.returned
       rw [updated] at setter
       have framed := effects.acquire start (table := table) setter
-      have ready := writes.keepsStorageOnSnapshot view storage (fun atHeap => (inodes atHeap).visible) initial updated framed
+      have ready := writes.keepsStorage view storage (fun atHeap => (inodes atHeap).visible) initial updated framed
       refine ⟨next, .snapshotControl .acquire (.ok (start.current.ready.state.session.sessionRef, pin.localPin)),
         sameHeap.symm, ?_, ready, .acquire pin, acquired.common.ledgerSuffix⟩
       simp only [pins, List.map_append, List.map_cons, List.map_nil, pinsAfter]
@@ -222,7 +385,7 @@ theorem NativeReturnedCalls.refinesReady
     {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
     {entry reached : heap} {known : List DiskSnapshotPin} {calls : List (NativeReturnedCall opened)}
     (executed : NativeReturnedCalls writes issuer entry known calls reached)
-    (covered : ∀ call ∈ calls, call.ReadyContinuation)
+    (covered : NativeReturnedCalls.ReadyFrom writes issuer entry known calls)
     (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
     (buffered : heap → IO.FS.Handle → ByteArray)
@@ -240,11 +403,15 @@ theorem NativeReturnedCalls.refinesReady
   | empty => exact ⟨start, [], sameEntry, samePins, initial, rfl, by simp, .empty _⟩
   | @cons middle rest last before known call observed _ ih =>
     have atStart : call.Reaches writes issuer known start.reached middle := sameEntry ▸ observed
+    have first : call.ReadyContinuation writes start.reached middle :=
+      sameEntry ▸ covered (prior := []) (later := rest) rfl .empty observed
     obtain ⟨next, event, nextHeap, pins, ready, recorded, firstLedger⟩ :=
-      call.refinesReady writes issuer view inodes runs storage inode buffered effects start atStart
-        (covered call (.head rest)) initial
+      call.refinesReady writes issuer view inodes runs storage inode buffered effects start atStart first initial
+    have tail : NativeReturnedCalls.ReadyFrom writes issuer middle (call.pinsAfter known) rest := by
+      intro prior subsequent later before after order ran returned
+      exact covered (prior := call :: prior) (by rw [order]; rfl) (.cons observed ran) returned
     obtain ⟨finish, events, done, finalPins, physical, length, records, ledger⟩ :=
-      ih (fun each member => covered each (.tail call member)) next nextHeap
+      ih tail next nextHeap
         (pins.trans (congrArg call.pinsAfter samePins)) ready
     refine ⟨finish, event :: events, done, finalPins, physical, by simp [length], ?_, firstLedger.append ledger⟩
     intro pair member

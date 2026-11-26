@@ -56,11 +56,13 @@ whether the history at the final failed open contains the whole pending
 batch or omits it. Both terminal proofs allow execution to end at that error.
 [Late publication recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
-The fresh opener now starts a finite induction over returned ready calls.
-The proof derives a client event for each observed response and carries the
-exact pins, cache and protected storage to the next call. An acquisition
-assumes a local frame at the phase setter. This lets a later write use the
-storage reached after a snapshot read.
+The fresh opener starts one finite induction over returned ready calls.
+It also covers empty batches and preflight rejections. These add an event
+with no submitted rows. A pure rejection leaves the heap unchanged. If the
+metadata lookup rejects after changing the heap, the next call starts there
+under a local frame on the phase, cache and protected storage. The proof
+uses the guard at that occurrence to distinguish a later setter failure
+with the same diagnostic.
 [Fresh ready-call consumer](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
 The confirmed write, snapshot acquisition and read now produce their own

@@ -141,12 +141,14 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
 
 - [ ] **Derive an integrated execution proof from fresh state.** Start with the ordered primitive returns and interruptions of the production schedules under the filesystem contract. Derive coverage and invariant preservation for each admitted step, including the exact returned value or error for a completed call and the reached state for an interrupted or still-running call. Connect fresh admission and terminal prefixes with one induction that reuses the existing replay. Exercise an acknowledged batch followed by an uncertain batch and independent retry attempts. [Raw open return classifier](../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean) · [Current opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
-  From the returned fresh handle, one induction now covers finite sequences
-  of confirmed nonempty writes, successful snapshot acquisitions and returned
-  reads on that handle. Starting with empty pins, it derives the matching
-  client events, replay and physical state for the next call. It uses local
-  publication, phase-update and token observations. Empty writes, ordinary
-  errors and interrupted calls still need transitions into the same argument.
+  From the returned fresh handle, one induction now covers confirmed writes,
+  empty batches, preflight rejections, successful snapshot acquisitions and
+  returned reads on that handle. Each event uses the request, result and heap
+  of that occurrence. A rejected write that passes local batch preparation
+  needs the actual failing metadata guard. A setter can return the same error
+  later. Setter failures, uncertain writes and interrupted calls still need
+  transitions into this argument. Its inputs include local publication,
+  metadata, phase-update and token effects.
   [Ready-call induction](../lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean)
 
   A first acknowledged write on the fresh table carries the WAL namespace

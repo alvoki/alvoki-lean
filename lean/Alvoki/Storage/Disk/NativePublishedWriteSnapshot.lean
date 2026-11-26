@@ -65,6 +65,53 @@ def Reaches (call : NativeReturnedCall opened) (writes : NativeReadyWriteCalls o
 
 end NativeReturnedCall
 
+/-- A returned preflight records the response on the same model table and
+pins. If the no-follow check was reached, keep the actual returned heap
+and use only that metadata call's local phase-cell frame. -/
+theorem NativeOpenedPosition.preflightsReturnedWrite
+    {heap : Type} {opened : NativeOpenedHandle heap} (start : NativeOpenedPosition opened)
+    (writes : NativeReadyWriteCalls opened) (issuer : opened.LatestIssuer) (pins : List DiskSnapshotPin)
+    {request : WriteRequest} (seen : NativeWritePreflightObservation start.current.ready.state request)
+    (observes : seen.lookup = fun path => (nativeWriteLookupAt writes.lookup start.reached path).1)
+    {reached : heap}
+    (returned : (NativeReturnedCall.write (opened := opened) request
+      (seen.response.mapError DiskWriteError.rejected)).Reaches writes issuer pins start.reached reached)
+    (keepsPhase : let state := start.current.ready.state
+      let checkedAt := (nativeWriteLookupAt writes.lookup start.reached
+        (opened.directory.file (.walSegment state.writer.installed.activeFirst))).2
+      reached ≠ start.reached → seen.ReturnHeap start.reached checkedAt reached →
+        opened.contents reached opened.phase = opened.contents start.reached opened.phase) :
+    let state := start.current.ready.state
+    let checkedAt := (nativeWriteLookupAt writes.lookup start.reached
+      (opened.directory.file (.walSegment state.writer.installed.activeFirst))).2
+    ∃ next : NativeOpenedPosition opened,
+      next.reached = reached ∧ next.current = start.current ∧ next.pins = start.pins ∧
+      start.current.LedgerSuffix [.writePreflight request seen.response] next.current ∧
+      seen.ReturnHeap start.reached checkedAt reached := by
+  intro state checkedAt
+  have valid : state.Valid := start.current.ready.readPrefix.refines.1
+  have loaded : opened.get opened.phase start.reached = .ok (.ready state.writer.installed) start.reached := by
+    have read := opened.phaseEffects.reads start.reached opened.phase state.session.phase start.stored
+    simpa only [valid.phase] using read
+  obtain ⟨actual, path, preflight⟩ := request.runOnRawOpenPhase_preflight opened.directory writes.lookup
+    (writes.appender.run writes.cache.active) (writes.stager.run writes.cache.pending)
+    (writes.syncer.group opened.directory.path writes.cache.directory writes.cache.active writes.cache.pending)
+    writes.rename opened.phase opened.get opened.set valid seen loaded start.directory observes
+  have sameHeap : reached = actual := by
+    simp only [NativeReturnedCall.Reaches, preflight] at returned
+    cases response : seen.response <;>
+      simp only [NativeWritePreflightObservation.resultAt, response, Except.mapError, NativeReturnedCall.atReturn,
+        EStateM.Result.ok.injEq, EStateM.Result.error.injEq, true_and] at returned <;>
+      exact returned.symm
+  have path : seen.ReturnHeap start.reached checkedAt reached := sameHeap.symm ▸ path
+  have stored : opened.contents reached opened.phase = some state.session.phase := by
+    by_cases same : reached = start.reached
+    · exact same.symm ▸ start.stored
+    · exact (keepsPhase same path).symm ▸ start.stored
+  exact ⟨⟨start.current, reached, start.directory, stored, start.pins⟩, rfl, rfl, rfl,
+    (NativeExecutionStep.writePreflight start.current seen (start.current.ready.preflightsWrite seen)).ledgerSuffix,
+    path⟩
+
 /-- An ordered sequence of source returns. Each call starts with the
 actual preceding heap and the pin values the preceding calls returned. -/
 inductive NativeReturnedCalls {heap : Type} {opened : NativeOpenedHandle heap}

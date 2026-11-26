@@ -2134,6 +2134,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.prepend
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.writesThenReadsOpenPin
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsViaOpenReferences
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_preflight
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.classifiesWriteOnOpenPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.interpretsOpenWritePreflight
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.Calls.observesPreflight
@@ -4021,6 +4022,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCalls
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.append
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preflightsReturnedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reopensAfterGroupedError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.groupedRetryAndReads
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.lastError

@@ -279,6 +279,79 @@ theorem NativePendingWrite.returnsViaOpenReferences {history log}
     (entry, before.cache, initial) = _
   simp only [publishPreparedWrite, publishPrepared, Bind.bind, EStateM.bind, setPhase, heapEffect, writeResult, exclude, committed]
 
+/-- The heap returned by a quiet write is the entry heap or the heap of
+the rejecting no-follow check of the active segment. -/
+def NativeWritePreflightObservation.ReturnHeap {σ : Type} {state : NativeReadyState} {request : WriteRequest}
+    (seen : NativeWritePreflightObservation state request) (entry lookedUp reached : σ) : Prop :=
+  reached = entry ∨ ∃ cause, seen.response = .error cause ∧
+    (checkActiveSegmentWith state.session.directory state.writer.installed seen.lookup :
+      Except IO.Error Unit) = .error cause ∧ reached = lookedUp
+
+/-- A preflight settles before any phase update or publication. Only a
+nonempty, prepared write can run the metadata guard. -/
+private theorem NativeWritePreflightObservation.returnsThroughPublication {σ : Type}
+    {state : NativeReadyState} {request : WriteRequest}
+    (seen : NativeWritePreflightObservation state request) (valid : state.Valid)
+    (load : EStateM DiskWriteError σ Installed) (guard : Installed → EStateM DiskWriteError σ Unit)
+    (setPhase : Phase Installed → EStateM DiskWriteError σ Unit)
+    (commit : Installed → ByteArray → Nat → EStateM DiskWriteError σ Unit)
+    {entry lookedUp : σ} (loaded : load entry = .ok state.writer.installed entry)
+    (guardFailure : ∀ {cause}, (checkActiveSegmentWith state.session.directory state.writer.installed
+      seen.lookup : Except IO.Error Unit) = .error cause →
+      guard state.writer.installed entry = .error (.rejected cause) lookedUp) :
+    ∃ reached,
+      seen.ReturnHeap entry lookedUp reached ∧
+      request.runWithPublication load guard setPhase commit entry = seen.resultAt reached := by
+  obtain ⟨lookup, response, reported⟩ := seen
+  cases request with
+  | single key value =>
+    obtain ⟨next, prepared⟩ := valid.retained.preparesSingleWrite key value
+    cases reported with
+    | empty rows => simp [WriteRequest.rows] at rows
+    | rejected rejected =>
+      cases rejected with
+      | byteCount _ overflow =>
+        have tooLarge : ¬ state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
+          simpa [WriteRequest.rows] using Nat.not_lt.mpr overflow
+        refine ⟨entry, .inl rfl, ?_⟩
+        simp [WriteRequest.runWithPublication, withPreparedSingleWrite, loaded, prepared, requireWritePreparation, tooLarge, Bind.bind, EStateM.bind,
+          Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+          NativeWritePreflightObservation.resultAt]
+      | sequence _ _ exhausted =>
+        simp [WriteRequest.rows, prepareBatch_singleton, prepared] at exhausted
+      | active present room preflight checked =>
+        refine ⟨lookedUp, .inr ⟨_, rfl, checked, rfl⟩, ?_⟩
+        rw [preparedWrite_reachesGuard _ rfl present preflight room load guard setPhase commit loaded]
+        simp only [Bind.bind, EStateM.bind, guardFailure checked, NativeWritePreflightObservation.resultAt]
+  | batch rows =>
+    cases reported with
+    | empty nil =>
+      change rows = [] at nil
+      subst rows
+      refine ⟨entry, .inl rfl, ?_⟩
+      simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+        NativeWritePreflightObservation.resultAt]
+    | rejected rejected =>
+      have nonempty (present : (WriteRequest.batch rows).rows ≠ []) : rows.isEmpty = false :=
+        List.isEmpty_eq_false_iff.mpr present
+      cases rejected with
+      | byteCount present overflow =>
+        simp only [WriteRequest.rows] at overflow
+        refine ⟨entry, .inl rfl, ?_⟩
+        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, Nat.not_lt.mpr overflow, Bind.bind, EStateM.bind,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+          NativeWritePreflightObservation.resultAt]
+      | sequence present room exhausted =>
+        simp only [WriteRequest.rows] at room exhausted
+        refine ⟨entry, .inl rfl, ?_⟩
+        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, room, exhausted, requireWritePreparation,
+          Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+          NativeWritePreflightObservation.resultAt]
+      | active present room prepared checked =>
+        refine ⟨lookedUp, .inr ⟨_, rfl, checked, rfl⟩, ?_⟩
+        rw [preparedWrite_reachesGuard _ rfl present prepared room load guard setPhase commit loaded]
+        simp only [Bind.bind, EStateM.bind, guardFailure checked, NativeWritePreflightObservation.resultAt]
+
 /-- A checked rejection or an empty batch reads this table's phase
 cell and leaves the reached heap and file projection unchanged.
 The first phase setter and the publication callbacks are arbitrary
@@ -309,54 +382,13 @@ theorem NativeReadPosition.preflightsViaOpenReferences {history log}
   have loaded : load (entry, atEntry) = .ok current.state.writer.installed (entry, atEntry) := by
     simp [load, heapEffect, writeResult, read, valid.phase, Phase.installed, Bind.bind, EStateM.bind, liftExcept, Pure.pure,
       EStateM.pure, Except.pure, Except.mapError]
-  obtain ⟨lookup, response, reported⟩ := seen
-  cases request with
-  | single key value =>
-    obtain ⟨next, prepared⟩ := valid.retained.preparesSingleWrite key value
-    cases reported with
-    | empty rows => simp [WriteRequest.rows] at rows
-    | rejected rejected =>
-      cases rejected with
-      | byteCount _ overflow =>
-        have tooLarge : ¬ current.state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
-          simpa [WriteRequest.rows] using Nat.not_lt.mpr overflow
-        simp [WriteRequest.runWithPublication, withPreparedSingleWrite, loaded, prepared, requireWritePreparation, tooLarge, Bind.bind, EStateM.bind,
-          Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
-          NativeWritePreflightObservation.resultAt]
-      | sequence _ _ exhausted =>
-        simp [WriteRequest.rows, prepareBatch_singleton, prepared] at exhausted
-      | active _ room _ checked =>
-        have fits : current.state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
-          simpa [WriteRequest.rows] using room
-        simp [WriteRequest.runWithPublication, withPreparedSingleWrite, loaded, prepared, requireWritePreparation, fits, guard, directory, checked,
-          Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Except.mapError, liftExcept,
-          throw, throwThe, MonadExceptOf.throw, EStateM.throw, NativeWritePreflightObservation.resultAt]
-  | batch rows =>
-    cases reported with
-    | empty nil =>
-      change rows = [] at nil
-      subst rows
-      simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
-        NativeWritePreflightObservation.resultAt]
-    | rejected rejected =>
-      have nonempty (present : (WriteRequest.batch rows).rows ≠ []) : rows.isEmpty = false :=
-        List.isEmpty_eq_false_iff.mpr present
-      cases rejected with
-      | byteCount present overflow =>
-        simp only [WriteRequest.rows] at overflow
-        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, Nat.not_lt.mpr overflow, Bind.bind, EStateM.bind,
-          throw, throwThe, MonadExceptOf.throw, EStateM.throw,
-          NativeWritePreflightObservation.resultAt]
-      | sequence present room exhausted =>
-        simp only [WriteRequest.rows] at room exhausted
-        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, room, exhausted, requireWritePreparation,
-          Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
-          NativeWritePreflightObservation.resultAt]
-      | active present room prepared checked =>
-        simp only [WriteRequest.rows] at room prepared
-        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, room, prepared, requireWritePreparation, guard, directory,
-          checked, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, Except.mapError, liftExcept,
-          throw, throwThe, MonadExceptOf.throw, EStateM.throw, NativeWritePreflightObservation.resultAt]
+  have rejected {cause} (checked : (checkActiveSegmentWith directory current.state.writer.installed
+      seen.lookup : Except IO.Error Unit) = .error cause) :
+      guard current.state.writer.installed (entry, atEntry) = .error (.rejected cause) (entry, atEntry) := by
+    simp [guard, checked, Except.mapError, liftExcept, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  obtain ⟨reached, same | ⟨_, _, _, same⟩, returned⟩ :=
+    seen.returnsThroughPublication valid load guard setPhase commit loaded rejected <;>
+    simpa only [same] using returned
 
 /-- Interpret the original single or batch schedule on the reached phase
 cell and a fixed set of projected native file callbacks. -/
@@ -587,6 +619,52 @@ def WriteRequest.runOnRawOpenPhase : EStateM DiskWriteError heap UInt64 :=
     (fun next => rawEffect .rejected (set phase next))
     (fun installed bytes count =>
       rawEffect .commitUnknown (commitBytesAt directory installed.activeFirst bytes count append stage sync rename))
+
+/-- Observe the result and reached heap of the particular metadata call. -/
+def nativeWriteLookupAt (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata) (entry : heap)
+    (path : FilePath) : Except IO.Error IO.FS.Metadata × heap :=
+  match lookup path entry with
+  | .ok metadata reached => (.ok metadata, reached)
+  | .error cause reached => (.error cause, reached)
+
+/-- The fixed raw write uses its real ready-phase read and its reached
+metadata response. An empty batch and pure failures leave the exact entry
+heap. A rejecting metadata guard leaves the heap returned by that lookup.
+Neither route reaches the setter or publication callbacks. -/
+theorem WriteRequest.runOnRawOpenPhase_preflight
+    {state : NativeReadyState} (valid : state.Valid)
+    (seen : NativeWritePreflightObservation state request)
+    {entry : heap} (loaded : get phase entry = .ok (.ready state.writer.installed) entry)
+    (located : state.session.directory = directory)
+    (observes : seen.lookup = fun path => (nativeWriteLookupAt lookup entry path).1) :
+    let checkedAt := (nativeWriteLookupAt lookup entry
+      (directory.file (.walSegment state.writer.installed.activeFirst))).2
+    ∃ reached,
+      seen.ReturnHeap entry checkedAt reached ∧
+      request.runOnRawOpenPhase directory lookup append stage sync rename phase get set entry =
+        seen.resultAt reached := by
+  intro checkedAt
+  have reads : rawWriteLoad phase get entry = .ok state.writer.installed entry := by
+    simp [rawWriteLoad, rawEffect, loaded, writeResult, Phase.installed, Bind.bind, EStateM.bind, liftExcept,
+      Pure.pure, EStateM.pure, Except.pure, Except.mapError]
+  let guard := fun installed => rawEffect .rejected (checkActiveSegmentWith directory installed lookup)
+  have rejected {cause} (checked : (checkActiveSegmentWith state.session.directory state.writer.installed
+      seen.lookup : Except IO.Error Unit) = .error cause) :
+      guard state.writer.installed entry = .error (.rejected cause) checkedAt := by
+    rw [located, observes] at checked
+    change writeResult .rejected id (checkActiveSegmentWith directory state.writer.installed lookup entry) = _
+    rw [checkActiveSegmentWith_rawResult]
+    cases actual : lookup (directory.file (.walSegment state.writer.installed.activeFirst)) entry with
+    | error diagnostic reached =>
+      simp [checkActiveSegmentWith, Bind.bind, Except.bind, nativeWriteLookupAt, actual] at checked
+      simp [actual, checkedAt, nativeWriteLookupAt, writeResult, checked]
+    | ok metadata reached =>
+      have same : (checkActiveSegmentWith directory state.writer.installed (fun _ => .ok metadata) :
+          Except IO.Error Unit) = .error cause := by
+        simpa [checkActiveSegmentWith, Bind.bind, Except.bind, nativeWriteLookupAt, actual] using checked
+      simp [actual, checkedAt, nativeWriteLookupAt, writeResult, same]
+  unfold WriteRequest.runOnRawOpenPhase
+  exact seen.returnsThroughPublication valid _ guard _ _ reads rejected
 
 /-- A successful pure preparation reaches the actual metadata guard.
 Its error returns before writing the phase. Success uses the reached
