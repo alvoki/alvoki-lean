@@ -27,6 +27,20 @@ theorem ListedLongKeeperDirectoryIssue.readyAfterEffect
   have valid := (issue.stoppedEffects true).valid prepared.pair prepared.keeperPrefix prepared.newer
   exact ⟨valid.selected, valid.settled, rfl, rfl, pruning.stageInputEffects.2⟩
 
+/-- The cached handle at the issued call is live and refers to the
+database directory whose child bindings can be settled by this fsync. -/
+theorem ListedLongKeeperDirectoryIssue.rawDirectoryTarget
+    (issue : ListedLongKeeperDirectoryIssue moved) (view : OpenCloseHeapView heap FileImage)
+    (names : heap → FilePath → Option Nat) {issued : heap} {handle : IO.FS.Handle}
+    (atIssue : view.handle issued handle = (issue.inventory, held.lifetime.directorySlot, 0))
+    (census : view.descriptors issued = issue.inventory)
+    (root : names issued directory.path = issue.bindings directory.path) :
+    (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots ∧
+    names issued directory.path = some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) := by
+  obtain ⟨live, _, bound, _⟩ := issue.custody
+  rw [atIssue, census]
+  exact ⟨live, root.trans bound⟩
+
 variable (callbacks : AlignedKeeperCacheCallbacks heap)
   (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
   (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
@@ -91,23 +105,13 @@ theorem ListedLongKeeperDirectoryIssue.rawFinalSyncError
     bytes ▸ measured.symm ▸ pruning.longer
   have valid : layout.boundedPlan.valid = true :=
     (Plan.valid_iff _).mpr ⟨layout.target.firstCovered, Nat.le_of_eq bytes.symm, pruning.later⟩
-  obtain ⟨dirLive, ownerLive, rootBound, _, noStage, keeperBound⟩ := issue.custody
-  have dirLive' : held.lifetime.directorySlot ∈ (view.descriptors issued).slots := census.symm ▸ dirLive
-  have rootBound' : names issued directory.path =
-      some ((view.descriptors issued).inode held.lifetime.directorySlot.description) :=
-    root.trans (census.symm ▸ rootBound)
-  have liveHandle : (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots := by
-    rw [atIssue]
-    exact dirLive'
-  have boundHandle : names issued directory.path =
-      some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) := by
-    rw [atIssue]
-    exact rootBound'
+  obtain ⟨dirLive, ownerLive, _, _, noStage, keeperBound⟩ := issue.custody
+  obtain ⟨liveHandle, boundHandle⟩ := issue.rawDirectoryTarget view names atIssue census root
   have files := effect failed liveHandle boundHandle issuedFiles
   have trace : EffectTrace layout.target (view.files start).image (view.files reached).image := by
     rw [startFiles, files]
     exact issue.stoppedEffects effective
-  refine ⟨?_, files, trace, ?_, ?_, dirLive', census.symm ▸ ownerLive,
+  refine ⟨?_, files, trace, ?_, ?_, census.symm ▸ dirLive, census.symm ▸ ownerLive,
     (namesKept .stagedWal).trans (stageName.trans noStage),
     (namesKept (.walSegment layout.keeper.first)).trans (keeper.trans keeperBound),
     files.symm ▸ issue.projectsStoppedInodes effective, ?_, (issue.stoppedBindings effective).2⟩

@@ -451,8 +451,11 @@ bytes durable and frames all protected files and the root in its parent.
 The rename keeps the same inode and its durable bytes while moving its
 visible binding. A final directory-fsync error carries that binding and
 payload under either effect. Only the effective branch settles the new
-keeper name in every crash map. The local frames still need to meet at
-the finalized raw retry and the subsequent open.
+keeper name in every crash map. The actual cached directory load and
+reported fsync supply the bounded repair error. Cleanup carries the
+renamed inode and its durable bytes to the exact fixed opener's error
+heap. This extends the existing selected retry prefix, which still
+needs to be joined to the successful next call in the integrated proof.
 [Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached

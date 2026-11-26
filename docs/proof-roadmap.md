@@ -177,8 +177,13 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   durable files and the root's independent parent settlement. One frame
   proof follows the existing bounded finisher for the selected WAL target
   and the writer's protected footprint. A different surviving manifest
-  needs its own selected footprint. The local staging and sync effects
-  remain explicit.
+  needs its own selected footprint. For the final directory-fsync error,
+  the actual loaded directory handle and local fsync effect determine
+  the failed repair. The raw finalizers carry the renamed inode and
+  its durable trimmed bytes into the failed-call prefix at the exact
+  returned heap. The next successful open still needs to consume that
+  prefix in the integrated proof. The preceding callback and cleanup
+  frames remain explicit.
   [Failed repair and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
   The raw longer-keeper schedule consumes the same successful acquisition

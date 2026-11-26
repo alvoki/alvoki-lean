@@ -2155,12 +2155,15 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.fromWorkerError
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.workerReturnsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFinalSyncError
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnly
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.repair
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_afterStage
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.longRepairStageSyncFails
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.rawFinalSyncError
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.rawDirectoryTarget
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.readyAfterEffect
 #check_axioms Alvoki.Storage.DiskSession.RawHeldLateGuardError.stops
 #check_axioms Alvoki.Storage.DiskSession.RawHeldLateGuardError.returnsFinalized

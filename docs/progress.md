@@ -1,5 +1,17 @@
 # Current handoff
 
+The final directory-fsync error during long-keeper repair now extends
+the actual failed-open prefix. The reached cached handle identifies
+the root being synced. The same bounded finisher, cache disposal and
+lock finalization give the exact returned diagnostic and heap. That
+heap still binds the keeper to the renamed inode with the durable
+trimmed bytes, and carries the protected checkpoint and WAL files
+and parent settlement into the next attempt. Both fsync timings and
+either selected write target use this step. It takes the scoped effects
+of the preceding callbacks and cleanup. Connect this extension to the
+successful raw reopen and its next write on the same heap.
+[Final sync error through cleanup](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
 Keeper staging now follows the same acquisition for a direct exclusive
 create and a create retried after `EEXIST`. The no-follow check allows a
 missing name or detaches a regular file before retry. The common proof
@@ -17,8 +29,8 @@ files and parent binding survive under the local Linux effects. The
 rename carries the same synced inode and bytes from the staging name to
 the keeper name. A final directory-fsync error retains those live and
 durable bytes under either effect. Only the effective fsync establishes
-settlement of the keeper name in every crash map. These results still
-need to be joined to the finalized raw retry and the subsequent open.
+settlement of the keeper name in every crash map. The finalized live
+retry carries the same inode and bytes.
 [Staged keeper storage](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 A failed marked open can extend the same retry prefix after changing its
