@@ -152,7 +152,8 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
 
 /-- The actual open returns the table and ready position of the fixed
-reader, with the same cache, callback projections, and reference allocations. -/
+reader, with the same cache and callback projections. Its actual phase and
+token reference identities are fresh in the allocator's live set. -/
 structure ReturnedAt where
   cacheOpen : IO DiskTable.OpenSyncFiles
   makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
@@ -175,7 +176,10 @@ structure ReturnedAt where
   readsPhase : handle.get = get
   writesPhase : handle.set = set
   comparesTokens : handle.ptrEq = ptrEq
+  phaseRef : phaseIdentity handle.phase = next.state.session.phaseRef
   tokenRef : tokenIdentity handle.token = next.state.session.sessionRef
+  phaseFresh : phaseIdentity handle.phase ∉ opening.callbacks.liveRefs
+  tokenFresh : tokenIdentity handle.token ∉ opening.callbacks.liveRefs
   pins : start.pins = []
   files : view.files start.reached = next.state.files
   census : view.descriptors start.reached = next.state.census
@@ -238,10 +242,14 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
       seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked remove write rename bootstrap assemble
       constructs seen.allocations
   obtain ⟨handle, start, table, resolved, lock, files, phase, token, contents, getEq, setEq, compared, position,
-    reached, pins, sameFiles, sameCensus, sameCache, _, _, _, _, tokenRef⟩ :=
+    reached, pins, sameFiles, sameCensus, sameCache, _, _, _, phaseRef, tokenRef⟩ :=
     installed.startsAtReportedPosition next sameReturn returned cache owner slot effects ptrEq
-  obtain ⟨_, atRepair, _⟩ := selectedReport.opening.finish.reachesInstaller chronology opening.markerFound
+  obtain ⟨_, atRepair, atInstall⟩ := selectedReport.opening.finish.reachesInstaller chronology opening.markerFound
     (sameReturn.trans returned)
+  have phaseCounter : phaseIdentity handle.phase = opening.callbacks.nextRef :=
+    phaseRef.trans (congrArg SegmentedSession.phaseRef atInstall)
+  have tokenCounter : tokenIdentity handle.token = opening.callbacks.nextRef + 1 :=
+    tokenRef.trans (congrArg SegmentedSession.sessionRef atInstall)
   have sameRepair := (EStateM.Result.ok.inj (atRepair.symm.trans installed.recovered)).2
   have resolvedAtPosition := start.directory.trans resolved
   rw [position] at resolvedAtPosition
@@ -262,7 +270,14 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     readsPhase := getEq
     writesPhase := setEq
     comparesTokens := compared
+    phaseRef := phaseRef
     tokenRef := tokenRef
+    phaseFresh := fun belongs => Nat.lt_irrefl _ (opening.callbacks.fresh _ (phaseCounter ▸ belongs))
+    tokenFresh := by
+      intro belongs
+      have older := opening.callbacks.fresh _ belongs
+      rw [tokenCounter] at older
+      exact Nat.not_lt_of_ge (Nat.le_succ _) older
     pins := pins
     files := sameFiles
     census := sameCensus

@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.NativeOpenReadyTrace
 
 namespace Alvoki.Storage.DiskSession
 
-open Sequential (SnapshotTable)
+open Sequential (SnapshotPin SnapshotTable)
 
 variable {heap : Type} {opened : NativeOpenedHandle heap}
 
@@ -62,13 +62,70 @@ theorem NativeOpenedTrace.reportsSnapshotsAndRewrites
   | rewriteRun request => exact ⟨.rewriteRun request⟩
   | _ => exact NativeOpenedInstruction.observesSnapshot _ reached reported
 
+abbrev NativeOpenedHandle.acquireLatestRaw {heap : Type} (opened : NativeOpenedHandle heap)
+    (issue : SnapshotPin → DiskSnapshotPin) : EStateM IO.Error heap DiskSnapshotPin :=
+  let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
+  acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue)
+
+abbrev NativeOpenedHandle.readPinRaw {heap : Type} (opened : NativeOpenedHandle heap)
+    (pin : NativeOpenedPin opened) (request : SnapshotReadRequest α) :
+    EStateM IO.Error heap (Option α) :=
+  readSnapshotWith (do (← opened.get opened.phase).installed)
+    (opened.ptrEq opened.token opened.token) (request.read pin.localPin.handle)
+
+/-- The token comparison is observed after the actual acquisition call
+on this handle's phase cell. -/
+def NativeOpenedHandle.ObservesSnapshotToken {heap : Type}
+    (opened : NativeOpenedHandle heap) (start : heap) : Prop :=
+  ∀ (issue : SnapshotPin → DiskSnapshotPin),
+    opened.table.acquire = acquireLatestWith (m := IO) (do (← opened.phase.get).installed)
+      (acquireSnapshotWith (do (← opened.phase.get).installed) opened.phase.set issue) →
+    ∀ {pin : DiskSnapshotPin} {reached : heap},
+      opened.acquireLatestRaw issue start = .ok pin reached →
+      opened.ptrEq opened.token opened.token reached = .ok true reached
+
+/-- A present answer from the actual read identifies the successful
+token comparison on its reached heap. The loaded phase and the presented
+pin determine the same response in the client read step. -/
+theorem NativeOpenedPosition.refinesReturnedPin
+    (start : NativeOpenedPosition opened) (pin : NativeOpenedPin opened) (request : SnapshotReadRequest α)
+    {value : α} {reached : heap}
+    (returned : opened.readPinRaw pin request start.reached = .ok (some value) reached) :
+    opened.ptrEq opened.token opened.token start.reached = .ok true reached ∧
+    ∃ recorded next,
+      NativeSnapshotHandleRead start.current.ready
+        ⟨pin.localPin.handle, start.current.ready.state.session.sessionRef, true, by simp⟩
+        request (some value) recorded next := by
+  let current := start.current.ready
+  have valid := current.readPrefix.refines.1
+  have loaded := opened.phaseEffects.reads start.reached opened.phase current.state.session.phase start.stored
+  simp only [NativeOpenedHandle.readPinRaw, readSnapshotWith, withLocalHandle, Bind.bind, EStateM.bind,
+    loaded, valid.phase, Phase.installed, Pure.pure, EStateM.pure] at returned
+  have read : opened.ptrEq opened.token opened.token start.reached = .ok true reached ∧
+      request.read pin.localPin.handle current.state.writer.installed.table = some value := by
+    cases compared : opened.ptrEq opened.token opened.token start.reached with
+    | error cause atError =>
+      simp [compared] at returned
+    | ok localToken readHeap =>
+      cases localToken <;> simp [compared, EStateM.pure] at returned ⊢
+      exact ⟨returned.2, returned.1⟩
+  refine ⟨read.1, ?_⟩
+  let observation : NativeSnapshotHandleObservation current.state.session :=
+    ⟨pin.localPin.handle, current.state.session.sessionRef, true, by simp⟩
+  obtain ⟨response, recorded, next, modeled⟩ := current.readsHandle observation request
+  have computed := (observation.reader valid).readResult (request.read pin.localPin.handle)
+  have same : response = some value := by
+    have equal := (EStateM.Result.ok.inj (modeled.result.returned.symm.trans computed)).1
+    simpa only [observation, NativeSnapshotHandleObservation.reader, ↓reduceIte, read.2] using equal
+  subst response
+  exact ⟨recorded, next, modeled⟩
+
 /-- Acquire and read on any reached ready table. Only the live-token
 comparison at the heap reached by the acquire is supplied. -/
 theorem NativeOpenedPosition.acquiresAndReadsLatest
     (start : NativeOpenedPosition opened)
     (request : SnapshotReadRequest α)
-    (compareIssuedToken : ∀ {event after}, (NativeOpenedReport.acquire (start := start)).Reached event after →
-      opened.ptrEq opened.token opened.token after.reached = .ok true after.reached) :
+    (compareIssuedToken : opened.ObservesSnapshotToken start.reached) :
     ∃ (pin : NativeOpenedPin opened) (acquired last : NativeOpenedPosition opened)
       (reference : SnapshotTable UInt64)
       (issued : acquired.pins[start.pins.length]? = some pin)
@@ -86,9 +143,9 @@ theorem NativeOpenedPosition.acquiresAndReadsLatest
       SnapshotWalReplay .empty start.current.history reference ∧
       (∀ read ∈ last.current.ready.reads, read.agrees reference) := by
   obtain ⟨acquireEvent, acquired, atAcquired⟩ := (NativeOpenedReport.acquire (start := start)).reaches
-  have compared := compareIssuedToken atAcquired
-  obtain ⟨_, pin, table, _, _, _, _, _, registered, pinState, _, _, active, event, pins, priorHistory, _, priorReads⟩ :=
-    atAcquired.returned
+  obtain ⟨issue, pin, table, source, _, _, acquiredRaw, _, registered, pinState, _, _, active, event, pins,
+    priorHistory, _, priorReads⟩ := atAcquired.returned
+  have compared := compareIssuedToken issue source acquiredRaw
   subst acquireEvent
   have issued : acquired.pins[start.pins.length]? = some pin := by simp [pins]
   have found : acquired.current.ready.state.writer.installed.table.pins.find pin.localPin.handle = some pin.localPin := by
@@ -96,25 +153,35 @@ theorem NativeOpenedPosition.acquiresAndReadsLatest
     exact table.pins.find_of_mem active
   let observation : NativeSnapshotHandleObservation acquired.current.ready.state.session :=
     ⟨pin.localPin.handle, acquired.current.ready.state.session.sessionRef, true, by simp⟩
-  obtain ⟨source, response, recorded, next, read, raw, replay⟩ :=
-    acquired.current.ready.readsOpenPin opened.table acquired.uses pin.issued
-      (fun value => opened.phaseEffects.reads acquired.reached opened.phase value)
-      acquired.stored opened.ptrEq compared request
-  have positive : response.isSome = true := by
-    cases response with
+  let installed := acquired.current.ready.state.writer.installed
+  have valid := acquired.current.ready.readPrefix.refines.1
+  have loaded := opened.phaseEffects.reads acquired.reached opened.phase _ acquired.stored
+  have raw : opened.readPinRaw pin request acquired.reached =
+      .ok (request.read pin.localPin.handle installed.table) acquired.reached := by
+    simp only [NativeOpenedHandle.readPinRaw, readSnapshotWith, withLocalHandle, Bind.bind, EStateM.bind,
+      loaded, valid.phase, Phase.installed, Pure.pure, EStateM.pure, compared, ↓reduceIte, installed]
+  have positive : (request.read pin.localPin.handle installed.table).isSome = true := by
+    cases value : request.read pin.localPin.handle installed.table with
     | none =>
-      have denied := (request.handleDenied_iff _ _).mp read.result.returned
-      simp [NativeSnapshotHandleObservation.reader, ObservedSnapshotReader.guard,
+      dsimp only [installed] at value
+      have returned := (observation.reader valid).readResult (request.read pin.localPin.handle)
+      have missing : (observation.reader valid).session.runSnapshotRead (observation.reader valid).sameSession
+          (request.read pin.localPin.handle) = .ok none (observation.reader valid).session := by
+        simpa only [observation, NativeSnapshotHandleObservation.reader, ↓reduceIte, value] using returned
+      have denied := (request.handleDenied_iff _ _).mp missing
+      simp [observation, NativeSnapshotHandleObservation.reader, ObservedSnapshotReader.guard,
         SnapshotReadGuard.rejects, found] at denied
     | some => rfl
-  obtain ⟨value, rfl⟩ := Option.isSome_iff_exists.mp positive
+  obtain ⟨value, response⟩ := Option.isSome_iff_exists.mp positive
+  rw [response] at raw
+  obtain ⟨_, recorded, next, read⟩ := acquired.refinesReturnedPin pin request raw
   obtain ⟨selected, foundSelected, readRecord⟩ := read.result.records
   have samePin : selected = pin.localPin := Option.some.inj (foundSelected.symm.trans found)
   subst selected
   have sequence := (PackedTable.acquireAt_spec registered).sequence
   rw [sequence] at readRecord
   subst recorded
-  obtain ⟨reference, wal, _, _, _, agrees, _⟩ := replay
+  obtain ⟨reference, wal, _, _, _, agrees, _⟩ := next.readPrefix.guardedReplay
   have agreesRead := agrees (request.record start.current.ready.state.writer.installed.table.committed value)
     (by rw [read.reads]; simp)
   have replayValue : value = request.replay reference start.current.ready.state.writer.installed.table.committed := by
@@ -130,7 +197,9 @@ theorem NativeOpenedPosition.acquiresAndReadsLatest
     pin.localPin.handle request (some value) (request.record sequence value)
   have atRead : readReport.Reached readEvent last := by
     refine ⟨NativeExecutionStep.snapshotHandleRead acquired.current observation request _ _ next read, ?_, _, _, raw, rfl, rfl, rfl⟩
-    cases request <;> exact source
+    cases request with
+    | lookup key => exact acquired.uses.lookupPin pin.issued key
+    | range lo hi => exact acquired.uses.rangePin pin.issued lo hi
   have calls := NativeOpenedTrace.step (NativeOpenedTrace.step .empty .acquire atAcquired) readReport atRead
   exact ⟨pin, acquired, last, reference, issued, compared, atAcquired.returned, atRead.returned,
     calls, read.reads.trans (congrArg (· ++ [_]) priorReads), priorHistory ▸ wal, agrees⟩

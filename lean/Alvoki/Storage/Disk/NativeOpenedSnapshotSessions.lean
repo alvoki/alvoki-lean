@@ -19,8 +19,7 @@ theorem NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest
     (seen : NativeOpenedEarlyCheckpointReport before.position input view names bytes)
     (request : SnapshotReadRequest α)
     (compareIssuedToken : ∀ {handle : NativeOpenedHandle heap} {opened : NativeOpenedPosition handle}, seen.Returned opened →
-      ∀ {event after}, (NativeOpenedReport.acquire (start := opened)).Reached event after →
-        handle.ptrEq handle.token handle.token after.reached = .ok true after.reached) :
+      handle.ObservesSnapshotToken opened.reached) :
     ∃ (reached : NativeOpenedSessionPoint heap) (pin : NativeOpenedPin reached.handle)
       (acquired last : NativeOpenedPosition reached.handle)
       (reference : SnapshotTable UInt64)

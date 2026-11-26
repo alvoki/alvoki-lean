@@ -198,8 +198,7 @@ theorem QuietCheckpointRetryObservations.readsLatest
     (compareToken : ∀ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
       handle.ptrEq = ptrEq →
       source.openTable retryInput afterFailure = .ok handle.table start.reached →
-      ∀ {event after}, (NativeOpenedReport.acquire (start := start)).Reached event after →
-        ptrEq handle.token handle.token after.reached = .ok true after.reached) :
+      handle.ObservesSnapshotToken start.reached) :
     RawQuietRebootEntry (stable.observeCrash retry.names retry.chosen retry.contents retry.durable retry.rebootObjects)
       view liveNames bytes reached.2 rebooted (view.descriptors reached.2) ∧
     source.openTable input rebooted = .error diagnostic afterFailure ∧
@@ -220,9 +219,8 @@ theorem QuietCheckpointRetryObservations.readsLatest
   have reopenedAt : source.openTable retryInput afterFailure = .ok returned.handle.table returned.start.reached :=
     (congrArg (source.openTable retryInput) retry.cleanup).symm.trans reopened
   obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, replay, agrees⟩ :=
-    returned.start.acquiresAndReadsLatest request (fun atAcquire => by
-      rw [returned.comparesTokens]
-      exact compareToken returned.handle returned.start returned.comparesTokens reopenedAt atAcquire)
+    returned.start.acquiresAndReadsLatest request
+      (compareToken returned.handle returned.start returned.comparesTokens reopenedAt)
   have history : returned.start.current.history = current.current.history := by rw [returned.position]
   have submissions : returned.start.current.submissions = current.current.submissions := by rw [returned.position]
   have earlierReads : returned.start.current.ready.reads = (ready).reads := by
@@ -304,8 +302,7 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterEarlyCheckpointStop
     (compares : ∀ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
       handle.ptrEq = reopenPtrEq →
       source.openTable retryInput afterFailure = .ok handle.table start.reached →
-      ∀ {event after}, (NativeOpenedReport.acquire (start := start)).Reached event after →
-        reopenPtrEq handle.token handle.token after.reached = .ok true after.reached) :
+      handle.ObservesSnapshotToken start.reached) :
     call entry = .ok opened.handle.table opened.start.reached ∧
     request.runOnRawOpenPhase directory lookup (appender.run activeRef) (stager.run pendingRef)
       (syncer.group directory.path directoryRef activeRef pendingRef)

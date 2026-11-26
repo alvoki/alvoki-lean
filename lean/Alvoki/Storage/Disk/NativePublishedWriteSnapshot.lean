@@ -35,17 +35,6 @@ theorem NativeReturnedCalls.append {heap : Type} {entry middle last : heap}
   | empty => exact second
   | cons returned _ ih => exact .cons returned (ih second)
 
-abbrev NativeOpenedHandle.acquireLatestRaw {heap : Type} (opened : NativeOpenedHandle heap)
-    (issue : SnapshotPin → DiskSnapshotPin) : EStateM IO.Error heap DiskSnapshotPin :=
-  let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
-  acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue)
-
-abbrev NativeOpenedHandle.readPinRaw {heap : Type} (opened : NativeOpenedHandle heap)
-    (pin : NativeOpenedPin opened) (request : SnapshotReadRequest α) :
-    EStateM IO.Error heap (Option α) :=
-  readSnapshotWith (do (← opened.get opened.phase).installed)
-    (opened.ptrEq opened.token opened.token) (request.read pin.localPin.handle)
-
 noncomputable abbrev NativeReturnedCall.writeOnPhase {heap : Type} (opened : NativeOpenedHandle heap)
     (directory : DiskDirectory) (cache : OpenSyncCacheRefs opened.files directory.path)
     (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
@@ -75,17 +64,6 @@ def NativeOpenedHandle.ReturnsLatestAfter {heap : Type} (opened : NativeOpenedHa
     pin.raw.sequence = sequence ∧
     NativeReturnedCalls entry (prior ++ [⟨IO.Error, DiskSnapshotPin, opened.acquireLatestRaw issue, .ok pin.raw⟩,
       ⟨IO.Error, Option α, opened.readPinRaw pin request, .ok response⟩]) reached
-
-/-- The token comparison is observed after the actual acquisition call
-on this handle's phase cell. -/
-def NativeOpenedHandle.ObservesSnapshotToken {heap : Type}
-    (opened : NativeOpenedHandle heap) (start : heap) : Prop :=
-  ∀ (issue : SnapshotPin → DiskSnapshotPin),
-    opened.table.acquire = acquireLatestWith (m := IO) (do (← opened.phase.get).installed)
-      (acquireSnapshotWith (do (← opened.phase.get).installed) opened.phase.set issue) →
-    ∀ {pin : DiskSnapshotPin} {reached : heap},
-      opened.acquireLatestRaw issue start = .ok pin reached →
-      opened.ptrEq opened.token opened.token reached = .ok true reached
 
 /-- Derive the client ledger of an observed write and snapshot on the same
 table. The write's reached position supplies the phase and token that the
@@ -127,9 +105,7 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
     current.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty entry seen
   obtain ⟨pin, acquired, last, reference, issued, compared, acquireReturned, readReturned, calls, _, replay, agrees⟩ :=
-    written.acquiresAndReadsLatest read (fun acquired => by
-      obtain ⟨issue, pin, _, source, _, _, returned, _⟩ := acquired.returned
-      exact token issue source (reachedWrite ▸ returned))
+    written.acquiresAndReadsLatest read (reachedWrite ▸ token)
   have history : written.current.history = current.current.history ++ batch := by
     simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using wrote.history
   refine ⟨schedule, returned, batch, table, written, last, reference, _, prepared, number, reachedWrite, calls,

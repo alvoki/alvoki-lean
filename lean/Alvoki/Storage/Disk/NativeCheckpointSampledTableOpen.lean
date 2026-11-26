@@ -160,8 +160,7 @@ def NativeOpenedPosition.SampledCheckpointRecovery (current : NativeOpenedPositi
       InstalledClientReplay current.current.submissions (ready).reads current.current.history
         returned.start.current.ready.state.writer.installed returned.start.current.ready.state.session ∧
       (∀ {α : Type} (request : SnapshotReadRequest α),
-        (∀ {event after}, (NativeOpenedReport.acquire (start := returned.start)).Reached event after →
-          ptrEq returned.handle.token returned.handle.token after.reached = .ok true after.reached) →
+        returned.handle.ObservesSnapshotToken returned.start.reached →
         ∃ (last : NativeOpenedPosition returned.handle) (events : List NativeExecutionEvent)
           (reference : SnapshotTable UInt64),
           NativeOpenedTrace returned.start [.acquire, .readAt returned.start.pins.length request] events last ∧
@@ -317,9 +316,7 @@ theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
       afterRestart.append suffix, sameHistory ▸ replay, reads⟩
   · intro α request compareAtAcquire
     obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, snapshotReplay, agrees⟩ :=
-      returned.start.acquiresAndReadsLatest request (fun reached => by
-        rw [returned.comparesTokens]
-        exact compareAtAcquire reached)
+      returned.start.acquiresAndReadsLatest request compareAtAcquire
     have sameHistory : returned.start.current.history = current.current.history := by rw [returned.position]
     refine ⟨last, _, reference, calls, ?_, sameHistory ▸ snapshotReplay, ?_, agrees⟩
     · exact afterRestart.append calls.common.ledgerSuffix

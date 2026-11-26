@@ -70,6 +70,13 @@ returns the replay result. The three calls share their intermediate heaps.
 The general proof still needs to select each call from the public requests.
 [Source calls on the returned table](../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
+For a successful point or range read on an active snapshot, the returned
+value identifies the successful token comparison in the executed reader.
+The aligned opener also exposes the phase and token identities it allocated.
+Each is fresh relative to the allocator's observed live references. Comparing
+against a prior session still requires its identity in that live set.
+[Returned snapshot reads](../lean/Alvoki/Storage/Disk/NativeOpenSnapshotTrace.lean)
+
 A returned checkpoint error identifies a preflight rejection, the first
 failed publication step, or failure to restore the ready phase after publication.
 For a failed manifest rename, the returned prefix identifies the prior staged
