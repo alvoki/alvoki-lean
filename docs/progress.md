@@ -1,5 +1,16 @@
 # Current handoff
 
+The fresh bootstrap return supplies the empty origin of the client ledger
+for the final checkpoint pilot. The opened-session trace starts the
+checkpoint on that table's phase and cache, and the source schedule
+reaches an interruption during the final directory fsync. The same
+ledger continues through the sampled reboot and failed opens to an
+acknowledged write and snapshot on the exact reopened table.
+The prefix uses the existing opened-session trace. The common induction
+from raw calls, including an uncertain write and mutating open retries,
+still needs to construct that trace and its recovery extensions.
+[Fresh final checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
+
 The final checkpoint proof carries the same sampled durable files and
 parent-directory settlement through the actual framed failed opens to the
 healthy aligned reader. Its selected manifest and WAL layout determine the
@@ -8,8 +19,7 @@ syncs and newly allocated phase and token establish the write entry on
 the returned table and cache. A subsequent observed nonempty write on
 that handle appends exactly its acknowledged batch. The following snapshot
 agrees with replay of the preceding history and that batch. The proof uses
-scoped reset, failed-open, repair and write effects. Mutating retries and
-composition with the full source trace from fresh storage remain open.
+scoped reset, failed-open, repair and write effects.
 [Checkpoint reboot, next write and snapshot](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 The source checkpoint stop has one terminal case for every reached stage.

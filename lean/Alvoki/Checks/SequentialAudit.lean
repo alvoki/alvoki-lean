@@ -437,6 +437,7 @@ import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.NativeCheckpointFinalManifest
 import Alvoki.Storage.Disk.NativeCheckpointSampledTableOpen
+import Alvoki.Storage.Disk.NativeFreshFinalCheckpoint
 import Alvoki.Storage.Disk.NativeFreshCheckpointReplay
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
@@ -2494,6 +2495,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.carriesCheckpointReset
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_forSelectedCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.rebootDirectoryBindings
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.samplesWal
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.checkpointCrashReopen

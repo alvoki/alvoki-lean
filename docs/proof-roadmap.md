@@ -132,6 +132,15 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   The reset and reached syscall effects remain explicit.
   [Write after selected checkpoint recovery](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
+  The fresh bootstrap return also supplies this pilot's empty client
+  ledger. An existing opened-session trace on that handle leads to a
+  checkpoint on its current cache and a stop in the final directory fsync.
+  The sampled reboot,
+  read-only failed opens, successful reopen, confirmed write and snapshot
+  extend that ledger. The integrated execution theorem still needs to
+  construct this prefix and its recovery extensions for raw mixed calls.
+  [Fresh final checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
+
 - [ ] **Derive an integrated execution proof from fresh state.** Start with the ordered primitive returns and interruptions of the production schedules under the filesystem contract. Derive coverage and invariant preservation for each admitted step, including the exact returned value or error for a completed call and the reached state for an interrupted or still-running call. Connect fresh admission and terminal prefixes with one induction that reuses the existing replay. Exercise an acknowledged batch followed by an uncertain batch and independent retry attempts. [Raw open return classifier](../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean) · [Current opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
   The grouped-error pilot joins the actual uncertain write, one admitted durable

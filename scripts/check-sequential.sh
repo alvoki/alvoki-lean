@@ -354,6 +354,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointSourceReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDurability
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointFinalManifest
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointSampledTableOpen
+lake env leanchecker Alvoki.Storage.Disk.NativeFreshFinalCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.NativeFreshCheckpointReplay
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport

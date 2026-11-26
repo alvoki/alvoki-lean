@@ -481,9 +481,17 @@ syncs and newly allocated phase and token establish the write entry on
 the returned table and cache. A subsequent observed nonempty write on
 that handle appends exactly its acknowledged batch. The following snapshot
 agrees with replay of the preceding history and that batch. The proof uses
-scoped reset, failed-open, repair and write effects. Mutating retries and
-composition with the full source trace from fresh storage remain open.
+scoped reset, failed-open, repair and write effects.
 [Checkpoint reboot, next write and snapshot](../../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
+
+The fresh bootstrap return supplies the empty origin for this continuation.
+The existing opened-session trace supplies the prefix on its exact table.
+The current cache identifies the starting checkpoint heap, and the source
+schedule reaches the stop during the final directory fsync.
+The recovery extends that prefix ledger with the next confirmed write and
+snapshot. Constructing the prefix and its recovery extensions for raw mixed
+calls remains an obligation of the integrated execution theorem.
+[Fresh final checkpoint pilot](../../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
 
 The source checkpoint stop has one terminal case for every reached stage.
 The source call and poisoned phase identify the stop, and the existing
