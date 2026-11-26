@@ -55,24 +55,31 @@ private theorem keepsName {path : FilePath} (known : WalKeeperRenameEffect.Manag
     reached.files.names path = before.files.names path := by
   simpa [WalKeeperRenameEffect.rebind, notKeeper, notStage] using effect.visible path known
 
+/-- The same pre-rename crash map supplies every untouched binding. -/
+theorem framesOffTarget {scope : FilePath → Prop}
+    (managed : ∀ path, scope path → WalKeeperRenameEffect.ManagedPath directory path)
+    (safe : ∀ path, scope path →
+      path ≠ directory.file (.walSegment first) ∧ path ≠ directory.file .stagedWal) :
+    before.Frames scope reached := by
+  have binds {path} (known : scope path) := effect.keepsName (managed path known)
+    (safe path known).1 (safe path known).2
+  refine ⟨fun path known => ⟨binds known, fun inode named =>
+    effect.durableBytes _ (.inl rfl) path (managed path known) inode ((binds known).trans named)⟩, ?_⟩
+  intro names possible
+  obtain ⟨prior, earlier, moved, _, map⟩ := effect.survivors names possible
+  refine ⟨prior, earlier, fun path known => ?_⟩
+  simpa [WalKeeperRenameEffect.rebind, (safe path known).1, (safe path known).2] using map path (managed path known)
+
 theorem framesRetry {state : NativeReadyState} (sameDirectory : state.session.directory = directory)
     (safe : ∀ path, state.selectedRetryPath path →
       path ≠ directory.file (.walSegment first) ∧ path ≠ directory.file .stagedWal) :
     state.SelectedRetryFrame before reached beforeBytes reachedBytes := by
   have canonical {path} (known : state.selectedRetryPath path) : WalKeeperRenameEffect.ManagedPath directory path :=
     sameDirectory ▸ selectedPath known
-  have binds {path} (known : state.selectedRetryPath path) := effect.keepsName (canonical known)
-    (safe path known).1 (safe path known).2
-  have durable : before.files.Frames state.selectedRetryPath reached.files := fun path known =>
-    ⟨binds known, fun inode named => effect.durableBytes _ (.inl rfl) path (canonical known) inode ((binds known).trans named)⟩
-  refine ⟨fun path known => ⟨binds known, fun inode named => congrArg (fun bytes => [bytes])
-    (effect.liveBytes path (canonical known) inode ((binds known).trans named))⟩, durable, ?_⟩
-  refine ⟨fun path same => durable path (.inr (.inl same)), ?_⟩
-  intro names possible
-  obtain ⟨prior, earlier, moved, _, map⟩ := effect.survivors names possible
-  refine ⟨prior, earlier, fun path same => ?_⟩
-  have retained : state.selectedRetryPath path := .inr (.inl same)
-  simpa [WalKeeperRenameEffect.rebind, (safe path retained).1, (safe path retained).2] using map path (canonical retained)
+  have durable := effect.framesOffTarget (fun _ known => canonical known) safe
+  refine ⟨fun path known => ⟨(durable.visible path known).1, fun inode named => congrArg (fun bytes => [bytes])
+    (effect.liveBytes path (canonical known) inode (((durable.visible path known).1).trans named))⟩,
+    durable.visible, durable.weaken (fun _ same => .inr (.inl same))⟩
 
 private theorem liveKeeper (named : before.files.names (directory.file (.walSegment first)) = some old) :
     reached.files.names (directory.file (.walSegment first)) = some (if effective then replacement else old) := by

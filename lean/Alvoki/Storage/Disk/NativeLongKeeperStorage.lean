@@ -354,9 +354,9 @@ private theorem replacementRootFrame
       (children.bytes _ (.inl rfl) file inode ((children.visible file).trans (named.trans bound))).trans (content inode bound)⟩
 
 /-- The common successful prefix ends at the literal fsync of the
-fresh staging descriptor. The prune barrier settles the old keeper
-name. Creation, writing, the selected pending entry and regular-file
-fsync carry that binding through to the rename issue. -/
+fresh staging descriptor. The prune barrier settles the protected
+child names, including the old keeper. Creation, writing, the selected
+pending entry and regular-file fsync carry them to the rename issue. -/
 theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
     (state : NativeReadyState) (view : OpenCloseHeapView heap image)
@@ -404,8 +404,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     SameLiveWalNames state.session.directory (observe entry) (observe authorized) ∧
     SameLiveWalNames state.session.directory (observe unlinked) (observe synced) ∧
     (observe synced).files.names (state.session.directory.file (.walSegment plan.keeper)) = some old ∧
-    (∀ names ∈ (observe synced).crashNames,
-      names (state.session.directory.file (.walSegment plan.keeper)) = some old) ∧
+    (∀ names ∈ (observe synced).crashNames, ∀ file, state.crashPath (state.session.directory.file file) →
+      names (state.session.directory.file file) = (observe synced).files.names (state.session.directory.file file)) ∧
     ∃ (issued : heap) (file : IO.FS.Handle) (slot : DescriptorSlot) (replacement : Nat),
       calls.sync file issued = .ok () synced ∧
       attachedReadSlot view file slot replacement issued ∧ replacement ≠ old ∧
@@ -481,14 +481,18 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
   have oldAtRename := (toSynced.visible keeperPath keepScope).1.trans ((prunedFootprint keeperPath keepScope).1.trans oldNamed)
   have parentFrame := prunedParentFrame.trans
     (toSynced.weaken (scope := (· = dir.path)) (fun _ same => same.symm ▸ rootScope))
-  have keeperSettled := (toSynced.weaken (scope := (· = keeperPath)) (fun _ same => same.symm ▸ keepScope)).settledFrom
-    (fun names possible path same => same.symm ▸ settled names possible (.walSegment plan.keeper))
+  have childrenSettled := (toSynced.weaken
+    (scope := fun name => state.crashPath name ∧ ∃ file, name = dir.file file)
+    (fun _ child => child.1)).settledFrom (by
+      intro names possible name child
+      obtain ⟨file, rfl⟩ := child.2
+      exact settled names possible file)
   have stageNames : SameLiveWalNames dir (observe unlinked) (observe synced) := prunedNames.trans (acquiredNames.trans
     (writeFrame.walNames.trans (flushFrame.walNames.trans (recordFrame.walNames.trans
       (loadFrame.walNames.trans (clearFrame.walNames.trans (fun start =>
         congrFun fileSync.names (dir.file (.walSegment start)))))))))
   refine ⟨prunedFootprint.trans toSynced.visible, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
-    oldAtRename, fun names possible => (keeperSettled names possible _ rfl).trans oldAtRename,
+    oldAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
     consumed, file, slot, replacement, stageSync, syncedStage.1, distinct, stagedBinding, stageBytes, fileSync,
     syncedVisible, ?_⟩
   intro liveEffects pendingAtEntry

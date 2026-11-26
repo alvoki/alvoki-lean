@@ -50,6 +50,116 @@ private theorem WalRootSyncEffect.framesSelectedRetry {state : NativeReadyState}
     (fun _ => NativeReadyState.selectedRetryPath_rootOrChild)
   exact ⟨fun path held => ⟨(durable path held).1, by rw [live]; intros; rfl⟩, durable, parent⟩
 
+/-- The replacement is exact. The old inode's payload choices remain
+relevant while a joint survivor can still name it. -/
+private theorem WalKeeperRenameEffect.acceptsKeeperSurvivors
+    {directory : DiskDirectory} {target : Target} {old replacement : Nat} {effective : Bool}
+    {before reached : CheckpointStorageObservation} {beforeBytes reachedBytes : Nat → ByteArray}
+    (effect : WalKeeperRenameEffect directory target.first replacement effective before reached beforeBytes reachedBytes)
+    (settled : ∀ names ∈ before.crashNames, names (directory.file (.walSegment target.first)) = some old)
+    (staged : before.files.bytes replacement = [target.trimmed])
+    (oldPayload : ∀ bytes ∈ before.files.bytes old, target.Accepts (some bytes)) :
+    RawOpenRetryTrace.KeeperCrashChoices directory target reached := by
+  intro names survives
+  obtain ⟨moved, _, named, bytes, _⟩ := effect.keeperSurvivors settled staged names survives
+  refine ⟨_, named, fun payload sampled => ?_⟩
+  rw [bytes] at sampled
+  cases moved with
+  | false => exact oldPayload payload sampled
+  | true =>
+    have exactPayload : payload = target.trimmed := List.mem_singleton.mp sampled
+    exact exactPayload ▸ target.acceptsTrimmed
+
+/-- The final sync selects the live trimmed inode when it settles. On
+a before-effect error the reboot uses one of the prior joint maps. -/
+private theorem WalRootSyncEffect.acceptsKeeperSurvivors
+    {directory : DiskDirectory} {target : Target} {entry reached : CheckpointStorageObservation}
+    {effective : Bool} {replacement : Nat}
+    (effect : WalRootSyncEffect directory effective entry reached)
+    (prior : RawOpenRetryTrace.KeeperCrashChoices directory target entry)
+    (live : entry.files.names (directory.file (.walSegment target.first)) = some replacement)
+    (durable : entry.files.bytes replacement = [target.trimmed]) :
+    RawOpenRetryTrace.KeeperCrashChoices directory target reached := by
+  intro names survives
+  let file := DiskFile.walSegment target.first
+  have carries (inode : Nat) (named : names (directory.file file) = some inode) :
+      reached.files.bytes inode = entry.files.bytes inode :=
+    effect.bytes names (.inr survives) file inode named
+  cases applied : effective with
+  | false =>
+    obtain ⟨earlier, possible, same⟩ := effect.unchanged applied names survives
+    obtain ⟨inode, earlierNamed, accepted⟩ := prior earlier possible
+    have named := (same file).trans earlierNamed
+    exact ⟨inode, named, fun payload member => accepted payload (carries inode named ▸ member)⟩
+  | true =>
+    have named := (effect.settled applied names survives file).trans ((effect.visible file).trans live)
+    refine ⟨replacement, named, fun payload member => ?_⟩
+    rw [carries replacement named, durable] at member
+    exact (List.mem_singleton.mp member) ▸ target.acceptsTrimmed
+
+/-- A settled selected child stays settled on any survivors of an
+ineffective barrier. An effective barrier uses its live binding. -/
+private theorem WalRootSyncEffect.keepsSelectedChildren
+    {state : NativeReadyState} {entry reached : CheckpointStorageObservation} {effective : Bool}
+    (effect : WalRootSyncEffect state.session.directory effective entry reached)
+    (prior : ∀ names ∈ entry.crashNames, ∀ path, state.selectedRetryPath path →
+      path ≠ state.session.directory.path → names path = entry.files.names path) :
+    ∀ names ∈ reached.crashNames, ∀ path, state.selectedRetryPath path →
+      path ≠ state.session.directory.path → names path = reached.files.names path := by
+  intro names survives path selected notRoot
+  rcases NativeReadyState.selectedRetryPath_rootOrChild selected with atRoot | ⟨file, rfl⟩
+  · exact False.elim (notRoot atRoot)
+  cases applied : effective with
+  | true => exact effect.settled applied names survives file
+  | false =>
+    obtain ⟨earlier, possible, same⟩ := effect.unchanged applied names survives
+    exact (same file).trans ((prior earlier possible _ selected notRoot).trans (effect.visible file).symm)
+
+/-- Keeper replacement has no effect on the other selected children.
+Their prior settlement therefore carries through the actual rename. -/
+private theorem WalKeeperRenameEffect.keepsSelectedChildren
+    {state : NativeReadyState} {first replacement : Nat} {effective : Bool}
+    {entry reached : CheckpointStorageObservation} {entryBytes reachedBytes : Nat → ByteArray}
+    (effect : WalKeeperRenameEffect state.session.directory first replacement effective entry reached entryBytes reachedBytes)
+    (ready : state.Valid) (atKeeper : first = state.writer.wal.active.first)
+    (prior : ∀ names ∈ entry.crashNames, ∀ path, state.selectedRetryPath path →
+      path ≠ state.session.directory.path → names path = entry.files.names path) :
+    ∀ names ∈ reached.crashNames, ∀ path, state.selectedRetryPath path →
+      path ≠ state.session.directory.path → names path = reached.files.names path := by
+  let scope : FilePath → Prop := fun path => state.selectedRetryPath path ∧ path ≠ state.session.directory.path
+  have frame := effect.framesOffTarget (scope := scope)
+    (fun _ retained => NativeReadyState.selectedRetryPath_rootOrChild retained.1) (by
+      intro path retained
+      exact ⟨atKeeper.symm ▸ state.protectedPathNeWalFromActive ready retained.1 (Nat.le_refl _),
+        state.stagedWalOutsideRetryFootprint path retained.1⟩)
+  intro names possible path protectedPath notRoot
+  exact frame.settledFrom (fun priorMap earlier name retained => prior priorMap earlier name retained.1 retained.2)
+    names possible path ⟨protectedPath, notRoot⟩
+
+/-- Read the admitted keeper from the same namespace used to read the
+settled marker. Its payload belongs to the selected inode at the crash. -/
+theorem RawWriteRebootEntry.selectsRepairedKeeper
+    {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap FileImage}
+    {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
+    {visible : heap → Nat → ByteArray} {failed rebooted : heap} {target : Target}
+    (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
+    (first : target.first = state.writer.wal.active.first)
+    (keeper : RawOpenRetryTrace.KeeperCrashChoices state.session.directory target (storage failed))
+    (marker : (view.files rebooted).image.directory.active.walBoundary = target.pair.walBoundary) :
+    ∃ inode count, names rebooted (state.session.directory.file (.walSegment target.first)) = some inode ∧
+      ((names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)).map
+        WAL.Boundary.decode = some (.ok count) ∧
+      WAL.Boundary.selectRetained target.first count (visible rebooted inode) = .ok target.trimmed := by
+  obtain ⟨inode, named, accepted⟩ := keeper _ seen.chosen
+  have sampled := seen.samplesWal (state.session.directory.file (.walSegment target.first)) inode
+    (.inr (.inr (congrArg (fun start => state.session.directory.file (.walSegment start)) first))) named
+  obtain ⟨_, _, payload, count, marked, decoded, _⟩ := DirectoryPublication.Bindings.walRange_accounting target.decoded
+  have markerBytes : (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted) = some payload := by
+    have physical := congrArg DirectoryPublication.Bindings.walBoundary seen.activePair
+    exact physical.symm.trans (marker.trans marked)
+  exact ⟨inode, count, named, by rw [markerBytes, Option.map_some, decoded],
+    target.selectKeeper marked decoded (accepted _ sampled)⟩
+
 
 section PruneDirectorySync
 
@@ -617,9 +727,11 @@ private theorem MarkedDirectoryReadReport.carriesPrunedCatalog
     initial firstCovered cutoffCovered bounded (fun start _ _ => beforePrune start) later listed
     source.remove stageWrite groupSync source.rename unlinkNames unlinks (fun start _ => afterPrune start) gone
 
+set_option maxHeartbeats 1200000 in
 /-- Feed the actual repair stopped by the final directory fsync into
-the same fixed opener's cleanup and failed-call prefix. This applies
-to whichever WAL target the preceding operation left selected. -/
+the same fixed opener's cleanup and failed-call prefix. With the
+protected child frame, any later sampled reboot re-enters that same
+target, whether it names the old keeper or the trimmed replacement. -/
 theorem MarkedWalExtentReports.extendsFinalSyncError
     {operations : MarkedRetryChunkOperations
       (SyncHandleRouting.Cache (DescriptorInventory × DescriptorSlot × Nat)) dir layout}
@@ -729,7 +841,30 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       (storage finalized.reached).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed] ∧
       visible finalized.reached (staged.inventory.inode staged.slot.description) = target.trimmed ∧
       (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
-      (view.files finalized.reached).image.later.DurablyEmpty := by
+      (view.files finalized.reached).image.later.DurablyEmpty ∧
+      (RawOpenRetryTrace.LiveKeeperCrashChoices dir layout.target (storage afterKeeper) →
+        (storage afterKeeper).files.Frames (· = (dir).file (.walSegment layout.keeper.first)) (storage synced).files →
+        (∀ names ∈ (storage synced).crashNames, ∀ file, state.crashPath ((dir).file file) →
+          names ((dir).file file) = retryNames synced ((dir).file file)) →
+        (storage synced).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed] →
+        (source.rename ((dir).file .stagedWal) ((dir).file (.walSegment layout.keeper.first))
+          synced = .ok () renamedHeap →
+          WalKeeperRenameEffect dir layout.keeper.first (staged.inventory.inode staged.slot.description) true
+            (storage synced) (storage renamedHeap) (visible synced) (visible renamedHeap)) →
+        ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some handle) issued →
+          (storage renamedHeap).CrashFileFrame
+            (fun path => path = (dir).file (.walSegment layout.keeper.first) ∨
+              state.selectedRetryPath path ∧ path ≠ (dir).path) (storage issued)) →
+        dispose.ScopeFrames finalized (fun before after =>
+          (storage before).CrashFileFrame
+            (fun path => path = (dir).file (.walSegment layout.keeper.first) ∨
+              state.selectedRetryPath path ∧ path ≠ (dir).path) (storage after)) →
+        RawOpenRetryTrace.KeeperCrashChoices dir target (storage finalized.reached) ∧
+        ∀ {rebooted}, RawWriteRebootEntry state view storage retryNames visible finalized.reached rebooted →
+          (view.files first).image.Valid target → selectedWal first →
+          target.pair.manifest = state.writer.target.pair.manifest →
+          RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
+            TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = []) := by
   have prunedFrame := framesReturnedPrune dir layout.boundedPlan source.remove stageWrite groupSync source.rename
     retryFrame (fun atHeap => NativeReadyState.SelectedRetryFrame.refl state (storage atHeap) (visible atHeap))
     (fun first last => first.trans last) (unlink := by
@@ -750,8 +885,9 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       source.remove source.stage source.rename startFiles measured authorize prune written persisted moved loaded atIssue
       census issuedFiles root keeper scratch keeperBytes keeperDurable reachedIssue failed effect
   obtain ⟨liveRoot, rootBinding⟩ := issue.rawDirectoryTarget view retryNames atIssue census root
+  have errorEffect := effect failed liveRoot rootBinding issuedFiles
   have errorNames : walNameFrame synced reached := fun start =>
-    (congrArg Option.isSome ((effect failed liveRoot rootBinding issuedFiles).2.1.visible (.walSegment start))).trans
+    (congrArg Option.isSome (errorEffect.2.1.visible (.walSegment start))).trans
       ((namesOfLoad start).trans (namesOfRename start))
   have laterBound (ordinal : Nat) (member : ordinal ∈ layout.boundedPlan.newer) : target.range.through < ordinal :=
     sameTarget ▸ pruning.later ordinal member
@@ -772,12 +908,65 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   obtain ⟨sameName, sameBytes⟩ := keeperStorage _ rfl
   have afterCleanup := (keeperCleanup _ (congrArg (fun start => (dir).file (.walSegment start))
     (congrArg Target.first sameTarget))).2 _ named
-  have liveAtSync := (effect failed liveRoot rootBinding issuedFiles).2.2.2
+  have liveAtSync := errorEffect.2.2.2
   have live := (List.cons.inj afterCleanup).1.trans
     ((congrFun liveAtSync _).trans (keeperBytes.trans (congrArg Target.trimmed sameTarget)))
-  refine ⟨returned, selectedEffects, sameName.trans named, (sameBytes _ named).trans durable, live, ?_⟩
-  rw [finalImage, workerImage, ← sameTarget]
-  exact issue.visibleAfterRename effective
+  have ⟨active, later⟩ : (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
+      (view.files finalized.reached).image.later.DurablyEmpty := by
+    rw [finalImage, workerImage, ← sameTarget]
+    exact issue.visibleAfterRename effective
+  refine ⟨returned, selectedEffects, sameName.trans named, (sameBytes _ named).trans durable, live, active, later, ?_⟩
+  intro liveBeforeRepair oldStorage childrenSettled stagedAtSync renameEffect loadSurvivors cleanupSurvivors
+  let keeperPath := (dir).file (.walSegment layout.keeper.first)
+  let immutableChild : FilePath → Prop := fun path => state.selectedRetryPath path ∧ path ≠ (dir).path
+  let crashScope : FilePath → Prop := fun path => path = keeperPath ∨ immutableChild path
+  let replacement := staged.inventory.inode staged.slot.description
+  obtain ⟨old, oldNamed, oldPayload⟩ := liveBeforeRepair.frame oldStorage rfl
+  have keeperInScope : state.crashPath keeperPath :=
+    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl
+      (congrArg (fun start => (dir).file (.walSegment start)) targetAtKeeper)))
+  have settled : ∀ names ∈ (storage synced).crashNames, names keeperPath = some old :=
+    fun names possible => (childrenSettled names possible (.walSegment layout.keeper.first) keeperInScope).trans oldNamed
+  have inodeMove := renameEffect moved
+  have atRename : (storage renamedHeap).files.names keeperPath = some replacement := by
+    simpa [keeperPath, replacement, WalKeeperRenameEffect.rebind] using
+      inodeMove.visible keeperPath (.inr ⟨.walSegment layout.keeper.first, rfl⟩)
+  have loadedFrame : (storage renamedHeap).CrashFileFrame crashScope (storage issued) := loadSurvivors loaded
+  have keeperAtIssue : retryNames issued keeperPath = some replacement :=
+    (loadedFrame.toFrames.visible keeperPath (.inl rfl)).1.trans atRename
+  have atIssueSurvivors : RawOpenRetryTrace.KeeperCrashChoices dir layout.target (storage issued) :=
+    (inodeMove.acceptsKeeperSurvivors (target := layout.target) settled stagedAtSync oldPayload).frame loadedFrame (.inl rfl)
+  have atErrorSurvivors : RawOpenRetryTrace.KeeperCrashChoices dir layout.target (storage reached) :=
+    errorEffect.2.1.acceptsKeeperSurvivors atIssueSurvivors keeperAtIssue keeperDurable
+  have afterWorker : (storage reached).CrashFileFrame crashScope (storage finalized.reached) :=
+    cleanupSurvivors.afterWorker (fun first last => first.trans last)
+  have survivesCleanup : RawOpenRetryTrace.KeeperCrashChoices dir target (storage finalized.reached) :=
+    sameTarget ▸ atErrorSurvivors.frame afterWorker (.inl rfl)
+  refine ⟨survivesCleanup, ?_⟩
+  intro rebooted seen initial priorStorage sameManifest
+  have immutableAtStage (names : FilePath → Option Nat) (possible : names ∈ (storage synced).crashNames)
+      (path : FilePath) (protectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
+      names path = retryNames synced path := by
+    rcases NativeReadyState.selectedRetryPath_rootOrChild protectedPath with rootPath | ⟨file, rfl⟩
+    · exact False.elim (notRoot rootPath)
+    exact childrenSettled names possible file (NativeReadyState.crashPath_iff_write.mpr
+      (protectedPath.imp id Or.inr))
+  have immutableAtRename := inodeMove.keepsSelectedChildren currentReady targetAtKeeper immutableAtStage
+  have loadChildren := loadedFrame.toFrames.weaken (scope := immutableChild) (fun _ child => .inr child)
+  have immutableAtIssue (names : FilePath → Option Nat) (possible : names ∈ (storage issued).crashNames)
+      (path : FilePath) (selectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
+      names path = retryNames issued path :=
+    loadChildren.settledFrom (fun prior possible path child => immutableAtRename prior possible path child.1 child.2)
+      names possible path ⟨selectedPath, notRoot⟩
+  have immutableAtError := errorEffect.2.1.keepsSelectedChildren immutableAtIssue
+  have cleanupChildren := afterWorker.toFrames.weaken (scope := immutableChild) (fun _ child => .inr child)
+  have immutableAtReboot (path : FilePath) (selectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
+      retryNames rebooted path = retryNames finalized.reached path :=
+    cleanupChildren.settledFrom (fun prior possible path child => immutableAtError prior possible path child.1 child.2)
+      _ seen.chosen path ⟨selectedPath, notRoot⟩
+  have actualDurability := ((selectedEffects.preserves initial).2.2.2 priorStorage).2.2.1
+  exact seen.selectsRetryAfterRepair (sameTarget ▸ targetAtKeeper) sameManifest actualDurability
+    immutableAtReboot survivesCleanup
 
 /-- Maintain the prior writer's file footprint while identifying the
 cached descriptor allocated by this actual retry. -/
@@ -786,7 +975,8 @@ private def repairRootScope (state : NativeReadyState) (current : DescriptorInve
 
 /-- The actual failed replacement rename, including a reported move
 before EIO, enters the shared failed-call fold with the original
-selected catalog, the observed keeper, and the reached cleanup heap. -/
+selected catalog, the observed keeper, and the reached cleanup heap.
+The crash candidates at that heap can still name the old keeper. -/
 theorem MarkedWalExtentReports.extendsLongRenameError
     (before : RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath selectedWal prior)
     (sameTarget : layout.target = target)
@@ -900,7 +1090,15 @@ theorem MarkedWalExtentReports.extendsLongRenameError
         retryNames after ((dir).file (.walSegment start)) = retryNames before ((dir).file (.walSegment start))) :
     ∃ returned : source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached,
       RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath selectedWal
-        (prior.next input returned) := by
+        (prior.next input returned) ∧
+      (RawOpenRetryTrace.LiveKeeperCrashChoices dir target (storage afterKeeper) →
+        dispose.ScopeFrames finalized (fun before after =>
+          (storage before).CrashFileFrame
+            (fun path => path = (dir).file (.walSegment target.first) ∨
+              state.selectedRetryPath path ∧ path ≠ (dir).path) (storage after)) →
+        RawOpenRetryTrace.KeeperCrashChoices dir target (storage finalized.reached) ∧
+        ∀ names ∈ (storage finalized.reached).crashNames, ∀ path, state.selectedRetryPath path → path ≠ (dir).path →
+          names path = retryNames finalized.reached path) := by
   have path : layout.boundedPlan.keeper = target.first := congrArg Target.first sameTarget
   have payload : layout.keeper.bytes = target.trimmed := congrArg Target.trimmed sameTarget
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
@@ -927,7 +1125,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
       (layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize) pruned = .ok () recorded := by
     rw [layout.boundedPlan_extractKeeper]
     exact written
-  obtain ⟨durableFrame, rootFrame, _, authorizedScope, stageScope, oldAtRename, oldSettled,
+  obtain ⟨durableFrame, rootFrame, _, authorizedScope, stageScope, oldAtRename, childrenSettled,
     issued, file, slot, replacement, _, _, apart, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, protects⟩ :=
     source.stage.prunedAndSyncedReplacement callbacks
       (repairRootScope state (view.descriptors afterKeeper) admission.cached) view storage visible buffered
@@ -937,8 +1135,12 @@ theorem MarkedWalExtentReports.extendsLongRenameError
       authorize unlinks suffixSync writtenPrefix persisted
   have renamedOld : retryNames synced ((dir).file (.walSegment target.first)) = some old := by
     simpa only [repairRootScope, path] using oldAtRename
+  have keeperPath : state.crashPath ((dir).file (.walSegment target.first)) :=
+    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl
+      (congrArg (fun start => (dir).file (.walSegment start)) targetAtKeeper)))
   have oldChoices : ∀ names ∈ (storage synced).crashNames, names ((dir).file (.walSegment target.first)) = some old := by
-    simpa only [repairRootScope, path] using oldSettled
+    intro names possible
+    exact (childrenSettled names possible (.walSegment target.first) keeperPath).trans renamedOld
   have stagedNamed := (congrFun fileSync.names ((dir).file .stagedWal)).trans stageAtIssue
   have atIssueBytes : visible issued replacement = target.trimmed := by
     rw [bytesAtIssue, layout.boundedPlan_extractKeeper]
@@ -953,9 +1155,6 @@ theorem MarkedWalExtentReports.extendsLongRenameError
   have emptyPending := listing.emptyPendingAfterLongKeeper selected seals readPendingFrames listingPendingFrames
     (fun path handle => (callbacks).modifyPending seed.pendingRef (pushPending path handle)) observedLong keeperRead
   have live := protects liveEffects emptyPending
-  have keeperPath : state.crashPath ((dir).file (.walSegment target.first)) :=
-    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl
-      (congrArg (fun start => (dir).file (.walSegment start)) targetAtKeeper)))
   have sameOld : visible synced old = visible afterKeeper old :=
     (List.cons.inj ((live _ keeperPath).2 old oldNamed)).1
   have atRename : RawOpenRetryTrace.KeeperAt view dir target retryNames visible synced := by
@@ -998,7 +1197,28 @@ theorem MarkedWalExtentReports.extendsLongRenameError
         errorNames namesOfCleanup firstCovered cutoffCovered bounded
         later listed unlinkNames initial.1 gone
       exact ⟨nextWindow, finalKeeper, finalDurability, nextSuffix⟩)
-  exact ⟨returned, effects⟩
+  refine ⟨returned, effects, ?_⟩
+  intro acceptedBefore cleanupSurvivors
+  obtain ⟨inode, named, acceptedReady⟩ := acceptedBefore.frame durableFrame keeperPath
+  have sameInode : inode = old := Option.some.inj (named.symm.trans renamedOld)
+  subst inode
+  have renamedEffect := (observation failed stagedNamed renamedOld apart).1
+  have atError := renamedEffect.acceptsKeeperSurvivors oldChoices stagedDurable acceptedReady
+  have cleanup := cleanupSurvivors.afterWorker (fun earlier later => earlier.trans later)
+  refine ⟨atError.frame cleanup (.inl rfl), ?_⟩
+  have immutableAtStage (names : FilePath → Option Nat) (possible : names ∈ (storage synced).crashNames)
+      (path : FilePath) (protectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
+      names path = retryNames synced path := by
+    rcases NativeReadyState.selectedRetryPath_rootOrChild protectedPath with rootPath | ⟨file, rfl⟩
+    · exact False.elim (notRoot rootPath)
+    exact childrenSettled names possible file (NativeReadyState.crashPath_iff_write.mpr
+      (protectedPath.imp id Or.inr))
+  have immutableAtError := renamedEffect.keepsSelectedChildren currentReady targetAtKeeper immutableAtStage
+  let immutableChild : FilePath → Prop := fun path => state.selectedRetryPath path ∧ path ≠ (dir).path
+  have cleanupChildren := cleanup.toFrames.weaken (scope := immutableChild) (fun _ child => .inr child)
+  intro names survives path selectedPath notRoot
+  exact cleanupChildren.settledFrom (fun prior possible path child => immutableAtError prior possible path child.1 child.2)
+    names survives path ⟨selectedPath, notRoot⟩
 
 end SelectedRetry
 
