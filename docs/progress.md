@@ -56,6 +56,14 @@ whether the history at the final failed open contains the whole pending
 batch or omits it. Both terminal proofs allow execution to end at that error.
 [Late publication recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
+A returned checkpoint error identifies a preflight rejection, the first
+failed publication step, or failure to restore the ready phase after publication.
+For a failed manifest rename, the returned prefix identifies the prior staged
+write, the successful sync of its descriptor, and the cache and heap reached
+by the rename. Connecting that return to the old or new manifest selected at
+reboot still requires a local physical rename effect.
+[Returned checkpoint errors](../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
+
 At the earlier sync of `MANIFEST.next`, the returned run writes and
 first directory barrier establish storage for the previous checkpoint.
 The local file-sync contract allows arbitrary durable contents of the

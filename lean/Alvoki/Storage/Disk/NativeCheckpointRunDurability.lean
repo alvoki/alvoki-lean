@@ -107,8 +107,8 @@ theorem NativeCheckpointSourceStop.returnedRunsStoreBytes
 
 /-- Split the returned run prefix at its directory barrier. The
 resolver and fsync receipt use the heaps reached by that prefix. -/
-theorem NativeCheckpointSourceStop.returnedRunsBarrier
-    (stop : NativeCheckpointSourceStop current primitives fsync stage reason stoppedAt)
+theorem NativeCheckpointSourcePrefix.returnedRunsBarrier
+    (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
     {afterBarrier : CheckpointWorld heap}
     (throughBarrier : let directory := current.current.ready.state.session.directory
       let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
@@ -129,6 +129,11 @@ theorem NativeCheckpointSourceStop.returnedRunsBarrier
       .ok (.ok ()) afterBarrier := barrier
   obtain ⟨handle, atSync, picked, returnedFsync⟩ := primitives.returnedFsync fsync directory.path directory.path actual
   exact ⟨afterRuns, handle, atSync, runCalls, picked, returnedFsync⟩
+
+abbrev NativeCheckpointSourceStop.returnedRunsBarrier
+    (stop : NativeCheckpointSourceStop current primitives fsync stage reason stoppedAt)
+    {afterBarrier : CheckpointWorld heap} :=
+  stop.toNativeCheckpointSourcePrefix.returnedRunsBarrier (afterBarrier := afterBarrier)
 
 /-- The final manifest barrier reaches past the successful run directory
 barrier. Extract its returned prefix and actual successful fsync. -/

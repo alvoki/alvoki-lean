@@ -28,38 +28,43 @@ theorem run_bind {halt image α β : Type} (action : ExceptT IO.Error (EStateM h
   | error => rfl
   | ok result => cases result <;> rfl
 
-private theorem forM_firstStop {image : Type}
+private def exitResult {halt image : Type} (exit : Except IO.Error halt) (after : image) :
+    EStateM.Result halt image (Except IO.Error Unit) :=
+  match exit with
+  | .error cause => .ok (.error cause) after
+  | .ok stop => .error stop after
+
+private theorem forM_firstExit {image : Type}
     (actions : List Step) (perform : Step → ExceptT IO.Error (EStateM FilePath image) Unit)
-    {before after : image} {step : Step} {path : FilePath}
-    (stopped : (actions.forM (tagStop perform)).run before = .error (step, path) after) :
-    ∃ done remaining atIssue, actions = done ++ step :: remaining ∧
+    {before after : image} {exit : Except IO.Error (Step × FilePath)}
+    (ended : (actions.forM (tagStop perform)).run before = exitResult exit after) :
+    ∃ done step remaining atIssue, actions = done ++ step :: remaining ∧
       (done.forM perform).run before = .ok (.ok ()) atIssue ∧
-      (perform step).run atIssue = .error path after := by
+      (tagStop perform step).run atIssue = exitResult exit after := by
   induction actions generalizing before with
   | nil =>
-    change EStateM.Result.ok (Except.ok ()) before = .error (step, path) after at stopped
-    cases stopped
+    change EStateM.Result.ok (Except.ok ()) before = exitResult exit after at ended
+    cases exit <;> cases ended
   | cons issued tail ih =>
-    change (ExceptT.bind (tagStop perform issued) (fun _ => tail.forM (tagStop perform))).run before = _ at stopped
-    rw [run_bind] at stopped
+    change (ExceptT.bind (tagStop perform issued) (fun _ => tail.forM (tagStop perform))).run before = _ at ended
+    rw [run_bind] at ended
     cases call : (perform issued).run before with
     | error stoppedPath reached =>
       have tagged : (tagStop perform issued).run before = .error (issued, stoppedPath) reached := by
         change perform issued before = _ at call
         simp only [tagStop, ExceptT.run, call]
-      rw [tagged] at stopped
-      obtain ⟨⟨rfl, rfl⟩, rfl⟩ := EStateM.Result.error.inj stopped
-      exact ⟨[], tail, before, rfl, rfl, call⟩
+      rw [tagged] at ended
+      exact ⟨[], issued, tail, before, rfl, rfl, tagged.trans ended⟩
     | ok returned reached =>
       have tagged : (tagStop perform issued).run before = .ok returned reached := by
         change perform issued before = _ at call
         simp only [tagStop, ExceptT.run, call]
-      rw [tagged] at stopped
+      rw [tagged] at ended
       cases returned with
-      | error cause => cases stopped
+      | error cause => exact ⟨[], issued, tail, before, rfl, rfl, tagged.trans ended⟩
       | ok value =>
-        obtain ⟨done, remaining, atIssue, order, returnedPrefix, cut⟩ := ih stopped
-        refine ⟨issued :: done, remaining, atIssue, congrArg (List.cons issued) order, ?_, cut⟩
+        obtain ⟨done, step, remaining, atIssue, order, returnedPrefix, cut⟩ := ih ended
+        refine ⟨issued :: done, step, remaining, atIssue, congrArg (List.cons issued) order, ?_, cut⟩
         change (ExceptT.bind (perform issued) (fun _ => done.forM perform)).run before = _
         rw [run_bind, call]
         exact returnedPrefix
@@ -72,8 +77,38 @@ theorem run_firstStop {image : Type} {count : Nat}
     (stopped : (run count (tagStop perform)).run before = .error (step, path) after) :
     ∃ done remaining atIssue, steps count = done ++ step :: remaining ∧
       (done.forM perform).run before = .ok (.ok ()) atIssue ∧
-      (perform step).run atIssue = .error path after :=
-  forM_firstStop (steps count) perform stopped
+      (perform step).run atIssue = .error path after := by
+  obtain ⟨done, issued, remaining, atIssue, ordered, earlier, cut⟩ :=
+    forM_firstExit (steps count) perform (exit := .ok (step, path)) stopped
+  change (tagStop perform issued).run atIssue = .error (step, path) after at cut
+  simp only [tagStop, ExceptT.run] at cut
+  cases call : perform issued atIssue with
+  | ok value heap => simp [call] at cut
+  | error reason heap =>
+    rw [call] at cut
+    obtain ⟨⟨rfl, rfl⟩, rfl⟩ := EStateM.Result.error.inj cut
+    exact ⟨done, remaining, atIssue, ordered, earlier, call⟩
+
+/-- A returned diagnostic also fixes the first failing step and the exact
+heap reached by its successful predecessors. An earlier stop or ordinary
+error cannot be replayed as another issue. -/
+theorem run_firstReturnedError {image : Type} {count : Nat}
+    {perform : Step → ExceptT IO.Error (EStateM FilePath image) Unit}
+    {before after : image} {cause : IO.Error}
+    (failed : (run count (tagStop perform)).run before = .ok (.error cause) after) :
+    ∃ done step remaining atIssue, steps count = done ++ step :: remaining ∧
+      (done.forM perform).run before = .ok (.ok ()) atIssue ∧
+      (perform step).run atIssue = .ok (.error cause) after := by
+  obtain ⟨done, issued, remaining, atIssue, ordered, earlier, cut⟩ :=
+    forM_firstExit (steps count) perform (exit := .error cause) failed
+  change (tagStop perform issued).run atIssue = .ok (.error cause) after at cut
+  simp only [tagStop, ExceptT.run] at cut
+  cases call : perform issued atIssue with
+  | error reason heap => simp [call] at cut
+  | ok value heap =>
+    rw [call] at cut
+    obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj cut
+    exact ⟨done, issued, remaining, atIssue, ordered, earlier, call⟩
 
 private theorem runSteps_nodup (count : Nat) : (runSteps count).Nodup := by
   induction count with
@@ -142,6 +177,13 @@ theorem prefixBeforeManifestSync {count : Nat} {done remaining : List Step}
     (ordered : steps count = done ++ .manifest .syncStaged :: remaining) :
     done = (runSteps count ++ [.syncRunsDirectory]) ++ [.manifest .writeStaged] := by
   apply samePrefix ordered (later := [.manifest .renameStaged, .manifest .syncDirectory])
+  simp [steps, Publication.steps, List.append_assoc]
+
+/-- The manifest rename follows the successful staged file sync. -/
+theorem prefixBeforeManifestRename {count : Nat} {done remaining : List Step}
+    (ordered : steps count = done ++ .manifest .renameStaged :: remaining) :
+    done = runSteps count ++ [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged] := by
+  apply samePrefix ordered (later := [.manifest .syncDirectory])
   simp [steps, Publication.steps, List.append_assoc]
 
 /-- The manifest directory barrier follows the returned rename. -/

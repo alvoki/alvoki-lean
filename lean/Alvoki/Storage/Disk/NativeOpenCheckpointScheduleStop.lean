@@ -86,11 +86,11 @@ noncomputable def runCheckpointOnOpenPhaseUntilSyncStop {heap : Type}
 
 variable {heap : Type} {opened : NativeOpenedHandle heap}
 
-/-- The prefix and stopped callback are derived from one execution.
-The issue records its heap and consumed cache before any reboot is chosen. -/
-structure NativeCheckpointSourceStop (current : NativeOpenedPosition opened)
+/-- The completed actions and issued step come from the same
+checkpoint preparation, phase update and ordered publication prefix. -/
+structure NativeCheckpointSourcePrefix (current : NativeOpenedPosition opened)
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
-    (stage : Step) (reason : FilePath) (reached : CheckpointWorld heap) where
+    (stage : Step) where
   next : Installed
   manifest : ByteArray
   poisoned : heap
@@ -104,11 +104,84 @@ structure NativeCheckpointSourceStop (current : NativeOpenedPosition opened)
   ordered : steps next.table.runs.length = completed ++ stage :: remaining
   returnedPrefix : (completed.forM (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
     fsync next manifest)).run (current.current.ready.state.cache, poisoned) = .ok (.ok ()) atIssue
+
+/-- A native stop records the actual callback interruption before any
+reboot or continuation is chosen. -/
+structure NativeCheckpointSourceStop (current : NativeOpenedPosition opened)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    (stage : Step) (reason : FilePath) (reached : CheckpointWorld heap)
+    extends NativeCheckpointSourcePrefix current primitives fsync stage where
   stoppedStep : (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
     fsync next manifest stage).run atIssue = .error reason reached
   stoppedCall : (runCheckpointOnOpenPhaseUntilSyncStop current.current.ready.state.session.directory
     opened.phase opened.get opened.set primitives fsync).run
       (current.current.ready.state.cache, current.reached) = .error (stage, reason) reached
+
+/-- An ordinary return keeps the failing callback's diagnostic and the
+exact heap it reached. As with an interruption, no later action is run. -/
+structure NativeCheckpointSourceError (current : NativeOpenedPosition opened)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    (stage : Step) (cause : IO.Error) (reached : CheckpointWorld heap)
+    extends NativeCheckpointSourcePrefix current primitives fsync stage where
+  failedStep : (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+    fsync next manifest stage).run atIssue = .ok (.error cause) reached
+  failedCall : (runCheckpointOnOpenPhaseUntilSyncStop current.current.ready.state.session.directory
+    opened.phase opened.get opened.set primitives fsync).run
+      (current.current.ready.state.cache, current.reached) = .ok (.error cause) reached
+
+/-- Expose the single publication run and final setter used by the
+literal opened checkpoint after a successful preparation. -/
+private theorem checkpointRunsFromPrepared (current : NativeOpenedPosition opened)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {next : Installed} {manifest : ByteArray}
+    (prepared : CheckpointPreflight current.current.ready.state.session.phase (.ok (next, manifest))) :
+    let state := current.current.ready.state
+    let perform := tagStop (primitives.checkpointStepUntilStop state.session.directory fsync next manifest)
+    ∃ poisoned,
+      opened.set opened.phase .poisoned current.reached = .ok () poisoned ∧
+      opened.contents poisoned opened.phase = some .poisoned ∧
+      (runCheckpointOnOpenPhaseUntilSyncStop state.session.directory opened.phase opened.get opened.set
+        primitives fsync).run (state.cache, current.reached) =
+      (ExceptT.bind (CheckpointPublication.run next.table.runs.length perform)
+        (fun _ => phaseAction (opened.set opened.phase (.ready next)))).run (state.cache, poisoned) := by
+  intro state perform
+  have loaded := opened.phaseEffects.reads current.reached opened.phase state.session.phase current.stored
+  obtain ⟨poisoned, wrote, stored⟩ := opened.phaseEffects.writes current.reached opened.phase state.session.phase
+    .poisoned current.stored
+  let load : CheckpointStopM heap Installed := do
+    (← phaseAction (opened.get opened.phase)).installed
+  let publish next manifest := publishPrepared (fun value => phaseAction (opened.set opened.phase value))
+    (CheckpointPublication.run next.table.runs.length
+      (tagStop (primitives.checkpointStepUntilStop state.session.directory fsync next manifest)))
+    (phaseAction (opened.set opened.phase (.ready next)))
+  have readPhase : load.run (state.cache, current.reached) =
+      (state.session.phase.installed : CheckpointStopM heap Installed).run (state.cache, current.reached) := by
+    change (ExceptT.bind (phaseAction (opened.get opened.phase))
+      (fun phase => phase.installed)).run (state.cache, current.reached) = _
+    rw [run_bind, phaseAction_run, loaded]
+  refine ⟨poisoned, wrote, stored, ?_⟩
+  change (withPreparedCheckpoint load validate publish).run (state.cache, current.reached) = _
+  rw [preflightFromRead prepared load readPhase publish]
+  change (ExceptT.bind (phaseAction (opened.set opened.phase .poisoned)) (fun _ =>
+    ExceptT.bind (CheckpointPublication.run next.table.runs.length perform)
+      (fun _ => phaseAction (opened.set opened.phase (.ready next))))).run (state.cache, current.reached) = _
+  rw [run_bind, phaseAction_run, wrote]
+
+/-- A rejected preflight never runs a publication or phase setter. -/
+private theorem checkpointRejectsBeforePublication (current : NativeOpenedPosition opened)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {cause : IO.Error} (rejected : CheckpointPreflight current.current.ready.state.session.phase (.error cause)) :
+    let state := current.current.ready.state
+    (runCheckpointOnOpenPhaseUntilSyncStop state.session.directory opened.phase opened.get opened.set
+      primitives fsync).run (state.cache, current.reached) = .ok (.error cause) (state.cache, current.reached) := by
+  intro state
+  let load : CheckpointStopM heap Installed := do (← phaseAction (opened.get opened.phase)).installed
+  have readPhase : load.run (state.cache, current.reached) =
+      (state.session.phase.installed : CheckpointStopM heap Installed).run (state.cache, current.reached) := by
+    change (ExceptT.bind (phaseAction (opened.get opened.phase))
+      (fun phase => phase.installed)).run (state.cache, current.reached) = _
+    rw [run_bind, phaseAction_run, opened.phaseEffects.reads current.reached opened.phase state.session.phase current.stored]
+  apply preflightFromRead rejected load readPhase
 
 /-- Derive the stop directly from the interpreted whole call starting at
 the original opened position, using each successful prefix once. -/
@@ -120,51 +193,100 @@ theorem NativeOpenedPosition.checkpointStopsFromWhole (current : NativeOpenedPos
         (current.current.ready.state.cache, current.reached) = .error (step, reason) reached) :
     Nonempty (NativeCheckpointSourceStop current primitives fsync step reason reached) := by
   have wholeCall := stopped
-  let state := current.current.ready.state
-  let directory := state.session.directory
-  have loaded := opened.phaseEffects.reads current.reached opened.phase state.session.phase current.stored
-  obtain ⟨result, preflight⟩ := CheckpointPreflight.total state.session.phase
-  let load : CheckpointStopM heap Installed := do
-    (← phaseAction (opened.get opened.phase)).installed
-  let perform next manifest := tagStop (primitives.checkpointStepUntilStop directory fsync next manifest)
-  let publish next manifest := publishPrepared (fun value => phaseAction (opened.set opened.phase value))
-    (CheckpointPublication.run next.table.runs.length (perform next manifest))
-    (phaseAction (opened.set opened.phase (.ready next)))
-  have readPhase : load.run (state.cache, current.reached) =
-      (state.session.phase.installed : CheckpointStopM heap Installed).run (state.cache, current.reached) := by
-    change (ExceptT.bind (phaseAction (opened.get opened.phase))
-      (fun phase => phase.installed)).run (state.cache, current.reached) = _
-    rw [run_bind, phaseAction_run, loaded]
-  change (withPreparedCheckpoint load validate publish).run (state.cache, current.reached) = _ at stopped
-  rw [preflightFromRead preflight load readPhase publish] at stopped
+  obtain ⟨result, preflight⟩ := CheckpointPreflight.total current.current.ready.state.session.phase
   cases result with
-  | error cause => cases stopped
+  | error cause =>
+    rw [checkpointRejectsBeforePublication current primitives fsync preflight] at stopped
+    cases stopped
   | ok prepared =>
     obtain ⟨next, manifest⟩ := prepared
-    obtain ⟨phase, wrote, stored⟩ := opened.phaseEffects.writes current.reached opened.phase state.session.phase
-      .poisoned current.stored
-    change (ExceptT.bind (phaseAction (opened.set opened.phase .poisoned)) (fun _ =>
-      ExceptT.bind (CheckpointPublication.run next.table.runs.length (perform next manifest))
-        (fun _ => phaseAction (opened.set opened.phase (.ready next))))).run (state.cache, current.reached) = _ at stopped
-    rw [run_bind, phaseAction_run, wrote] at stopped
-    simp only at stopped
-    rw [run_bind] at stopped
-    cases ran : (CheckpointPublication.run next.table.runs.length (perform next manifest)).run (state.cache, phase) with
+    obtain ⟨poisoned, wrote, stored, runs⟩ := checkpointRunsFromPrepared current primitives fsync preflight
+    rw [runs, run_bind] at stopped
+    cases ran : (CheckpointPublication.run next.table.runs.length
+      (tagStop (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+        fsync next manifest))).run (current.current.ready.state.cache, poisoned) with
     | error halt after =>
-      simp only [ran] at stopped
+      rw [ran] at stopped
       obtain ⟨rfl, rfl⟩ := EStateM.Result.error.inj stopped
       obtain ⟨done, remaining, atIssue, ordered, completedRun, issued⟩ := run_firstStop ran
-      exact ⟨⟨next, manifest, phase, done, remaining, atIssue, current.uses.checkpoint, preflight, wrote,
-        stored, ordered, completedRun, issued, wholeCall⟩⟩
+      exact ⟨⟨⟨next, manifest, poisoned, done, remaining, atIssue, current.uses.checkpoint, preflight, wrote,
+        stored, ordered, completedRun⟩, issued, wholeCall⟩⟩
     | ok returned after =>
-      simp only [ran] at stopped
+      rw [ran] at stopped
       cases returned with
       | error cause => cases stopped
       | ok value =>
         cases value
         obtain ⟨cache, files⟩ := after
+        simp only at stopped
         rw [phaseAction_run] at stopped
         cases installed : opened.set opened.phase (.ready next) files <;> rw [installed] at stopped <;> cases stopped
+
+/-- Invert an ordinary checkpoint error on the actual opened phase and
+heap. A preflight rejection or a failed ready setter is distinct from
+a reported error of the first unsuccessful publication callback. -/
+theorem NativeOpenedPosition.checkpointErrorsFromWhole (current : NativeOpenedPosition opened)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {cause : IO.Error} {reached : CheckpointWorld heap}
+    (failed : (runCheckpointOnOpenPhaseUntilSyncStop current.current.ready.state.session.directory
+      opened.phase opened.get opened.set primitives fsync).run
+      (current.current.ready.state.cache, current.reached) = .ok (.error cause) reached) :
+    let state := current.current.ready.state
+    (CheckpointPreflight state.session.phase (.error cause) ∧ reached = (state.cache, current.reached)) ∨
+    (∃ step, Nonempty (NativeCheckpointSourceError current primitives fsync step cause reached)) ∨
+    (∃ (next : Installed) (manifest : ByteArray) (poisoned : heap) (beforeReady : CheckpointWorld heap),
+      CheckpointPreflight state.session.phase (.ok (next, manifest)) ∧
+      opened.set opened.phase .poisoned current.reached = .ok () poisoned ∧
+      ((steps next.table.runs.length).forM (tagStop
+        (primitives.checkpointStepUntilStop state.session.directory fsync next manifest))).run
+        (state.cache, poisoned) = .ok (.ok ()) beforeReady ∧
+      opened.set opened.phase (.ready next) beforeReady.2 = .error cause reached.2 ∧
+      reached.1 = beforeReady.1) := by
+  intro state
+  have wholeCall := failed
+  obtain ⟨result, preflight⟩ := CheckpointPreflight.total state.session.phase
+  cases result with
+  | error rejected =>
+    rw [checkpointRejectsBeforePublication current primitives fsync preflight] at failed
+    obtain ⟨same, reached⟩ := EStateM.Result.ok.inj failed
+    cases same
+    exact .inl ⟨preflight, reached.symm⟩
+  | ok prepared =>
+    obtain ⟨next, manifest⟩ := prepared
+    obtain ⟨poisoned, wrote, stored, runs⟩ := checkpointRunsFromPrepared current primitives fsync preflight
+    rw [runs, run_bind] at failed
+    cases ran : (CheckpointPublication.run next.table.runs.length
+      (tagStop (primitives.checkpointStepUntilStop state.session.directory fsync next manifest))).run
+      (state.cache, poisoned) with
+    | error halt after =>
+      rw [ran] at failed
+      cases failed
+    | ok result after =>
+      rw [ran] at failed
+      cases result with
+      | error diagnostic =>
+        obtain ⟨same, heap⟩ := EStateM.Result.ok.inj failed
+        cases same
+        subst after
+        obtain ⟨done, step, remaining, atIssue, ordered, completedRun, issued⟩ := run_firstReturnedError ran
+        exact .inr (.inl ⟨step, ⟨⟨⟨next, manifest, poisoned, done, remaining, atIssue, current.uses.checkpoint,
+          preflight, wrote, stored, ordered, completedRun⟩, issued, wholeCall⟩⟩⟩)
+      | ok value =>
+        cases value
+        obtain ⟨cache, files⟩ := after
+        simp only at failed
+        rw [phaseAction_run] at failed
+        cases installed : opened.set opened.phase (.ready next) files with
+        | ok result after =>
+          rw [installed] at failed
+          cases failed
+        | error diagnostic after =>
+          rw [installed] at failed
+          obtain ⟨same, world⟩ := EStateM.Result.ok.inj failed
+          cases same
+          have afterHeap := congrArg Prod.snd world
+          exact .inr (.inr ⟨next, manifest, poisoned, (cache, files), preflight, wrote, ran,
+            afterHeap ▸ installed, (congrArg Prod.fst world).symm⟩)
 
 /-- Use the same source-stop witness when the call starts on the
 literal opened table's directory and cache. The three equalities
@@ -223,21 +345,42 @@ private theorem successfulCheckpointStepsFrame {value : Type}
   successfulCheckpointStepsPreserve perform observe (fun first last => last = first)
     (fun _ => rfl) (fun earlier later => later.trans earlier) completed frame returned
 
-/-- File effects frame the original phase cell. Propagate this local
-contract across the derived prefix and the issued step. -/
+/-- Each actually returned file callback preserves the original phase cell. -/
+abbrev NativeCheckpointSourcePrefix.KeepsPhase {current : NativeOpenedPosition opened}
+    {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
+    {stage : Step} (prior : NativeCheckpointSourcePrefix current primitives fsync stage) : Prop :=
+  ∀ step ∈ prior.completed, ∀ before after,
+    (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+      fsync prior.next prior.manifest step).run before = .ok (.ok ()) after →
+    opened.contents after.2 opened.phase = opened.contents before.2 opened.phase
+
+theorem NativeCheckpointSourcePrefix.phaseAtIssue {current : NativeOpenedPosition opened}
+    {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
+    {stage : Step} (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
+    (returnedKeeps : prior.KeepsPhase) : opened.contents prior.atIssue.2 opened.phase = some .poisoned := by
+  have completed := successfulCheckpointStepsFrame _ (fun world => opened.contents world.2 opened.phase)
+    prior.completed returnedKeeps prior.returnedPrefix
+  exact completed.trans prior.poisonStored
+
+/-- Carry the poisoned cell through the successful prefix and the issued stop. -/
 theorem NativeCheckpointSourceStop.phaseAtStop {current : NativeOpenedPosition opened}
     {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
     {stage : Step} {reason : FilePath} {reached : CheckpointWorld heap}
     (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
-    (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
-      (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
-        fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
-      opened.contents after.2 opened.phase = opened.contents before.2 opened.phase)
+    (returnedKeeps : stop.toNativeCheckpointSourcePrefix.KeepsPhase)
     (stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase) :
-    opened.contents reached.2 opened.phase = some .poisoned := by
-  have completed := successfulCheckpointStepsFrame _ (fun world => opened.contents world.2 opened.phase)
-    stop.completed returnedKeeps stop.returnedPrefix
-  exact stoppedKeeps.trans (completed.trans stop.poisonStored)
+    opened.contents reached.2 opened.phase = some .poisoned :=
+  stoppedKeeps.trans (stop.toNativeCheckpointSourcePrefix.phaseAtIssue returnedKeeps)
+
+/-- A returned publication error also leaves that same phase poisoned. -/
+theorem NativeCheckpointSourceError.phaseAtError {current : NativeOpenedPosition opened}
+    {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
+    {stage : Step} {cause : IO.Error} {reached : CheckpointWorld heap}
+    (failed : NativeCheckpointSourceError current primitives fsync stage cause reached)
+    (returnedKeeps : failed.toNativeCheckpointSourcePrefix.KeepsPhase)
+    (failedKeeps : opened.contents reached.2 opened.phase = opened.contents failed.atIssue.2 opened.phase) :
+    opened.contents reached.2 opened.phase = some .poisoned :=
+  failedKeeps.trans (failed.toNativeCheckpointSourcePrefix.phaseAtIssue returnedKeeps)
 
 /-- A singleton barrier can stop only after the cache resolves the
 requested path to the descriptor that actually issues fsync. -/
@@ -539,8 +682,8 @@ theorem CheckpointPrimitiveCalls.returnedRememberedFile
 /-- The manifest staged on the way to the final directory barrier was
 synced using the descriptor returned by the actual write. Consuming that
 descriptor does not change the raw heap where the fsync issues. -/
-theorem NativeCheckpointSourceStop.manifestRenameFollowsStagedSync
-    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+theorem NativeCheckpointSourcePrefix.manifestRenameFollowsStagedSync
+    (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
     {beforeRename : CheckpointWorld heap}
     (returned : let directory := current.current.ready.state.session.directory
       let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
@@ -574,6 +717,47 @@ theorem NativeCheckpointSourceStop.manifestRenameFollowsStagedSync
   have synced : (primitives.syncUntilStop directory.path fsync #[path]).run afterWrite = .ok (.ok ()) beforeRename := sync
   obtain ⟨consumed, effect⟩ := primitives.returnedRememberedFile fsync (file_ne_directory _ _) remembered synced
   exact ⟨beforeWrite, afterWrite, handle, earlier, wrote, remembered, effect, consumed⟩
+
+abbrev NativeCheckpointSourceStop.manifestRenameFollowsStagedSync
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+    {beforeRename : CheckpointWorld heap} :=
+  stop.toNativeCheckpointSourcePrefix.manifestRenameFollowsStagedSync (beforeRename := beforeRename)
+
+/-- The first returned error at the manifest rename names the actual
+callback between the staged file sync and the unexecuted final barrier. -/
+theorem NativeCheckpointSourceError.manifestRenameFailed
+    (failed : NativeCheckpointSourceError current primitives fsync (.manifest .renameStaged) cause reached) :
+    let directory := current.current.ready.state.session.directory
+    let path := directory.file .stagedManifest
+    let perform := primitives.checkpointStepUntilStop directory fsync failed.next failed.manifest
+    primitives.rename path (directory.file .manifest) failed.atIssue.2 = .error cause reached.2 ∧
+    reached.1 = failed.atIssue.1 ∧
+    ∃ (beforeWrite afterWrite : CheckpointWorld heap) (handle : CheckpointOpenHandle),
+      ((runSteps failed.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
+        (current.current.ready.state.cache, failed.poisoned) = .ok (.ok ()) beforeWrite ∧
+      primitives.cached.writeStaged path failed.manifest beforeWrite.2 = .ok handle afterWrite.2 ∧
+      afterWrite.1 = beforeWrite.1.remember path handle ∧
+      fsync handle afterWrite.2 = .ok (.ok ()) failed.atIssue.2 ∧
+      failed.atIssue.1 = beforeWrite.1.consume path := by
+  intro directory path perform
+  have earlier := failed.returnedPrefix
+  rw [prefixBeforeManifestRename failed.ordered] at earlier
+  have renameEffect : primitives.rename path (directory.file .manifest) failed.atIssue.2 = .error cause reached.2 ∧
+      reached.1 = failed.atIssue.1 := by
+    have failure := failed.failedStep
+    rw [CheckpointFileCallbacks.performManifestRenameUntilSyncStop] at failure
+    simp only [CheckpointCacheCalls.callbacks, CheckpointPrimitiveCalls.cached] at failure
+    cases renamed : primitives.rename
+      (current.current.ready.state.session.directory.file .stagedManifest)
+      (current.current.ready.state.session.directory.file .manifest) failed.atIssue.2 with
+    | ok value after => simp [withCache, renamed] at failure
+    | error diagnostic after =>
+      simp only [withCache, renamed] at failure
+      obtain ⟨different, world⟩ := EStateM.Result.ok.inj failure
+      cases different
+      exact ⟨congrArg (EStateM.Result.error cause) (congrArg Prod.snd world), (congrArg Prod.fst world).symm⟩
+  exact ⟨renameEffect.1, renameEffect.2,
+    failed.toNativeCheckpointSourcePrefix.manifestRenameFollowsStagedSync earlier⟩
 
 private theorem checkpointSyncKeepsDirectory
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
