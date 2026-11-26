@@ -117,6 +117,79 @@ local notation "keeperPath" => current.current.ready.state.session.directory.fil
 local notation "keepsVisibleKeeper" => keepsVisibleBytes keeperPath
   (fun atHeap => RunDirectoryInodeView.visible (observe atHeap)) inodes
 
+/-- Physical effects at the individual callbacks of a published write.
+The contract mentions only the reached primitives and their observations. -/
+structure NativeOpenedPosition.PublishedWriteEffects
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) (batch : List WAL.Write) : Prop where
+  guardEffect : ∀ {after}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () after →
+      (storage current.reached).Frames (before).crashPath (storage after) ∧
+        view.writeAuthorityAt before cache.directory after = view.writeAuthorityAt before cache.directory current.reached ∧
+        keepsVisibleKeeper current.reached after
+  phaseEffect : ∀ {value entry after}, opened.set opened.phase value entry = .ok () after →
+      opened.contents after opened.phase = some value ∧ (storage entry).Frames (before).crashPath (storage after) ∧
+        view.writeAuthorityAt before cache.directory after = view.writeAuthorityAt before cache.directory entry ∧
+        keepsVisibleKeeper entry after
+  appendFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (append ((dir).file (.walSegment (oldInstalled).activeFirst))
+        (WAL.encodeBatch batch) entry))
+  stageFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (stage ((dir).file .stagedWalBoundary)
+        (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) entry))
+  groupFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (sync
+        #[(dir).file (.walSegment (oldInstalled).activeFirst), (dir).file .stagedWalBoundary] entry))
+  renameFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry))
+  rootFrame : let frame := view.framesWrite before cache.directory storage
+      ∀ entry, frame entry (reachedState (sync #[(dir).path] entry))
+  appendEffects : let bytes := WAL.encodeBatch batch
+      ∀ {entry appended keeper},
+        append keeperPath bytes entry = .ok () appended →
+        (observe entry).visible keeperPath = some keeper →
+        appender.KeeperEffects view cache.active keeperPath bytes entry appended
+          (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible) inode buffered keeper
+  stageEffects : let mark := WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64
+      ∀ {appended staged keeper},
+        (observe appended).visible keeperPath = some keeper →
+        stage ((dir).file .stagedWalBoundary) mark appended = .ok () staged →
+        stager.MarkerEffects cache view mark appended staged
+          (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible) inode buffered keeper
+  barrierEffects : ∀ {appended staged grouped keeper keeperHandle markerHandle},
+      sync #[ keeperPath, (dir).file .stagedWalBoundary ] staged = .ok () grouped →
+      (observe appended).visible keeperPath = some keeper →
+      inode keeperHandle = keeper →
+      view.active appended cache.active = some (keeperPath, keeperHandle) →
+      view.literalCacheAt staged cache.directory cache.active cache.pending =
+        (view.literalCacheAt appended cache.directory cache.active cache.pending).remember
+          ((dir).file .stagedWalBoundary) markerHandle →
+      ∃ consumed, syncer.GroupedFileEffects cache view inodes observe (oldInstalled).activeFirst
+        appended staged consumed grouped keeperHandle markerHandle keeper (inode markerHandle)
+  renameEffect : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
+      ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
+        (storage after).files.names ((dir).file .walBoundary) = some inode ∧
+        (storage after).files.names ((dir).file .stagedWalBoundary) = none ∧
+        (storage after).files.bytes inode = (storage entry).files.bytes inode
+  stagedPrivate : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
+      ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
+        (storage entry).files.names ((dir).file .walBoundary) ≠ some inode
+  renameFiles : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
+      (storage entry).files.Frames (fun path => path ≠ (dir).file .stagedWalBoundary ∧ path ≠ (dir).file .walBoundary)
+        (storage after).files ∧ keepsVisibleKeeper entry after
+  loadEffect : ∀ {entry after handle}, syncer.readDirectory cache.directory entry = .ok (some handle) after →
+      RawFsyncTarget view entry after handle ∧
+      (storage entry).files.names (dir).path = some ((view.handle entry handle).1.inode
+        (view.handle entry handle).2.1.description) ∧
+      (storage entry).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
+        (storage after).files ∧ keepsVisibleKeeper entry after
+  syncEffect : ∀ {issued after handle}, syncer.fsync handle issued = .ok () after →
+      (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
+      (storage issued).files.names (dir).path = some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
+      (storage issued).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
+        (storage after).files ∧ keepsVisibleKeeper issued after ∧ (storage after).crashNames ≠ [] ∧
+      ∀ names ∈ (storage after).crashNames, ∀ file, names ((dir).file file) = (storage after).files.names ((dir).file file)
+
 /-- One acknowledged raw call supplies the next retained writer and its
 prior read ledger. The committed storage is observed at the last
 publication barrier, and the original phase setter carries it to the
@@ -135,83 +208,19 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (returned : request.runOnRawOpenPhase dir lookup append stage sync rename
       opened.phase opened.get opened.set current.reached = .ok sequence reached)
     (entry : current.WriteStorageEntry view cache (storage current.reached) (inodes current.reached).visible)
-    (guardEffect : ∀ {after}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () after →
-      (storage current.reached).Frames (before).crashPath (storage after) ∧
-        view.writeAuthorityAt before cache.directory after = view.writeAuthorityAt before cache.directory current.reached ∧
-        keepsVisibleKeeper current.reached after)
-    (phaseEffect : ∀ {value entry after}, opened.set opened.phase value entry = .ok () after →
-      opened.contents after opened.phase = some value ∧ (storage entry).Frames (before).crashPath (storage after) ∧
-        view.writeAuthorityAt before cache.directory after = view.writeAuthorityAt before cache.directory entry ∧
-        keepsVisibleKeeper entry after)
-    (appendFrame : let frame := view.framesWrite before cache.directory storage
-      ∀ entry, frame entry (reachedState (append ((dir).file (.walSegment (oldInstalled).activeFirst))
-        (WAL.encodeBatch batch) entry)))
-    (stageFrame : let frame := view.framesWrite before cache.directory storage
-      ∀ entry, frame entry (reachedState (stage ((dir).file .stagedWalBoundary)
-        (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) entry)))
-    (groupFrame : let frame := view.framesWrite before cache.directory storage
-      ∀ entry, frame entry (reachedState (sync
-        #[(dir).file (.walSegment (oldInstalled).activeFirst), (dir).file .stagedWalBoundary] entry)))
-    (renameFrame : let frame := view.framesWrite before cache.directory storage
-      ∀ entry, frame entry (reachedState (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry)))
-    (rootFrame : let frame := view.framesWrite before cache.directory storage
-      ∀ entry, frame entry (reachedState (sync #[(dir).path] entry)))
-    (appendEffects : let bytes := WAL.encodeBatch batch
-      ∀ {entry appended keeper},
-        append keeperPath bytes entry = .ok () appended →
-        (observe entry).visible keeperPath = some keeper →
-        appender.KeeperEffects view cache.active keeperPath bytes entry appended
-          (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible) inode buffered keeper)
-    (stageEffects : let mark := WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64
-      ∀ {appended staged keeper},
-        (observe appended).visible keeperPath = some keeper →
-        stage ((dir).file .stagedWalBoundary) mark appended = .ok () staged →
-        stager.MarkerEffects cache view mark appended staged
-          (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible) inode buffered keeper)
-    (barrierEffects : ∀ {appended staged grouped keeper keeperHandle markerHandle},
-      sync #[ keeperPath, (dir).file .stagedWalBoundary ] staged = .ok () grouped →
-      (observe appended).visible keeperPath = some keeper →
-      inode keeperHandle = keeper →
-      view.active appended cache.active = some (keeperPath, keeperHandle) →
-      view.literalCacheAt staged cache.directory cache.active cache.pending =
-        (view.literalCacheAt appended cache.directory cache.active cache.pending).remember
-          ((dir).file .stagedWalBoundary) markerHandle →
-      ∃ consumed, syncer.GroupedFileEffects cache view inodes observe (oldInstalled).activeFirst
-        appended staged consumed grouped keeperHandle markerHandle keeper (inode markerHandle))
-    (renameEffect : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
-      ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
-        (storage after).files.names ((dir).file .walBoundary) = some inode ∧
-        (storage after).files.names ((dir).file .stagedWalBoundary) = none ∧
-        (storage after).files.bytes inode = (storage entry).files.bytes inode)
-    (stagedPrivate : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
-      ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
-        (storage entry).files.names ((dir).file .walBoundary) ≠ some inode)
-    (renameFiles : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
-      (storage entry).files.Frames (fun path => path ≠ (dir).file .stagedWalBoundary ∧ path ≠ (dir).file .walBoundary)
-        (storage after).files ∧ keepsVisibleKeeper entry after)
-    (loadEffect : ∀ {entry after handle}, syncer.readDirectory cache.directory entry = .ok (some handle) after →
-      RawFsyncTarget view entry after handle ∧
-      (storage entry).files.names (dir).path = some ((view.handle entry handle).1.inode
-        (view.handle entry handle).2.1.description) ∧
-      (storage entry).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
-        (storage after).files ∧ keepsVisibleKeeper entry after)
-    (syncEffect : ∀ {issued after handle}, syncer.fsync handle issued = .ok () after →
-      (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
-      (storage issued).files.names (dir).path = some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
-      (storage issued).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
-        (storage after).files ∧ keepsVisibleKeeper issued after ∧ (storage after).crashNames ≠ [] ∧
-      ∀ names ∈ (storage after).crashNames, ∀ file, names ((dir).file file) = (storage after).files.names ((dir).file file)) :
+    (effects : current.PublishedWriteEffects appender stager syncer view cache inodes runs observe
+      inode buffered request lookup rename batch) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧ sequence = table.committed ∧
     ∃ (next : NativeOpenedPosition opened)
       (sameDirectory : next.current.ready.state.session.directory = dir),
       next.reached = reached ∧ next.pins = current.pins ∧
-      next.current.history = current.current.history ++ batch ∧
-      next.current.submissions = current.current.submissions ++ [.acknowledgedBatch batch] ∧
-      next.current.ready.reads = current.current.ready.reads ∧
+      current.current.LedgerSuffix [.acknowledged request batch] next.current ∧
       next.WriteStorageEntry view
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (storage next.reached) (inodes next.reached).visible := by
+  obtain ⟨guardEffect, phaseEffect, appendFrame, stageFrame, groupFrame, renameFrame, rootFrame,
+    appendEffects, stageEffects, barrierEffects, renameEffect, stagedPrivate, renameFiles, loadEffect, syncEffect⟩ := effects
   obtain ⟨entryCensus, entryCache, old, entryKeeper, root⟩ := entry
   obtain ⟨valid, history, _⟩ := current.current.ready.readPrefix.refines
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
@@ -311,7 +320,15 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     · rw [← retained.resumed.bytes]
       exact marker
     · exact fun names member => ⟨(settledNames names member).1, (settledNames names member).2.1⟩
-  refine ⟨current.uses.writeSchedules, number, next, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, afterStorage, ?_, ?_⟩
+  have ledger : current.current.LedgerSuffix [.acknowledged request batch] next.current := by
+    refine ⟨?_, rfl, ?_, ?_⟩
+    · simp [next, NativeExecutionEvent.writes]
+    · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.reads]
+        using (show next.current.ready.reads = current.current.ready.reads from rfl)
+    · intro event member
+      obtain rfl := List.mem_singleton.mp member
+      trivial
+  refine ⟨current.uses.writeSchedules, number, next, rfl, rfl, rfl, ledger, rfl, rfl, afterStorage, ?_, ?_⟩
   · intro namedInode named
     change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
     rw [← selectedKeeper] at named

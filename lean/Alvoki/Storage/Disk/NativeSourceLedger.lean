@@ -5,6 +5,23 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- The old target fixes the previously committed history even when
+the keeper's physical bytes extend past its marker. -/
+theorem NativeReadPosition.SelectedWritePlan.oldHistory
+    {history : List WAL.Write} {log : List DatabaseSubmissions}
+    {current : NativeReadPosition history log} {batch : List WAL.Write} {image : FileImage}
+    (plan : current.SelectedWritePlan batch current.state.writer.target image) :
+    plan.history = history := by
+  obtain ⟨valid, original, _⟩ := current.readPrefix.refines
+  have oldLength := valid.retained.resumed.through.trans (congrArg List.length original)
+  have sameLength : plan.history.length = history.length :=
+    plan.layout.through.symm.trans ((congrArg (fun target : Target => target.range.through) plan.targetEq).trans oldLength)
+  rcases plan.allowed with previous | whole
+  · exact previous
+  · rw [whole, List.length_append] at sameLength
+    have empty : batch = [] := List.length_eq_zero_iff.mp (by omega)
+    simpa only [empty, List.append_nil] using whole
+
 /-- The reopened ready position yields the existing replay event directly
 from the selected old-or-whole history and the carried snapshot ledger. -/
 theorem NativeReadPosition.SelectedWritePlan.ledgerAfterReopen
@@ -91,17 +108,12 @@ theorem NativeReadPosition.SelectedWriteRecovery.replaysOldTarget
     current.ReopenedLedger prior batch [] request input cause (source.openTable input reached) := by
   obtain ⟨plan, retained, next, handle, start, success, atStart, ledger, replay⟩ :=
     recovered.replaysSelectedLedger request cause
-  obtain ⟨valid, original, _⟩ := current.readPrefix.refines
-  have oldLength := valid.retained.resumed.through.trans (congrArg List.length original)
-  have sameLength : plan.history.length = prior.length :=
-    plan.layout.through.symm.trans ((congrArg (fun target : Target => target.range.through) plan.targetEq).trans oldLength)
   have history : plan.history = prior ++ retained := by
     simpa only [atStart, List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes]
       using ledger.history
-  have empty : retained = [] := by
-    rw [history, List.length_append] at sameLength
-    exact List.length_eq_zero_iff.mp (by omega)
-  have old : plan.history = prior := by simpa only [empty, List.append_nil] using history
+  have old := plan.oldHistory
+  have empty : retained = [] := List.append_cancel_left (by
+    simpa only [List.append_nil] using history.symm.trans old)
   have castPosition {before after : List WAL.Write} (eq : before = after)
       (ready : NativeReadPosition before (log ++ [.uncertainBatch batch])) :
       (⟨before, log ++ [.uncertainBatch batch], ready⟩ : NativeExecutionPosition) =
@@ -136,6 +148,7 @@ theorem NativeReadPosition.SelectedWritePlan.ledgerAtReadyWriter
       (cache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
       (retained : List WAL.Write),
       source.openTable input entry = .ok handle.table start.reached ∧
+      start.current.history = plan.history ∧
       (⟨history, log, current⟩ : NativeExecutionPosition).LedgerSuffix
         [.uncertainWriteCrashRecovered request input cause batch retained] start.current ∧
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
@@ -145,6 +158,7 @@ theorem NativeReadPosition.SelectedWritePlan.ledgerAtReadyWriter
     returned
   obtain ⟨retained, ledger⟩ :=
     plan.ledgerAfterReopen start.current selectedHistory submissions reads request input cause
-  exact ⟨handle, start, cache, retained, success, ledger, start.current.ready.readPrefix.guardedReplay, physical⟩
+  exact ⟨handle, start, cache, retained, success, selectedHistory, ledger, start.current.ready.readPrefix.guardedReplay,
+    physical⟩
 
 end Alvoki.Storage.DiskSession

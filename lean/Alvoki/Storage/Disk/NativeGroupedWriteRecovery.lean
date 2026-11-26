@@ -25,32 +25,38 @@ local notation "append" => appender.run cache.active
 local notation "stage" => stager.run cache.pending
 local notation "sync" => syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending
 
-/-- Compose the literal write prefix and failed file group with one
-reboot observation. Recovery has its own chronological trace and file
-effects, with the same interpreter for all attempts and the final table. -/
+local notation "keeperPath" => DiskDirectory.file dir
+  (DiskFile.walSegment (Installed.activeFirst installed))
+local notation "stagedPath" => DiskDirectory.file dir DiskFile.stagedWalBoundary
+local notation "appendBatch" => fun batch => append keeperPath (WAL.encodeBatch batch)
+local notation "writeMarker" => fun rows => stage stagedPath
+  (WAL.Boundary.encode (Nat.toUInt64 (Installed.walBytes installed + WAL.frameSize * List.length rows)))
+local notation "syncFiles" => sync #[keeperPath, stagedPath]
+
+/-- Classify the actual uncertain return before selecting a reboot.
+When the reached group failed, its literal returns supply the original
+target and exact later source open. Other stops retain their own cause
+and reached heap and exclude a failure at this file group. -/
 theorem NativeOpenedPosition.recoversGroupedWriteError
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {batch : List WAL.Write} {table : PackedTable}
-    {guarded poisoned appended staged failed rebooted reached : heap} {cause : IO.Error}
+    {failed rebooted reached : heap} {cause : IO.Error}
     (nonempty : request.rows ≠ [])
-    (prepared : prepareBatch (installed).table request.rows = some (batch, table))
-    (fits : (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
-    (guard : checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded)
-    (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
-    (wrote : append ((dir).file (.walSegment (installed).activeFirst)) (WAL.encodeBatch batch) poisoned = .ok () appended)
-    (stagedMarker : stage ((dir).file .stagedWalBoundary)
-      (WAL.Boundary.encode ((installed).walBytes + WAL.frameSize * request.rows.length).toUInt64)
-      appended = .ok () staged)
-    (fileError : sync #[(dir).file (.walSegment (installed).activeFirst), (dir).file .stagedWalBoundary]
-      staged = .error cause failed)
+    (returned : request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
+      .error (.commitUnknown cause) failed)
     (initial : NativeReadyStorage state (storage current.reached))
-    (prefixFrame : (storage current.reached).Frames (state).writeFramePath (storage poisoned))
-    (appendFrame : (storage poisoned).Frames (state).writeFramePath (storage appended))
-    (stageFrame : (storage appended).Frames (state).writeFramePath (storage staged))
-    (syncFrame : (storage staged).Frames (state).writeFramePath (storage failed))
-    (groupEffects : syncer.GroupFailureEffects cache view appender stager inodes observe inode buffered
-      request.rows batch current.reached poisoned appended staged)
+    (groupEffects : ∀ {batch table guarded poisoned appended staged},
+      prepareBatch (installed).table request.rows = some (batch, table) →
+      checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded →
+      opened.set opened.phase .poisoned guarded = .ok () poisoned →
+      appendBatch batch poisoned = .ok () appended → writeMarker request.rows appended = .ok () staged →
+      syncFiles staged = .error cause failed →
+      (storage current.reached).Frames (state).writeFramePath (storage poisoned) ∧
+      (storage poisoned).Frames (state).writeFramePath (storage appended) ∧
+      (storage appended).Frames (state).writeFramePath (storage staged) ∧
+      (storage staged).Frames (state).writeFramePath (storage failed) ∧
+      syncer.GroupFailureEffects cache view appender stager inodes observe inode buffered
+        request.rows batch current.reached poisoned appended staged)
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
@@ -63,37 +69,71 @@ theorem NativeOpenedPosition.recoversGroupedWriteError
     (liveKeeper : keep reached → RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible reached)
     (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
-    (healthy : (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)
-      (target := (state).writer.target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-      source names vacant)
+    (healthy : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
+      (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)
+        (target := (state).writer.target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
+        source names vacant)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
-    request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
-      .error (.commitUnknown cause) failed ∧
-    TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
-    (view.descriptors rebooted).slots = [] ∧
-    keep reached ∧
-    (ready).SelectedWriteRecovery (returns := returns) (input := input) (view := view) (batch := batch)
-      (target := (state).writer.target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-      source names visible rebooted vacant get set ptrEq ∧
-    (ready).ReopenedLedger current.current.history batch [] request input cause (source.openTable input reached) := by
-  have valid := (ready).readPrefix.refines.1
-  have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
-  obtain ⟨committed, admitted, selected, rebootVacant, slots⟩ :=
-    RawWriteRebootEntry.selectsGroupErrorRetry cache view appender stager syncer inodes observe inode buffered rename
-      valid initial (prefixFrame.trans (appendFrame.trans (stageFrame.trans syncFrame)))
-      wrote stagedMarker fileError groupEffects reboot later
-  refine ⟨current.uses.writeSchedules, ?_, rebootVacant, slots, ?_⟩
-  · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set
-      loaded nonempty prepared fits]
-    simp only [guard, assigned, committed]
-  · obtain ⟨carried, recovered⟩ :=
+    ∃ batch table guarded poisoned,
+      prepareBatch (installed).table request.rows = some (batch, table) ∧
+      (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
+      checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded ∧
+      opened.set opened.phase .poisoned guarded = .ok () poisoned ∧
+      let groupFailed := ∃ appended staged, appendBatch batch poisoned = .ok () appended ∧
+        writeMarker request.rows appended = .ok () staged ∧ syncFiles staged = .error cause failed
+      (groupFailed ∧
+        TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
+        (view.descriptors rebooted).slots = [] ∧
+        keep reached ∧
+        (ready).SelectedWriteRecovery (returns := returns) (input := input) (view := view) (batch := batch)
+          (target := (state).writer.target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
+          source names visible rebooted vacant get set ptrEq ∧
+        (ready).ReopenedLedger current.current.history batch [] request input cause (source.openTable input reached)) ∨
+      ¬ groupFailed := by
+  obtain ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, _, outcome⟩ :=
+    current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
+  refine ⟨current.uses.writeSchedules, batch, table, guarded, poisoned, prepared, fits, guard, assigned, ?_⟩
+  have passedGroup {appended staged grouped} (wrote : appendBatch batch poisoned = .ok () appended)
+      (remembered : writeMarker request.rows appended = .ok () staged)
+      (synced : syncFiles staged = .ok () grouped) :
+      ¬ ∃ a s, appendBatch batch poisoned = .ok () a ∧
+        writeMarker request.rows a = .ok () s ∧ syncFiles s = .error cause failed := by
+    rintro ⟨_, _, w, m, f⟩
+    obtain rfl := (EStateM.Result.ok.inj (wrote.symm.trans w)).2
+    obtain rfl := (EStateM.Result.ok.inj (remembered.symm.trans m)).2
+    rw [synced] at f
+    contradiction
+  cases outcome with
+  | appendError failedAppend =>
+    right
+    rintro ⟨_, _, wrote, _, _⟩
+    have impossible := failedAppend.symm.trans wrote
+    contradiction
+  | stageError wrote failedStage =>
+    right
+    rintro ⟨_, _, w, remembered, _⟩
+    obtain rfl := (EStateM.Result.ok.inj (wrote.symm.trans w)).2
+    have impossible := failedStage.symm.trans remembered
+    contradiction
+  | groupError wrote remembered failedGroup =>
+    have valid := (ready).readPrefix.refines.1
+    obtain ⟨prefixFrame, appendFrame, stageFrame, syncFrame, effects⟩ :=
+      groupEffects prepared guard assigned wrote remembered failedGroup
+    have protectedFrame := prefixFrame.trans (appendFrame.trans (stageFrame.trans syncFrame))
+    obtain ⟨_, admitted, selected, rebootVacant, slots⟩ :=
+      RawWriteRebootEntry.selectsGroupErrorRetry cache view appender stager syncer inodes observe inode buffered rename
+        valid initial protectedFrame wrote remembered failedGroup effects reboot later
+    obtain ⟨carried, recovered⟩ :=
       (ready).opensAfterWriteRetries source prepared fits admitted names visible retryEffects selected
-        (starts selected) liveKeeper vacant healthy phase ptrEq
-    exact ⟨carried, recovered, recovered.replaysOldTarget request cause⟩
+        (starts selected) liveKeeper vacant (healthy prepared) phase ptrEq
+    exact .inl ⟨⟨_, _, wrote, remembered, failedGroup⟩, rebootVacant, slots, carried, recovered,
+      recovered.replaysOldTarget request cause⟩
+  | renameError wrote remembered synced _ => exact .inr (passedGroup wrote remembered synced)
+  | directory wrote remembered synced _ _ => exact .inr (passedGroup wrote remembered synced)
 
 end
 

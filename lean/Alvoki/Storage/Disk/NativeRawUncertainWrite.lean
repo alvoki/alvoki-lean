@@ -32,6 +32,39 @@ local notation "append" => appender.run cache.active
 local notation "stage" => stager.run cache.pending
 local notation "sync" => syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending
 
+/-- The actual public return determines the reached preparation, poison
+assignment and failing publication step from the same callbacks. -/
+theorem NativeOpenedPosition.classifiesCommitUnknown
+    (request : WriteRequest)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {cause : IO.Error} {reached : heap}
+    (nonempty : request.rows ≠ [])
+    (returned : request.runOnRawOpenPhase dir lookup append stage sync rename
+      opened.phase opened.get opened.set current.reached = .error (.commitUnknown cause) reached) :
+    ∃ batch table guarded poisoned,
+      prepareBatch (oldInstalled).table request.rows = some (batch, table) ∧
+      (oldInstalled).walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
+      checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded ∧
+      opened.set opened.phase .poisoned guarded = .ok () poisoned ∧
+      commitBytesAt dir (oldInstalled).activeFirst (WAL.encodeBatch batch)
+        ((oldInstalled).walBytes + WAL.frameSize * request.rows.length)
+        append stage sync rename poisoned = .error cause reached ∧
+      syncer.PublicationOutcome cache appender stager rename (oldInstalled).activeFirst
+        ((oldInstalled).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch) poisoned
+        (.error cause reached) := by
+  have valid := current.current.ready.readPrefix.refines.1
+  have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
+  obtain ⟨batch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared dir lookup
+    append stage sync rename opened.phase opened.get opened.set loaded nonempty (by rw [returned]; trivial)
+  obtain ⟨guarded, poisoned, guard, excluded, failed, _, _⟩ :=
+    request.runOnRawOpenPhase_commitUnknown dir lookup append stage sync rename opened.phase opened.get opened.set
+      loaded nonempty prepared fits returned
+  have outcome := syncer.publicationOutcome cache appender stager rename (first := (oldInstalled).activeFirst)
+    (count := (oldInstalled).walBytes + WAL.frameSize * request.rows.length) (bytes := WAL.encodeBatch batch) poisoned
+  rw [failed] at outcome
+  exact ⟨batch, table, guarded, poisoned, prepared, fits, guard, excluded, failed, outcome⟩
+
 /-- An ordinary uncertain write returns on the original opened phase
 and cache. Follow the reached guard, poison assignment and failed
 commit to obtain the still-held authority and the exact protected-file
@@ -83,12 +116,8 @@ theorem NativeOpenedPosition.returnsCommitUnknown
         ((oldInstalled).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch) poisoned
         (.error cause reached) := by
   have valid := current.current.ready.readPrefix.refines.1
-  have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
-  obtain ⟨batch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared dir lookup
-    append stage sync rename opened.phase opened.get opened.set loaded nonempty (by rw [returned]; trivial)
-  obtain ⟨guarded, poisoned, guard, excluded, failed, _, _⟩ :=
-    request.runOnRawOpenPhase_commitUnknown dir lookup append stage sync rename opened.phase opened.get opened.set
-      loaded nonempty prepared fits returned
+  obtain ⟨batch, table, guarded, poisoned, prepared, fits, guard, excluded, failed, outcome⟩ :=
+    current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
   have afterGuard := guardFrame guard
   have present := afterGuard.2.trans current.stored
   obtain ⟨actual, assigned, stored⟩ := opened.phaseEffects.writes guarded opened.phase _ .poisoned present
@@ -107,9 +136,6 @@ theorem NativeOpenedPosition.returnsCommitUnknown
   have protectedFrame := afterGuard.1.2.trans (afterPoison.2.trans afterCommit.1.2)
   let custody := NativePendingWriteCensus.ofRawAuthority view cache valid entryCensus entryCache authority
     old root protectedFrame.visible
-  have outcome := syncer.publicationOutcome cache appender stager rename (first := (oldInstalled).activeFirst)
-    (count := (oldInstalled).walBytes + WAL.frameSize * request.rows.length) (bytes := WAL.encodeBatch batch) poisoned
-  rw [failed] at outcome
   exact ⟨current.uses.writeSchedules, afterCommit.2.trans atPoisoned, protectedFrame, ⟨custody, rfl, rfl⟩,
     batch, table, guarded, poisoned, prepared, fits, guard, excluded, outcome⟩
 

@@ -494,6 +494,8 @@ import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.NativePrunedKeeperStorage
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
+import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
+import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
 import Alvoki.Storage.Disk.NativeLongMarkedReady
 import Alvoki.Storage.Disk.NativePrunedMarkedReady
 import Alvoki.Storage.Disk.NativeRawWriteCustody
@@ -3879,6 +3881,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterPublishedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.afterAcknowledgedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesPublishedWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.acknowledgesAndReadsAfterOldTarget
 #check_axioms Alvoki.Storage.DiskSession.checkActiveSegmentWith_rawResult
 #check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofRawChecked
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_afterPreparation
@@ -3887,6 +3891,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_commitUnknown
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.framesRawWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.returnsCommitUnknown
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.classifiesCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_prepared
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.preparedWalCount
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.selectsWriteWal
@@ -3944,6 +3949,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversAfterPublicationError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.replaysSelectedLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.ledgerAtReadyWriter
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.oldHistory
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.framesReadyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.bindsOpenCacheDirectory
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_rootOrChild
@@ -3970,6 +3976,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsDurableRetry
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.frame
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preservesDurability
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.framesAfter
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.withDurableFrames
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.keptSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.forReopenedWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.forReopenedWriter

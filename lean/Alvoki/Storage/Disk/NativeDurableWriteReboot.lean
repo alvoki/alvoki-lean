@@ -58,11 +58,12 @@ theorem RawWriteRebootEntry.startsDurableRetry
     (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
     (reset : seen.DurableReset) {target : Target}
     (selected : RawOpenRetryTrace.SelectedEntry view state target names visible rebooted) :
-    state.SelectedRetryDurability target (storage rebooted) := by
+    RawOpenRetryTrace.KeeperAt view state.session.directory target names visible rebooted ∧
+      state.SelectedRetryDurability target (storage rebooted) := by
   let directory := state.session.directory
   have old := selected.protectedFiles
-  refine ⟨⟨(reset.bindings directory.path (.inl rfl)).trans old.directoryBound,
-    (reset.bindings (directory.file .lock) (.inr (.inl rfl))).trans old.lockBound, ?_, ?_, ?_⟩, ?_, ?_⟩
+  refine ⟨selected.keeper, ⟨⟨(reset.bindings directory.path (.inl rfl)).trans old.directoryBound,
+    (reset.bindings (directory.file .lock) (.inr (.inl rfl))).trans old.lockBound, ?_, ?_, ?_⟩, ?_, ?_⟩⟩
   · cases manifest : state.writer.target.pair.manifest with
     | none =>
       have missing := old.manifest
@@ -84,6 +85,57 @@ theorem RawWriteRebootEntry.startsDurableRetry
     exact (reset.crashBindings surviving possible directory.path (.inl rfl)).trans
       (reset.bindings directory.path (.inl rfl)).symm
 
+/-- Carry a frame across a block of actual failed calls. The premise
+sees each issued call's prefix in the full chronology and its actual
+error and reached heap. -/
+theorem RawMarkedOpenInterpreter.FailedCalls.framesAfter
+    {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
+    {first entry reached : heap} {lead more : List (FilePath × IO.Error)}
+    (block : source.FailedCalls entry more reached) (previousCalls : source.FailedCalls first lead entry)
+    (frame : heap → heap → Prop) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (each : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+      source.FailedCalls first prior before → List.IsPrefix (prior ++ [(input, cause)]) (lead ++ more) →
+      source.openTable input before = .error cause after → frame before after) :
+    frame entry reached := by
+  induction block with
+  | empty => exact refl _
+  | @next earlier before after cause previous input returned ih =>
+    have extended : List.IsPrefix (lead ++ earlier) (lead ++ (earlier ++ [(input, cause)])) := by
+      rw [← List.append_assoc]
+      exact List.prefix_append ..
+    have initial := ih (fun ran inside result => each ran (inside.trans extended) result)
+    have last := each (previousCalls.append previous) (by rw [List.append_assoc]; exact List.prefix_rfl) returned
+    exact trans initial last
+
+/-- Add the durable file observation to an existing retry carrier.
+The same selected-effects proof still controls the keeper and logical
+image. The extra physical laws apply only to the actual failed calls. -/
+theorem RawOpenRetryTrace.SelectedEffects.withDurableFrames
+    {stream : Type} {source : RawMarkedOpenInterpreter heap stream} {target : Target}
+    {first reached : heap} {returns : List (FilePath × IO.Error)}
+    {files : heap → CheckpointSurvivingFiles} {protectedPaths : FilePath → Prop} {keep : heap → Prop}
+    {attempts : source.FailedCalls first returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view source first target files protectedPaths keep attempts)
+    (each : ∀ {earlier : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+      source.FailedCalls first earlier before → List.IsPrefix (earlier ++ [(input, cause)]) returns →
+      source.openTable input before = .error cause after →
+      (storage before).files.Frames state.selectedRetryPath (storage after).files ∧
+      (storage before).Frames (· = state.session.directory.path) (storage after)) :
+    RawOpenRetryTrace.SelectedEffects view source first target files protectedPaths
+      (fun heap => keep heap ∧ state.SelectedRetryDurability target (storage heap)) attempts := by
+  induction effects with
+  | empty => exact .empty
+  | @append earlier more entry reached prior block before image kept inodes carries ih =>
+    have previous := ih (fun ran inside result => each ran (List.prefix_append_of_prefix inside) result)
+    let frame (entry reached : heap) :=
+      (storage entry).files.Frames state.selectedRetryPath (storage reached).files ∧
+      (storage entry).Frames (· = state.session.directory.path) (storage reached)
+    obtain ⟨footprint, parent⟩ := block.framesAfter prior frame
+      (fun heap => ⟨(CheckpointStorageObservation.Frames.refl _ (storage heap)).visible, .refl _ _⟩)
+      (fun first last => ⟨first.1.trans last.1, first.2.trans last.2⟩) each
+    exact .append (calls := block) previous image kept inodes (fun selected => ⟨carries selected.1, selected.2.frame footprint parent⟩)
+
 /-- Carry the immutable footprint alongside the mutable live keeper
 through the same actual failed calls used for logical recovery. A read
 failure or a failed repair can use its own local frame for the carrier. -/
@@ -96,9 +148,10 @@ theorem RawOpenRetryTrace.SelectedEffects.preservesDurability
       (fun heap => RawOpenRetryTrace.KeeperAt view state.session.directory target names visible heap ∧
         state.SelectedRetryDurability target (storage heap)) attempts)
     (initial : RawOpenRetryTrace.SelectedEntry view state target names visible first)
-    (durable : state.SelectedRetryDurability target (storage first)) :
+    (physical : RawOpenRetryTrace.KeeperAt view state.session.directory target names visible first ∧
+      state.SelectedRetryDurability target (storage first)) :
     RawOpenRetryTrace.KeeperAt view state.session.directory target names visible reached ∧
       state.SelectedRetryDurability target (storage reached) :=
-  (effects.preserves initial.valid).2.2.2.2 ⟨initial.keeper, durable⟩
+  (effects.preserves initial.valid).2.2.2.2 physical
 
 end Alvoki.Storage.DiskSession

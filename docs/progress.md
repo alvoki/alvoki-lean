@@ -1,5 +1,18 @@
 # Current handoff
 
+The actual uncertain write return now classifies the failing publication stage once.
+The grouped-error proof uses those same append, stage and sync receipts to select the
+old marker and the exact source open. The failed-call fold can carry the durable
+footprint alongside the live keeper. The aligned return proof consumes the same selected
+plan and physical footprint. From that returned table, the old-target ledger composes
+with an observed acknowledged write and guarded snapshot using the same handle, cache
+and reached heaps. The combined execution still needs to supply these local laws from
+one fresh execution and connect the checkpoint stops.
+[Uncertain classification](../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
+· [Grouped error](../lean/Alvoki/Storage/Disk/NativeGroupedWriteRecovery.lean)
+· [Aligned reopen](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+· [Write and snapshot](../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
+
 The aligned writer proof now derives its read-only frames from the source callbacks.
 The exact append-open, flock, held directory and three cache allocations carry the
 durable footprint and live keeper to the worker. Manifest, runs, marker, the checked

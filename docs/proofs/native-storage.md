@@ -418,6 +418,18 @@ grouped file-sync error now supplies its target directly to the recovery worker.
 rename and final directory sync errors use the same joint sampling and repair fold. Each
 local late-publication proof supplies its exact commit return and reached payloads.
 
+The public uncertain write's exact returned error and heap now classify the literal
+publication stage for the custody and grouped-error proofs. A grouped error reaches the
+old target through the observed joint reboot. Selected durable files and the live keeper
+can use the same failed-call fold with their own local frames. The aligned branch uses the
+exact selected successful open to establish its physical writer entry. At that writer the
+old-target ledger joins the next observed nonempty acknowledged write and snapshot. The
+new write requires its own primitive effect laws, and the snapshot requires the live-token
+comparison. These lemmas supply the individual transitions for a combined execution.
+[Source classification](../../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
+· [Aligned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+· [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
+
 The selected batch target supplies the same repair plan after a reported reboot or live retry.
 The reboot bridge uses one joint map and the bytes sampled at its actual heap. In the grouped
 file-sync error branch this map admits the old marker and a keeper that may include an
