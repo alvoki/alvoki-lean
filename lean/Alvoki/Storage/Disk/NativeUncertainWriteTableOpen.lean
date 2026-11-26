@@ -233,7 +233,7 @@ theorem NativeOpenedPosition.opensAfterUncertainWrite
   have bounded := next.readPrefix.readsBounded
   rw [reopened.reads, ← chosen] at pending bounded
   let marked := observed.markedReport finish aligned current.current.ready.readPrefix.refines.1 pending bounded
-  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ := marked.opensAlignedFromAdmission seen.raw seen.seed
+  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, _, ran⟩ := marked.opensAlignedFromAdmission seen.raw seen.seed
     finish rfl seen.checkpoint seen.listing seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked
     remove write rename bootstrap assemble constructs seen.allocations
   have worker : marked.opening.finish.run marked.opening.chronology = next.opened :=

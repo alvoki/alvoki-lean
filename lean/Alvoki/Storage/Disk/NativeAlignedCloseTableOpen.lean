@@ -122,9 +122,11 @@ theorem RawAlignedReopenEffects.opens
       seen.openTable remove write rename bootstrap assemble makeCache =
         .ok installed.table installed.allocation.afterToken := by
   let report := reader.markedReport retained pending bounded
-  exact report.opensAlignedFromAdmission seen.admission.raw seen.admission.seed reader.opening.finish rfl
-    seen.checkpoint seen.listing seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked
-    remove write rename bootstrap assemble constructs seen.allocations
+  obtain ⟨installed, cacheOpen, makeCache, action, source, _, returned⟩ :=
+    report.opensAlignedFromAdmission seen.admission.raw seen.admission.seed reader.opening.finish rfl
+      seen.checkpoint seen.listing seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked
+      remove write rename bootstrap assemble constructs seen.allocations
+  exact ⟨installed, cacheOpen, makeCache, action, source, returned⟩
 
 section
 

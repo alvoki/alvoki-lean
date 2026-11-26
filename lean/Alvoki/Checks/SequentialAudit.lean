@@ -2487,6 +2487,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.terminalPrefix
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.refinesTerminalLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.observesReboot
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.ReturnedAt.returnsFixedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensQuietAfterManifestRejection
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedEarlyCheckpointReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedUncertainWriteReport.reaches
@@ -3921,6 +3922,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.append
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsFixedAfterWorkerAgreement
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.returnsFixedInterpreterOfRun
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.returnsFixedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.returnsBeforeFlock

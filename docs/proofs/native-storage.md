@@ -441,6 +441,16 @@ comparison. These lemmas supply the individual transitions for a combined execut
 · [Aligned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 · [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
+The quiet checkpoint continuation uses one fixed marked interpreter for
+the MANIFEST lookup rejection and the subsequent aligned open. The error
+comes from that interpreter's cache-disposal and lock finalizers. The retry
+starts at the exact cleanup heap. Its two marked workers agree at the
+held entry because the same measured keeper is aligned and needs no
+staging. The allocated cache and reference constructor identify the
+returned table and heap. The chosen reboot and each call's primitive
+effects are explicit.
+[Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+
 At the first run fsync, the completed prefix contains the run write. The
 literal write determines the heap before sync and frames the selected files.
 Pending-cache removal and the stopped fsync provide a second frame. Both

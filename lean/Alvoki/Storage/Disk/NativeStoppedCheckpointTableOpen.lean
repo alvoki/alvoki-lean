@@ -119,7 +119,7 @@ theorem NativeOpenedPosition.opensAfterStoppedCheckpoint
   let marked := observed.markedReport valid pending bounded
   obtain ⟨next, reopened, sameReturn, nextReturned, owner, slot, cache⟩ :=
     current.current.ready.recoversStoppedCheckpointWithReader observed
-  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, ran⟩ := marked.opensAlignedFromAdmission seen.raw seen.seed
+  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, _, ran⟩ := marked.opensAlignedFromAdmission seen.raw seen.seed
     observed.reopen.opening.finish rfl seen.checkpoint seen.listing seen.extents seen.seals seen.keeper seen.sameLookup
     seen.flat seen.marked remove write rename bootstrap assemble constructs seen.allocations
   have phaseEffects : OpenPhaseCellEffects view.phase opened.get opened.set := samePhase.symm ▸ opened.phaseEffects

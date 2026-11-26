@@ -161,6 +161,8 @@ structure ReturnedAt where
   cacheSource : cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk directory.path .read)
     (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
     (fun value => liftM (IO.mkRef value)) makeCache
+  cacheUses : let cache := makeCache seen.seed.directoryRef seen.seed.activeRef seen.seed.pendingRef
+    cache.UsesCacheReferences seen.seed.activeRef seen.seed.pendingRef seen.seed.directoryRef ∧ cache.AtDirectory directory.path
   handle : NativeOpenedHandle heap
   start : NativeOpenedPosition handle
   rawOpen : seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached
@@ -223,7 +225,7 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
   let selectedReport : MarkedOpenSuccessReports input directory modelHistory log recorded :=
     { report with opening := ⟨opening.admission, opening.callbacks, opening.reads, .aligned opening.finish,
         chronology, opening.marker, opening.markerFound⟩ }
-  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, openedTable⟩ :=
+  obtain ⟨installed, cacheOpen, makeCache, cacheAction, cacheSource, cacheUses, openedTable⟩ :=
     selectedReport.opensAlignedFromAdmission seen.raw seen.seed opening.finish rfl seen.checkpoint seen.listing
       seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked remove write rename bootstrap assemble
       constructs seen.allocations
@@ -235,6 +237,7 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     makeCache := makeCache
     cacheAction := cacheAction
     cacheSource := cacheSource
+    cacheUses := cacheUses
     handle := handle
     start := start
     rawOpen := ?_

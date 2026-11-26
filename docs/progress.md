@@ -1,5 +1,15 @@
 # Current handoff
 
+After a stopped checkpoint and one chosen reboot, the failed MANIFEST
+lookup and the successful aligned retry now run through the same fixed
+marked opener. Both calls use their own cache allocations. The first
+returns its exact diagnostic and cleanup heap. The next starts at that
+heap and returns the exact table and replay position. Equal keeper extents
+match the two aligned recovery workers at the held entry, so longer-keeper
+staging is outside the comparison. The final snapshot and the fresh write
+still need to be composed with this stop in one execution.
+[Fixed interpreter after a checkpoint stop](../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+
 Before the first stopped run fsync, the schedule has returned exactly one
 run write. Its returned handle and the private run inode supply the frame
 for the selected checkpoint and WAL. The pending-cache removal and stopped
