@@ -377,8 +377,22 @@ private theorem walOffsetsOrdered (values : List Nat) : values.mergeSort.Pairwis
     (fun a b => Bool.or_eq_true_iff.mpr ((Nat.le_total a b).imp decide_eq_true decide_eq_true)) values).imp
       (fun bound => of_decide_eq_true bound)
 
-/-- ENOENT at a WAL stat reached from the returned listing witnesses an
-absent name in its held directory. The contract is local to this scan. -/
+/-- ENOENT for a relevant WAL name witnesses absence in the held directory
+at the listing used by this scan. -/
+def DiskSession.MarkedWalExtentReports.TruthfulAbsenceOn (relevant : Nat → Prop)
+    (fileCalls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (names : List String) (listed : heap) : Prop :=
+  ∀ {earlier rest : List String} {name : String} {first : Nat},
+    names = earlier ++ name :: rest → parseWalSegmentName name = some first → relevant first →
+    ∀ {collected : List (Nat × IO.FS.Metadata)} {issued after filename message},
+    (earlier.filterMapM (readWalSegmentExtentWith directory (MarkedWalExtentReports.inspect fileCalls))) listed =
+      .ok collected issued →
+    fileCalls.stat (directory.file (.walSegment first)) issued =
+      .ok (.error (.noFileOrDirectory filename 2 message)) after →
+    namespaceView.child root (renderWalSegmentName first) = none
+
+/-- Truthful absence for all canonical WAL names. -/
 def DiskSession.MarkedWalExtentReports.TruthfulAbsence
     (fileCalls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
@@ -391,6 +405,36 @@ def DiskSession.MarkedWalExtentReports.TruthfulAbsence
     fileCalls.stat (directory.file (.walSegment first)) issued =
       .ok (.error (.noFileOrDirectory filename 2 message)) after →
     namespaceView.child root (renderWalSegmentName first) = none
+
+private theorem exactInventoryOn
+    (fileCalls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (names : List String) (relevant : Nat → Bool) {listed scanned : heap} {extents : List (Nat × IO.FS.Metadata)}
+    (listedNames : names.Perm (namespaceView.names root))
+    (scan : readWalSegmentExtentsWith directory (MarkedWalExtentReports.inspect fileCalls) names listed =
+      .ok extents scanned)
+    (absent : MarkedWalExtentReports.TruthfulAbsenceOn (fun start => relevant start = true)
+      fileCalls directory namespaceView root names listed) :
+    (extents.map Prod.fst).Pairwise (· ≤ ·) ∧
+      ((extents.map Prod.fst).filter relevant).Perm
+        (((namespaceView.names root).filterMap parseWalSegmentName).filter relevant) := by
+  obtain ⟨ordered, offsets⟩ := readWalSegmentExtentsWith_exactOffsetsOn directory
+    (MarkedWalExtentReports.inspect fileCalls) names relevant scan
+    (fun {earlier rest name first} order parsed kept {_ _ _ _ _} entered missing => by
+      have inListing : name ∈ names := order.symm ▸ List.mem_append_right earlier List.mem_cons_self
+      have seen : renderWalSegmentName first ∈ names := (parseWalSegmentName_eq_some_iff.mp parsed) ▸ inListing
+      obtain ⟨object, bound⟩ := (namespaceView.namesExact _ _).mp (listedNames.mem_iff.mp seen)
+      have raw := MarkedWalExtentReports.inspectReturned fileCalls _ missing
+      exact Option.some_ne_none object (bound.symm.trans (absent order parsed kept entered raw)))
+  exact ⟨ordered, offsets.trans ((listedNames.filterMap parseWalSegmentName).filter relevant)⟩
+
+/-- A retained canonical offset denotes a child of the streamed root. -/
+private theorem listedWalChild (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (first : Nat) :
+    first ∈ (namespaceView.names root).filterMap parseWalSegmentName ↔
+      ∃ object, namespaceView.child root (renderWalSegmentName first) = some object := by
+  rw [List.mem_filterMap, ← namespaceView.namesExact]
+  exact ⟨fun ⟨name, listed, parsed⟩ => (parseWalSegmentName_eq_some_iff.mp parsed) ▸ listed,
+    fun listed => ⟨_, listed, parseWalSegmentName_render first⟩⟩
 
 /-- The checked listing supplies every held name, and a reached no-follow
 absence must agree with that binding. The actual scan then retains every
@@ -406,25 +450,18 @@ theorem DiskSession.MarkedWalExtentReports.exactInventory
     extents.map Prod.fst = ((namespaceView.names root).filterMap parseWalSegmentName).mergeSort ∧
       ∀ first, first ∈ extents.map Prod.fst ↔
         ∃ object, namespaceView.child root (renderWalSegmentName first) = some object := by
-  have exactOffsets := readWalSegmentExtentsWith_exactOffsets directory (MarkedWalExtentReports.inspect fileCalls) names scan
-    (fun {scanned rest name first} order parsed {_ _ _ _ _} entered missing => by
-      have inListing : name ∈ names :=
-        order.symm ▸ List.mem_append_right scanned List.mem_cons_self
-      have seen : renderWalSegmentName first ∈ names :=
-        (parseWalSegmentName_eq_some_iff.mp parsed) ▸ inListing
-      obtain ⟨object, bound⟩ := (namespaceView.namesExact _ _).mp (listedNames.mem_iff.mp seen)
-      have raw := MarkedWalExtentReports.inspectReturned fileCalls _ missing
-      exact Option.some_ne_none object (bound.symm.trans (absent order parsed entered raw)))
-  have sorted := List.Perm.eq_of_pairwise (fun _ _ _ _ ab ba => Nat.le_antisymm ab ba)
-    (walOffsetsOrdered _) (walOffsetsOrdered _) ((List.mergeSort_perm _ _).trans
-      ((listedNames.filterMap parseWalSegmentName).trans (List.mergeSort_perm _ _).symm))
+  obtain ⟨ordered, offsets⟩ := exactInventoryOn fileCalls directory namespaceView root names
+    (fun _ => true) listedNames scan (fun order parsed _ => absent order parsed)
+  have keepsAll (values : List Nat) : values.filter (fun _ => true) = values :=
+    List.filter_eq_self.mpr (fun _ _ => rfl)
+  have all : (extents.map Prod.fst).Perm ((namespaceView.names root).filterMap parseWalSegmentName) := by
+    simpa only [keepsAll] using offsets
   have inventory : extents.map Prod.fst = ((namespaceView.names root).filterMap parseWalSegmentName).mergeSort :=
-    exactOffsets.trans sorted
+    List.Perm.eq_of_pairwise (fun _ _ _ _ ab ba => Nat.le_antisymm ab ba) ordered (walOffsetsOrdered _)
+      (all.trans (List.mergeSort_perm _ _).symm)
   have exactNames (first : Nat) : first ∈ extents.map Prod.fst ↔
-      ∃ object, namespaceView.child root (renderWalSegmentName first) = some object := by
-    rw [inventory, List.mem_mergeSort, List.mem_filterMap, ← namespaceView.namesExact]
-    exact ⟨fun ⟨name, listed, parsed⟩ => (parseWalSegmentName_eq_some_iff.mp parsed) ▸ listed,
-      fun listed => ⟨_, listed, parseWalSegmentName_render first⟩⟩
+      ∃ object, namespaceView.child root (renderWalSegmentName first) = some object :=
+    all.mem_iff.trans (listedWalChild namespaceView root first)
   exact ⟨inventory, exactNames⟩
 
 /-- A completed WAL scan determines the successful selector from the
@@ -438,8 +475,8 @@ theorem DiskSession.MarkedWalExtentReports.selectsWindow
     (listedNames : names.Perm (namespaceView.names root))
     (scan : readWalSegmentExtentsWith directory (MarkedWalExtentReports.inspect fileCalls) names listed =
       .ok extents scanned)
-    (absent : MarkedWalExtentReports.TruthfulAbsence fileCalls directory namespaceView root names listed)
     {first watermark through : Nat} {expected later : List Nat} {required : List (Nat × IO.FS.Metadata)}
+    (absent : MarkedWalExtentReports.TruthfulAbsenceOn (first ≤ ·) fileCalls directory namespaceView root names listed)
     (selected : selectWalExtentsThrough extents watermark through = some (required, later))
     (strict : (required.map Prod.fst).Pairwise (· < ·))
     (canonical : (first :: expected).Pairwise (· < ·))
@@ -450,14 +487,27 @@ theorem DiskSession.MarkedWalExtentReports.selectsWindow
     required.map Prod.fst = first :: expected ∧
       ∀ start, start ∈ later ↔ through < start ∧
         ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
-  obtain ⟨inventory, exactNames⟩ := exactInventory fileCalls directory namespaceView root names listedNames scan absent
-  have ordered := inventory.symm ▸ walOffsetsOrdered ((namespaceView.names root).filterMap parseWalSegmentName)
+  obtain ⟨ordered, retained⟩ := exactInventoryOn fileCalls directory namespaceView root names
+    (fun start => decide (first ≤ start)) listedNames scan
+    (fun order parsed kept => absent order parsed (of_decide_eq_true kept))
+  have exactNames (start : Nat) (relevant : first ≤ start) : start ∈ extents.map Prod.fst ↔
+      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
+    have kept : start ∈ extents.map Prod.fst ↔
+        start ∈ (namespaceView.names root).filterMap parseWalSegmentName := by
+      simpa only [List.mem_filter, decide_eq_true_eq, relevant, and_true] using (retained.mem_iff (a := start))
+    exact kept.trans (listedWalChild namespaceView root start)
   obtain ⟨offsets, rfl⟩ := selectWalExtentsThrough_matchesWindow ordered selected strict
-    canonical covers bounded within (fun start lower upper => (exactNames start).trans (catalog start lower upper))
+    canonical covers bounded within (fun start lower upper => (exactNames start lower).trans (catalog start lower upper))
   refine ⟨offsets, ?_⟩
   intro start
-  rw [List.mem_filter, exactNames start]
-  simp only [decide_eq_true_eq, and_comm]
+  simp only [List.mem_filter, decide_eq_true_eq]
+  constructor
+  · intro ⟨present, beyond⟩
+    have relevant := Nat.le_trans (Nat.le_trans covers bounded) (Nat.le_of_lt beyond)
+    exact ⟨beyond, (exactNames start relevant).mp present⟩
+  · intro ⟨beyond, present⟩
+    have relevant := Nat.le_trans (Nat.le_trans covers bounded) (Nat.le_of_lt beyond)
+    exact ⟨(exactNames start relevant).mpr present, beyond⟩
 
 /-- The actual successful selected WAL read consumes an exact inventory.
 The scope fixes the stream's held root and makes an ENOENT report

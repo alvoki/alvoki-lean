@@ -798,6 +798,34 @@ theorem NativeReadPosition.preparesDurableVisibleWriteRetry
   current.preparesVisibleWriteRetryFromEffects prepared fits admitted (fun heap => (storage heap).files.names) visible
     covers initial effects entry (fun kept => ⟨kept.1, kept.2.1⟩)
 
+-- The actual stat prefix frames the checked child back to the chosen
+-- directory observation. An honest ENOENT then proves its absence.
+theorem MarkedTemporaryReadCalls.absenceOnFromNames
+    (fileCalls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (scope : FilePath → Prop)
+    {initial listed : heap} {listing : List String} {relevant : Nat → Prop}
+    (atListing : (visibleImage names visible initial).Frames scope (visibleImage names visible listed))
+    (statFrame : ∀ path before, (visibleImage names visible before).Frames scope
+      (visibleImage names visible (reachedState (fileCalls.stat path before))))
+    (missing : ∀ {path before filename message after},
+      fileCalls.stat path before = .ok (.error (.noFileOrDirectory filename 2 message)) after → names before path = none)
+    (covered : ∀ start, relevant start → scope (directory.file (.walSegment start)))
+    (child : ∀ start, relevant start →
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        names initial (directory.file (.walSegment start))) :
+    MarkedWalExtentReports.TruthfulAbsenceOn relevant fileCalls directory namespaceView root listing listed := by
+  intro earlier rest name start order parsed inScope previous issued after filename message scanned absent
+  let frame (before after : heap) := (visibleImage names visible before).Frames scope
+    (visibleImage names visible after)
+  have refl (atHeap : heap) : frame atHeap atHeap := fun _ _ => ⟨rfl, fun _ _ => rfl⟩
+  have prior := KeepsReadFrame.readsWalExtentPrefix (frame := frame) directory earlier refl
+    CheckpointSurvivingFiles.Frames.trans
+    (MarkedWalExtentReports.inspectFrames fileCalls refl CheckpointSurvivingFiles.Frames.trans statFrame) listed
+  have beforeStat : frame listed issued := by simpa only [scanned, reachedState] using prior
+  have sameName := ((atListing.trans beforeStat) _ (covered start inScope)).1
+  exact Option.map_eq_none_iff.mp ((child start inScope).trans (sameName.symm.trans (missing absent)))
+
 /-- Refine the actual WAL return using only the held recovery window
 and reached file effects. Both the canonical replay bytes and the
 actual keeper route come from the same payload traversal. The keeper's
@@ -832,7 +860,8 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
       (entries.toList.map (·.fileName)).Perm (namespaceView.names root))
     (absent : ∀ {entries : Array IO.FS.DirEntry} {listed : heap},
       directoryCalls.run directory.path entry = .ok entries listed →
-      MarkedWalExtentReports.TruthfulAbsence fileCalls directory namespaceView root
+      (visibleImage names visible initial).Frames scope (visibleImage names visible listed) →
+      MarkedWalExtentReports.TruthfulAbsenceOn (layout.first ≤ ·) fileCalls directory namespaceView root
         (entries.toList.map (·.fileName)) listed)
     (through : length.toNat / WAL.frameSize = layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
@@ -889,9 +918,11 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     have present := physical.window start lower upper
     rw [← atInitial, Option.isSome_map, first] at present
     exact Option.isSome_iff_exists.symm.trans present
+  have listedFrame : (visibleImage names visible initial).Frames scope (visibleImage names visible listed) :=
+    starts.trans (directoryCalls.successKeepsFrame directory listingFrames CheckpointSurvivingFiles.Frames.trans listedCall)
   obtain ⟨need, laterNames⟩ :=
     MarkedWalExtentReports.selectsWindow fileCalls directory namespaceView root _ (listedNames listedCall) scan
-      (absent listedCall) selected (orderedReads.successfulOrder rfl) canonical layout.covers
+      (absent listedCall listedFrame) selected (orderedReads.successfulOrder rfl) canonical layout.covers
       (through ▸ aligned.2) bounds heldWindow
   have offsets : required.map Prod.fst = segments.map WalSegment.first := need.trans first.symm
   have protectedExtent : ∀ extent ∈ required, scope (directory.file (.walSegment extent.1)) := by
@@ -904,8 +935,6 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
   let frame (before after : heap) := (visibleImage names visible before).Frames scope
     (visibleImage names visible after)
   have refl (atHeap : heap) : frame atHeap atHeap := fun _ _ => ⟨rfl, fun _ _ => rfl⟩
-  have listedFrame : frame initial listed :=
-    starts.trans (directoryCalls.successKeepsFrame directory listingFrames CheckpointSurvivingFiles.Frames.trans listedCall)
   have scannedFrame : frame listed scanned :=
     walExtentScan_success_frame fileCalls directory _ refl CheckpointSurvivingFiles.Frames.trans statFrame scan
   obtain ⟨keeper, metadata, earlier, bytes, beforeKeeper, opened, readHeap, file, slot, inode, last,

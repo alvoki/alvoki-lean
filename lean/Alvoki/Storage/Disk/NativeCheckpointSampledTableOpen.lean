@@ -258,6 +258,9 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (child : ∀ start ≤ current.current.ready.state.writer.history.length,
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
         (observe entry).files.names ((dbDir).file (.walSegment start)))
+    (laterAbsent : ∀ {before entries listed}, source.directoryCalls.run (dbDir).path before = .ok entries listed →
+      MarkedWalExtentReports.TruthfulAbsenceOn (current.current.ready.state.writer.history.length < ·)
+        source.fileCalls dbDir namespaceView root (entries.toList.map (·.fileName)) listed)
     {table : DiskTable} {returnedAt : heap}
     (returned : source.openTable input entry = .ok table returnedAt) :
     let dir := dbDir
@@ -387,7 +390,11 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     manifest selectedRuns markerBytes (.inr ⟨.manifest, rfl⟩)
     (fun _ metadata _ _ index _ => .inr ⟨.run metadata.header.generation index, rfl⟩)
     (.inr ⟨.walBoundary, rfl⟩) modeled.2 (fun start _ _ => .inr ⟨.walSegment start, rfl⟩)
-    (fun start _ bound => child start (layout.through ▸ bound)) physical worker
+    (fun start _ bound => child start (layout.through ▸ bound))
+    (fun listed _ => by
+      intro earlier rest name start order parsed beyond
+      exact laterAbsent listed order parsed (layout.through ▸ beyond))
+    physical worker
   refine ⟨cache, published, layout, checkpoint, authority, heldRoot, heldLock, emptyActive, emptyPending,
     keeper, aligned, selected, (fun start lower upper => window start lower (layout.through ▸ upper)), physical, literal, ?_⟩
   intro repair allocate phaseId tokenId selectedPair selectedKeeper sealed suffix

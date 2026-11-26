@@ -40,6 +40,10 @@ For checkpoint and write recovery, the held directory handle identifies the
 cached root inode at installation. Allocating the phase and token needs to
 preserve visible bytes only for the inode named by the selected keeper.
 
+The write-retry reader derives WAL stat absence from the held bindings and
+the actual scan prefix. The checkpoint reader still needs an absence observation
+for names beyond the marker, which determine the cleanup list.
+
 **Next obligation.** Supply the remaining read, cache and installation effects
 from the fixed production callbacks. The original write’s admitted old-or-whole
 target and incoming ledger must come from the same execution prefix. Further

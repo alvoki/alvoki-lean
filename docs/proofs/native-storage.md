@@ -365,6 +365,11 @@ that same open. A final directory fsync error before effect can leave a replacem
 old inode can still survive a subsequent power loss. At the next open, `RecoveryObservations` relates the
 WAL interval to the names on disk, the live keeper binding to its bytes, the selected
 immutable files to their durable contents, and later WAL names to the physical suffix.
+On a successful extent scan, the segment covering the checkpoint is the lower
+bound for selection. For a write retry, the held directory bindings, the frame
+through preceding stats and the primitive ENOENT observation establish absence
+at every relevant WAL start. The sampled checkpoint path has binding agreement
+through the marker and still requires truthful absence for later names to prune.
 The selected marker bounds replay. Above it, the successful directory scan must enumerate
 every later canonical WAL name, including any restored by power loss before pruning was durable.
 After all unlinks return, the directory barrier can report an error before or after

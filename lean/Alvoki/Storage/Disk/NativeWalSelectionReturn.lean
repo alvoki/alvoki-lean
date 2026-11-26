@@ -251,20 +251,22 @@ private theorem returnedExtentResult (directory : DiskDirectory)
           exact .inr ⟨filename, message, rfl, rfl⟩
         · simp [missing, EStateM.throw] at returned
 
-private theorem returnedExtentOffset (directory : DiskDirectory)
+private theorem returnedExtentOffsetOn (directory : DiskDirectory) (relevant : Nat → Bool)
     (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
     {name : String} {before reached : heap} {found : Option (Nat × IO.FS.Metadata)}
     (returned : readWalSegmentExtentWith directory lstat name before = .ok found reached)
-    (present : ∀ {first statHeap filename message}, parseWalSegmentName name = some first →
+    (present : ∀ {first statHeap filename message}, parseWalSegmentName name = some first → relevant first = true →
       lstat (directory.file (.walSegment first)) before ≠
         .ok (.error (.noFileOrDirectory filename 2 message)) statHeap) :
-    found.map Prod.fst = parseWalSegmentName name := by
+    (found.map Prod.fst).filter relevant = (parseWalSegmentName name).filter relevant := by
   rcases returnedExtentResult directory lstat returned with ⟨parsed, rfl⟩ | ⟨first, parsed, positive | missing⟩
-  · exact parsed.symm
+  · simp only [parsed, Option.map_none]
   · obtain ⟨metadata, _, rfl⟩ := positive
-    exact parsed.symm
-  · obtain ⟨filename, message, stat, _⟩ := missing
-    exact (present parsed stat).elim
+    simp only [parsed, Option.map_some]
+  · obtain ⟨_, _, stat, rfl⟩ := missing
+    cases kept : relevant first with
+    | false => simp [parsed, Option.filter, kept]
+    | true => exact (present parsed kept stat).elim
 
 private theorem filterMapM_extend {α β : Type}
     (read : α → EStateM IO.Error heap (Option β)) (scanned : List α) (name : α)
@@ -363,8 +365,70 @@ theorem readWalSegmentExtentsWith_memberStat (directory : DiskDirectory)
     · obtain ⟨_, _, _, contradiction⟩ := missing
       cases contradiction
 
-/-- A successful raw scan retains exactly the canonical listed names if
-the no-follow probes cannot report ENOENT for those still-bound names. -/
+private theorem sortedOffsets (offsets : List Nat) : offsets.mergeSort.Pairwise (· ≤ ·) :=
+  (List.pairwise_mergeSort (le := fun a b => decide (a ≤ b))
+    (fun _ _ _ ab bc => decide_eq_true (Nat.le_trans (of_decide_eq_true ab) (of_decide_eq_true bc)))
+    (fun a b => Bool.or_eq_true_iff.mpr ((Nat.le_total a b).imp decide_eq_true decide_eq_true)) offsets).imp
+      (fun bound => of_decide_eq_true bound)
+
+/-- The sorted extent scan retains every relevant listed offset whose
+reached probe cannot report ENOENT. Other offsets can be omitted. -/
+theorem readWalSegmentExtentsWith_exactOffsetsOn (directory : DiskDirectory)
+    (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (names : List String) (relevant : Nat → Bool) {before reached : heap} {extents : List (Nat × IO.FS.Metadata)}
+    (scanned : readWalSegmentExtentsWith directory lstat names before = .ok extents reached)
+    (present : ∀ {scanned rest : List String} {name : String} {first : Nat},
+      names = scanned ++ name :: rest → parseWalSegmentName name = some first → relevant first = true →
+      ∀ {earlier : List (Nat × IO.FS.Metadata)} {atStat after filename message},
+      (scanned.filterMapM (readWalSegmentExtentWith directory lstat)) before = .ok earlier atStat →
+      lstat (directory.file (.walSegment first)) atStat ≠ .ok (.error (.noFileOrDirectory filename 2 message)) after) :
+    (extents.map Prod.fst).Pairwise (· ≤ ·) ∧
+      ((extents.map Prod.fst).filter relevant).Perm ((names.filterMap parseWalSegmentName).filter relevant) := by
+  let probe := readWalSegmentExtentWith directory lstat
+  have collect (items scanned : List String) (order : names = scanned ++ items) {atStat after : heap}
+      {earlier results : List (Nat × IO.FS.Metadata)}
+      (entered : (scanned.filterMapM probe) before = .ok earlier atStat)
+      (returned : (items.filterMapM probe) atStat = .ok results after) :
+      (results.map Prod.fst).filter relevant = (items.filterMap parseWalSegmentName).filter relevant := by
+    induction items generalizing scanned atStat after earlier results with
+    | nil =>
+      simp [Pure.pure, EStateM.pure] at returned
+      rw [returned.1]
+      rfl
+    | cons name rest ih =>
+      cases head : probe name atStat with
+      | error cause heap => simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head] at returned
+      | ok value heap =>
+        have offset := returnedExtentOffsetOn directory relevant lstat head
+          (fun parsed kept missing => present order parsed kept entered missing)
+        have enteredTail := filterMapM_extend probe scanned name entered head
+        have restOrder : names = (scanned ++ [name]) ++ rest := by
+          simpa only [List.append_assoc, List.singleton_append] using order
+        cases runTail : (rest.filterMapM probe) heap with
+        | error cause reached =>
+          cases value <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, runTail] at returned
+        | ok values next =>
+          have map := ih (scanned ++ [name]) restOrder enteredTail runTail
+          have complete : ((name :: rest).filterMapM probe) atStat = .ok (value.toList ++ values) next := by
+            cases value <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, runTail, Pure.pure, EStateM.pure]
+          obtain ⟨rfl, _⟩ := EStateM.Result.ok.inj (returned.symm.trans complete)
+          have listed : (name :: rest).filterMap parseWalSegmentName =
+              (parseWalSegmentName name).toList ++ rest.filterMap parseWalSegmentName := by
+            cases parsed : parseWalSegmentName name <;> simp [parsed]
+          rw [listed, List.map_append, List.filter_append, List.filter_append, map,
+            ← Option.toList_map, ← Option.toList_filter, ← Option.toList_filter, offset]
+  change ((names.filterMapM probe) >>= fun result => pure (result.mergeSort _)) before = _ at scanned
+  cases collected : (names.filterMapM probe) before with
+  | error cause after => simp [Bind.bind, EStateM.bind, collected] at scanned
+  | ok entries after =>
+    simp [Bind.bind, EStateM.bind, collected, Pure.pure, EStateM.pure] at scanned
+    obtain ⟨rfl, _⟩ := scanned
+    rw [List.map_mergeSort (f := Prod.fst) (s := fun a b : Nat => decide (a ≤ b)) (fun _ _ _ _ => rfl)]
+    exact ⟨sortedOffsets _, ((List.mergeSort_perm _ _).filter relevant).trans
+      (collect names [] rfl rfl collected ▸ List.Perm.refl _)⟩
+
+/-- With truthful absence for every canonical name, the scan retains
+exactly the sorted offsets of the listing. -/
 theorem readWalSegmentExtentsWith_exactOffsets (directory : DiskDirectory)
     (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
     (names : List String) {before reached : heap} {extents : List (Nat × IO.FS.Metadata)}
@@ -375,41 +439,14 @@ theorem readWalSegmentExtentsWith_exactOffsets (directory : DiskDirectory)
       (scanned.filterMapM (readWalSegmentExtentWith directory lstat)) before = .ok earlier atStat →
       lstat (directory.file (.walSegment first)) atStat ≠ .ok (.error (.noFileOrDirectory filename 2 message)) after) :
     extents.map Prod.fst = (names.filterMap parseWalSegmentName).mergeSort := by
-  let probe := readWalSegmentExtentWith directory lstat
-  have collect (items scanned : List String) (order : names = scanned ++ items) {atStat after : heap}
-      {earlier results : List (Nat × IO.FS.Metadata)}
-      (entered : (scanned.filterMapM probe) before = .ok earlier atStat)
-      (returned : (items.filterMapM probe) atStat = .ok results after) :
-      results.map Prod.fst = items.filterMap parseWalSegmentName := by
-    induction items generalizing scanned atStat after earlier results with
-    | nil =>
-      simp [Pure.pure, EStateM.pure] at returned
-      rw [returned.1]
-      rfl
-    | cons name rest ih =>
-      cases head : probe name atStat with
-      | error cause heap => simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head] at returned
-      | ok value heap =>
-        have offset := returnedExtentOffset directory lstat head (fun parsed missing => present order parsed entered missing)
-        have enteredTail := filterMapM_extend probe scanned name entered head
-        have restOrder : names = (scanned ++ [name]) ++ rest := by
-          simpa only [List.append_assoc, List.singleton_append] using order
-        cases runTail : (rest.filterMapM probe) heap with
-        | error cause reached =>
-          cases value <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, runTail] at returned
-        | ok values next =>
-          have map := ih (scanned ++ [name]) restOrder enteredTail runTail
-          cases value <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, runTail,
-            Pure.pure, EStateM.pure] at returned <;> obtain ⟨rfl, _⟩ := returned <;>
-            simp [← offset, map]
-  change ((names.filterMapM probe) >>= fun result => pure (result.mergeSort _)) before = _ at scanned
-  cases collected : (names.filterMapM probe) before with
-  | error cause after => simp [Bind.bind, EStateM.bind, collected] at scanned
-  | ok entries after =>
-    simp [Bind.bind, EStateM.bind, collected, Pure.pure, EStateM.pure] at scanned
-    obtain ⟨rfl, _⟩ := scanned
-    exact (List.map_mergeSort (f := Prod.fst) (s := fun a b : Nat => decide (a ≤ b)) (fun _ _ _ _ => rfl)).trans
-      (congrArg (fun xs : List Nat => xs.mergeSort) (collect names [] rfl rfl collected))
+  obtain ⟨ordered, offsets⟩ := readWalSegmentExtentsWith_exactOffsetsOn directory lstat names (fun _ => true) scanned
+    (fun order parsed _ => present order parsed)
+  have keepsAll (values : List Nat) : values.filter (fun _ => true) = values :=
+    List.filter_eq_self.mpr (fun _ _ => rfl)
+  have all : (extents.map Prod.fst).Perm (names.filterMap parseWalSegmentName) := by
+    simpa only [keepsAll] using offsets
+  exact List.Perm.eq_of_pairwise (fun _ _ _ _ ab ba => Nat.le_antisymm ab ba) ordered (sortedOffsets _)
+    (all.trans (List.mergeSort_perm _ _).symm)
 
 private theorem dropWhileCovered (through : Nat) (offsets : List Nat) (ordered : offsets.Pairwise (· ≤ ·)) :
     offsets.dropWhile (fun start => decide (start ≤ through)) =

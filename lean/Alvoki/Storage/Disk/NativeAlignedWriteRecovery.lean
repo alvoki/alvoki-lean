@@ -67,8 +67,6 @@ structure RawMarkedOpenInterpreter.AlignedReadEffects (source : RawMarkedOpenInt
     source.directoryCalls.closeDir descriptor scanned = .ok () closed →
     (⟨entries, .ok (), .ok ()⟩ : OpenedDirectoryScan).visibleNames.Perm
       (namespaceView.names (streamObject opened descriptor))
-  absent : ∀ {before entries after}, source.directoryCalls.run directory.path before = .ok entries after →
-    MarkedWalExtentReports.TruthfulAbsence source.fileCalls directory namespaceView root (entries.toList.map (·.fileName)) after
   remember : ∀ {path file before after},
     (source.keeperCallbacks.withFileReads source.fileCalls).modifyPending pending
       (pushPending path file) before = .ok () after → alignedReadFrame names visible scope keeps before after
@@ -170,6 +168,11 @@ theorem RawMarkedOpenInterpreter.readsLiteralMarkedOpen
     (child : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
         names reached ((directory).file (.walSegment start)))
+    (laterAbsent : ∀ {before entries listed}, source.directoryCalls.run directory.path before = .ok entries listed →
+      (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).Frames scope
+        ⟨names listed, fun inode => [visible listed inode]⟩ →
+      MarkedWalExtentReports.TruthfulAbsenceOn (layout.range.through < ·) source.fileCalls directory
+        namespaceView root (entries.toList.map (·.fileName)) listed)
     (physical : layout.VisibleWal directory (names reached) (visible reached))
     {returnedAt : heap} {table : DiskTable}
     (returned : source.worker cached active pending directory lock
@@ -226,7 +229,18 @@ theorem RawMarkedOpenInterpreter.readsLiteralMarkedOpen
       (fun path before => (effects.statFrame path before).1) framed
       (fun listed => source.directoryCalls.listedRootNames (directory).path namespaceView root effects.streamObject listed
         (fun _ _ ran => effects.streamRoot ran) (fun _ _ _ _ opened scan close => effects.complete opened scan close))
-      effects.absent
+      (fun {entries listedHeap} listed fromEntry => by
+        have bounded : MarkedWalExtentReports.TruthfulAbsenceOn
+            (fun start => layout.first ≤ start ∧ start ≤ layout.range.through) source.fileCalls directory
+            namespaceView root (entries.toList.map (·.fileName)) listedHeap :=
+          source.fileCalls.absenceOnFromNames directory names visible namespaceView root scope
+            (relevant := fun start => layout.first ≤ start ∧ start ≤ layout.range.through) fromEntry (fun path before => (effects.statFrame path before).1) effects.statMissing
+            (fun start inside => scopedWindow start inside.1 inside.2)
+            (fun start inside => child start inside.1 inside.2)
+        intro earlier rest name start order parsed lower
+        by_cases within : start ≤ layout.range.through
+        · exact bounded order parsed ⟨lower, within⟩
+        · exact laterAbsent listed fromEntry order parsed (Nat.lt_of_not_ge within))
       through following physical scopedWindow childAtRead wal
   let frame := alignedReadFrame names visible scope keeps
   have refl (atHeap : heap) : frame atHeap atHeap := ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, keepsRefl atHeap⟩
@@ -1402,6 +1416,9 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
         start.current.ready.state.session.directory firstOffset through (observe start.reached) := by
   have untilHeld := admissionFrame.entersReader authority
   have manifest := (congrArg (fun target : Target => target.pair.manifest) plan.targetEq).trans entry.manifest
+  have childLater (start : Nat) (later : plan.layout.range.through < start) :=
+    shared.child start (Nat.le_trans plan.layout.covers
+      (Nat.le_trans (DirectoryPublication.Bindings.walRange_accounting plan.layout.decoded).2.1 (Nat.le_of_lt later)))
   obtain ⟨count, markerBytes, patched, logical, keeper, slot, inode, readHeap, prepared, repaired, extent, newer,
     phase, afterPhase, token, markerName, decoded, _, replay, named, attached, route, extentEq, laterNames, liveFrame,
     privateKeeper, readFrame, cacheFrame, rawFinish, phaseReturn, tokenReturn, tableEq, _⟩ :=
@@ -1416,12 +1433,14 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       (.inr ⟨.manifest, rfl⟩)
       (fun _ metadata _ _ index _ => .inr ⟨.run metadata.header.generation index, rfl⟩)
       (.inr ⟨.walBoundary, rfl⟩) plan.modeledWindow.2 (fun first _ _ => .inr ⟨.walSegment first, rfl⟩)
-      (fun start lower _ => shared.child start lower) physical workerReturn
+      (fun start lower _ => shared.child start lower)
+      (fun _ fromEntry =>
+        source.fileCalls.absenceOnFromNames dir (fun atHeap => (observe atHeap).files.names) visible namespaceView root
+          (managedPath dir) fromEntry (fun path before => (shared.readEffects.statFrame path before).1)
+          shared.readEffects.statMissing (fun start _ => .inr ⟨.walSegment start, rfl⟩) childLater)
+      physical workerReturn
   have cutoff : plan.layout.range.through = target.range.through :=
     congrArg (fun t : Target => t.range.through) plan.targetEq
-  have childLater (start : Nat) (later : plan.layout.range.through < start) :=
-    shared.child start (Nat.le_trans plan.layout.covers
-      (Nat.le_trans (DirectoryPublication.Bindings.walRange_accounting plan.layout.decoded).2.1 (Nat.le_of_lt later)))
   have sameSuffix := suffixAtEntry.scanNames namespaceView root (by simpa only [cutoff] using laterNames)
     (fun start later => childLater start (cutoff.symm ▸ later))
   obtain ⟨selectedNames, boundedStarts, later, listed⟩ := plan.walNamespaceAtPreparation (cutoff.symm ▸ window)
