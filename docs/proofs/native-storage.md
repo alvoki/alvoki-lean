@@ -211,7 +211,8 @@ reads the replayed batch for any key. Its pin and the original acknowledgement
 both have sequence number equal to the batch length.
 [Fresh writer through reopen](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 · [Snapshot lookup](../../lean/Alvoki/Storage/Disk/NativeOpenSnapshotControls.lean)
-· [Reopen theorem](https://github.com/alvoki/alvoki-lean/blob/069be1e6d09dd3eba01b87d8756d454126d4ca8f/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1755)
+· [Reopen after acknowledgement](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1866)
+· [Reopen after an uncertain write](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1889)
 
 For a later write returning `commitUnknown` after the file-sync group
 succeeds, the sampled marker selects the earlier history or the earlier history

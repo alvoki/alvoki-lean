@@ -98,7 +98,10 @@ root read and the outstanding sync.
 
 **Next obligation.** Carry the fresh writer’s storage entry and directory
 window across the first acknowledgement to an interrupted second batch.
-The initial window must cover the combined row count. For rotation, establish
+The initial window must cover the combined row count. The resulting client
+trace must retain the first acknowledgement, record the second submission
+without a response, and read the pin on the actual reopened table.
+For rotation, establish
 the sealed files and the new active binding at the rotation’s actual return. On the
 failed-barrier path, the surviving namespace and cleanup inventory still need
 to feed the next admission.
