@@ -338,20 +338,8 @@ private theorem rootBarrierReturned (calls : RawSyncCalls heap) (cache : OpenSyn
       #[directory.path] before = .ok () reached) :
     ∃ issued handle, calls.readDirectory cache.directory before = .ok (some handle) issued ∧
       calls.fsync handle issued = .ok () reached := by
-  rw [calls.rootBarrierResult cache] at returned
-  cases loaded : calls.readDirectory cache.directory before with
-  | error => simp [loaded] at returned
-  | ok contents issued =>
-    cases contents with
-    | none => simp [loaded] at returned
-    | some handle =>
-      cases synced : calls.fsync handle issued with
-      | error => simp [loaded, synced] at returned
-      | ok value after =>
-        cases value
-        simp [loaded, synced] at returned
-        subst reached
-        exact ⟨issued, handle, rfl, synced⟩
+  obtain ⟨handle, issued, loaded, synced⟩ := calls.rootGroupReturned returned
+  exact ⟨issued, handle, loaded, synced⟩
 
 /-- The actual returning commit identifies its successful prefix and
 the first failing publication callback, or the final directory outcome.

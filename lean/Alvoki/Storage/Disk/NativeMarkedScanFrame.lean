@@ -323,6 +323,246 @@ theorem MarkedTemporaryReadCalls.readsMarkedKeeperWithPhysicalExtent
   exact ⟨keeper, metadata, file, slot, inode, issued, statHeap, beforeKeeper, opened, readHeap, bytes,
     stat, measured, original, acquired, held, by simp [files], exactPrefix, expectedSize.trans trueSize, route, finalFrame⟩
 
+private theorem mapM_matchesKeys {α β γ δ : Type} (read : α → Option β)
+    (sourceKey : α → γ) (canonicalKey : δ → γ) (payload : δ → β)
+    (source : List α) (canonical : List δ)
+    (keys : source.map sourceKey = canonical.map canonicalKey)
+    (agrees : ∀ entry ∈ source, ∀ item ∈ canonical, sourceKey entry = canonicalKey item →
+      read entry = some (payload item)) :
+    source.mapM read = some (canonical.map payload) := by
+  induction source generalizing canonical with
+  | nil =>
+    cases canonical with
+    | nil => rfl
+    | cons item rest => simp at keys
+  | cons entry rest ih =>
+    cases canonical with
+    | nil => simp at keys
+    | cons item tail =>
+      obtain ⟨same, remaining⟩ := List.cons.inj keys
+      have first := agrees entry List.mem_cons_self item List.mem_cons_self same
+      have restReads := ih tail remaining (fun entry member item named =>
+        agrees entry (List.mem_cons_of_mem _ member) item (List.mem_cons_of_mem _ named))
+      simp [List.mapM_cons, first, restReads, Pure.pure, Bind.bind, Option.bind]
+
+/-- The literal WAL payload fold is canonical once the actual selected
+metadata has the corresponding offsets and reached physical extents.
+The keeper remains a prefix of its full visible bytes. -/
+theorem CanonicalKeeperLayout.matchesSelectedWalPayloads
+    {image : FileImage} {history : List WAL.Write} (layout : CanonicalKeeperLayout image history)
+    {required : List (Nat × IO.FS.Metadata)} {keeper : Nat} {metadata : IO.FS.Metadata}
+    {earlier : List (Nat × ByteArray)} {bytes : ByteArray} {inode : Nat}
+    (atName : Nat → Option Nat) (visible : Nat → ByteArray)
+    (offsets : required.map Prod.fst = (layout.sealed ++ [layout.keeper]).map WalSegment.first)
+    (last : required.getLast? = some (keeper, metadata))
+    (reads : required.dropLast.mapM (fun extent => (atName extent.1).map fun i =>
+      (extent.1, (visible i).extract 0 extent.2.byteSize.toNat)) = some earlier)
+    (stat : ∀ extent ∈ required, ∀ i, atName extent.1 = some i →
+      extent.2.byteSize.toNat = (visible i).size)
+    (sealed : ∀ segment ∈ layout.sealed, (atName segment.first).map visible = some segment.bytes)
+    (keeperName : atName keeper = some inode)
+    (keeperContent : (atName layout.keeper.first).map visible = some (layout.keeper.bytes ++ layout.tail))
+    (keeperPrefix : bytes = (visible inode).extract 0 ((layout.range.through - keeper) * WAL.frameSize)) :
+    earlier ++ [(keeper, bytes)] =
+      (layout.sealed ++ [layout.keeper]).map (fun segment => (segment.first, segment.bytes)) ∧
+      metadata.byteSize.toNat = (layout.keeper.bytes ++ layout.tail).size := by
+  have keeperFirst : keeper = layout.keeper.first := by
+    have seen := congrArg List.getLast? offsets
+    simpa [last] using seen
+  have seals : required.dropLast.map Prod.fst = layout.sealed.map WalSegment.first := by
+    rw [List.map_dropLast, offsets]
+    simp
+  have actualSeals := mapM_matchesKeys
+    (fun extent : Nat × IO.FS.Metadata => (atName extent.1).map fun i =>
+      (extent.1, (visible i).extract 0 extent.2.byteSize.toNat)) Prod.fst WalSegment.first (fun segment => (segment.first, segment.bytes))
+    required.dropLast layout.sealed seals (by
+      intro extent seen segment member key
+      obtain ⟨i, named, exactBytes⟩ := Option.map_eq_some_iff.mp (sealed segment member)
+      have ownName : atName extent.1 = some i := key.symm ▸ named
+      have full := stat extent ((List.dropLast_sublist required).subset seen) i ownName
+      simp only [key, named, Option.map_some, full, exactBytes, ByteArray.extract_zero_size])
+  have exactSeals := Option.some.inj (reads.symm.trans actualSeals)
+  have exactKeeper : visible inode = layout.keeper.bytes ++ layout.tail := by
+    rw [← keeperFirst, keeperName, Option.map_some] at keeperContent
+    exact Option.some.inj keeperContent
+  have keeperBytes : bytes = layout.keeper.bytes := by
+    have count : layout.keeper.bytes.size = (layout.range.through - keeper) * WAL.frameSize := by
+      simpa [keeperFirst, CanonicalKeeperLayout.target] using layout.target.trimmedSize
+    rw [keeperPrefix, exactKeeper, ← count, ByteArray.extract_append_eq_left rfl]
+  rw [exactSeals, keeperFirst, keeperBytes, List.map_append]
+  exact ⟨rfl, (stat (keeper, metadata) (List.mem_of_getLast? last) inode keeperName).trans (congrArg ByteArray.size exactKeeper)⟩
+
+private theorem chainStarts {history : List WAL.Write} {first : Nat} {segments : List WalSegment}
+    (chain : WalSegment.Chain history first segments) (nonempty : segments ≠ []) :
+    ∃ rest, segments.map WalSegment.first = first :: rest := by
+  cases chain with
+  | endOfHistory => contradiction
+  | cons => exact ⟨_, rfl⟩
+
+/-- Refine the actual WAL return using only the held recovery window
+and reached file effects. Both the canonical replay bytes and the
+actual keeper route come from the same payload traversal. -/
+theorem MarkedTemporaryReadCalls.readsCanonicalWal
+    {stream image : Type} (fileCalls : MarkedTemporaryReadCalls heap)
+    (directoryCalls : MarkedDirectoryReadCalls heap stream)
+    (directory : DiskDirectory) (view : OpenCloseHeapView heap image)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    {files : FileImage} {history : List WAL.Write} (layout : CanonicalKeeperLayout files history)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (scope : FilePath → Prop)
+    (scopedSegments : ∀ segment ∈ layout.sealed ++ [layout.keeper],
+      scope (directory.file (.walSegment segment.first)))
+    (opens : fileCalls.OpensReadSlot view names visible) (reads : fileCalls.ReadsAtCursor view visible)
+    (scopedReads : fileCalls.ScopeFrames (fun before after =>
+      (visibleImage names visible before).Frames scope (visibleImage names visible after)))
+    (listingFrames : directoryCalls.ScopeFrames directory (fun before after =>
+      (visibleImage names visible before).Frames scope (visibleImage names visible after)))
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (remembers : ∀ {path file before after}, remember path file before = .ok () after →
+      (visibleImage names visible before).Frames scope (visibleImage names visible after))
+    (statObject : FilePath → heap → heap → Option Nat)
+    (statTruth : ∀ {path before after metadata}, fileCalls.stat path before = .ok (.ok metadata) after →
+      ∃ inode, statObject path before after = some inode ∧ names before path = some inode ∧
+        metadata.byteSize.toNat = (visible before inode).size)
+    (statFrame : ∀ path before, (visibleImage names visible before).Frames scope
+      (visibleImage names visible (reachedState (fileCalls.stat path before))))
+    {initial entry reached : heap} {length : UInt64} {payloads : WalSegmentMarkerReads} {extent : Nat}
+    (starts : (visibleImage names visible initial).Frames scope (visibleImage names visible entry))
+    (listedNames : ∀ {entries : Array IO.FS.DirEntry} {listed : heap},
+      directoryCalls.run directory.path entry = .ok entries listed →
+      (entries.toList.map (·.fileName)).Perm (namespaceView.names root))
+    (absent : ∀ {entries : Array IO.FS.DirEntry} {listed : heap},
+      directoryCalls.run directory.path entry = .ok entries listed →
+      MarkedWalExtentReports.TruthfulAbsence fileCalls directory namespaceView root
+        (entries.toList.map (·.fileName)) listed)
+    (through : length.toNat / WAL.frameSize = layout.range.through)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (catalog : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
+      ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔
+        start ∈ (layout.sealed ++ [layout.keeper]).map WalSegment.first))
+    (unique : (((namespaceView.names root).filterMap parseWalSegmentName).filter
+      (fun start => decide (start ≤ layout.range.through) && decide (layout.first ≤ start))).Nodup)
+    (sealed : ∀ segment ∈ layout.sealed,
+      (names initial (directory.file (.walSegment segment.first))).map (visible initial) = some segment.bytes)
+    (keeperContent : (names initial (directory.file (.walSegment layout.keeper.first))).map (visible initial) =
+      some (layout.keeper.bytes ++ layout.tail))
+    (returned : readSelectedWithCachedExtents directory layout.range.watermark length directoryCalls.run
+      (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal (fileCalls.readKeeperWithRelease remember) entry =
+        .ok (payloads, extent) reached) :
+    payloads.files = (layout.sealed ++ [layout.keeper]).map (fun segment => (segment.first, segment.bytes)) ∧
+    extent = (layout.keeper.bytes ++ layout.tail).size ∧
+    (∀ start, start ∈ payloads.newer ↔ layout.range.through < start ∧
+      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ∧
+    ∃ (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat) (beforeKeeper opened readHeap : heap),
+      let path := directory.file (.walSegment layout.keeper.first)
+      names initial path = some inode ∧
+      fileCalls.openRead path beforeKeeper = .ok file opened ∧ attachedReadSlot view file slot inode readHeap ∧
+      ((layout.keeper.bytes.size = extent ∧ remember path file readHeap = .ok () reached) ∨
+        (layout.keeper.bytes.size < extent ∧ fileCalls.release file readHeap = .ok () reached)) ∧
+      (visibleImage names visible initial).Frames scope (visibleImage names visible reached) := by
+  have observed := SelectedWalReadReturn.classifies directory layout.range.watermark length directoryCalls.run
+    (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal (fileCalls.readKeeperWithRelease remember) entry
+  rw [returned] at observed
+  obtain ⟨entries, listed, extents, scanned, required, aligned, listedCall, scan, selected, _, orderedReads⟩ :=
+    observed.successfulPayloads
+  rw [through] at selected orderedReads
+  let segments := layout.sealed ++ [layout.keeper]
+  obtain ⟨expected, first⟩ := chainStarts layout.chain (by simp)
+  have canonical := List.pairwise_map.mpr layout.chain.startsStrict
+  change (segments.map WalSegment.first).Pairwise (· < ·) at canonical
+  rw [first] at canonical
+  have bounds : ∀ start ∈ expected, layout.range.watermark < start ∧ start ≤ layout.range.through := by
+    intro start member
+    have afterCover := following start (by simpa only [first, List.drop_succ_cons, List.drop_zero] using member)
+    have mapped : start ∈ segments.map WalSegment.first := by rw [first]; exact List.mem_cons_of_mem _ member
+    obtain ⟨segment, part, rfl⟩ := List.mem_map.mp mapped
+    exact ⟨afterCover, layout.through ▸ layout.chain.startsWithin segment part⟩
+  obtain ⟨canonicalReads, later, canonicalSelection, need, laterNames⟩ :=
+    MarkedWalExtentReports.selectsWindow fileCalls directory namespaceView root _ (listedNames listedCall) scan
+      (absent listedCall) canonical layout.covers (through ▸ aligned.2) bounds
+      (fun start lower upper => by simpa only [first] using catalog start lower upper) unique
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj (selected.symm.trans canonicalSelection))
+  have offsets : required.map Prod.fst = segments.map WalSegment.first := need.trans first.symm
+  have protectedExtent : ∀ extent ∈ required, scope (directory.file (.walSegment extent.1)) := by
+    intro extent member
+    have selectedOffset : extent.1 ∈ required.map Prod.fst := List.mem_map.mpr ⟨extent, member, rfl⟩
+    rw [offsets] at selectedOffset
+    obtain ⟨segment, part, agrees⟩ := List.mem_map.mp selectedOffset
+    simpa only [agrees] using scopedSegments segment part
+  let frame (before after : heap) := (visibleImage names visible before).Frames scope
+    (visibleImage names visible after)
+  have refl (atHeap : heap) : frame atHeap atHeap := fun _ _ => ⟨rfl, fun _ _ => rfl⟩
+  have listedFrame : frame initial listed :=
+    starts.trans (directoryCalls.successKeepsFrame directory listingFrames CheckpointSurvivingFiles.Frames.trans listedCall)
+  have scannedFrame : frame listed scanned :=
+    walExtentScan_success_frame fileCalls directory _ refl CheckpointSurvivingFiles.Frames.trans statFrame scan
+  obtain ⟨keeper, metadata, earlier, bytes, beforeKeeper, opened, readHeap, file, slot, inode, last,
+    sealReads, fileList, extentEq, named, acquired, held, exactPrefix, route, _, finalFrame⟩ :=
+    fileCalls.restoresSelectedWalBytes view names visible scope opens reads scopedReads remember remembers
+      protectedExtent (listedFrame.trans scannedFrame) orderedReads rfl
+  let atName := fun start => names initial (directory.file (.walSegment start))
+  have truthfulExtent : ∀ extent ∈ required, ∀ inode, atName extent.1 = some inode →
+      extent.2.byteSize.toNat = (visible initial inode).size := by
+    rintro ⟨offset, metadata⟩ member inode name
+    obtain ⟨_, _, measuredInode, _, _, same, _, size, _⟩ :=
+      MarkedWalExtentReports.selectedPhysicalExtent fileCalls directory names visible scope statObject statTruth statFrame
+        _ listedFrame scan selected member (protectedExtent (offset, metadata) member)
+    exact (Option.some.inj (same.symm.trans name)) ▸ size
+  obtain ⟨sameFiles, sameExtent⟩ := layout.matchesSelectedWalPayloads atName (visible initial) offsets last
+    sealReads truthfulExtent sealed named keeperContent exactPrefix
+  have keeperFirst : keeper = layout.keeper.first := by
+    have seen := congrArg List.getLast? offsets
+    simpa [segments, last] using seen
+  have count : layout.keeper.bytes.size = (layout.range.through - keeper) * WAL.frameSize := by
+    simpa [keeperFirst, CanonicalKeeperLayout.target] using layout.target.trimmedSize
+  refine ⟨fileList.trans sameFiles, extentEq.trans sameExtent, laterNames,
+    file, slot, inode, beforeKeeper, opened, readHeap, ?_, ?_, held, ?_, finalFrame⟩
+  · simpa only [keeperFirst] using named
+  · simpa only [keeperFirst] using acquired
+  · rw [count]
+    simpa only [keeperFirst] using route
+
 end ActualWalStat
+
+/-- Replay the exact decoded marker and bounded selected WAL payloads
+from the restored checkpoint. A physical tail has already been left
+outside the bounded reader's result. -/
+theorem CanonicalKeeperLayout.replaysSelected {image : FileImage} {history : List WAL.Write}
+    (layout : CanonicalKeeperLayout image history) {published : CheckpointPublication.Image}
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable image.directory.active.manifest checkpoint)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    {marker : ByteArray} {count : UInt64}
+    (markerName : image.directory.active.walBoundary = some marker)
+    (markerRead : WAL.Boundary.decode marker = .ok count)
+    {files : List (Nat × ByteArray)}
+    (payloads : files = layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++
+      [(layout.keeper.first, layout.keeper.bytes)]) :
+    ∃ table model,
+      recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 count files =
+        .ok (WAL.encode (history.drop layout.first), table) ∧
+      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok table ∧
+      count.toNat = history.length * WAL.frameSize ∧
+      table.committed.toNat = history.length ∧ table.RowBounds ∧ table.Refines model ∧
+      RepresentsWalHistory history model ∧
+      table.pins = (checkpoint.getD (.empty, 0)).1.pins ∧ table.pins.active = [] := by
+  obtain ⟨watermark, _, _, canonical, markerAt, decoded, absolute⟩ :=
+    DirectoryPublication.Bindings.walRange_accounting layout.decoded
+  obtain rfl := Option.some.inj (markerName.symm.trans markerAt)
+  obtain rfl := Except.ok.inj (markerRead.symm.trans decoded)
+  rw [layout.through] at absolute
+  have byteCount : (WAL.encode history).size = count.toNat := by
+    rw [WAL.encode_size, absolute, Nat.mul_comm]
+  obtain ⟨base, table, model, known, full, committed, bounded, refined, represents, fresh⟩ :=
+    selectedCheckpoint_replays watermark accepted (byteCount ▸ count.toNat_lt_size) ordered
+  obtain rfl := known.uniqueResult selected
+  have clock := Option.some.inj (selected.watermark.symm.trans watermark)
+  have replay := layout.chain.replaysMarked ByteArray.empty absolute (clock.symm ▸ layout.covers) ordered full
+  obtain ⟨_, _, applied, _⟩ := recoverSelected_success full
+  refine ⟨table, model, ?_, full, absolute, committed, bounded, refined, represents, replay_pins applied, fresh⟩
+  simpa only [payloads, ByteArray.append_empty] using replay
 
 end Alvoki.Storage.DiskSession

@@ -1,9 +1,32 @@
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
+import Alvoki.Storage.Disk.NativeRawSync
 
 namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
+
+/-- A successful aligned finish with no later names uses exactly the
+directory barrier followed by the barrier on its existing keeper. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSyncsReached {heap : Type}
+    (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {entry reached : heap}
+    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
+    (aligned : physicalSize = plan.keeperSize) (noneLater : plan.newer = [])
+    (returned : finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .ok () reached) :
+    ∃ afterDirectory, sync #[directory.path] entry = .ok () afterDirectory ∧
+      sync #[directory.file (.walSegment plan.keeper)] afterDirectory = .ok () reached := by
+  subst physicalSize
+  simp [finishBoundedMarkedOpen, valid, size, noneLater, Bind.bind, EStateM.bind] at returned
+  cases directoryBarrier : sync #[directory.path] entry with
+  | error cause failed => simp [directoryBarrier] at returned
+  | ok result afterDirectory =>
+    cases result
+    exact ⟨afterDirectory, rfl, by simpa only [directoryBarrier] using returned⟩
 
 structure AlignedKeeperCacheCallbacks (heap : Type) where
   openRead : FilePath → EStateM IO.Error heap IO.FS.Handle
@@ -62,6 +85,63 @@ theorem syncsPendingKeeper {dir path cached active pending before consumed after
     calls.syncPaths dir cached active pending #[path] before = .ok () after := by
   rw [syncPaths, SyncPathGroup.run_single]
   simp [syncWithHandles, Bind.bind, EStateM.bind, separate, loaded, cleared, synced, Pure.pure, EStateM.pure]
+
+/-- The actual aligned finisher uses the original cached root and the
+keeper surfaced by the preceding read. The root barrier frames the
+pending names, and the keeper fsync follows removal of all matches. -/
+theorem alignedRepairSyncs {image : Type} (view : OpenCloseHeapView heap image)
+    (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {readHeap entry reached : heap} {root keeper : IO.FS.Handle}
+    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
+    (aligned : physicalSize = plan.keeperSize) (noneLater : plan.newer = [])
+    (cachedRoot : view.directory entry cached = some root)
+    (remembered : calls.modifyPending pending (pushPending (directory.file (.walSegment plan.keeper)) keeper)
+      readHeap = .ok () entry)
+    (recordsKeeper : calls.modifyPending pending (pushPending (directory.file (.walSegment plan.keeper)) keeper)
+      readHeap = .ok () entry →
+      view.pending entry pending = pushPending (directory.file (.walSegment plan.keeper)) keeper (view.pending readHeap pending))
+    (readsDirectory : ∀ {result issued}, calls.getDirectory cached entry = .ok result issued →
+      result = view.directory entry cached ∧ view.pending issued pending = view.pending entry pending)
+    (syncKeepsPending : ∀ {issued after}, calls.sync root issued = .ok () after →
+      view.pending after pending = view.pending issued pending)
+    (readsPending : ∀ {before entries loaded}, calls.getPending pending before = .ok entries loaded →
+      entries = view.pending before pending)
+    (returned : finishBoundedMarkedOpen directory plan physicalSize remove write
+      (calls.syncPaths directory.path cached active pending) rename entry = .ok () reached) :
+    let path := directory.file (.walSegment plan.keeper)
+    ∃ (rootIssued afterDirectory : heap) (entries : List (FilePath × IO.FS.Handle)) (loaded consumed : heap),
+      calls.getDirectory cached entry = .ok (some root) rootIssued ∧
+      calls.sync root rootIssued = .ok () afterDirectory ∧
+      calls.getPending pending afterDirectory = .ok entries loaded ∧
+      entries.find? (fun item => item.1 == path) = some (path, keeper) ∧
+      calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed ∧
+      calls.sync keeper consumed = .ok () reached := by
+  intro path
+  obtain ⟨afterDirectory, rootBarrier, keeperBarrier⟩ :=
+    finishBoundedMarkedOpen_alignedSyncsReached directory plan physicalSize remove write
+      (calls.syncPaths directory.path cached active pending) rename valid size aligned noneLater returned
+  let syncer : RawSyncCalls heap :=
+    ⟨⟨calls.getDirectory, calls.getPending, calls.setPending, calls.getActive, calls.openRead⟩, calls.sync⟩
+  change syncer.group directory.path cached active pending #[directory.path] entry = .ok () afterDirectory at rootBarrier
+  change syncer.group directory.path cached active pending #[path] afterDirectory = .ok () reached at keeperBarrier
+  obtain ⟨directoryHandle, issued, loadedRoot, syncedRoot⟩ := syncer.rootGroupReturned rootBarrier
+  obtain ⟨sameRoot, pendingFromRead⟩ := readsDirectory loadedRoot
+  have sameHandle := Option.some.inj (sameRoot.trans cachedRoot)
+  subst directoryHandle
+  have pendingFromRemember :=
+    (syncKeepsPending syncedRoot).trans (pendingFromRead.trans (recordsKeeper remembered))
+  have selects {entries loaded} (read : syncer.readPending pending afterDirectory = .ok entries loaded) :
+      entries.find? (fun item => item.1 == path) = some (path, keeper) := by
+    rw [readsPending read, pendingFromRemember]
+    simp [path, pushPending]
+  obtain ⟨entries, loaded, consumed, got, chosen, removed, synced⟩ :=
+    syncer.pendingGroupReturned (file_ne_directory directory (.walSegment plan.keeper)) selects keeperBarrier
+  exact ⟨issued, afterDirectory, entries, loaded, consumed, loadedRoot, syncedRoot, got, chosen, removed, synced⟩
 
 end AlignedKeeperCacheCallbacks
 

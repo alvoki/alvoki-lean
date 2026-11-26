@@ -195,12 +195,17 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   releases and keeper callback. With the local stat identity and
   extent laws, the keeper's reached stat and read refer to the same
   inode. The reported full extent is its visible size, separately
-  from the marker prefix. To derive the canonical replay, connect
-  the held namespace to the selected writer's complete WAL footprint.
-  The next obligation is to obtain these local effects and the
-  protected footprint from the independently admitted execution,
-  then use the actual WAL selection and repair to retire the
-  corresponding healthy-open premises.
+  from the marker prefix. A held inventory that agrees with the
+  recovery window now supplies the ordered canonical payloads, with
+  exact later-name membership independent of the expected replay.
+  The checked selection and marker give the recovered table and
+  checkpoint pin floor by a pure replay theorem. The literal open
+  exposes the same read, repair and table allocations from one
+  inversion. For an aligned keeper with no later WAL files, worker
+  success gives the original directory and pending-keeper fsync callbacks. The next
+  obligation is to derive the held window and corresponding storage
+  effects from an admitted retry, and transport the exact returned
+  cache and durable state into the next writer.
   [Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
   [Checkpoint runs](../lean/Alvoki/Storage/Disk/NativeCheckpointReadReturn.lean) ·
   [Selected WAL](../lean/Alvoki/Storage/Disk/NativeWalSelectionReturn.lean)

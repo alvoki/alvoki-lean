@@ -49,23 +49,19 @@ private theorem alignedSettledFor {before : ReopenImage} {history : List WAL.Wri
     DirectoryPublication.Bindings) = ⟨_, _⟩
   rw [visible, reads.markerVisible _ markerRead]
 
-/-- A checked versioned checkpoint and the exact selected WAL bytes load
-and replay independently of the durability branch used to settle them. -/
-theorem _root_.Alvoki.Storage.VersionedCheckpointFileReads.replays_selected
+/-- The selected durable runs determine the checkpoint and its replay.
+The pure recovery argument supplies the recovered representation before
+a reader is used to identify those bytes in a native execution. -/
+theorem _root_.Alvoki.Storage.CheckpointPublication.Image.replaysVersionedRuns
     {image : CheckpointPublication.Image} {bytes : ByteArray} {selected : VersionedCheckpoint}
     {history : List WAL.Write}
-    (reads : VersionedCheckpointFileReads image.durable (some bytes))
     (decoded : VersionedCheckpoint.decode bytes = .ok selected)
     (accepted : image.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) (some bytes))
-    (manifestRead : reads.readManifest = .ok (some bytes))
-    (runReads : ∀ index, index < selected.header.runCount.toNat →
-      ∃ payload, reads.readRun selected.header.generation index = .ok payload)
     (fits : (WAL.encode history).size < UInt64.size) (ordered : WAL.OrdinalsFrom 1 history) :
     ∃ files base table,
       (List.range selected.header.runCount.toNat).mapM
         (image.durable selected.header.generation) = some files ∧
       selected.ValidatesFiles files ∧ loadRunSet selected.header files = .ok base ∧
-      reads.result = .ok (some (base, selected.header.generation)) ∧
       replay base (history.drop selected.header.committed.toNat) = .ok table ∧
       recoverSelected base (WAL.encode history) = .ok table ∧
       table.committed.toNat = history.length ∧ table.RowBounds ∧
@@ -74,7 +70,6 @@ theorem _root_.Alvoki.Storage.VersionedCheckpointFileReads.replays_selected
     image.acceptsVersioned_runs accepted decoded
   have watermark := written.watermark
   obtain ⟨base, structural, same⟩ := written.loads
-  have loaded := reads.completes_selected manifestRead decoded runReads durable validated structural
   have historyFits : history.length < UInt64.size := by
     rw [WAL.encode_size] at fits
     simp [WAL.frameSize] at fits
@@ -105,8 +100,35 @@ theorem _root_.Alvoki.Storage.VersionedCheckpointFileReads.replays_selected
   have bounded := replay_rowBounds (same.rowBounds written.rowBounds) exactReplay
   have represented := abstractHistory.preserve sameClock (UInt64.le_of_eq sameFloor.symm)
     (refined.rowsBounded bounded) (fun snapshot _ key => by rw [sameTable])
-  exact ⟨files, base, table, durable, validated, structural, loaded, exactReplay, replayed, total, bounded,
+  exact ⟨files, base, table, durable, validated, structural, exactReplay, replayed, total, bounded,
     model, refined, represented, by rw [refined.pins, fresh]⟩
+
+/-- A checked versioned checkpoint and the exact selected WAL bytes load
+and replay independently of the durability branch used to settle them. -/
+theorem _root_.Alvoki.Storage.VersionedCheckpointFileReads.replays_selected
+    {image : CheckpointPublication.Image} {bytes : ByteArray} {selected : VersionedCheckpoint}
+    {history : List WAL.Write}
+    (reads : VersionedCheckpointFileReads image.durable (some bytes))
+    (decoded : VersionedCheckpoint.decode bytes = .ok selected)
+    (accepted : image.AcceptsVersioned history.length.toUInt64 (CheckpointRepresentsPrefix history) (some bytes))
+    (manifestRead : reads.readManifest = .ok (some bytes))
+    (runReads : ∀ index, index < selected.header.runCount.toNat →
+      ∃ payload, reads.readRun selected.header.generation index = .ok payload)
+    (fits : (WAL.encode history).size < UInt64.size) (ordered : WAL.OrdinalsFrom 1 history) :
+    ∃ files base table,
+      (List.range selected.header.runCount.toNat).mapM
+        (image.durable selected.header.generation) = some files ∧
+      selected.ValidatesFiles files ∧ loadRunSet selected.header files = .ok base ∧
+      reads.result = .ok (some (base, selected.header.generation)) ∧
+      replay base (history.drop selected.header.committed.toNat) = .ok table ∧
+      recoverSelected base (WAL.encode history) = .ok table ∧
+      table.committed.toNat = history.length ∧ table.RowBounds ∧
+      ∃ model, table.Refines model ∧ RepresentsWalHistory history model ∧ table.pins.active = [] := by
+  obtain ⟨files, base, table, durable, validated, structural, exactReplay, replayed, total, bounded,
+    model, refined, represented, fresh⟩ := image.replaysVersionedRuns decoded accepted fits ordered
+  have loaded := reads.completes_selected manifestRead decoded runReads durable validated structural
+  exact ⟨files, base, table, durable, validated, structural, loaded, exactReplay, replayed, total, bounded,
+    model, refined, represented, fresh⟩
 
 /-- A marked open with a valid selected versioned checkpoint loads its runs
 and replays precisely the suffix above the selected watermark. Success of

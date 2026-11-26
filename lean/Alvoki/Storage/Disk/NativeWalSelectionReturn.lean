@@ -444,4 +444,85 @@ theorem selectWalSegmentReadsThrough_later {offsets required later : List Nat} {
     · simp [beyond, Nat.le_trans lower (Nat.le_trans covers (Nat.le_of_lt beyond))]
     · simp [beyond]
 
+private theorem takesBoundedOffsets (through : Nat) (offsets : List Nat)
+    (ordered : offsets.Pairwise (· ≤ ·)) :
+    offsets.takeWhile (fun start => decide (start ≤ through)) =
+      offsets.filter (fun start => decide (start ≤ through)) := by
+  induction offsets with
+  | nil => rfl
+  | cons start rest ih =>
+    obtain ⟨following, sorted⟩ := List.pairwise_cons.mp ordered
+    by_cases within : start ≤ through
+    · simp [within, ih sorted]
+    · have later : rest.filter (fun next => decide (next ≤ through)) = [] :=
+        List.filter_eq_nil_iff.mpr fun next member found =>
+          within (Nat.le_trans (following _ member) (of_decide_eq_true found))
+      simp [within, later]
+
+/-- Match the actual sorted WAL selection to a canonical recovery window.
+Older names before the covering start are unconstrained. Existing names
+inside that window must agree exactly, since an extra start can change
+the file chosen to cover the checkpoint. Keep the actual later set. -/
+theorem WalSegmentRepair.selectWalExtentsThrough_matchesWindow
+    {extents : List (Nat × IO.FS.Metadata)} {first watermark through : Nat}
+    {expected : List Nat}
+    (ordered : (extents.map Prod.fst).Pairwise (· ≤ ·))
+    (unique : ((extents.map Prod.fst).filter
+      (fun start => decide (start ≤ through) && decide (first ≤ start))).Nodup)
+    (canonical : (first :: expected).Pairwise (· < ·))
+    (covers : first ≤ watermark) (bounded : watermark ≤ through)
+    (within : ∀ start ∈ expected, watermark < start ∧ start ≤ through)
+    (catalog : ∀ start, first ≤ start → start ≤ through →
+      (start ∈ extents.map Prod.fst ↔ start ∈ first :: expected)) :
+    ∃ required, selectWalExtentsThrough extents watermark through =
+        some (required, (extents.map Prod.fst).filter (fun start => decide (through < start))) ∧
+      required.map Prod.fst = first :: expected := by
+  let offsets := extents.map Prod.fst
+  have present : first ∈ offsets := (catalog first (Nat.le_refl _) (Nat.le_trans covers bounded)).mpr List.mem_cons_self
+  have greatest : (offsets.filter fun start => decide (start ≤ watermark)).max? = some first := by
+    apply List.max?_eq_some_iff.mpr
+    refine ⟨List.mem_filter.mpr ⟨present, decide_eq_true covers⟩, ?_⟩
+    intro start filtered
+    obtain ⟨inList, lower⟩ := List.mem_filter.mp filtered
+    by_cases le : start ≤ first
+    · exact le
+    · exfalso
+      have beyond := Nat.lt_of_not_ge le
+      have atMarker := of_decide_eq_true lower
+      have wanted := (catalog start (Nat.le_of_lt beyond) (Nat.le_trans atMarker bounded)).mp inList
+      rcases List.mem_cons.mp wanted with rfl | expectedStart
+      · exact Nat.lt_irrefl _ beyond
+      · exact Nat.not_lt_of_ge atMarker (within _ expectedStart).1
+  let matching := extents.filter (fun extent => decide (first ≤ extent.1))
+  let required := matching.takeWhile (fun extent => decide (extent.1 ≤ through))
+  let later := (matching.dropWhile (fun extent => decide (extent.1 ≤ through))).map Prod.fst
+  have selected : selectWalExtentsThrough extents watermark through = some (required, later) := by
+    simp [selectWalExtentsThrough, offsets, greatest, required, later, matching, Bind.bind, Option.bind, Pure.pure]
+  have exactOffsets := selectWalExtentsThrough_offsets extents watermark through
+  rw [selected, Option.map_some] at exactOffsets
+  have dropped := selectWalSegmentReadsThrough_later exactOffsets.symm bounded ordered
+  have logical := exactOffsets
+  change some (required.map Prod.fst, later) = selectWalSegmentReadsThrough offsets watermark through at logical
+  simp only [selectWalSegmentReadsThrough, selectWalSegmentReads, greatest, Bind.bind, Option.bind, Pure.pure] at logical
+  have needed := (Prod.mk.inj (Option.some.inj logical)).1
+  refine ⟨required, selected.trans (congrArg (fun suffix => some (required, suffix)) dropped), ?_⟩
+  rw [needed, takesBoundedOffsets through _ (List.Pairwise.filter _ ordered), List.filter_filter]
+  let keeps := fun start => decide (start ≤ through) && decide (first ≤ start)
+  change offsets.filter keeps = _
+  have sorted := (List.Pairwise.filter keeps ordered).imp₂ (fun _ _ before distinct => Nat.lt_of_le_of_ne before distinct) unique
+  have perm : (offsets.filter keeps).Perm (first :: expected) := by
+    apply (List.perm_ext_iff_of_nodup (sorted.imp Nat.ne_of_lt) (canonical.imp Nat.ne_of_lt)).mpr
+    intro start
+    simp only [List.mem_filter, keeps, Bool.and_eq_true, decide_eq_true_eq]
+    constructor
+    · rintro ⟨member, upper, lower⟩
+      exact (catalog start lower upper).mp member
+    · intro member
+      have range : first ≤ start ∧ start ≤ through := by
+        rcases List.mem_cons.mp member with rfl | among
+        · exact ⟨Nat.le_refl _, Nat.le_trans covers bounded⟩
+        · exact ⟨Nat.le_trans covers (Nat.le_of_lt (within _ among).1), (within _ among).2⟩
+      exact ⟨(catalog start range.1 range.2).mpr member, range.2, range.1⟩
+  exact List.Perm.eq_of_pairwise (fun _ _ _ _ ab ba => False.elim ((Nat.lt_asymm ab) ba)) sorted canonical perm
+
 end Alvoki.Storage

@@ -1,5 +1,18 @@
 # Current handoff
 
+The reached WAL inventory and payload loop now give the canonical
+replay bytes when the held namespace matches the chosen recovery
+window. Only offsets inside that window need match. The later set
+remains the actual names beyond the marker. A shared byte replay
+lemma provides the table, history and checkpoint pin floor without
+constructing a reader report. One successful marked-open inversion
+retains its read, replay, repair and allocation receipts and supports
+a caller-selected live frame before repair. For an aligned keeper
+with no later WAL files, the actual finish identifies both cache
+fsyncs and the exact pending keeper removal.
+[Canonical reads and replay](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean) ·
+[Actual aligned syncs](../lean/Alvoki/Storage/Disk/NativeAlignedKeeperCache.lean)
+
 The literal marked-open return now identifies the checkpoint and marker
 of the protected retry files before following the actual selected WAL
 read. The admitted cache initialization and both reached guards preserve

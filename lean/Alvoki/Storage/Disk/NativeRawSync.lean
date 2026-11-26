@@ -60,6 +60,75 @@ namespace RawSyncCalls
 
 variable {heap : Type} (calls : RawSyncCalls heap) {files : DiskTable.OpenSyncFiles}
 
+private theorem singletonGroupReturned {root path : FilePath}
+    {directory : IO.Ref (Option IO.FS.Handle)} {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {entry reached : heap}
+    (returned : calls.group root directory active pending #[path] entry = .ok () reached) :
+    calls.syncPath root path directory active pending entry = .ok () reached := by
+  rw [group, SyncPathGroup.run_single] at returned
+  cases step : calls.syncPath root path directory active pending entry with
+  | error cause failed => simp [step] at returned
+  | ok value after =>
+    cases value
+    simpa only [step] using returned
+
+/-- A returned singleton root barrier identifies the actual cached handle
+and the heap on which its fsync was issued. -/
+theorem rootGroupReturned {root : FilePath}
+    {directory : IO.Ref (Option IO.FS.Handle)} {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {entry reached : heap}
+    (returned : calls.group root directory active pending #[root] entry = .ok () reached) :
+    ∃ (handle : IO.FS.Handle) (issued : heap),
+      calls.readDirectory directory entry = .ok (some handle) issued ∧ calls.fsync handle issued = .ok () reached := by
+  have ran := calls.singletonGroupReturned returned
+  cases loaded : calls.readDirectory directory entry with
+  | error cause failed =>
+    simp [syncPath, syncWithHandles, Bind.bind, EStateM.bind, loaded] at ran
+  | ok contents issued =>
+    cases contents with
+    | none =>
+      simp [syncPath, syncWithHandles, Bind.bind, EStateM.bind, loaded, throw, throwThe,
+        MonadExceptOf.throw, EStateM.throw] at ran
+    | some handle =>
+      refine ⟨handle, issued, rfl, ?_⟩
+      simpa only [syncPath, syncWithHandles, BEq.rfl, ↓reduceIte, Bind.bind, EStateM.bind,
+        Pure.pure, EStateM.pure, loaded] using ran
+
+/-- Invert a successful singleton whose reached pending lookup selects
+the given handle. Removal filters out all matches before syncing that very
+handle, with no active lookup or fallback open. -/
+theorem pendingGroupReturned {root path : FilePath}
+    {directory : IO.Ref (Option IO.FS.Handle)} {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {entry reached : heap} {handle : IO.FS.Handle}
+    (notDirectory : path ≠ root)
+    (selects : ∀ {entries loaded}, calls.readPending pending entry = .ok entries loaded →
+      entries.find? (fun item => item.1 == path) = some (path, handle))
+    (returned : calls.group root directory active pending #[path] entry = .ok () reached) :
+    ∃ (entries : List (FilePath × IO.FS.Handle)) (loaded consumed : heap),
+      calls.readPending pending entry = .ok entries loaded ∧
+      entries.find? (fun item => item.1 == path) = some (path, handle) ∧
+      calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed ∧
+      calls.fsync handle consumed = .ok () reached := by
+  have ran := calls.singletonGroupReturned returned
+  cases read : calls.readPending pending entry with
+  | error cause failed =>
+    simp [syncPath, syncWithHandles, notDirectory, Bind.bind, EStateM.bind, read] at ran
+  | ok entries loaded =>
+    have found := selects read
+    let left := entries.filter (fun item => item.1 != path)
+    have issued : (do
+        calls.setPending pending left
+        calls.fsync handle : EStateM IO.Error heap Unit) loaded = .ok () reached := by
+      simpa [syncPath, syncWithHandles, notDirectory, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, read, found, left]
+        using ran
+    cases removed : calls.setPending pending left loaded with
+    | error cause failed =>
+      simp [Bind.bind, EStateM.bind, removed] at issued
+    | ok value consumed =>
+      cases value
+      exact ⟨entries, loaded, consumed, rfl, found, removed,
+        by simpa only [Bind.bind, EStateM.bind, removed] using issued⟩
+
 /-- The first matching pending entry is consumed before the syscall.
 The raw heap after consuming entries supplies the fsync operand. -/
 theorem syncPending {root path : FilePath} (cache : OpenSyncCacheRefs files root) {before consumed : heap}

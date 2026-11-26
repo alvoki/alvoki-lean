@@ -7,22 +7,6 @@ namespace Alvoki.Storage
 open WAL (frameSize)
 open WAL.Boundary (CheckpointRepresentsPrefix)
 
-private theorem runPresent_of_ordered {read : Nat → Option ByteArray} {indices : List Nat}
-    {files : List ByteArray} (ordered : indices.mapM read = some files) (index : Nat) (member : index ∈ indices) :
-    ∃ bytes, read index = some bytes := by
-  induction indices generalizing files with
-  | nil => contradiction
-  | cons first rest ih =>
-    cases found : read first with
-    | none => simp [List.mapM_cons, found] at ordered
-    | some bytes =>
-      cases remaining : rest.mapM read with
-      | none => simp [List.mapM_cons, found, remaining] at ordered
-      | some later =>
-        rcases List.mem_cons.mp member with rfl | after
-        · exact ⟨bytes, found⟩
-        · exact ih remaining after
-
 /-- Recover the canonical reference from the selected publication's
 durable ordered run map. The native reader subsequently loads the same
 map from the reported paths. -/
@@ -48,35 +32,8 @@ theorem selectedCheckpoint_replays {published : CheckpointPublication.Image} {bi
   | some bytes =>
     obtain ⟨manifest, decoded, _⟩ := selectedCheckpointWatermark_present_iff.mp strict
     have tagged := Manifest.VersionedCheckpoint.decode_integrity decoded
-    obtain ⟨files, stored, _, _, _⟩ := published.acceptsVersioned_runs accepted tagged
-    let readStored (generation : UInt64) (index : Nat) : Except String ByteArray :=
-      match published.durable generation index with
-      | none => .error "unavailable durable run"
-      | some bytes => .ok bytes
-    let reads : VersionedCheckpointFileReads published.durable (some bytes) :=
-      { readManifest := .ok (some bytes)
-        readRun := readStored
-        manifestVisible := fun _ result => (Except.ok.inj result).symm
-        runDurable := by
-          intro _ header _ _ index _ value expected read known
-          change readStored header.generation index = .ok value at read
-          unfold readStored at read
-          rw [known] at read
-          exact (Except.ok.inj read).symm
-        integrityRunDurable := by
-          intro _ manifest _ _ index _ value expected read known
-          change readStored manifest.header.generation index = .ok value at read
-          unfold readStored at read
-          rw [known] at read
-          exact (Except.ok.inj read).symm }
-    have runReads : ∀ index, index < manifest.header.runCount.toNat →
-        ∃ payload, reads.readRun manifest.header.generation index = .ok payload := by
-      intro index within
-      obtain ⟨payload, known⟩ := runPresent_of_ordered stored index (List.mem_range.mpr within)
-      change published.durable manifest.header.generation index = some payload at known
-      exact ⟨payload, by simp [reads, readStored, known]⟩
-    obtain ⟨runs, base, table, durable, validated, structural, _, _, recovered, total, bounded, model,
-      refinement, represents, fresh⟩ := reads.replays_selected tagged accepted rfl runReads fits ordered
+    obtain ⟨runs, base, table, durable, validated, structural, _, recovered, total, bounded, model,
+      refinement, represents, fresh⟩ := published.replaysVersionedRuns tagged accepted fits ordered
     exact ⟨some (base, manifest.header.generation), table, model,
       .present decoded durable (loadIntegrityRunSet_iff.mpr ⟨validated, structural⟩),
       recovered, total, bounded, refinement, represents, fresh⟩
