@@ -62,11 +62,6 @@ theorem NativeOpenedTrace.reportsSnapshotsAndRewrites
   | rewriteRun request => exact ⟨.rewriteRun request⟩
   | _ => exact NativeOpenedInstruction.observesSnapshot _ reached reported
 
-abbrev NativeOpenedHandle.acquireLatestRaw {heap : Type} (opened : NativeOpenedHandle heap)
-    (issue : SnapshotPin → DiskSnapshotPin) : EStateM IO.Error heap DiskSnapshotPin :=
-  let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
-  acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue)
-
 abbrev NativeOpenedHandle.readPinRaw {heap : Type} (opened : NativeOpenedHandle heap)
     (pin : NativeOpenedPin opened) (request : SnapshotReadRequest α) :
     EStateM IO.Error heap (Option α) :=
@@ -123,9 +118,10 @@ theorem NativeOpenedPosition.refinesReturnedPin
 /-- Acquire and read on any reached ready table. Only the live-token
 comparison at the heap reached by the acquire is supplied. -/
 theorem NativeOpenedPosition.acquiresAndReadsLatest
-    (start : NativeOpenedPosition opened)
-    (request : SnapshotReadRequest α)
-    (compareIssuedToken : opened.ObservesSnapshotToken start.reached) :
+    (start : NativeOpenedPosition opened) (issuer : opened.LatestIssuer)
+    {acquisition : EStateM.Result IO.Error heap DiskSnapshotPin}
+    (observed : opened.acquireLatestRaw issuer.val start.reached = acquisition)
+    (request : SnapshotReadRequest α) (compareIssuedToken : opened.ObservesSnapshotToken start.reached) :
     ∃ (pin : NativeOpenedPin opened) (acquired last : NativeOpenedPosition opened)
       (reference : SnapshotTable UInt64)
       (issued : acquired.pins[start.pins.length]? = some pin)
@@ -141,12 +137,14 @@ theorem NativeOpenedPosition.acquiresAndReadsLatest
       NativeOpenedTrace start [.acquire, .readAt start.pins.length request] [acquireEvent, readEvent] last ∧
       last.current.ready.reads = start.current.ready.reads ++ [request.record sequence value] ∧
       SnapshotWalReplay .empty start.current.history reference ∧
-      (∀ read ∈ last.current.ready.reads, read.agrees reference) := by
-  obtain ⟨acquireEvent, acquired, atAcquired⟩ := (NativeOpenedReport.acquire (start := start)).reaches
-  obtain ⟨issue, pin, table, source, _, _, acquiredRaw, _, registered, pinState, _, _, active, event, pins,
-    priorHistory, _, priorReads, _⟩ := atAcquired.returned
-  have compared := compareIssuedToken issue source acquiredRaw
-  subst acquireEvent
+      (∀ read ∈ last.current.ready.reads, read.agrees reference) ∧
+      acquisition = .ok pin.raw acquired.reached ∧ pin.raw.sequence = sequence := by
+  obtain ⟨acquired, pin, actual, pins, atAcquired⟩ := start.refinesAcquireLatest issuer observed
+  have compared := compareIssuedToken issuer.val issuer.property.2 (observed.trans actual)
+  obtain ⟨_, reportPin, table, _, _, _, _, _, registered, pinState, _, rawSequence, active, _, tracked,
+    priorHistory, _, priorReads⟩ := atAcquired.returned
+  have samePin : reportPin = pin := (List.cons.inj (List.append_cancel_left (tracked.symm.trans pins))).1
+  subst reportPin
   have issued : acquired.pins[start.pins.length]? = some pin := by simp [pins]
   have found : acquired.current.ready.state.writer.installed.table.pins.find pin.localPin.handle = some pin.localPin := by
     rw [pinState]
@@ -202,6 +200,6 @@ theorem NativeOpenedPosition.acquiresAndReadsLatest
     | range lo hi => exact acquired.uses.rangePin pin.issued lo hi
   have calls := NativeOpenedTrace.step (NativeOpenedTrace.step .empty .acquire atAcquired) readReport atRead
   exact ⟨pin, acquired, last, reference, issued, compared, atAcquired.returned, atRead.returned,
-    calls, read.reads.trans (congrArg (· ++ [_]) priorReads), priorHistory ▸ wal, agrees⟩
+    calls, read.reads.trans (congrArg (· ++ [_]) priorReads), priorHistory ▸ wal, agrees, actual, rawSequence⟩
 
 end Alvoki.Storage.DiskSession

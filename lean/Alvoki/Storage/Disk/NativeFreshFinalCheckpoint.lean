@@ -51,7 +51,7 @@ theorem FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
       NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
         (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
         (write := write) (get := get) (set := set) (ptrEq := ptrEq)
-        current inodes observe names contents fresh.start.current earlier errors := by
+        current inodes observe stop.manifest names contents fresh.start.current earlier errors := by
   obtain ⟨stop⟩ := current.checkpointStopsAtReachedCache primitives fsync current.directory cacheAt rfl stopped
   obtain ⟨effect, sampled⟩ := storage stop
   exact ⟨stop, fresh.opened, fresh.emptyHistory, fresh.emptySubmissions, fresh.emptyReads,

@@ -43,8 +43,9 @@ theorem NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest
       (∀ read ∈ last.current.ready.reads, read.agrees reference) := by
   obtain ⟨handle, opened, returned⟩ := seen.reaches
   let reached : NativeOpenedSessionPoint heap := ⟨handle, opened⟩
-  obtain ⟨pin, acquired, last, reference, issued, compared, acquireReturned, readReturned, calls, reads, wal, agrees⟩ :=
-    opened.acquiresAndReadsLatest request (compareIssuedToken returned)
+  obtain ⟨issuer⟩ := handle.hasLatestIssuer
+  obtain ⟨pin, acquired, last, reference, issued, compared, acquireReturned, readReturned, calls, reads, wal, agrees, _⟩ :=
+    opened.acquiresAndReadsLatest issuer rfl request (compareIssuedToken returned)
   have reopened : NativeOpenedSessionTrace view names bytes start _ _ reached :=
     .step prior (.stoppedCheckpointEarly seen returned)
   have continued := NativeOpenedSessionTrace.step reopened (.calls calls)

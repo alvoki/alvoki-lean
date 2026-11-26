@@ -43,26 +43,11 @@ private theorem CheckpointPowerCut.reopenedWatermark
       (survivor.manifest = some cut.checkpoint.manifest →
         next.state.writer.target.range.watermark = current.state.writer.history.length) := by
   have before := current.readPrefix.refines.1.retained
-  have authority : next.state.files.image.directory.active = next.state.writer.target.pair :=
-    next.readPrefix.refines.1.retained.resumed.ready.selected
-  have selected : selectedCheckpointWatermark survivor.manifest = some next.state.writer.target.range.watermark := by
-    rw [← settled, authority]
-    exact (DirectoryPublication.Bindings.walRange_accounting next.state.writer.target.decoded).1
-  have old (survived : survivor.manifest = current.state.writer.wal.directory.active.manifest) :
-      next.state.writer.target.range.watermark = current.state.writer.target.range.watermark := by
-    have watermark := (DirectoryPublication.Bindings.walRange_accounting current.state.writer.target.decoded).1
-    rw [survived, before.walPair, watermark] at selected
-    exact (Option.some.inj selected).symm
-  have new (survived : survivor.manifest = some cut.checkpoint.manifest) :
-      next.state.writer.target.range.watermark = current.state.writer.history.length := by
-    have watermark := (cut.checkpoint.preparedManifestWatermark before cut.preflight).2
-    rw [survived, watermark] at selected
-    exact (Option.some.inj selected).symm
-  refine ⟨?_, old, new⟩
-  rcases chosen with original | replacement
-  · exact Nat.le_of_eq (old original).symm
-  · rw [new replacement, ← before.resumed.through]
-    exact (DirectoryPublication.Bindings.walRange_accounting current.state.writer.target.decoded).2.1
+  have authority : next.state.writer.target.pair = survivor :=
+    next.readPrefix.refines.1.retained.resumed.ready.selected.symm.trans settled
+  have old := congrArg DirectoryPublication.Bindings.manifest before.walPair
+  rw [← authority, old] at chosen ⊢
+  exact cut.preflight.reopenedWatermark before chosen
 
 /-- The reopened writer follows the manifest reported to survive the
 final directory barrier, for both returned and interrupted calls. -/

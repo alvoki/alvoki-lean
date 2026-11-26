@@ -26,14 +26,6 @@ abbrev NativeOpenedPosition.readyWriteCalls {heap : Type} {opened : NativeOpened
   ⟨⟨cache.directory, cache.active, cache.pending, cache.references,
     (congrArg DiskDirectory.path current.directory) ▸ cache.atRoot⟩, appender, stager, syncer, lookup, rename⟩
 
-/-- The source's opaque pin constructor carries the public acquisition's
-original token, handle and sequence. -/
-def NativeOpenedHandle.LatestIssuer {heap : Type} (opened : NativeOpenedHandle heap) :=
-  { issue : SnapshotPin → DiskSnapshotPin //
-    (∀ pin, (issue pin).UsesOpenToken opened.token pin) ∧
-    opened.table.acquire = acquireLatestWith (m := IO) (do (← opened.phase.get).installed)
-      (acquireSnapshotWith (do (← opened.phase.get).installed) opened.phase.set issue) }
-
 /-- Public calls and their observed responses. Each constructor has the
 error and success types of that method. -/
 inductive NativeReturnedCall {heap : Type} (opened : NativeOpenedHandle heap) where
@@ -141,23 +133,18 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
       opened.ReturnsLatestAfter (current.readyWriteCalls cache appender stager syncer lookup rename)
         [.write request (.ok sequence)] read sequence (some (read.replay reference sequence))
         current.reached last.reached := by
+  obtain ⟨issuer⟩ := opened.hasLatestIssuer
   obtain ⟨schedule, returned, batch, table, written, _, prepared, number, reachedWrite, _, installed, wrote, _, _⟩ :=
     current.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty entry seen
-  obtain ⟨pin, acquired, last, reference, issued, compared, acquireReturned, readReturned, calls, _, replay, agrees⟩ :=
-    written.acquiresAndReadsLatest read (reachedWrite ▸ token)
+  obtain ⟨pin, acquired, last, reference, _, _, _, readReturned, calls, _, replay, agrees, acquire, pinSequence⟩ :=
+    written.acquiresAndReadsLatest issuer rfl read (reachedWrite ▸ token)
   have history : written.current.history = current.current.history ++ batch := by
     simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using wrote.history
   refine ⟨schedule, returned, batch, table, written, last, reference, _, prepared, number, reachedWrite, calls,
     wrote.append calls.common.ledgerSuffix, history ▸ replay, agrees, ?_⟩
-  obtain ⟨issue, actual, _, source, _, _, acquire, _, _, _, _, pinSequence, _, _, pins, _, _, _, issueUses⟩ :=
-    acquireReturned
-  have pinEq : actual = pin := by
-    simpa [pins] using issued
-  subst actual
   obtain ⟨_, response, _, raw, event, _, _⟩ := readReturned
   cases event
-  let issuer : opened.LatestIssuer := ⟨issue, issueUses, source⟩
   refine ⟨issuer, pin, ?_, ?_⟩
   · simpa only [installed, ← number] using pinSequence
   · let writes := current.readyWriteCalls cache appender stager syncer lookup rename

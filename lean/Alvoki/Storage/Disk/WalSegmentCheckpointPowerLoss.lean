@@ -154,6 +154,39 @@ theorem CheckpointPreflight.preparedManifestEncoding {old next : Installed} {man
       (by simpa [metadata, payloads, Manifest.IntegrityCheckpoint.fromRuns] using written.count)
   exact ⟨runBytesFit, exactManifest, decodedNew⟩
 
+/-- The returned target identifies the watermark of the actual selected
+manifest. A newly prepared manifest covers the complete prior history. -/
+theorem CheckpointPreflight.reopenedWatermark
+    {directory : DiskDirectory} {before : SegmentedWriterState} {owner : Nat}
+    {prepared : Installed} {manifest : ByteArray} {target : Target}
+    (checkpoint : CheckpointPreflight (.ready before.installed) (.ok (prepared, manifest)))
+    (ready : before.RetainedReady directory owner)
+    (selected : target.pair.manifest = before.target.pair.manifest ∨ target.pair.manifest = some manifest) :
+    before.target.range.watermark ≤ target.range.watermark ∧
+    (target.pair.manifest = before.target.pair.manifest → target.range.watermark = before.target.range.watermark) ∧
+    (target.pair.manifest = some manifest → target.range.watermark = before.history.length) := by
+  obtain ⟨flushed, _, countFits, _⟩ := checkpoint.preparedFacts
+  obtain ⟨_, refinement, represented⟩ := ready.resumed.canonical
+  obtain ⟨_, clock, _⟩ := WrittenCheckpoint.of_flushForCheckpoint flushed refinement countFits
+    ready.resumed.bounds.runs ready.resumed.bounds.memory prepared.generation
+  have decoded := (checkpoint.preparedManifestEncoding refinement ready.resumed.bounds).2.2
+  have published : selectedCheckpointWatermark (some manifest) = some before.history.length :=
+    selectedCheckpointWatermark_present_iff.mpr
+      ⟨_, decoded, (congrArg UInt64.toNat (clock.trans refinement.committed)).trans represented.committed_count⟩
+  have actual := (DirectoryPublication.Bindings.walRange_accounting target.decoded).1
+  have old (chosen : target.pair.manifest = before.target.pair.manifest) :
+      target.range.watermark = before.target.range.watermark := by
+    rw [chosen, (DirectoryPublication.Bindings.walRange_accounting before.target.decoded).1] at actual
+    exact (Option.some.inj actual).symm
+  have new (chosen : target.pair.manifest = some manifest) : target.range.watermark = before.history.length := by
+    rw [chosen, published] at actual
+    exact (Option.some.inj actual).symm
+  refine ⟨?_, old, new⟩
+  rcases selected with prior | recent
+  · exact Nat.le_of_eq (old prior).symm
+  · rw [new recent, ← ready.resumed.through]
+    exact (DirectoryPublication.Bindings.walRange_accounting before.target.decoded).2.1
+
 /-- The exact prepared plan and its modeled publication determine the
 selected checkpoint and replay for each admissible manifest. The
 publication equation supplies the modeled prefix. -/

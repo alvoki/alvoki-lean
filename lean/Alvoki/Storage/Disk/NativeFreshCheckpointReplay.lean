@@ -218,8 +218,9 @@ theorem QuietCheckpointRetryObservations.readsLatest
   rw [retry.failedWith, retry.cleanup] at denied
   have reopenedAt : source.openTable retryInput afterFailure = .ok returned.handle.table returned.start.reached :=
     (congrArg (source.openTable retryInput) retry.cleanup).symm.trans reopened
-  obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, replay, agrees⟩ :=
-    returned.start.acquiresAndReadsLatest request
+  obtain ⟨issuer⟩ := returned.handle.hasLatestIssuer
+  obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, replay, agrees, _⟩ :=
+    returned.start.acquiresAndReadsLatest issuer rfl request
       (compareToken returned.handle returned.start returned.comparesTokens reopenedAt)
   have history : returned.start.current.history = current.current.history := by rw [returned.position]
   have submissions : returned.start.current.submissions = current.current.submissions := by rw [returned.position]

@@ -235,6 +235,29 @@ inductive NativeOpenedSessionStep (view : OpenCloseHeapView heap FileImage)
       NativeOpenedSessionStep view names bytes before (.stoppedObsoleteRunUnlink held input)
         [.interruptedRunUnlinkRecovered held input] next
 
+/-- Derive the ledger update at the actual reached session boundary. -/
+theorem NativeOpenedSessionStep.ledgerSuffix
+    (step : NativeOpenedSessionStep view names bytes before action added after) :
+    before.position.current.LedgerSuffix added after.position.current := by
+  cases step with
+  | calls ran => exact ran.common.ledgerSuffix
+  | quiet _ returned => exact returned.common.ledgerSuffix
+  | processExit _ returned => exact returned.common.ledgerSuffix
+  | close _ returned => exact returned.common.ledgerSuffix
+  | closeAfterFailedUnlock _ returned => exact returned.common.ledgerSuffix
+  | closeRetries _ returned => exact returned.common.ledgerSuffix
+  | checkpointRename _ returned => exact returned.ledgerSuffix
+  | stoppedCheckpoint _ returned => exact returned.common.ledgerSuffix
+  | stoppedCheckpointEarly _ returned => exact returned.common.ledgerSuffix
+  | uncertainWrite _ returned => exact returned.common.ledgerSuffix
+  | uncertainWriteExit _ returned => exact returned.common.ledgerSuffix
+  | stoppedWalWrite _ returned => exact returned.common.ledgerSuffix
+  | stoppedFirstAppend _ returned => exact returned.common.ledgerSuffix
+  | stoppedFirstAppendExit _ returned => exact returned.common.ledgerSuffix
+  | stoppedFirstAppendExitRetries _ returned => exact returned.common.ledgerSuffix
+  | stoppedFirstAppendContendedRetries _ _ _ returned => exact returned.common.ledgerSuffix
+  | stoppedObsoleteRunUnlink _ returned => exact returned.common.ledgerSuffix
+
 inductive NativeOpenedSessionTrace (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (start : NativeOpenedSessionPoint heap) :
     List NativeOpenedSessionAction → List NativeExecutionEvent → NativeOpenedSessionPoint heap → Prop where
@@ -243,6 +266,14 @@ inductive NativeOpenedSessionTrace (view : OpenCloseHeapView heap FileImage)
       (prior : NativeOpenedSessionTrace view names bytes start actions events before)
       (next : NativeOpenedSessionStep view names bytes before action added after) :
       NativeOpenedSessionTrace view names bytes start (actions ++ [action]) (events ++ added) after
+
+/-- Compose the local ledger updates along successive reached sessions. -/
+theorem NativeOpenedSessionTrace.ledgerSuffix
+    (trace : NativeOpenedSessionTrace view names bytes start actions events last) :
+    start.position.current.LedgerSuffix events last.position.current := by
+  induction trace with
+  | empty => exact .empty _
+  | step _ next earlier => exact earlier.append next.ledgerSuffix
 
 /-- The common ledger spans the same exact ready positions as the raw
 session trace, including every covered reopen. -/
@@ -392,7 +423,7 @@ aligned reopens. One replay explains the recorded responses and final table. -/
 theorem NativeOpenedSessionTrace.executes (start : NativeOpenedSessionPoint heap) (actions : List NativeOpenedSessionAction)
     (reports : Reports view names bytes start actions) :
     ∃ events next, NativeOpenedSessionTrace view names bytes start actions events next ∧
-      NativeExecutionTrace start.position.current events next.position.current ∧
+      start.position.current.LedgerSuffix events next.position.current ∧
       InstalledClientReplay next.position.current.submissions next.position.current.ready.reads next.position.current.history
         next.position.current.ready.state.writer.installed next.position.current.ready.state.session := by
   have finish (remaining : List NativeOpenedSessionAction) : ∀ completed events reached,
@@ -410,6 +441,6 @@ theorem NativeOpenedSessionTrace.executes (start : NativeOpenedSessionPoint heap
         simpa only [List.append_assoc, List.singleton_append] using ordered
       exact earlier (completed ++ [action]) (events ++ added) next follows (.step ran step)
   obtain ⟨events, next, ran⟩ := finish actions [] [] start (by simp) .empty
-  exact ⟨events, next, ran, ran.common, ran.common.keyValueRefinement.2.2.2⟩
+  exact ⟨events, next, ran, ran.ledgerSuffix, next.position.current.ready.readPrefix.guardedReplay⟩
 
 end Alvoki.Storage.DiskSession

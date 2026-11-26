@@ -100,6 +100,15 @@ The same run-pair induction carries both file bytes and descriptor custody.
 The temporary descriptor drops at the end of its handle scope, under an
 explicit lifetime assumption. The source return leaves the phase poisoned.
 
+The session trace composes a client ledger from each local step. On the
+rename-error recovery path, the returned history and reads supply that step
+directly. The stronger model trace is still available to its callers. The
+sampled opener derives the watermark of the selected checkpoint and can
+distinguish previous session references recorded in its allocator's live set.
+The latest snapshot acquisition likewise refines the raw return of the same
+issuer used in the public call sequence.
+[Session step composition](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
+
 At the earlier sync of `MANIFEST.next`, the returned run writes and
 first directory barrier establish storage for the previous checkpoint.
 The local file-sync contract allows arbitrary durable contents of the

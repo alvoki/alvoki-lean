@@ -90,7 +90,6 @@ structure NativeOpenedManifestRenameReport.Returned (seen : NativeOpenedManifest
     seen.observed.toRawAlignedCheckpointReopenEffects.openTable seen.remove seen.write seen.rename
       seen.bootstrap seen.assemble makeCache =
       .ok handle.table start.reached
-  common : NativeExecutionStep current.current seen.event start.current
   watermark : current.current.ready.state.writer.target.range.watermark ≤ start.current.ready.state.writer.target.range.watermark
   lock : handle.lock = seen.observed.raw.lock
   cache : handle.files.UsesCacheReferences seen.observed.seed.activeRef seen.observed.seed.pendingRef
@@ -107,17 +106,42 @@ structure NativeOpenedManifestRenameReport.Returned (seen : NativeOpenedManifest
   cached : view.cacheAt start.reached seen.observed.seed.directoryRef seen.observed.seed.activeRef
     seen.observed.seed.pendingRef = start.current.ready.state.cache
 
+/-- This recovery keeps the client history, submission list and recorded
+reads at its exact returned session. -/
+theorem NativeOpenedManifestRenameReport.Returned.ledgerSuffix
+    {seen : NativeOpenedManifestRenameReport current input view names bytes}
+    {handle : NativeOpenedHandle heap} {start : NativeOpenedPosition handle}
+    (returned : seen.Returned start) : current.current.LedgerSuffix [seen.event] start.current := by
+  obtain ⟨next, reopened, _, _, position⟩ := returned.recovery
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · simp [position, NativeOpenedManifestRenameReport.event, NativeExecutionEvent.writes]
+  · simp [position, NativeOpenedManifestRenameReport.event, NativeExecutionEvent.submissions]
+  · rw [position]
+    simpa [NativeOpenedManifestRenameReport.event, NativeExecutionEvent.reads] using reopened.reads
+  · intro event included
+    obtain rfl := List.mem_singleton.mp included
+    simp [NativeOpenedManifestRenameReport.event, NativeExecutionEvent.uncertainBatchWhole]
+
+/-- Recover the modeled trace step when a caller needs that projection. -/
+theorem NativeOpenedManifestRenameReport.Returned.common
+    {seen : NativeOpenedManifestRenameReport current input view names bytes}
+    {handle : NativeOpenedHandle heap} {start : NativeOpenedPosition handle}
+    (returned : seen.Returned start) : NativeExecutionStep current.current seen.event start.current := by
+  obtain ⟨next, reopened, _, _, position⟩ := returned.recovery
+  rw [position, NativeOpenedManifestRenameReport.event, returned.cause]
+  exact .recoverCheckpointManifestRenameError current.current seen.crash next reopened
+
 theorem NativeOpenedManifestRenameReport.reaches (seen : NativeOpenedManifestRenameReport current input view names bytes) :
     ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle), seen.Returned start := by
   obtain ⟨source, cause, failedFiles, poisoned, failedProjection, rebootProjection, emptyCensus, lockObject, directoryObject,
     selected, surviving, next, cacheOpen, makeCache, handle, start, cacheAction, cacheSource, reopened, reader, nextReturned,
-    common, watermark, rawOpen, reached, lock, cache, directory, contents, get, set, compare, token, pins, files, census, cached⟩ :=
+    watermark, rawOpen, reached, lock, cache, directory, contents, get, set, compare, token, pins, files, census, cached⟩ :=
     current.opensAfterManifestRenameError seen.observed seen.failed seen.samePhase seen.remove seen.write seen.rename
       seen.bootstrap seen.assemble seen.constructs
   refine ⟨handle, start, source, cause, failedFiles, poisoned, failedProjection, rebootProjection, emptyCensus,
     lockObject, directoryObject, selected, surviving,
     ⟨next, reopened, reader, nextReturned, reached⟩, ⟨cacheOpen, makeCache, cacheAction, cacheSource, rawOpen⟩,
-    common, ?_, lock, cache, directory, contents, get, set, compare, ?_, pins, ?_, ?_, ?_⟩
+    ?_, lock, cache, directory, contents, get, set, compare, ?_, pins, ?_, ?_, ?_⟩
   · rw [reached]
     exact watermark
   · rw [reached]

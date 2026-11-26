@@ -98,7 +98,7 @@ variable {opened : NativeOpenedHandle heap} (current : NativeOpenedPosition open
   {reader : NativeCheckpointManifestRenameReads crash input plan}
 
 /-- The observed checkpoint return and power loss lead to the table
-allocated by the same selected reader, with one common history step. -/
+allocated by the same selected reader. -/
 theorem NativeOpenedPosition.opensAfterManifestRenameError
     (seen : RawManifestRenameReopenEffects reader view calls init names bytes reached rebooted phaseIdentity tokenIdentity
       allocatePhase allocateToken stream)
@@ -137,8 +137,6 @@ theorem NativeOpenedPosition.opensAfterManifestRenameError
         (fun value => liftM (IO.mkRef value)) makeCache ∧
       NativeCheckpointManifestRenameReopened current.current.ready crash input next ∧
       reader.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
-      NativeExecutionStep current.current (.checkpointManifestRenameCrashRecovered input cause crash.pair.manifest)
-        start.current ∧
       state.writer.target.range.watermark ≤ next.state.writer.target.range.watermark ∧
       seen.toRawAlignedCheckpointReopenEffects.openTable remove write rename bootstrap assemble makeCache =
         .ok handle.table start.reached ∧
@@ -167,7 +165,7 @@ theorem NativeOpenedPosition.opensAfterManifestRenameError
   refine ⟨source, diagnostic, image, stored, ?_,
     Prod.ext seen.raw.entryCensus seen.raw.entryFiles, ?_, ?_, ?_, reader.readsSelected valid,
     fun _ _ => seen.reboot.readsSurvivingFile, next, installed.cacheOpen, installed.makeCache, installed.handle,
-    installed.start, installed.cacheAction, installed.cacheSource, reopened, sameReturn, nextReturned, ?_,
+    installed.start, installed.cacheAction, installed.cacheSource, reopened, sameReturn, nextReturned,
     reopened.checkpointWatermark.1, installed.rawOpen, installed.position, installed.lock, installed.references,
     installed.directory, installed.contents, installed.readsPhase, installed.writesPhase, installed.comparesTokens,
     installed.tokenRef, installed.pins, installed.files, installed.census, installed.cache⟩
@@ -181,8 +179,6 @@ theorem NativeOpenedPosition.opensAfterManifestRenameError
   · rw [seen.seed.sameHandle, seen.seed.openedHandle]
     exact (seen.reboot.survivorNames _ (.inl rfl)).trans
       ((reader.opening.reads.sameObjects.1.symm).trans reader.directoryObject).symm
-  · rw [installed.position, diagnostic]
-    exact .recoverCheckpointManifestRenameError current.current crash next reopened
 
 end
 

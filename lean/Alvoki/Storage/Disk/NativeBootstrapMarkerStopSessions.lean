@@ -11,7 +11,7 @@ def NativeOpenedSessionTrace.ReplaysFromEmpty {heap : Type} (view : OpenCloseHea
     (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (start : NativeOpenedSessionPoint heap) : Prop :=
   ∀ actions, NativeOpenedSessionTrace.Reports view names bytes start actions →
     ∃ events last, NativeOpenedSessionTrace view names bytes start actions events last ∧
-      NativeExecutionTrace start.position.current events last.position.current ∧
+      start.position.current.LedgerSuffix events last.position.current ∧
       last.position.current.history = events.flatMap NativeExecutionEvent.writes ∧
       last.position.current.submissions = events.flatMap NativeExecutionEvent.submissions ∧
       last.position.current.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
@@ -23,12 +23,11 @@ theorem NativeOpenedSessionTrace.replaysFromEmpty {heap : Type} {view : OpenClos
     (history : start.position.current.history = []) (submissions : start.position.current.submissions = [])
     (reads : start.position.current.ready.reads = []) : NativeOpenedSessionTrace.ReplaysFromEmpty view names bytes start := by
   intro actions reports
-  obtain ⟨events, last, trace, common, replay⟩ := NativeOpenedSessionTrace.executes start actions reports
-  obtain ⟨allWrites, allSubmissions, allReads⟩ := common.ledgers
-  refine ⟨events, last, trace, common, ?_, ?_, ?_, replay⟩
-  · simpa only [history, List.nil_append] using allWrites
-  · simpa only [submissions, List.nil_append] using allSubmissions
-  · simpa only [reads, List.nil_append] using allReads
+  obtain ⟨events, last, trace, ledger, replay⟩ := NativeOpenedSessionTrace.executes start actions reports
+  refine ⟨events, last, trace, ledger, ?_, ?_, ?_, replay⟩
+  · simpa only [history, List.nil_append] using ledger.history
+  · simpa only [submissions, List.nil_append] using ledger.submissions
+  · simpa only [reads, List.nil_append] using ledger.reads
 
 namespace RawBootstrapMarkerDirectoryStop
 

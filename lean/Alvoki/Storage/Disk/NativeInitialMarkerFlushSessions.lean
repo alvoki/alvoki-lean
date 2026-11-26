@@ -163,11 +163,10 @@ theorem BootstrapFlushRetryReader.executesAfterCallerError
   refine ⟨older.returned, older.files, rebootFiles, stale, actualChoice,
     cacheOpen, makeCache, start, action, cacheSource, ran, history, submissions, reads, pins, ?_⟩
   intro actions localReports
-  obtain ⟨events, last, trace, common, replay⟩ := NativeOpenedSessionTrace.executes start actions localReports
-  obtain ⟨resultHistory, resultSubmissions, resultReads⟩ := common.ledgers
+  obtain ⟨events, last, trace, ledger, replay⟩ := NativeOpenedSessionTrace.executes start actions localReports
   refine ⟨events, last, trace, ?_, ?_, ?_, replay⟩
-  · simpa only [start, history, List.nil_append] using resultHistory
-  · simpa only [start, submissions, List.nil_append] using resultSubmissions
-  · simpa only [start, reads, List.nil_append] using resultReads
+  · simpa only [start, history, List.nil_append] using ledger.history
+  · simpa only [start, submissions, List.nil_append] using ledger.submissions
+  · simpa only [start, reads, List.nil_append] using ledger.reads
 
 end Alvoki.Storage.DiskSession

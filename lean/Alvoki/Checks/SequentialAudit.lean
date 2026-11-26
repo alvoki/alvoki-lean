@@ -4007,6 +4007,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.afterAcknowledgedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesPublishedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesObservedWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.refinesAcquireLatest
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedManifestRenameReport.Returned.ledgerSuffix
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionStep.ledgerSuffix
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.ledgerSuffix
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.reopenedWatermark
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.refinesReturnedPin
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.append
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest

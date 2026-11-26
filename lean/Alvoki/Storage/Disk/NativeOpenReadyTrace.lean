@@ -17,6 +17,24 @@ open Sequential (SnapshotPin)
 
 variable {heap : Type} {opened : NativeOpenedHandle heap}
 
+/-- The source's opaque pin constructor carries the public acquisition's
+original token, handle and sequence. -/
+def NativeOpenedHandle.LatestIssuer {heap : Type} (opened : NativeOpenedHandle heap) :=
+  { issue : SnapshotPin → DiskSnapshotPin //
+    (∀ pin, (issue pin).UsesOpenToken opened.token pin) ∧
+    opened.table.acquire = acquireLatestWith (m := IO) (do (← opened.phase.get).installed)
+      (acquireSnapshotWith (do (← opened.phase.get).installed) opened.phase.set issue) }
+
+theorem NativeOpenedHandle.hasLatestIssuer (opened : NativeOpenedHandle heap) :
+    Nonempty opened.LatestIssuer := by
+  obtain ⟨issue, owns, _, source⟩ := opened.uses.snapshotAcquisitions
+  exact ⟨⟨issue, owns, source⟩⟩
+
+abbrev NativeOpenedHandle.acquireLatestRaw {heap : Type} (opened : NativeOpenedHandle heap)
+    (issue : SnapshotPin → DiskSnapshotPin) : EStateM IO.Error heap DiskSnapshotPin :=
+  let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
+  acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue)
+
 inductive NativeOpenedInstruction : Type 1 where
   | write (request : WriteRequest)
   | checkpoint
@@ -293,16 +311,14 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       load start.reached = .ok before.writer.installed start.reached ∧
       acquireSnapshotWith load (opened.set opened.phase) issue before.writer.installed.table.committed start.reached =
         .ok (some returned.raw) next.reached ∧
-      acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue) start.reached =
-        .ok returned.raw next.reached ∧
+      opened.acquireLatestRaw issue start.reached = .ok returned.raw next.reached ∧
       opened.set opened.phase after.session.phase start.reached = .ok () next.reached ∧
       before.writer.installed.table.acquireAt before.writer.installed.table.committed = some (returned.localPin, table) ∧
       after = before.withTable table ∧ returned.raw = issue returned.localPin ∧
       returned.raw.sequence = before.writer.installed.table.committed ∧ returned.localPin ∈ table.pins.active ∧
       event = .snapshotControl .acquire (.ok (before.session.sessionRef, returned.localPin)) ∧
       next.pins = start.pins ++ [returned] ∧ next.current.history = start.current.history ∧
-      next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads ∧
-      (∀ pin, (issue pin).UsesOpenToken opened.token pin)
+      next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads
   | .planWalCollection observed =>
     opened.table.UsesOpenWalPlanningSchedule start.current.ready.state.session.directory opened.phase ∧
     observed.calls.runOnOpenPhase opened start.reached = (match observed.extents.result with
@@ -353,6 +369,69 @@ private theorem reachesSnapshotControl {current : NativeExecutionPosition}
     subst value
     have directory := congrArg (fun value : NativeReadyState => value.session.directory) state
     exact ⟨step, directory⟩
+
+/-- Interpret the observed latest-acquisition return of this fixed issuer.
+The ready phase and its live cell determine the registered pin and the
+setter's exact heap. The observed result fixes both. -/
+theorem _root_.Alvoki.Storage.DiskSession.NativeOpenedPosition.refinesAcquireLatest
+    (start : NativeOpenedPosition opened) (issuer : opened.LatestIssuer)
+    {result : EStateM.Result IO.Error heap DiskSnapshotPin}
+    (observed : opened.acquireLatestRaw issuer.val start.reached = result) :
+    ∃ (next : NativeOpenedPosition opened) (pin : NativeOpenedPin opened),
+      result = .ok pin.raw next.reached ∧ next.pins = start.pins ++ [pin] ∧
+      (NativeOpenedReport.acquire (start := start)).Reached
+        (.snapshotControl .acquire (.ok (start.current.ready.state.session.sessionRef, pin.localPin))) next := by
+  let before := start.current.ready.state
+  let data := before.writer.installed.table
+  have valid := start.current.ready.readPrefix.refines.1
+  obtain ⟨reference, refined, _⟩ := valid.retained.resumed.canonical
+  have supported : data.pins.floor ≤ data.committed := by
+    change before.writer.installed.table.pins.floor ≤ before.writer.installed.table.committed
+    rw [refined.pins, refined.committed]
+    exact reference.floor_committed
+  have available : (data.acquireAt data.committed).isSome = true := by
+    rw [PackedTable.acquireAt, Option.isSome_map, Sequential.SnapshotPins.acquire_iff]
+    exact ⟨supported, UInt64.le_refl _⟩
+  obtain ⟨⟨pin, table⟩, acquired⟩ := Option.isSome_iff_exists.mp available
+  change before.writer.installed.table.acquireAt before.writer.installed.table.committed = some (pin, table) at acquired
+  have selected : start.current.ready.state.writer.installed.table.acquireAt
+      start.current.ready.state.writer.installed.table.committed = some (pin, table) := acquired
+  let issue := issuer.val
+  obtain ⟨next, transition⟩ := start.current.ready.updatesSnapshot (.acquire)
+  have ready : before.session.phase = .ready before.writer.installed := valid.phase
+  have returned : before.session.runAcquire = .ok (before.session.sessionRef, pin) next.state.session := by
+    simpa only [NativeSnapshotUpdateObservation.run, NativeSnapshotUpdateObservation.update,
+      SnapshotUpdate.outcome, valid.phase, selected] using transition.returned
+  have state : next.state = before.withTable table := by
+    simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, valid.phase, selected]
+      using transition.reached
+  have loaded := opened.phaseEffects.reads start.reached opened.phase before.session.phase start.stored
+  let installed := Phase.ready { before.writer.installed with table }
+  obtain ⟨reached, wrote, kept⟩ := opened.phaseEffects.writes start.reached opened.phase before.session.phase
+    installed start.stored
+  let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
+  have atEntry : load start.reached = .ok before.writer.installed start.reached := by
+    simp only [load, Bind.bind, EStateM.bind, loaded, ready, Phase.installed, Pure.pure, EStateM.pure]
+  have inner : acquireSnapshotWith load (opened.set opened.phase) issue data.committed start.reached =
+      .ok (some (issue pin)) reached := by
+    simp only [acquireSnapshotWith, Bind.bind, EStateM.bind, atEntry, acquired, wrote, installed, data,
+      Pure.pure, EStateM.pure]
+  have raw : opened.acquireLatestRaw issue start.reached = .ok (issue pin) reached := by
+    change acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue) start.reached = _
+    simp only [acquireLatestWith, Bind.bind, EStateM.bind, atEntry, inner, data, Pure.pure, EStateM.pure]
+  obtain ⟨step, directory⟩ := reachesSnapshotControl transition returned
+  let actualPin : NativeOpenedPin opened := ⟨issue pin, pin, issuer.property.1 pin⟩
+  let position : NativeOpenedPosition opened :=
+    ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
+      by rw [state]; exact kept, start.pins ++ [actualPin]⟩
+  have pinSpec := PackedTable.acquireAt_spec acquired
+  have storedUpdate : opened.set opened.phase position.current.ready.state.session.phase start.reached = .ok () reached := by
+    change opened.set opened.phase next.state.session.phase start.reached = .ok () reached
+    rw [state]
+    exact wrote
+  refine ⟨position, actualPin, observed.symm.trans raw, rfl, step, issue, actualPin, table, issuer.property.2,
+    atEntry, inner, raw, storedUpdate, acquired, state, rfl,
+    (issuer.property.1 pin).2.2.trans pinSpec.sequence, pinSpec.active, rfl, rfl, rfl, rfl, transition.reads⟩
 
 /-- Derive the next common step and the exact raw phase interpretation
 from the local report. The step acquires its next position here. -/
@@ -504,55 +583,9 @@ theorem reaches (report : NativeOpenedReport start instruction) :
       exact ⟨before.writer.installed.table.pins.find_released issued.handle,
         before.writer.installed.table.pins.mem_release issued.handle⟩
   | acquire =>
-    let before := start.current.ready.state
-    let data := before.writer.installed.table
-    have valid := start.current.ready.readPrefix.refines.1
-    obtain ⟨reference, refined, _⟩ := valid.retained.resumed.canonical
-    have supported : data.pins.floor ≤ data.committed := by
-      change before.writer.installed.table.pins.floor ≤ before.writer.installed.table.committed
-      rw [refined.pins, refined.committed]
-      exact reference.floor_committed
-    have available : (data.acquireAt data.committed).isSome = true := by
-      rw [PackedTable.acquireAt, Option.isSome_map, Sequential.SnapshotPins.acquire_iff]
-      exact ⟨supported, UInt64.le_refl _⟩
-    obtain ⟨⟨pin, table⟩, acquired⟩ := Option.isSome_iff_exists.mp available
-    change before.writer.installed.table.acquireAt before.writer.installed.table.committed = some (pin, table) at acquired
-    have selected : start.current.ready.state.writer.installed.table.acquireAt
-        start.current.ready.state.writer.installed.table.committed = some (pin, table) := acquired
-    obtain ⟨issue, issued, _, source⟩ := start.uses.snapshotAcquisitions
-    obtain ⟨next, transition⟩ := start.current.ready.updatesSnapshot (.acquire)
-    have ready : before.session.phase = .ready before.writer.installed := valid.phase
-    have returned : before.session.runAcquire = .ok (before.session.sessionRef, pin) next.state.session := by
-      simpa only [NativeSnapshotUpdateObservation.run, NativeSnapshotUpdateObservation.update,
-        SnapshotUpdate.outcome, valid.phase, selected] using transition.returned
-    have state : next.state = before.withTable table := by
-      simpa only [NativeSnapshotUpdateObservation.update, SnapshotUpdate.outcome, valid.phase, selected]
-        using transition.reached
-    have loaded := opened.phaseEffects.reads start.reached opened.phase before.session.phase start.stored
-    let installed := Phase.ready { before.writer.installed with table }
-    obtain ⟨reached, wrote, kept⟩ := opened.phaseEffects.writes start.reached opened.phase before.session.phase
-      installed start.stored
-    let load : EStateM IO.Error heap Installed := do (← opened.get opened.phase).installed
-    have atEntry : load start.reached = .ok before.writer.installed start.reached := by
-      simp only [load, Bind.bind, EStateM.bind, loaded, ready, Phase.installed, Pure.pure, EStateM.pure]
-    have inner : acquireSnapshotWith load (opened.set opened.phase) issue data.committed start.reached =
-        .ok (some (issue pin)) reached := by
-      simp only [acquireSnapshotWith, Bind.bind, EStateM.bind, atEntry, acquired, wrote, installed, data,
-        Pure.pure, EStateM.pure]
-    have raw : acquireLatestWith load (acquireSnapshotWith load (opened.set opened.phase) issue) start.reached =
-        .ok (issue pin) reached := by
-      simp only [acquireLatestWith, Bind.bind, EStateM.bind, atEntry, inner, data, Pure.pure, EStateM.pure]
-    obtain ⟨step, directory⟩ := reachesSnapshotControl transition returned
-    let actualPin : NativeOpenedPin opened := ⟨issue pin, pin, issued pin⟩
-    let position : NativeOpenedPosition opened :=
-      ⟨⟨start.current.history, start.current.submissions, next⟩, reached, directory.trans start.directory,
-        by rw [state]; exact kept, start.pins ++ [actualPin]⟩
-    have pinSpec := PackedTable.acquireAt_spec acquired
-    refine ⟨_, position, step, issue, actualPin, table, source, atEntry, inner, raw, ?_, acquired, state, rfl,
-      (issued pin).2.2.trans pinSpec.sequence, pinSpec.active, rfl, rfl, rfl, rfl, transition.reads, issued⟩
-    change opened.set opened.phase next.state.session.phase start.reached = .ok () reached
-    rw [state]
-    exact wrote
+    obtain ⟨issuer⟩ := opened.hasLatestIssuer
+    obtain ⟨next, pin, _, _, atReturn⟩ := start.refinesAcquireLatest issuer rfl
+    exact ⟨_, next, atReturn⟩
   | planWalCollection observed =>
     obtain ⟨source, raw, step, _, _, _, _, _⟩ := start.plansWalCollection observed
     exact ⟨_, start, step, source, raw, rfl, rfl⟩

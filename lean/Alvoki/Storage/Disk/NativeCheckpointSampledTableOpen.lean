@@ -47,7 +47,7 @@ to an already opened writer. -/
 def NativeOpenedPosition.SampledCheckpointRecovery (current : NativeOpenedPosition opened)
     (inodes : heap → WalInodeImage) {runs : heap → RunUnlinkImage}
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
-    (names : FilePath → Option Nat) (contents : Nat → ByteArray)
+    (newManifest : ByteArray) (names : FilePath → Option Nat) (contents : Nat → ByteArray)
     (origin : NativeExecutionPosition) (earlier : List NativeExecutionEvent)
     (errors : List (FilePath × IO.Error)) : Prop :=
     let dir := dbDir
@@ -119,6 +119,11 @@ def NativeOpenedPosition.SampledCheckpointRecovery (current : NativeOpenedPositi
         opening.ReadsSample contents (dir.file (.walSegment segment.first)) segment.bytes) ∧
       returned.start.current.ready.state.writer.checkpoint = checkpoint ∧
       returned.start.current.ready.reads = (ready).reads ∧
+      (state.session.phaseRef ∈ opening.callbacks.liveRefs → next.state.session.phaseRef ≠ state.session.phaseRef) ∧
+      (state.session.sessionRef ∈ opening.callbacks.liveRefs → next.state.session.sessionRef ≠ state.session.sessionRef) ∧
+      state.writer.target.range.watermark ≤ next.state.writer.target.range.watermark ∧
+      (pair.manifest = state.writer.target.pair.manifest → next.state.writer.target.range.watermark = state.writer.target.range.watermark) ∧
+      (pair.manifest = some newManifest → next.state.writer.target.range.watermark = state.writer.history.length) ∧
       origin.LedgerSuffix earlier returned.start.current ∧
       RebootDirectoryBindings next.state names ∧
       next.state.writer.target = layout.target ∧ next.state.writer.published.durable = actual ∧
@@ -187,7 +192,7 @@ theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
     (prefixLedger : origin.LedgerSuffix earlier current.current) :
     NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
       (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe names contents origin earlier errors := by
+      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe prior.manifest names contents origin earlier errors := by
   unfold NativeOpenedPosition.SampledCheckpointRecovery
   intro dir state pair wal actual retry vacant selectedPath physical filesAt checkpointFiles reset each observeReads
   obtain ⟨sameFilesAt, sameImage⟩ := attempts.framesAfter .empty
@@ -201,7 +206,7 @@ theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
     intro path authority
     exact (survivor path (authority.imp_right Or.inl)).1
   obtain ⟨authority, marker, segments, published, layout, _, walLayout, walValid, keeper, aligned,
-    descriptors, offsets, prepared, _, accepted, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ :=
+    descriptors, offsets, prepared, _, accepted, _, _, _, checkpoint, _, _, selected, generation, _, _, _, _⟩ :=
     selection
   obtain ⟨opening, chronology, raw, sameFiles, sameDirectory, sameKeeper, readsAtEntry⟩ :=
     observeReads published layout prepared selected
@@ -228,11 +233,11 @@ theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
   obtain ⟨missing, manifestRead, markerRead, runRead, walReads⟩ :=
     opening.readsSelectedSamples contents rfl rfl markerSelected (fun _ _ _ _ _ _ _ stored => stored) aligned readSegments
   have following := opening.reads.walReads.selectedAfterWatermark offsets descriptors
-  obtain ⟨prior, history, pending⟩ := (ready).readPrefix.refines
+  obtain ⟨valid, history, pending⟩ := (ready).readPrefix.refines
   have first : layout.target.first = wal.active.first := congrArg WalSegment.first keeper
   obtain ⟨next, returned, opened, selectedAgain, priorReads, sameTarget, sameRuns, sameWal, replay, ledger⟩ :=
     raw.returnsSelectedFromFixedInterpreter sameFiles sameDirectory sameKeeper prepared following accepted
-      prior.retained.resumed.ordered walLayout walValid prior.retained.spans rfl first rfl
+      valid.retained.resumed.ordered walLayout walValid valid.retained.spans rfl first rfl
       history pending (ready).readPrefix.readsBounded write effects ptrEq
   have unchanged : current.current.LedgerSuffix [] returned.start.current :=
     ⟨by rw [returned.position]; simp, by rw [returned.position]; simp, by simpa using priorReads, by simp⟩
@@ -254,10 +259,27 @@ theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
     · rw [sameWal]
     · rw [sameWal]
     · exact congrArg (fun target : Target => target.pair.manifest) sameTarget
+  have paired : next.state.writer.target.pair = pair :=
+    (congrArg Target.pair sameTarget).trans prepared.pair.symm
+  have phaseFresh (oldLive : state.session.phaseRef ∈ opening.callbacks.liveRefs)
+      (same : next.state.session.phaseRef = state.session.phaseRef) : False :=
+    returned.phaseFresh ((returned.phaseRef.trans same).symm ▸ oldLive)
+  have sessionFresh (oldLive : state.session.sessionRef ∈ opening.callbacks.liveRefs)
+      (same : next.state.session.sessionRef = state.session.sessionRef) : False :=
+    returned.tokenFresh ((returned.tokenRef.trans same).symm ▸ oldLive)
+  have checked : CheckpointPreflight (.ready state.writer.installed) (.ok (prior.next, prior.manifest)) :=
+    valid.phase ▸ prior.prepared
+  have chosen : next.state.writer.target.pair.manifest = state.writer.target.pair.manifest ∨
+      next.state.writer.target.pair.manifest = some prior.manifest := by
+    rw [paired]
+    exact generation.imp (fun old => old.2.trans (congrArg DirectoryPublication.Bindings.manifest valid.retained.walPair))
+      And.right
+  have watermark := checked.reopenedWatermark valid.retained chosen
+  rw [paired] at watermark
   refine ⟨published, layout, checkpoint, selected, opening, chronology, raw, next, returned,
     attempts, resetCensus, resetLock, sameImage.symm.trans (congrArg LockedFileState.image raw.raw.entryFiles), survivor,
     raw.raw.entryFiles, opened, captures.1, captures.2, missing, manifestRead, markerRead, runRead, walReads,
-    selectedAgain, priorReads, afterRestart, newAuthority, sameTarget, sameRuns, sameWal, segments, ?_, replay, ledger, ?_⟩
+    selectedAgain, priorReads, phaseFresh, sessionFresh, watermark.1, watermark.2.1, watermark.2.2, afterRestart, newAuthority, sameTarget, sameRuns, sameWal, segments, ?_, replay, ledger, ?_⟩
   · intro restored parent afterCall laws
     obtain ⟨files, root⟩ := attempts.carriesCheckpointReset physical selectedPath dir.path checkpointFiles
       (.inl rfl) restored parent afterCall
@@ -315,8 +337,9 @@ theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
     exact ⟨wrote, batch, table, written, last, reference, events, prepared, committed, atWrite, trace,
       afterRestart.append suffix, sameHistory ▸ replay, reads⟩
   · intro α request compareAtAcquire
-    obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, snapshotReplay, agrees⟩ :=
-      returned.start.acquiresAndReadsLatest request compareAtAcquire
+    obtain ⟨issuer⟩ := returned.handle.hasLatestIssuer
+    obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, snapshotReplay, agrees, _⟩ :=
+      returned.start.acquiresAndReadsLatest issuer rfl request compareAtAcquire
     have sameHistory : returned.start.current.history = current.current.history := by rw [returned.position]
     refine ⟨last, _, reference, calls, ?_, sameHistory ▸ snapshotReplay, ?_, agrees⟩
     · exact afterRestart.append calls.common.ledgerSuffix
@@ -343,7 +366,7 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     (prefixLedger : origin.LedgerSuffix earlier current.current) :
     NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
       (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe names contents origin earlier errors := by
+      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe stop.manifest names contents origin earlier errors := by
   have selection := stop.replaysSampledFinalCheckpoint inodes runs observe storage names chosen contents sampled
   exact stop.toNativeCheckpointSourcePrefix.reopensSampledCheckpoint inodes runs observe names contents selection
     resetCensus resetLock attempts effects prefixLedger
@@ -371,7 +394,7 @@ theorem NativeCheckpointSourceError.reopensSampledRenameError
     stop.SelectsManifest effective names contents ∧
     NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
       (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe names contents origin earlier errors := by
+      (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe stop.manifest names contents origin earlier errors := by
   obtain ⟨choice, selection⟩ := stop.replaysSampledRenameError inodes runs observe storage effective renameEffect names chosen contents sampled
   exact ⟨choice, stop.toNativeCheckpointSourcePrefix.reopensSampledCheckpoint inodes runs observe names contents selection
     resetCensus resetLock attempts effects prefixLedger⟩
