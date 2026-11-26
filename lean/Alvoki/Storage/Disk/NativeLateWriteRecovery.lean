@@ -193,16 +193,16 @@ theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
       target.pair = (view.files rebooted).image.directory.active ∧
       RawOpenRetryTrace.SelectedEntry view state target storageNames visible rebooted ∧
       RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
-        (current.current.history ++ batch).length rebooted := by
+        target.range.through rebooted := by
   obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected⟩ :=
     current.selectsAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot
   have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
     nonempty returned nameEffects
-  have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
-    simp only [List.length_append, (prepareBatch_spec prepared).1]
+  have cutoff := current.current.ready.retryThrough_le prepared admitted
+  have window := reboot.walNamespace nameFrame initialWindow.2
   exact ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected,
-    reboot.startsRecoveryObservations reset selected (by simpa only [upper] using reboot.walNamespace nameFrame initialWindow.2)⟩
+    reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff)⟩
 
 /-- A late publication error and its joint reboot reach the ready table
 through the same interpreter's failed opens. The recovery event uses
@@ -221,7 +221,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun atHeap => ⟨storageNames atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
         (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
-          (current.current.history ++ batch).length) attempts)
+          target.range.through) attempts)
     (openEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
@@ -321,7 +321,7 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
       RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun atHeap => ⟨storageNames atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
         (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
-          (current.current.history ++ batch).length) attempts) :
+          target.range.through) attempts) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
       .error (.commitUnknown cause) failed ∧

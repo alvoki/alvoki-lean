@@ -39,14 +39,14 @@ theorem NativeExecutionPosition.refinesFailedOpenTerminalLedger
     (initial : RawOpenRetryTrace.SelectedEntry view current.ready.state target
       (fun atHeap => (storage atHeap).files.names) visible first)
     (entry : RawOpenRetryTrace.RecoveryObservations view current.ready.state target storage visible firstOffset
-      (current.history ++ batch).length first)
+      target.range.through first)
     {returns : List (FilePath × IO.Error)} (attempts : source.FailedCalls first returns reached)
     (nonempty : returns ≠ [])
     (effects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun atHeap => ⟨(storage atHeap).files.names, fun inode => [visible atHeap inode]⟩)
       current.ready.state.selectedRetryPath
       (RawOpenRetryTrace.RecoveryObservations view current.ready.state target storage visible firstOffset
-        (current.history ++ batch).length) attempts) :
+        target.range.through) attempts) :
     (∀ event ∈ events, event.uncertainBatchWhole) ∧
     ∃ earlier input diagnostic issued,
       returns = earlier ++ [(input, diagnostic)] ∧ source.FailedCalls first earlier issued ∧

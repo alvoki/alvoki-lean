@@ -651,7 +651,7 @@ theorem NativeReadPosition.SelectedWritePlan.walNamespaceAtPreparation
     (plan : current.SelectedWritePlan batch target image)
     {entryNames preparedNames : FilePath → Option Nat} {first : Nat} {newer : List Nat}
     (priorWindow : current.state.writer.wal.NamespaceWindow current.state.session.directory first
-      (prior ++ batch).length entryNames)
+      plan.layout.range.through entryNames)
     (framed : ∀ start, preparedNames (current.state.session.directory.file (.walSegment start)) =
       entryNames (current.state.session.directory.file (.walSegment start)))
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
@@ -668,14 +668,9 @@ theorem NativeReadPosition.SelectedWritePlan.walNamespaceAtPreparation
     ∀ start, plan.layout.range.through < start →
       ((preparedNames (directory.file (.walSegment start))).isSome = true ↔ start ∈ newer) := by
   intro directory wal
-  have through : plan.layout.range.through ≤ (prior ++ batch).length := by
-    rw [plan.layout.through]
-    rcases plan.allowed with old | complete
-    · simp [old]
-    · simp [complete]
   refine ⟨?_, ?_, fun start member => (listed start).mp member |>.1, ?_⟩
   · intro start lower upper
-    have alignedNames := priorWindow start lower (Nat.le_trans upper through)
+    have alignedNames := priorWindow start lower upper
     rw [framed start, WalSegmentImage.appendSelectedView_starts]
     exact alignedNames
   · intro start member
@@ -760,7 +755,7 @@ private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
       current.state.selectedRetryPath keep attempts)
     (atEntry : keep start)
     (atReached : keep reached →
-      current.state.writer.wal.NamespaceWindow current.state.session.directory first (prior ++ batch).length
+      current.state.writer.wal.NamespaceWindow current.state.session.directory first target.range.through
         (names reached) ∧ RawOpenRetryTrace.KeeperAt view current.state.session.directory target names visible reached) :
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
       plan.layout.VisibleWal current.state.session.directory (names reached) (visible reached) ∧
@@ -773,19 +768,15 @@ private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
   have firstInWal := (plan.modeledWindow.1 plan.layout.first (Nat.le_refl _)).mpr
     (firstRead ▸ List.mem_cons_self (a := plan.layout.first) (l := rest))
   rw [WalSegmentImage.appendSelectedView_starts] at firstInWal
-  have upper : plan.layout.range.through ≤ (prior ++ batch).length := by
-    rw [plan.layout.through]
-    rcases plan.allowed with old | complete
-    · simp [old]
-    · simp [complete]
+  have cutoff : plan.layout.range.through = target.range.through :=
+    congrArg (fun selected : Target => selected.range.through) plan.targetEq
   have keptFiles := initial.protectedFiles.frame (fun path keep => protectedFrame path (.inr keep))
-  refine ⟨plan, plan.visibleWal names visible (reachedWindow.restrict (covers _ firstInWal) upper) keptFiles reachedKeeper,
+  refine ⟨plan, plan.visibleWal names visible (reachedWindow.restrict (covers _ firstInWal) (cutoff ▸ Nat.le_refl _)) keptFiles reachedKeeper,
     ⟨valid, kept.trans initial.kept, initial.manifest, keptFiles, reachedKeeper, ?_⟩, preserved⟩
   exact (protectedFrame.visiblePayload (.inl rfl)).trans initial.marker
 
 /-- Carry the WAL window and the live keeper through the same failed
-calls as the protected checkpoint. The initial name bound reaches as
-far as either marker after the uncertain batch. -/
+calls as the protected checkpoint through the selected marker. -/
 theorem NativeReadPosition.preparesVisibleWriteRetry
     {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
     {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : NativeReadPosition prior log)
@@ -798,11 +789,11 @@ theorem NativeReadPosition.preparesVisibleWriteRetry
     {first : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, first ≤ offset)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible start)
     (window : current.state.writer.wal.NamespaceWindow current.state.session.directory first
-      (prior ++ batch).length (names start))
+      target.range.through (names start))
     {returns : List (FilePath × IO.Error)} {attempts : source.FailedCalls start returns reached}
     (effects : RawOpenRetryTrace.SelectedEffects view source start target (visibleImage names visible)
       current.state.selectedRetryPath (fun atHeap =>
-        current.state.writer.wal.NamespaceWindow current.state.session.directory first (prior ++ batch).length
+        current.state.writer.wal.NamespaceWindow current.state.session.directory first target.range.through
           (names atHeap) ∧ RawOpenRetryTrace.KeeperAt view current.state.session.directory target names visible atHeap)
       attempts) :
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
@@ -811,8 +802,24 @@ theorem NativeReadPosition.preparesVisibleWriteRetry
     covers initial effects ⟨window, initial.keeper⟩ id
   exact ⟨plan, physical⟩
 
+-- A write may need the full prospective window before its marker is
+-- selected. After selection the reader only needs this upper bound.
+theorem NativeReadPosition.retryThrough_le
+    {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : NativeReadPosition prior log)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
+    {target : Target} (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target) :
+    target.range.through ≤ prior.length + rows.length := by
+  obtain ⟨_, history, old | whole, _, cutoff, _⟩ := admitted
+  · rw [cutoff, old, current.readPrefix.refines.2.1]
+    exact Nat.le_add_right ..
+  · rw [cutoff, whole, current.readPrefix.refines.2.1, List.length_append, (prepareBatch_spec prepared).1]
+    exact Nat.le_refl _
+
 /-- The exact failed opens carry the live WAL, protected checkpoint and
-marker, and durable storage to the same heap for the next reader. -/
+marker, and durable storage to the same heap for the next reader.
+Only the selected marker bounds the catalog. Later WAL files are
+tracked independently and may reappear after power loss. -/
 theorem NativeReadPosition.preparesDurableVisibleWriteRetry
     {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
     {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : NativeReadPosition prior log)
@@ -826,17 +833,17 @@ theorem NativeReadPosition.preparesDurableVisibleWriteRetry
     {first : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, first ≤ offset)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible start)
     (entry : RawOpenRetryTrace.RecoveryObservations view current.state target storage visible first
-      (prior ++ batch).length start)
+      target.range.through start)
     {returns : List (FilePath × IO.Error)} {attempts : source.FailedCalls start returns reached}
     (effects : RawOpenRetryTrace.SelectedEffects view source start target
       (visibleImage (fun heap => (storage heap).files.names) visible) current.state.selectedRetryPath
       (RawOpenRetryTrace.RecoveryObservations view current.state target storage visible first
-        (prior ++ batch).length) attempts) :
+        target.range.through) attempts) :
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
       plan.layout.VisibleWal current.state.session.directory (storage reached).files.names (visible reached) ∧
       RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible reached ∧
       RawOpenRetryTrace.RecoveryObservations view current.state target storage visible first
-        (prior ++ batch).length reached :=
+        target.range.through reached :=
   current.preparesVisibleWriteRetryFromEffects prepared fits admitted (fun heap => (storage heap).files.names) visible
     covers initial effects entry (fun kept => ⟨kept.1, kept.2.1⟩)
 

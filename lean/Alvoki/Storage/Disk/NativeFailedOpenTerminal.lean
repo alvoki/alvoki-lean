@@ -63,7 +63,7 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
         RawOpenRetryTrace.SelectedEffects view source rebooted state.writer.target
           (fun atHeap => ⟨names atHeap, fun inode => [visible atHeap inode]⟩) state.selectedRetryPath
           (RawOpenRetryTrace.RecoveryObservations view state state.writer.target storage visible firstOffset
-            (current.current.history.length + request.rows.length)) attempts →
+            state.writer.target.range.through) attempts →
         (∀ event ∈ earlier ++ events, event.uncertainBatchWhole) ∧
         ∃ batch table guarded poisoned,
           prepareBatch installed.table request.rows = some (batch, table) ∧
@@ -113,13 +113,12 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
     have framed := current.preservesWalNamesAfterCommitUnknown writes.appender writes.stager writes.syncer cache
       request writes.lookup writes.rename nonempty returned nameEffects
     have window := reboot.walNamespace framed readyWindow.2
-    have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
-      simp only [List.length_append, (prepareBatch_spec prepared).1]
+    have cutoff := current.current.ready.retryThrough_le prepared admitted
     obtain ⟨_, previous, input, diagnostic, issued, reported, earlierCalls, call, plan, _, last, durable, _, _, replay, bounded⟩ :=
       NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current)
         through prepared fits admitted storage visible readyWindow.1 selected
-        (reboot.startsRecoveryObservations reset selected (by simpa only [upper] using window))
-        attempts retried (by simpa only [upper] using retryEffects)
+        (reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff))
+        attempts retried retryEffects
     have old : plan.history = origin.history ++ (earlier ++ events).flatMap NativeExecutionEvent.writes :=
       plan.oldHistory.trans through.history
     exact ⟨previous, input, diagnostic, issued, reported, earlierCalls, call, last, durable, old ▸ replay, old ▸ bounded⟩

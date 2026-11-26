@@ -89,7 +89,7 @@ private abbrev retryEffectsFor (attempts : source.FailedCalls rebooted returns r
   RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
     (fun atHeap => ⟨names atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
     (RawOpenRetryTrace.RecoveryObservations view state (state).writer.target storage visible firstOffset
-      (current.current.history.length + request.rows.length)) attempts
+      (state).writer.target.range.through) attempts
 
 private abbrev groupedFailure (batch : List WAL.Write) (poisoned : heap) : Prop :=
   let keeperPath := (dir).file (.walSegment (installed).activeFirst)
@@ -112,7 +112,7 @@ settled WAL names. When the keeper contains uncommitted bytes, the
 actual open replaces it while keeping the previous history intact. -/
 theorem NativeOpenedPosition.reopensAfterGroupedError
     (attempts : source.FailedCalls rebooted returns reached)
-    (retryEffects : retryEffectsFor current view inodes runs observe request source (firstOffset := firstOffset) attempts) :
+    (retryEffects : retryEffectsFor current view inodes runs observe source (firstOffset := firstOffset) attempts) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     ∃ batch table guarded poisoned,
       prepareBatch (installed).table request.rows = some (batch, table) ∧
@@ -146,13 +146,12 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
     have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
       nonempty returned nameEffects
     have window := reboot.walNamespace nameFrame initialWindow.2
-    have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
-      simp only [List.length_append, (prepareBatch_spec prepared).1]
+    have cutoff := current.current.ready.retryThrough_le prepared admitted
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, sameDirectory, coversNext,
       retainedKeeper, nextWindow⟩ :=
       (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
-        initialWindow.1 selected (reboot.startsRecoveryObservations reset selected (by simpa only [upper] using window))
-        (by simpa only [upper] using retryEffects)
+        initialWindow.1 selected (reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff))
+        retryEffects
         admission namespaceView root rootBinding (openEffects prepared) (alignedEffects prepared)
         (replacementEffects prepared) phaseIdentity tokenIdentity phase ptrEq openedTable
     have old := history.trans plan.oldHistory
@@ -228,7 +227,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
         reboot.DurableReset →
         current.WalNameEffects writes.appender writes.stager writes.syncer cache request writes.lookup writes.rename
           storage firstOffset (current.current.history.length + request.rows.length) →
-        retryEffectsFor current view inodes runs files request source (firstOffset := firstOffset) attempts →
+        retryEffectsFor current view inodes runs files source (firstOffset := firstOffset) attempts →
         source.AlignedAdmissionEffects view state input reached storage visible →
         names reached dir.path = some (namespaceView.modelObject root) →
         groupedRetryPlanEffects current view request reached namespaceView root

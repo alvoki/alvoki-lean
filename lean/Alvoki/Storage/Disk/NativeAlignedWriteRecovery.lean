@@ -1355,7 +1355,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
     (physical : plan.layout.VisibleWal dir (observe reached).files.names (visible reached))
     {firstOffset : Nat}
     (covers : ∀ start ∈ current.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ start)
-    (window : current.state.writer.wal.NamespaceWindow dir firstOffset (prior ++ batch).length (observe reached).files.names)
+    (window : current.state.writer.wal.NamespaceWindow dir firstOffset target.range.through (observe reached).files.names)
     (replaces : 0 < plan.layout.tail.size → source.LiteralKeeperReplacementEffects cache plan observe visible)
     (suffixAtEntry : RawOpenRetryTrace.LaterWalAt view dir target (fun atHeap => (observe atHeap).files.names) reached)
     (durable : current.state.SelectedRetryDurability target (observe reached))
@@ -1409,7 +1409,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       (Nat.le_trans (DirectoryPublication.Bindings.walRange_accounting plan.layout.decoded).2.1 (Nat.le_of_lt later)))
   have sameSuffix := suffixAtEntry.scanNames namespaceView root (by simpa only [cutoff] using laterNames)
     (fun start later => childLater start (cutoff.symm ▸ later))
-  obtain ⟨selectedNames, boundedStarts, later, listed⟩ := plan.walNamespaceAtPreparation window
+  obtain ⟨selectedNames, boundedStarts, later, listed⟩ := plan.walNamespaceAtPreparation (cutoff.symm ▸ window)
     (fun start => (liveFrame _ (.inr ⟨.walSegment start, rfl⟩)).1) namespaceView root childLater laterNames
   let repairPlan : Plan := ⟨plan.layout.range.through, plan.layout.keeper.first, newer, plan.layout.keeper.bytes⟩
   let stageWrite := source.stage.stage cache.pendingRef (keeperCalls).modifyPending
@@ -1638,13 +1638,13 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
     {firstOffset : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun atHeap => (observe atHeap).files.names) visible first)
     (recovery : RawOpenRetryTrace.RecoveryObservations view current.state target observe visible firstOffset
-      (prior ++ batch).length first)
+      target.range.through first)
     {attempts : source.FailedCalls first returns reached}
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun atHeap => ⟨(observe atHeap).files.names, fun inode => [visible atHeap inode]⟩)
       current.state.selectedRetryPath
       (RawOpenRetryTrace.RecoveryObservations view current.state target observe visible firstOffset
-        (prior ++ batch).length) attempts)
+        target.range.through) attempts)
     (admission : source.AlignedAdmissionEffects view current.state input reached observe visible)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (rootBinding : (observe reached).files.names (dir).path = some (namespaceView.modelObject root))

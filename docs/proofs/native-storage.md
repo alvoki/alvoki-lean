@@ -365,6 +365,8 @@ that same open. A final directory fsync error before effect can leave a replacem
 old inode can still survive a subsequent power loss. At the next open, `RecoveryObservations` relates the
 WAL interval to the names on disk, the live keeper binding to its bytes, the selected
 immutable files to their durable contents, and later WAL names to the physical suffix.
+The selected marker bounds replay. Above it, the successful directory scan must enumerate
+every later canonical WAL name, including any restored by power loss before pruning was durable.
 An independent failure before flock also exposes its local file frame, including the keeper
 binding in place when the call began. For a second power loss after a replacement, one surviving
 directory map can still name the old inode. Its live bytes before the rename and the synced
