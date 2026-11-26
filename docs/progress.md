@@ -146,11 +146,13 @@ The sampled checkpoint reader passes the installation and repair observations
 from that open directly to the ready-call proof. It derives the keeper bytes
 and WAL range from the selected sample. The resulting session uses the same
 table and references, starts with empty snapshot pins and extends the incoming
-ledger of the checkpoint's actual predecessor. This requires the selected
-durable files and marker at the prepared heap, the settled root binding,
-agreement of later names with the complete scan, and local callback effects.
-The next obligation is to carry those durable facts through reboot, failed
-opens and the successful reader's preparation.
+ledger of the checkpoint's actual predecessor. The proof carries the selected
+durable files and marker from the reboot through the actual failed opens and
+the successful reader's preparation. It also preserves the root binding in
+each allowed crash namespace. It assumes that the reboot restores the sampled
+files, each failed open preserves the selected files and root, and the later
+WAL names at the successful entry agree with the complete directory scan.
+Deriving those frames for every reachable failed open remains open.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and

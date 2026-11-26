@@ -121,13 +121,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   recovery. At the last directory-fsync stop, the chosen file sample is
   preserved through the reboot and actual read-only failed calls. The
   aligned opener supplies the exact replayed table, its keeper sync and any
-  suffix pruning. Given durable protected files and marker at the prepared
-  heap, the settled root binding and agreement of later names with the
-  complete scan, this opener supplies both the installation and the exact
-  repair to the finite ready-call proof. The reinstalled handle starts
+  suffix pruning. The reboot and failed-open frames preserve the selected
+  durable files, marker and root through the reader’s preparation. With
+  later names matched to the complete scan, the opener supplies its own
+  installation and repair to the finite ready-call proof. The reinstalled handle starts
   with empty pins and carries its actual predecessor’s incoming ledger.
-  Deriving the prepared durable state across the intervening operations
-  remains open.
+  Coverage of those file effects for all reachable failed opens remains open.
   [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean) ·
   [Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 

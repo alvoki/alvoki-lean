@@ -1032,7 +1032,7 @@ structure RawMarkedOpenInterpreter.LiteralAlignedSyncs
     (layout : CanonicalKeeperLayout image history) (cache : HeldOpenCache heap)
     (view : OpenCloseHeapView heap FileImage) (observe : heap → CheckpointStorageObservation)
     (visible : heap → Nat → ByteArray) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
-    (entry repaired : heap) where
+    (readScope : FilePath → Prop) (entry repaired : heap) where
   keeper : IO.FS.Handle
   slot : DescriptorSlot
   inode : Nat
@@ -1052,6 +1052,7 @@ structure RawMarkedOpenInterpreter.LiteralAlignedSyncs
   holding : LiteralOpenAuthority view directory cache prepared
   liveFrame : (⟨(observe entry).files.names, fun inode => [visible entry inode]⟩ : CheckpointSurvivingFiles).Frames
     (managedPath directory) ⟨(observe prepared).files.names, fun inode => [visible prepared inode]⟩
+  storageFrame : (observe entry).Frames readScope (observe prepared)
   privateKeeper : ∀ path, managedPath directory path →
     (observe prepared).files.names path = some inode → path = directory.file (.walSegment layout.keeper.first)
   scanned : ∀ start, start ∈ newer ↔ layout.range.through < start ∧
@@ -1081,8 +1082,8 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedSyncs.readyStorage
     {directory : DiskDirectory} {image : FileImage} {history : List WAL.Write}
     {layout : CanonicalKeeperLayout image history} {cache : HeldOpenCache heap}
     {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
-    {namespaceView : DirectoryReadNamespace} {root : DeviceInode} {entry repaired : heap}
-    (seen : source.LiteralAlignedSyncs directory layout cache view observe visible namespaceView root entry repaired)
+    {namespaceView : DirectoryReadNamespace} {root : DeviceInode} {readScope : FilePath → Prop} {entry repaired : heap}
+    (seen : source.LiteralAlignedSyncs directory layout cache view observe visible namespaceView root readScope entry repaired)
     {state : NativeReadyState} (valid : state.Valid)
     (directoryEq : state.session.directory = directory) (slotEq : state.directorySlot = cache.rootSlot)
     (censusEq : state.census = view.descriptors repaired)
@@ -1207,7 +1208,7 @@ theorem RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
       (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired),
       source.LiteralAlignedReturn directory layout published checkpoint wal cache view
         phaseIdentity tokenIdentity writer allocation returnedAt table ∧
-      Nonempty (source.LiteralAlignedSyncs directory layout cache view observe visible namespaceView root entry repaired) := by
+      Nonempty (source.LiteralAlignedSyncs directory layout cache view observe visible namespaceView root selectedPath entry repaired) := by
   let files := RawMarkedOpenInterpreter.makeCache directory cache.directoryRef cache.activeRef cache.pendingRef
   obtain ⟨count, markerBytes, patched, logical, file, slot, inode, readHeap, prepared, repaired, extent, newer,
     phase, afterPhase, token, markerName, decoded, _, replayed, named, attached, route, extentEq, laterNames,
@@ -1266,7 +1267,7 @@ theorem RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
     ⟨valid, repairedAuthority, rfl, rfl, rfl, rfl, rfl, actualTable, actualTable.symm ▸ used, rfl,
       initialized, sameFiles, census, sameCache, held, recovered⟩,
     ⟨file, slot, inode, readHeap, prepared, rootIssued, authorized, keeperEntry, loaded, consumed, entries, newer,
-      named, attached, remembered.2, preparedAuthority, liveFrame,
+      named, attached, remembered.2, preparedAuthority, liveFrame, readFrame.1,
       (fun path inside => privateKeeper path inside inside), laterNames,
       getRoot, syncRoot, pruned, getPending, found, clear, syncKeeper⟩⟩
 
