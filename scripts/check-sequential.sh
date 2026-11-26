@@ -388,6 +388,8 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRawWriteProjection
 lake env leanchecker Alvoki.Storage.Disk.NativeRawWriteCustody
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyWriteStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeRawUncertainWrite
+lake env leanchecker Alvoki.Storage.Disk.NativeSelectedWriteReopen
+lake env leanchecker Alvoki.Storage.Disk.NativeWalGroupedTail
 lake env leanchecker Alvoki.Storage.Disk.NativeWalPublicationTail
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedUncertainWrite

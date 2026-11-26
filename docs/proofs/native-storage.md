@@ -407,6 +407,17 @@ bytes. The post-group payload observations and native effect laws remain explici
 recovery worker must still consume the derived target and prove the exact returned table
 across all supported retries.
 
+The selected batch target can supply the same repair plan in an existing modeled retry or in a
+raw reboot projection of the observed manifest, marker and keeper. Its protected file frame
+tracks the root, lock, selected runs and seals in the same joint namespace. The shared proof
+appends one uncertain submission and keeps earlier snapshot observations for either selected
+history. The marked opener follows a selected layout through reported read-only failures and
+uses the reached healthy worker and measured repair to return its actual table and fresh
+references. The scope consists of the selected paths, so an unrelated staging name in the raw
+listing has no bearing on the selected bytes. The current bridge uses the existing drained reboot
+inventory and raw effects for the healthy attempt. Recovery that has already changed the
+keeper and admission with surviving ownership still need the general execution argument.
+
 ## Migration test
 
 Keep the codecs, ordered replay, snapshot and retention proofs, publication laws, bounded reads,

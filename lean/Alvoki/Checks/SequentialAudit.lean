@@ -467,6 +467,8 @@ import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeRawWriteProjection
 import Alvoki.Storage.Disk.NativeReadyWriteStorage
 import Alvoki.Storage.Disk.NativeRawUncertainWrite
+import Alvoki.Storage.Disk.NativeSelectedWriteReopen
+import Alvoki.Storage.Disk.NativeWalGroupedTail
 import Alvoki.Storage.Disk.NativeWalPublicationTail
 import Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
 import Alvoki.Storage.Disk.NativeRawWriteCustody
@@ -1498,6 +1500,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedBatchCut
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atBatchBoundary
 #check_axioms Alvoki.Storage.WalSegmentRepair.BatchRetryTarget.ofSelected
+#check_axioms Alvoki.Storage.DiskSession.selectedBatchReopenLayout
 #check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofBatchSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.BatchRetryTarget.unique
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareAfterBatchCut
@@ -3824,6 +3827,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publicationReturned
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publicationOutcome
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootBarrierResult
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedWalPayloadsFromPublication
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedMarkerRenameSelects
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedRootSyncSelects
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
@@ -3848,7 +3852,14 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_prepared
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.preparedWalCount
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.selectsWriteWal
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.chosenWriteBinding
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.sampleWriteFile
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.retainsWriteRebootFiles
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.selectedWriteManifest
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesWriteReboot
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.selectedFilePath
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.reopenPath
+#check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.reopensAfterReadOnlyAttempts
 #check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selection.retryTarget
 #check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selections.retryTargets
 #check_axioms Alvoki.Storage.DiskSession.withoutWriteGroupCache_eq_projectResult

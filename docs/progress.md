@@ -1,5 +1,36 @@
 # Current handoff
 
+The existing batch retry proof now shares one selected-layout argument with the raw write
+recovery path. The chosen manifest, marker and keeper bytes give the exact target, retained WAL
+layout and repair plan. The original read ledger admits the selected old history or the complete
+batch and keeps the earlier snapshot observations. The protected-file frame recovers the root,
+lock, run and seal identities from that same joint map. The manifest, run and seal bytes come
+from the inodes selected by the map. Later WAL names remain an observed input checked against
+the selected boundary. [Layout and repair](../lean/Alvoki/Storage/Disk/WalBatchCommitEffects.lean)
+· [Sampled files and replay](../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
+
+The healthy marked-open proof now carries its exact selected paths and bytes across a finite
+sequence of actual read-only open failures. It reuses the measured aligned or longer-keeper
+repair and returns the actual table on the reached heap with the same selected target, cache,
+phase and token distinct from the old session, and prior read ledger. Its existing admission index requires the failed
+attempts to release their resources back to the reboot inventory. The proof uses raw admission,
+reader, repair and allocation effects for the final healthy attempt. The common execution still
+needs to derive those effects and join the selected layout and this reader to all operation cuts,
+including failed opens that have already changed the selected files. [Selected raw reopen](../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+
+The returned WAL rename error now derives its input payloads from the actual successful
+append, marker stage and grouped file sync on the same reached heap. The late effect must use
+the inode selected by the staged path on that heap. The successful group exposes a joint
+keeper-binding frame through its two syncs and the pending-reference update. The final root
+barrier can use the same payload construction. [Reached group and failed rename](../lean/Alvoki/Storage/Disk/NativeWalGroupedTail.lean)
+
+The native mixed retry fixture acknowledged five writes, published a checkpoint and rotated
+its keeper before returning `commitUnknown` on a four-write batch. Two read-only open errors
+retained the exact selected files. The next open either replaced the keeper and returned the
+prior snapshot or kept the original keeper and returned the complete batch. Subsequent writes
+and snapshot reads agreed with both selections. A separate same-length run corruption was
+rejected before repair.
+
 The actual `commitUnknown` return now derives the accepted preparation, byte limit and reached
 publication outcome on the same guarded and poisoned phase. The success proof uses that same
 callback classifier. The group-error proof follows both fsyncs, including the second after a
