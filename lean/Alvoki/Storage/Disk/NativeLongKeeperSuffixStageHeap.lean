@@ -43,21 +43,10 @@ theorem foldReturnedPrune {model : Type}
       sync #[directory.path] unlinked = .ok () last ∧
       invariant (plan.newer.foldl applyUnlink initial) unlinked := by
   intro run
-  change ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM run) first = _ at returned
-  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at returned
-  cases passed : ((plan.newer.map Step.unlink).forM run) first with
-  | error cause reached => simp [Bind.bind, EStateM.bind, passed] at returned
-  | ok value reached =>
-    cases value
-    refine ⟨reached, rfl, ?_,
-      foldReturnedWalUnlinks directory plan remove write sync rename invariant applyUnlink entered unlink passed⟩
-    simp only [Bind.bind, EStateM.bind, passed, List.forM_eq_forM, List.forM_cons, List.forM_nil,
-      Pure.pure, EStateM.pure, run, performPaths] at returned
-    cases status : sync #[directory.path] reached with
-    | error cause stopped => simp [status] at returned
-    | ok value stopped =>
-      cases value
-      simpa only [status] using returned
+  obtain ⟨unlinked, accepted, synced⟩ :=
+    returnedWalUnlinksAndBarrier directory plan remove write sync rename returned
+  exact ⟨unlinked, accepted, synced,
+    foldReturnedWalUnlinks directory plan remove write sync rename invariant applyUnlink entered unlink accepted⟩
 
 /-- Compose a frame through the same accepted unlink pass and its
 directory barrier, including when an unlink reports an already absent name. -/

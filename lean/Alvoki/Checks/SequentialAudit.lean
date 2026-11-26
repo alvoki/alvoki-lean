@@ -1974,10 +1974,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.replaysSelected
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.retainedFromActualReplay
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSuccess
-#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSyncsReached
+#check_axioms Alvoki.Storage.DiskSession.returnedWalUnlinksAndBarrier
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootGroupReturned
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.pendingGroupReturned
-#check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.alignedRepairSyncs
+#check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.alignedRepairSyncsWithSuffix
 #check_axioms Alvoki.Storage.SelectedWalReadReturn.classifies
 #check_axioms Alvoki.Storage.WalSegmentRepair.MarkedPreparationReturn.classifies
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_classifies

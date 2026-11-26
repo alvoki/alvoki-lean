@@ -115,6 +115,36 @@ theorem foldReturnedWalUnlinks {heap model : Type}
             (unlink (included _ List.mem_cons_self) removed accepted known) ran
   exact preserve (fun _ member => member) entered returned
 
+/-- Split the reached prune block into the ordered unlink pass and the
+directory barrier that follows it. -/
+theorem returnedWalUnlinksAndBarrier {heap : Type}
+    (directory : DiskDirectory) (plan : Plan)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {first last : heap}
+    (returned : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
+      (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
+    ∃ unlinked, ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) first = .ok () unlinked ∧
+      sync #[directory.path] unlinked = .ok () last := by
+  let run := performPaths directory plan remove throw write sync rename
+  change ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM run) first = _ at returned
+  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at returned
+  cases passed : ((plan.newer.map Step.unlink).forM run) first with
+  | error cause reached => simp [Bind.bind, EStateM.bind, passed] at returned
+  | ok value unlinked =>
+    cases value
+    refine ⟨unlinked, rfl, ?_⟩
+    simp only [Bind.bind, EStateM.bind, passed, List.forM_eq_forM, List.forM_cons, List.forM_nil,
+      Pure.pure, EStateM.pure, run, performPaths] at returned
+    cases status : sync #[directory.path] unlinked with
+    | error cause stopped => simp [status] at returned
+    | ok value stopped =>
+      cases value
+      simpa only [status] using returned
+
 /-- Each selected name is absent after the actual checked unlink pass.
 Only paths in the caller's canonical scope need the off-target frame. -/
 theorem namesOfReturnedWalUnlinks {heap : Type}
@@ -163,23 +193,6 @@ theorem namesOfReturnedWalUnlinks {heap : Type}
       foldReturnedWalUnlinks directory plan remove write sync rename invariant
         (fun done ordinal => done ++ [ordinal]) start step returned
   exact ⟨fun ordinal member => complete.1 ordinal member member, complete.2⟩
-
-/-- A successful aligned finish with no later names uses exactly the
-directory barrier followed by the barrier on its existing keeper. -/
-theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSyncsReached {heap : Type}
-    (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (sync : Array FilePath → EStateM IO.Error heap Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {entry reached : heap}
-    (aligned : physicalSize = plan.keeperSize) (noneLater : plan.newer = [])
-    (returned : finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .ok () reached) :
-    ∃ afterDirectory, sync #[directory.path] entry = .ok () afterDirectory ∧
-      sync #[directory.file (.walSegment plan.keeper)] afterDirectory = .ok () reached := by
-  have ⟨_, _, _, authorized⟩ :=
-    finishBoundedMarkedOpen_reachedSuccess directory plan physicalSize remove write sync rename returned
-  simpa [aligned, noneLater] using authorized
 
 structure AlignedKeeperCacheCallbacks (heap : Type) where
   openRead : FilePath → EStateM IO.Error heap IO.FS.Handle
@@ -239,10 +252,26 @@ theorem syncsPendingKeeper {dir path cached active pending before consumed after
   rw [syncPaths, SyncPathGroup.run_single]
   simp [syncWithHandles, Bind.bind, EStateM.bind, separate, loaded, cleared, synced, Pure.pure, EStateM.pure]
 
-/-- The actual aligned finisher uses the original cached root and the
-keeper surfaced by the preceding read. The root barrier frames the
-pending names, and the keeper fsync follows removal of all matches. -/
-theorem alignedRepairSyncs {image : Type} (view : OpenCloseHeapView heap image)
+/-- Local cache effects needed to carry the original keeper through
+the reached unlink pass and its directory barrier. -/
+structure SuffixCacheEffects {image : Type} (view : OpenCloseHeapView heap image)
+    (directory : DiskDirectory) (plan : Plan)
+    (cached : IO.Ref (Option IO.FS.Handle)) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (root : IO.FS.Handle) (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)) : Prop where
+  readsDirectory : ∀ {before result issued}, calls.getDirectory cached before = .ok result issued →
+    result = view.directory before cached ∧ view.directory issued cached = view.directory before cached ∧
+    view.pending issued pending = view.pending before pending
+  syncKeepsDirectory : ∀ {issued after}, calls.sync root issued = .ok () after →
+    view.directory after cached = view.directory issued cached
+  removesKeepCache : ∀ {ordinal before after result}, ordinal ∈ plan.newer →
+    remove (directory.file (.walSegment ordinal)) before = .ok result after →
+    RunCollection.ownedUnlinkResult result = .ok () →
+    view.directory after cached = view.directory before cached ∧ view.pending after pending = view.pending before pending
+
+/-- Both aligned routes sync the remembered keeper. The longer schedule
+additionally records the checked removals and the second root barrier,
+all on the same cache and the exact reached heaps. -/
+theorem alignedRepairSyncsWithSuffix {image : Type} (view : OpenCloseHeapView heap image)
     (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
     (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
@@ -250,7 +279,7 @@ theorem alignedRepairSyncs {image : Type} (view : OpenCloseHeapView heap image)
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     {readHeap entry reached : heap} {root keeper : IO.FS.Handle}
-    (aligned : physicalSize = plan.keeperSize) (noneLater : plan.newer = [])
+    (aligned : physicalSize = plan.keeperSize)
     (cachedRoot : view.directory entry cached = some root)
     (remembered : calls.modifyPending pending (pushPending (directory.file (.walSegment plan.keeper)) keeper)
       readHeap = .ok () entry)
@@ -263,37 +292,89 @@ theorem alignedRepairSyncs {image : Type} (view : OpenCloseHeapView heap image)
       view.pending after pending = view.pending issued pending)
     (readsPending : ∀ {before entries loaded}, calls.getPending pending before = .ok entries loaded →
       entries = view.pending before pending)
+    (suffix : plan.newer ≠ [] → calls.SuffixCacheEffects view directory plan cached pending root remove)
     (returned : finishBoundedMarkedOpen directory plan physicalSize remove write
       (calls.syncPaths directory.path cached active pending) rename entry = .ok () reached) :
     let path := directory.file (.walSegment plan.keeper)
-    ∃ (rootIssued afterDirectory : heap) (entries : List (FilePath × IO.FS.Handle)) (loaded consumed : heap),
+    let sync := calls.syncPaths directory.path cached active pending
+    ∃ (rootIssued authorized keeperEntry : heap) (entries : List (FilePath × IO.FS.Handle)) (loaded consumed : heap),
       calls.getDirectory cached entry = .ok (some root) rootIssued ∧
-      calls.sync root rootIssued = .ok () afterDirectory ∧
-      calls.getPending pending afterDirectory = .ok entries loaded ∧
+      calls.sync root rootIssued = .ok () authorized ∧
+      (if plan.newer = [] then keeperEntry = authorized
+        else ∃ (unlinked suffixIssued : heap),
+          ((plan.newer.map Step.unlink).forM (performPaths directory plan remove throw write sync rename))
+            authorized = .ok () unlinked ∧
+          calls.getDirectory cached unlinked = .ok (some root) suffixIssued ∧
+          calls.sync root suffixIssued = .ok () keeperEntry) ∧
+      calls.getPending pending keeperEntry = .ok entries loaded ∧
       entries.find? (fun item => item.1 == path) = some (path, keeper) ∧
       calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed ∧
       calls.sync keeper consumed = .ok () reached := by
-  intro path
-  obtain ⟨afterDirectory, rootBarrier, keeperBarrier⟩ :=
-    finishBoundedMarkedOpen_alignedSyncsReached directory plan physicalSize remove write
-      (calls.syncPaths directory.path cached active pending) rename aligned noneLater returned
+  intro path sync
+  obtain ⟨_, _, _, authorized, rootBarrier, finish⟩ :=
+    finishBoundedMarkedOpen_reachedSuccess directory plan physicalSize remove write sync rename returned
   let syncer : RawSyncCalls heap :=
     ⟨⟨calls.getDirectory, calls.getPending, calls.setPending, calls.getActive, calls.openRead⟩, calls.sync⟩
-  change syncer.group directory.path cached active pending #[directory.path] entry = .ok () afterDirectory at rootBarrier
-  change syncer.group directory.path cached active pending #[path] afterDirectory = .ok () reached at keeperBarrier
-  obtain ⟨directoryHandle, issued, loadedRoot, syncedRoot⟩ := syncer.rootGroupReturned rootBarrier
+  change syncer.group directory.path cached active pending #[directory.path] entry = .ok () authorized at rootBarrier
+  obtain ⟨directoryHandle, rootIssued, loadedRoot, syncedRoot⟩ := syncer.rootGroupReturned rootBarrier
   obtain ⟨sameRoot, pendingFromRead⟩ := readsDirectory loadedRoot
   have sameHandle := Option.some.inj (sameRoot.trans cachedRoot)
   subst directoryHandle
-  have pendingFromRemember :=
-    (syncKeepsPending syncedRoot).trans (pendingFromRead.trans (recordsKeeper remembered))
-  have selects {entries loaded} (read : syncer.readPending pending afterDirectory = .ok entries loaded) :
+  have authorizedPending := (syncKeepsPending syncedRoot).trans pendingFromRead
+  have tail :
+      ∃ keeperEntry,
+        (if plan.newer = [] then keeperEntry = authorized
+          else ∃ (unlinked suffixIssued : heap),
+            ((plan.newer.map Step.unlink).forM (performPaths directory plan remove throw write sync rename))
+              authorized = .ok () unlinked ∧
+            calls.getDirectory cached unlinked = .ok (some root) suffixIssued ∧
+            calls.sync root suffixIssued = .ok () keeperEntry) ∧
+        view.pending keeperEntry pending = view.pending entry pending ∧ sync #[path] keeperEntry = .ok () reached := by
+    by_cases empty : plan.newer = []
+    · have keeperBarrier : sync #[path] authorized = .ok () reached := by
+        simpa [aligned, empty, path] using finish
+      exact ⟨authorized, by simp [empty], authorizedPending, keeperBarrier⟩
+    · have nonempty : plan.newer.isEmpty = false := by
+        cases names : plan.newer with
+        | nil => exact (empty names).elim
+        | cons => rfl
+      simp only [aligned, nonempty, Bool.false_and, Bool.false_eq_true, ite_false, Nat.lt_irrefl] at finish
+      obtain ⟨keeperEntry, prune, keeperBarrier⟩ := finish
+      obtain ⟨unlinked, removed, suffixBarrier⟩ :=
+        returnedWalUnlinksAndBarrier directory plan remove write sync rename prune
+      have effects := suffix empty
+      have rootAuthorized := (effects.syncKeepsDirectory syncedRoot).trans
+        ((effects.readsDirectory loadedRoot).2.1.trans cachedRoot)
+      let invariant (_ : Unit) (atHeap : heap) :=
+        view.directory atHeap cached = some root ∧ view.pending atHeap pending = view.pending entry pending
+      have keeps {ordinal before after result} (member : ordinal ∈ plan.newer)
+          (ran : remove (directory.file (.walSegment ordinal)) before = .ok result after)
+          (accepted : RunCollection.ownedUnlinkResult result = .ok ()) (known : invariant () before) :
+          invariant () after :=
+        let framed := effects.removesKeepCache member ran accepted
+        ⟨framed.1.trans known.1, framed.2.trans known.2⟩
+      have unlinkedCache := foldReturnedWalUnlinks directory plan remove write sync rename invariant (fun _ _ => ())
+        (initial := ()) ⟨rootAuthorized, authorizedPending⟩ (fun member ran accepted known => keeps member ran accepted known)
+        removed
+      change syncer.group directory.path cached active pending #[directory.path] unlinked = .ok () keeperEntry at suffixBarrier
+      obtain ⟨suffixHandle, suffixIssued, loadedSuffix, syncedSuffix⟩ := syncer.rootGroupReturned suffixBarrier
+      obtain ⟨readRoot, _, readPending⟩ := effects.readsDirectory loadedSuffix
+      have sameRoot := Option.some.inj (readRoot.trans unlinkedCache.1)
+      subst suffixHandle
+      have pendingAtKeeper := (syncKeepsPending syncedSuffix).trans (readPending.trans unlinkedCache.2)
+      refine ⟨keeperEntry, ?_, pendingAtKeeper, keeperBarrier⟩
+      rw [ite_eq_right empty]
+      exact ⟨unlinked, suffixIssued, removed, loadedSuffix, syncedSuffix⟩
+  obtain ⟨keeperEntry, pruned, pendingAtKeeper, keeperBarrier⟩ := tail
+  change syncer.group directory.path cached active pending #[path] keeperEntry = .ok () reached at keeperBarrier
+  have selects {entries loaded} (read : syncer.readPending pending keeperEntry = .ok entries loaded) :
       entries.find? (fun item => item.1 == path) = some (path, keeper) := by
-    rw [readsPending read, pendingFromRemember]
+    rw [readsPending read, pendingAtKeeper, recordsKeeper remembered]
     simp [path, pushPending]
-  obtain ⟨entries, loaded, consumed, got, chosen, removed, synced⟩ :=
+  obtain ⟨entries, loaded, consumed, got, chosen, cleared, synced⟩ :=
     syncer.pendingGroupReturned (file_ne_directory directory (.walSegment plan.keeper)) selects keeperBarrier
-  exact ⟨issued, afterDirectory, entries, loaded, consumed, loadedRoot, syncedRoot, got, chosen, removed, synced⟩
+  exact ⟨rootIssued, authorized, keeperEntry, entries, loaded, consumed, loadedRoot, syncedRoot, pruned, got, chosen,
+    cleared, synced⟩
 
 end AlignedKeeperCacheCallbacks
 
