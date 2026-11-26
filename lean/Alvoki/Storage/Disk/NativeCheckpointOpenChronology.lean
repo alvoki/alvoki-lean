@@ -590,6 +590,33 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
 
 variable (source) in
+/-- Cleanup starts at the actual failed preparation. The same guard
+and cleanup callbacks carry the frame to the public diagnostic heap. -/
+theorem RawMarkedOpenInterpreter.finalizesMarkedPreparationError
+    {checked atCheckpoint workerReached : heap} {cause : IO.Error} {metadata : IO.FS.Metadata}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      allocation.afterPending = .ok () checked)
+    (marked : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) atCheckpoint)
+    (rejected : source.prepareMarkedRead directory allocation.pendingRef atCheckpoint = .error cause workerReached)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation workerReached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    {frame : heap → heap → Prop}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (guards : ∀ path, KeepsReadFrame frame (source.calls.lookup path))
+    (preparedFrame : frame atCheckpoint workerReached)
+    (cleanup : disposal.ScopeFrames finalized frame) :
+    source.openTable input entry = .error (disposal.diagnostic cause) finalized.reached ∧
+      frame entry finalized.reached := by
+  have stopped := source.workerRejectsPreparation directory raw.lock
+    (RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef)
+    allocation.directoryRef allocation.activeRef allocation.pendingRef flat marked rejected
+  have guarded := markedGuards_keepFrame (frame := frame) directory source.calls.lookup trans guards flat marked
+  exact ⟨disposal.returnsMarkedInterpreter source sameDisposal stopped finalized,
+    cleanup.preserves trans (trans guarded preparedFrame)⟩
+
+variable (source) in
 /-- A returned checkpoint read error follows the reached marked guards,
 then closes the cache and the owning lock. The same local effects frame
 any selected observation, at the heap returned to the caller. -/
@@ -613,14 +640,13 @@ theorem RawMarkedOpenInterpreter.framesCheckpointReadError
     (cleanup : disposal.ScopeFrames finalized frame) :
     source.openTable input entry = .error (disposal.diagnostic cause) finalized.reached ∧
       frame entry finalized.reached := by
-  have stopped := source.workerRejectsCheckpoint directory raw.lock
-    (RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef)
-    allocation.directoryRef allocation.activeRef allocation.pendingRef flat marked rejected
-  have guarded := markedGuards_keepFrame (frame := frame) directory source.calls.lookup trans guards flat marked
+  have failed : source.prepareMarkedRead directory allocation.pendingRef atCheckpoint = .error cause workerReached := by
+    simp only [RawMarkedOpenInterpreter.prepareMarkedRead, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
+      rejected]
   have readFrame := source.fileCalls.framesCheckpointRead directory refl trans reads stat atCheckpoint
   rw [rejected, reachedState] at readFrame
-  exact ⟨disposal.returnsMarkedInterpreter source sameDisposal stopped finalized,
-    cleanup.preserves trans (trans guarded readFrame)⟩
+  exact source.finalizesMarkedPreparationError flat marked failed disposal sameDisposal finalized (frame := frame)
+    trans guards readFrame cleanup
 
 /-- Scoped laws at the actual primitive callbacks of a rejected MANIFEST lookup. -/
 structure RawManifestStatError.CallbackFrames

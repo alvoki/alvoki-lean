@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedOpenPhaseFrame
+import Alvoki.Storage.Disk.NativeRawOpenPhaseFrame
 import Alvoki.Storage.Disk.NativeCheckpointReadReturn
 import Alvoki.Storage.Disk.NativeWalPayloadReturn
 
@@ -211,6 +211,41 @@ theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length :
     · exact .throw refl _
   · exact .throw refl _
 
+/-- Prepare the actual checkpoint and marker-bounded WAL with the same
+frame at their reached returns. Validation and replay are pure. -/
+theorem preparesMarked (directory : DiskDirectory)
+    {checkpoint : EStateM IO.Error heap (Option (PackedTable × UInt64))}
+    {readOptional : FilePath → EStateM IO.Error heap (Option ByteArray)}
+    {readWal : Nat → UInt64 → EStateM IO.Error heap (WalSegmentMarkerReads × Nat)}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (checkpointFrame : KeepsReadFrame frame checkpoint)
+    (markerFrame : KeepsReadFrame frame (readOptional (directory.file .walBoundary)))
+    (walFrame : ∀ watermark length, KeepsReadFrame frame (readWal watermark length)) :
+    KeepsReadFrame frame (prepareBoundedMarkedFromReaders directory checkpoint readOptional readWal) := by
+  unfold prepareBoundedMarkedFromReaders
+  apply checkpointFrame.bind trans
+  intro selected
+  apply markerFrame.bind trans
+  intro marker
+  cases marker with
+  | none => exact .throw refl _
+  | some bytes =>
+    apply (fromExcept (frame := frame) refl ((WAL.Boundary.decode bytes).mapError IO.userError)).bind trans
+    intro length
+    apply (walFrame (selected.getD (.empty, 0)).1.committed.toNat length).bind trans
+    rintro ⟨reads, keeperSize⟩
+    apply (fromExcept (frame := frame) refl
+      ((recoverMarkedWalSegments (selected.getD (.empty, 0)).1 length reads.files).mapError IO.userError)).bind trans
+    rintro ⟨_, table⟩
+    cases found : reads.files.getLast? with
+    | none =>
+      simpa only [MonadExcept.throw, throwThe] using
+        (KeepsReadFrame.throw (α := Plan × Reopened × Nat) refl (IO.userError "no WAL segment covers the commit marker"))
+    | some last =>
+      obtain ⟨keeper, bytes⟩ := last
+      exact .pure refl _
+
 end KeepsReadFrame
 
 namespace KeepsPhase
@@ -288,6 +323,18 @@ theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length :
     directory watermark length (fun _ => rfl) (fun a b => b.trans a)
     lists.asReadFrame (fun path => (stats path).asReadFrame)
     (fun path count => (seals path count).asReadFrame) (fun path count size => (keepers path count size).asReadFrame))
+
+theorem preparesMarked (directory : DiskDirectory)
+    {checkpoint : EStateM IO.Error heap (Option (PackedTable × UInt64))}
+    {readOptional : FilePath → EStateM IO.Error heap (Option ByteArray)}
+    {readWal : Nat → UInt64 → EStateM IO.Error heap (WalSegmentMarkerReads × Nat)}
+    (checkpointFrame : KeepsPhase observe checkpoint)
+    (markerFrame : KeepsPhase observe (readOptional (directory.file .walBoundary)))
+    (walFrame : ∀ watermark length, KeepsPhase observe (readWal watermark length)) :
+    KeepsPhase observe (prepareBoundedMarkedFromReaders directory checkpoint readOptional readWal) :=
+  fromReadFrame (KeepsReadFrame.preparesMarked (frame := fun before after => observe after = observe before)
+    directory (fun _ => rfl) (fun a b => b.trans a) checkpointFrame.asReadFrame markerFrame.asReadFrame
+    (fun watermark length => (walFrame watermark length).asReadFrame))
 
 end KeepsPhase
 

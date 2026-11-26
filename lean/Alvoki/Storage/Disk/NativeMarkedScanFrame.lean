@@ -218,6 +218,40 @@ local notation "remember" => fun path handle =>
   AlignedKeeperCacheCallbacks.modifyPending (source.keeperCallbacks.withFileReads source.fileCalls)
     allocation.pendingRef (pushPending path handle)
 
+/-- Every ordinary error from the marked preparation carries its
+frame to the public return. This includes a failed marker callback,
+an absent or malformed marker, and rejected WAL reads or replay. -/
+theorem RawMarkedOpenInterpreter.framesMarkedPreparationError
+    {checked atCheckpoint workerReached : heap} {cause : IO.Error} {metadata : IO.FS.Metadata}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      allocation.afterPending = .ok () checked)
+    (marked : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) atCheckpoint)
+    (failed : source.prepareMarkedRead directory allocation.pendingRef atCheckpoint = .error cause workerReached)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation workerReached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (guards : ∀ path, KeepsReadFrame frame (source.calls.lookup path))
+    (stat : ∀ path, KeepsReadFrame frame (source.fileCalls.stat path))
+    (reads : source.fileCalls.ScopeFrames frame)
+    (listing : KeepsReadFrame frame (source.directoryCalls.run directory.path))
+    (remembers : ∀ path file, KeepsReadFrame frame (remember path file))
+    (cleanup : disposal.ScopeFrames finalized frame) :
+    source.openTable input entry = .error (disposal.diagnostic cause) finalized.reached ∧
+      frame entry finalized.reached := by
+  have keeps : KeepsReadFrame frame (source.prepareMarkedRead directory allocation.pendingRef) :=
+    KeepsReadFrame.preparesMarked directory refl trans
+      (source.fileCalls.framesCheckpointRead directory refl trans reads stat)
+      (source.fileCalls.readOptionalFrames reads refl trans stat directory (directory.file .walBoundary))
+      (fun watermark length => source.fileCalls.framesSelectedWal source.directoryCalls directory watermark length
+        refl trans reads listing stat remember remembers)
+  have preparedFrame := keeps atCheckpoint
+  rw [failed, reachedState] at preparedFrame
+  exact source.finalizesMarkedPreparationError flat marked failed disposal sameDisposal finalized (frame := frame)
+    trans guards preparedFrame cleanup
+
 /-- The reached WAL read error stops before repair and installation.
 The public diagnostic and scoped frame come from the cache disposal,
 unlock and lock release of that same failed worker. -/
@@ -251,23 +285,11 @@ theorem RawMarkedOpenInterpreter.framesSelectedWalReadError
     (cleanup : disposal.ScopeFrames finalized frame) :
     source.openTable input entry = .error (disposal.diagnostic cause) finalized.reached ∧
       frame entry finalized.reached := by
-  let cache := RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef
-  have stopped : source.worker allocation.directoryRef allocation.activeRef allocation.pendingRef directory raw.lock cache
-      allocation.afterPending = .error cause workerReached := by
-    simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, recoverSegmentedWalWith,
-      reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
-      flat, marked, Option.isSome_some, ↓reduceIte, checkpointRead, markerRead, decoded, Except.mapError,
-      liftExcept, Pure.pure, EStateM.pure, failed]
-  have guarded := markedGuards_keepFrame (frame := frame) directory source.calls.lookup trans guards flat marked
-  have restored := source.fileCalls.framesCheckpointSuccess directory refl trans reads stat checkpointRead
-  have marker := source.fileCalls.readOptionalFrames reads refl trans stat directory (directory.file .walBoundary)
-    afterCheckpoint
-  rw [markerRead, reachedState] at marker
-  have wal := source.fileCalls.framesSelectedWal source.directoryCalls directory
-    (checkpoint.getD (.empty, 0)).1.committed.toNat length refl trans reads listing stat remember remembers afterMarker
-  rw [failed, reachedState] at wal
-  exact ⟨disposal.returnsMarkedInterpreter source sameDisposal stopped finalized,
-    cleanup.preserves trans (trans guarded (trans restored (trans marker wal)))⟩
+  have rejected : source.prepareMarkedRead directory allocation.pendingRef atCheckpoint = .error cause workerReached := by
+    simp only [RawMarkedOpenInterpreter.prepareMarkedRead, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
+      checkpointRead, markerRead, decoded, Except.mapError, liftExcept, Pure.pure, EStateM.pure, failed]
+  exact source.framesMarkedPreparationError flat marked rejected disposal sameDisposal finalized (frame := frame)
+    refl trans guards stat reads listing remembers cleanup
 
 end FailedOpen
 

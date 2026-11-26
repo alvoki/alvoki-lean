@@ -76,6 +76,38 @@ noncomputable def finalizedAttempt
 
 end RawManifestStatError
 
+/-- The fixed marked worker's read and replay prefix at this attempt's
+allocated pending cell. Repair and installation follow this action. -/
+abbrev RawMarkedOpenInterpreter.prepareMarkedRead
+    (source : RawMarkedOpenInterpreter heap stream) (directory : DiskDirectory)
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : EStateM IO.Error heap (Plan × Reopened × Nat) :=
+  let sync := source.keeperCallbacks.withFileReads source.fileCalls
+  prepareBoundedMarkedFromReaders directory
+    (readIntegrityCheckpointSized directory (source.fileCalls.readOptional directory (directory.file .manifest))
+      source.fileCalls.runSize source.fileCalls.runPrefix)
+    (source.fileCalls.readOptional directory)
+    (fun watermark length => readSelectedWithCachedExtents directory watermark length source.directoryCalls.run
+      (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal (source.fileCalls.readKeeperWithRelease
+        (fun path handle => sync.modifyPending pending (SyncHandleRouting.pushPending path handle))))
+
+/-- Any ordinary error from the actual preparation reaches the worker
+return before repair or installation. -/
+theorem RawMarkedOpenInterpreter.workerRejectsPreparation
+    (source : RawMarkedOpenInterpreter heap stream)
+    (directory : DiskDirectory) (lock : IO.FS.Handle) (cache : DiskTable.OpenSyncFiles)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    {before checked atCheckpoint reached : heap} {metadata : IO.FS.Metadata} {cause : IO.Error}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      before = .ok () checked)
+    (marked : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) atCheckpoint)
+    (rejected : source.prepareMarkedRead directory pending atCheckpoint = .error cause reached) :
+    source.worker cached active pending directory lock cache before = .error cause reached := by
+  unfold RawMarkedOpenInterpreter.prepareMarkedRead at rejected
+  simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, recoverSegmentedWalWith,
+    reopenMarkedBoundedWithCachedExtents, Bind.bind, EStateM.bind, flat, marked, Option.isSome_some, ↓reduceIte, rejected]
+
 /-- The actual marked checkpoint error stops the worker at the read's
 return. Marker payload, WAL selection and installation have not run. -/
 theorem RawMarkedOpenInterpreter.workerRejectsCheckpoint
@@ -92,9 +124,9 @@ theorem RawMarkedOpenInterpreter.workerRejectsCheckpoint
       (source.fileCalls.readOptional directory (directory.file .manifest))
       source.fileCalls.runSize source.fileCalls.runPrefix atCheckpoint = .error cause reached) :
     source.worker cached active pending directory lock cache before = .error cause reached := by
-  simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, recoverSegmentedWalWith,
-    reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
-    flat, marked, Option.isSome_some, ↓reduceIte, rejected]
+  apply source.workerRejectsPreparation directory lock cache cached active pending flat marked
+  simp only [RawMarkedOpenInterpreter.prepareMarkedRead, prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind,
+    rejected]
 
 section FixedInterpreter
 

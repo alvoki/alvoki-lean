@@ -1,16 +1,10 @@
-import Alvoki.Storage.Disk.NativeRawOpenPhaseFrame
+import Alvoki.Storage.Disk.NativeSelectedReadPhaseFrame
 
 namespace Alvoki.Storage.DiskSession.KeepsPhase
 
 open System WalSegmentRepair
 
 variable {heap α : Type} {observe : heap → Option (Phase Installed)}
-
-private theorem fromExcept (result : Except IO.Error α) :
-    KeepsPhase observe (liftExcept result : EStateM IO.Error heap α) := by
-  cases result with
-  | ok value => exact .pure value
-  | error cause => exact .throw cause
 
 private theorem forM (items : List α) {perform : α → EStateM IO.Error heap Unit}
     (kept : ∀ item, KeepsPhase observe (perform item)) : KeepsPhase observe (items.forM perform) := by
@@ -34,38 +28,6 @@ theorem recoverSegmented
   cases found
   · exact bootstrapFrame
   · exact markedFrame
-
-/-- Preparation reads the selected checkpoint, marker and WAL. Its
-pure validation, replay and error branches cannot write a phase cell. -/
-theorem preparesMarked (directory : DiskDirectory)
-    {checkpoint : EStateM IO.Error heap (Option (PackedTable × UInt64))}
-    {readOptional : FilePath → EStateM IO.Error heap (Option ByteArray)}
-    {readWal : Nat → UInt64 → EStateM IO.Error heap (WalSegmentMarkerReads × Nat)}
-    (checkpointFrame : KeepsPhase observe checkpoint)
-    (markerFrame : KeepsPhase observe (readOptional (directory.file .walBoundary)))
-    (walFrame : ∀ watermark length, KeepsPhase observe (readWal watermark length)) :
-    KeepsPhase observe (prepareBoundedMarkedFromReaders directory checkpoint readOptional readWal) := by
-  unfold prepareBoundedMarkedFromReaders
-  apply checkpointFrame.bind
-  intro selected
-  apply markerFrame.bind
-  intro marker
-  cases marker with
-  | none => exact .throw _
-  | some bytes =>
-    apply (fromExcept ((WAL.Boundary.decode bytes).mapError IO.userError)).bind
-    intro length
-    apply (walFrame (selected.getD (.empty, 0)).1.committed.toNat length).bind
-    rintro ⟨reads, keeperSize⟩
-    apply (fromExcept ((recoverMarkedWalSegments (selected.getD (.empty, 0)).1 length reads.files).mapError IO.userError)).bind
-    rintro ⟨_, table⟩
-    cases found : reads.files.getLast? with
-    | none =>
-      simpa only [MonadExcept.throw, throwThe] using (KeepsPhase.throw (observe := observe)
-        (α := Plan × Reopened × Nat) (IO.userError "no WAL segment covers the commit marker"))
-    | some last =>
-      obtain ⟨keeper, bytes⟩ := last
-      exact .pure _
 
 /-- All reached replacement or prune steps keep the old cell when the
 actual remove, write, sync and rename callbacks keep it. -/
