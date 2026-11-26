@@ -221,6 +221,34 @@ private theorem singletonFrame
   obtain rfl := (EStateM.Result.error.inj (returned.symm.trans ran)).2
   exact framed
 
+/-- A rejected MANIFEST lookup supplies the actual failed call and its
+read-only frame for a checkpoint retry with any selected manifest. -/
+theorem RawManifestStatError.finalizesSelectedCheckpoint
+    (seen : RawManifestStatError (admitted := raw) allocation source.fileCalls)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation seen.reached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    (files : heap → CheckpointSurvivingFiles) (scope : FilePath → Prop)
+    (frames : seen.CallbackFrames disposal finalized (fun before after => (files before).Frames scope (files after))) :
+    let errors := [(input, disposal.diagnostic seen.cause)]
+    source.FailedCalls entry errors finalized.reached ∧
+    (∀ {prior : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
+      source.FailedCalls entry prior before → List.IsPrefix (prior ++ [(path, cause)]) errors →
+      source.openTable path before = .error cause after →
+      (files before).Frames scope (files after) ∧ (view.files after).image = (view.files before).image) := by
+  obtain ⟨failed, returned, diagnostic, reached, framed⟩ := seen.finalizesWithFrames disposal sameDisposal finalized
+    (fun earlier later => earlier.trans later) frames
+  obtain ⟨_, _, _, _, _, _, sameImage, _⟩ := failed.returns
+  have observed : source.openTable input entry = .error (disposal.diagnostic seen.cause) finalized.reached := by
+    rw [← diagnostic, ← reached]
+    exact returned
+  have effect : (files entry).Frames scope (files finalized.reached) ∧
+      (view.files finalized.reached).image = (view.files entry).image :=
+    ⟨framed, reached ▸ sameImage⟩
+  exact ⟨.next .empty input observed, fun prior within ran => singletonFrame
+    (frame := fun before after => (files before).Frames scope (files after) ∧
+      (view.files after).image = (view.files before).image) observed effect prior within ran⟩
+
 end FinalizedManifestLookup
 
 section ManifestRetry

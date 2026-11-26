@@ -17,12 +17,6 @@ def FreshCheckpointCut.step : FreshCheckpointCut → CheckpointPublication.Step
   | .firstRun => .syncRun 0
   | .runsDirectory => .syncRunsDirectory
 
-private theorem FreshCheckpointCut.early (cut : FreshCheckpointCut) :
-    cut.step = .syncRunsDirectory ∨ ∃ index, cut.step = .syncRun index := by
-  cases cut
-  · exact .inr ⟨0, rfl⟩
-  · exact .inl rfl
-
 section EarlyCut
 
 variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
@@ -319,13 +313,12 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterEarlyCheckpointStop
     source.openTable failedInput rebooted = .error diagnostic afterFailure ∧
     ∃ (batch : List WAL.Write) (next : NativeOpenedPosition opened.handle)
       (stop : NativeCheckpointSourceStop next primitives fsync cutStage.step reason stoppedAt)
-      (poisoned : opened.handle.contents stoppedAt.2 opened.handle.phase = some .poisoned)
-      (stable : NativeReadyStorage next.current.ready.state (filesObserved stoppedAt.2).storageObservation),
-      let ending := NativeExecutionEnd.stoppedEarlyCheckpoint
-        (storage := fun atHeap => (filesObserved atHeap).storageObservation) rfl stop cutStage.early poisoned stable
+      (poisoned : opened.handle.contents stoppedAt.2 opened.handle.phase = some .poisoned),
+      let ending := NativeExecutionEnd.stoppedCheckpoint rfl stop poisoned
       next.reached = reached ∧ next.current.history = batch ∧ ending.Reached ∧
       (∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions next.current.ready.reads chosen ∧
         ∀ read ∈ next.current.ready.reads, read.BoundedBy chosen.length) ∧
+      NativeReadyStorage next.current.ready.state (filesObserved stoppedAt.2).storageObservation ∧
       ∃ (crash : NativeReadyQuietCrash next.current.ready.state)
         (handle : NativeOpenedHandle heap) (start last : NativeOpenedPosition handle)
         (events : List NativeExecutionEvent) (reference : SnapshotTable UInt64),
@@ -370,15 +363,14 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterEarlyCheckpointStop
     exact physical.physical
   have stable : NativeReadyStorage next.current.ready.state (filesObserved stoppedAt.2).storageObservation := by
     simpa only [storageObservation_cast] using cut.storageAtStop initial
-  have terminal := stop.refinesTerminalLedger (storage := fun atHeap => (filesObserved atHeap).storageObservation)
-    cutStage.early stable cut.returnedKeeps cut.stoppedKeeps ledger
+  have terminal := stop.refinesTerminalLedger cut.returnedKeeps cut.stoppedKeeps ledger
   obtain ⟨retry⟩ := retryEffects next atNext stable
   obtain ⟨boot, denied, handle, start, last, events, reference, reopened, calls, subsequent, replay, observed, _⟩ :=
     retry.readsLatest stop snapshot compares
   have combined := ledger.append subsequent
   have final := opened.refinesLedger combined
-  refine ⟨actual, wrote, denied, batch, next, stop, stop.phaseAtStop cut.returnedKeeps cut.stoppedKeeps, stable,
-    atNext, whole, terminal.2.1, terminal.2.2, _, handle, start, last, events, reference, rfl, rfl, boot, reopened, calls,
+  refine ⟨actual, wrote, denied, batch, next, stop, stop.phaseAtStop cut.returnedKeeps cut.stoppedKeeps,
+    atNext, whole, terminal.2.1, terminal.2.2, stable, _, handle, start, last, events, reference, rfl, rfl, boot, reopened, calls,
     combined, whole ▸ replay, ?_, final.2.2.2⟩
   simpa only [reads, List.nil_append] using observed
 

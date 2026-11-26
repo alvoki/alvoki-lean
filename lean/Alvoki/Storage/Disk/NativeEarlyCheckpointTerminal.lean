@@ -34,22 +34,19 @@ variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpene
   {stage : CheckpointPublication.Step} {reason : FilePath} {reached : CheckpointWorld heap}
   (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
 
-/-- The exact source stop is a terminal endpoint on the current writer. -/
-def terminalEnd {storage : heap → CheckpointStorageObservation}
-    (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
-    (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
+/-- The exact source stop is a terminal endpoint on the current writer.
+The issued stage indexes the call. Recovery proves what survives separately. -/
+def terminalEnd
     (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
       (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
         fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
       opened.contents after.2 opened.phase = opened.contents before.2 opened.phase)
     (stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase) :
     NativeExecutionEnd current.current :=
-  .stoppedEarlyCheckpoint rfl stop early (stop.phaseAtStop returnedKeeps stoppedKeeps) stable
+  .stoppedCheckpoint rfl stop (stop.phaseAtStop returnedKeeps stoppedKeeps)
 
 /-- Use the same terminal endpoint for a modeled finite prefix. -/
-def terminalPrefix {storage : heap → CheckpointStorageObservation}
-    (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
-    (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
+def terminalPrefix
     (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
       (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
         fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
@@ -58,22 +55,20 @@ def terminalPrefix {storage : heap → CheckpointStorageObservation}
     (ordered : NativeExecutionInstructions instructions events)
     (prior : NativeExecutionTrace start events current.current) :
     NativeReachedExecutionPrefix start instructions .checkpoint :=
-  let ending := stop.terminalEnd early stable returnedKeeps stoppedKeeps
+  let ending := stop.terminalEnd returnedKeeps stoppedKeeps
   ⟨events, current.current, ending, ordered, prior, rfl, ending.reached⟩
 
 /-- The reached source endpoint also refines a ledger proved directly
 from raw acknowledgements and reads. -/
-theorem refinesTerminalLedger {storage : heap → CheckpointStorageObservation}
+theorem refinesTerminalLedger
     {start : NativeExecutionPosition} {events : List NativeExecutionEvent}
-    (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
-    (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
     (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
       (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
         fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
       opened.contents after.2 opened.phase = opened.contents before.2 opened.phase)
     (stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase)
     (prior : start.LedgerSuffix events current.current) :
-    let ending := stop.terminalEnd early stable returnedKeeps stoppedKeeps
+    let ending := stop.terminalEnd returnedKeeps stoppedKeeps
     (∀ event ∈ events, event.uncertainBatchWhole) ∧ ending.Reached ∧
     ∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions current.current.ready.reads chosen ∧
       ∀ read ∈ current.current.ready.reads, read.BoundedBy chosen.length := by

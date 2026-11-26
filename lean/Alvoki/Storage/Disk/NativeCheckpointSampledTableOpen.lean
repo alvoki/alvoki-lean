@@ -1,10 +1,13 @@
 import Alvoki.Storage.Disk.NativeCheckpointFinalManifest
 import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
+import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication WalSegmentRepair SyncHandleRouting
 open WAL.Boundary (CheckpointRepresentsPrefix WalInodeImage)
+open Sequential (SnapshotTable)
 
 variable {heap stream : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
@@ -14,17 +17,16 @@ local notation "dbDir" => current.current.ready.state.session.directory
 local notation "ready" => current.current.ready
 
 variable {view : OpenCloseHeapView heap FileImage}
-  {entry : heap} {input : FilePath} {source : RawMarkedOpenInterpreter heap stream}
+  {rebooted entry : heap} {input : FilePath} {source : RawMarkedOpenInterpreter heap stream}
   {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
   {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
   {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
   {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
   {ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool}
 
-/-- From the one selected final checkpoint image, the healthy aligned
-source open acquires the same directory and LOCK, reads the sampled
-manifest, runs and WAL, and returns the exact replayed table. Each
-local filesystem observation refers to its reached callback heap. -/
+/-- A reboot restores a sampled final checkpoint image. Scoped effects
+carry it across the actual failed calls to the healthy aligned opener,
+which reads the same files and returns the exact replayed table. -/
 theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
@@ -34,8 +36,10 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     (contents : Nat → ByteArray)
     (sampled : ∀ path, path = (dbDir).file .manifest ∨ storage.scope path →
       ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode)
-    (namesAt : heap → FilePath → Option Nat)
-    (entryKeeps : ∀ path, path = (dbDir).path ∨ path = (dbDir).file .lock → namesAt entry path = names path)
+    (namesAt : heap → FilePath → Option Nat) (bytesAt : heap → Nat → ByteArray)
+    (resetCensus : (view.descriptors rebooted).slots = [])
+    (resetLock : (view.files rebooted).owners ((dbDir).file .lock) = none)
+    {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
     (effects : OpenPhaseCellEffects view.phase get set) :
     let dir := dbDir
     let state := (ready).state
@@ -46,6 +50,16 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     let retry : LockedFileState FileImage :=
       ⟨wal.checkpointReopenFiles wal.directory none, state.files.owners.set (dir.file .lock) none⟩
     let vacant : TryLockObserves retry.owners dir (.ok true) := fun _ => by simp [retry, LockOwners.set]
+    let selectedPath : FilePath → Prop := fun path =>
+      path = dir.path ∨ path = dir.file .lock ∨ checkpointSurvivorPath dir state.writer pair.manifest path
+    let filesAt : heap → CheckpointSurvivingFiles := fun heap =>
+      ⟨namesAt heap, fun inode => [bytesAt heap inode]⟩
+    let checkpointFiles : CheckpointSurvivingFiles := ⟨names, fun inode => [contents inode]⟩
+    (checkpointFiles.Frames selectedPath (filesAt rebooted)) →
+    (∀ {prior : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
+      source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(path, cause)]) errors →
+      source.openTable path before = .error cause after →
+      (filesAt before).Frames selectedPath (filesAt after) ∧ (view.files after).image = (view.files before).image) →
     (∀ (published : Image) (layout : CanonicalKeeperLayout retry.image state.writer.history),
       Prepared retry.image layout.target layout.plan →
       ∀ {checkpoint}, ∀ selected : SelectedIntegrityCheckpoint ({ published with durable := actual } : Image).durable
@@ -70,6 +84,10 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
       (next : NativeReadPosition current.current.history current.current.submissions)
       (returned : raw.ReturnedAt next source.remove write source.rename source.bootstrap
         RawMarkedOpenInterpreter.assemble get set ptrEq),
+      (view.descriptors rebooted).slots = [] ∧
+      (view.files rebooted).owners (dir.file .lock) = none ∧
+      (view.files rebooted).image = retry.image ∧
+      checkpointFiles.Frames selectedPath (filesAt entry) ∧
       view.files entry = retry ∧
       source.openTable input entry = .ok returned.handle.table returned.start.reached ∧
       (view.handle raw.seed.afterPending raw.seed.handle).1.inode
@@ -90,11 +108,34 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
         opening.ReadsSample contents (dir.file (.walSegment segment.first)) segment.bytes) ∧
       returned.start.current.ready.state.writer.checkpoint = checkpoint ∧
       returned.start.current.ready.reads = (ready).reads ∧
+      current.current.LedgerSuffix [] returned.start.current ∧
       recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode current.current.history) =
         .ok returned.start.current.ready.state.writer.installed.table ∧
       InstalledClientReplay current.current.submissions (ready).reads current.current.history
-        returned.start.current.ready.state.writer.installed returned.start.current.ready.state.session := by
-  intro dir state pair wal actual retry vacant observeReads
+        returned.start.current.ready.state.writer.installed returned.start.current.ready.state.session ∧
+      (∀ {α : Type} (request : SnapshotReadRequest α),
+        (∀ {event after}, (NativeOpenedReport.acquire (start := returned.start)).Reached event after →
+          ptrEq returned.handle.token returned.handle.token after.reached = .ok true after.reached) →
+        ∃ (last : NativeOpenedPosition returned.handle) (events : List NativeExecutionEvent)
+          (reference : SnapshotTable UInt64),
+          NativeOpenedTrace returned.start [.acquire, .readAt returned.start.pins.length request] events last ∧
+          current.current.LedgerSuffix events last.current ∧
+          SnapshotWalReplay .empty current.current.history reference ∧
+          last.current.ready.reads = (ready).reads ++
+            [request.record returned.start.current.ready.state.writer.installed.table.committed
+              (request.replay reference returned.start.current.ready.state.writer.installed.table.committed)] ∧
+          ∀ read ∈ last.current.ready.reads, read.agrees reference) := by
+  intro dir state pair wal actual retry vacant selectedPath filesAt checkpointFiles reset each observeReads
+  obtain ⟨sameFilesAt, sameImage⟩ := attempts.framesAfter .empty
+    (fun before after => (filesAt before).Frames selectedPath (filesAt after) ∧
+      (view.files after).image = (view.files before).image)
+    (fun _ => ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, rfl⟩)
+    (fun earlier later => ⟨earlier.1.trans later.1, later.2.trans earlier.2⟩)
+    (fun prior inside returned => each prior (by simpa only [List.nil_append] using inside) returned)
+  have survivor := reset.trans sameFilesAt
+  have entryKeeps : ∀ path, path = dir.path ∨ path = dir.file .lock → namesAt entry path = names path := by
+    intro path authority
+    exact (survivor path (authority.imp_right Or.inl)).1
   obtain ⟨authority, marker, segments, published, layout, _, walLayout, walValid, keeper, aligned,
     descriptors, offsets, prepared, _, accepted, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ :=
     stop.replaysSampledFinalCheckpoint inodes runs observe storage names chosen contents sampled
@@ -129,8 +170,20 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     raw.returnsSelectedFromFixedInterpreter sameFiles sameDirectory sameKeeper prepared following accepted
       prior.retained.resumed.ordered walLayout walValid prior.retained.spans rfl first rfl
       history pending (ready).readPrefix.readsBounded write effects ptrEq
-  exact ⟨published, layout, checkpoint, selected, opening, chronology, raw, next, returned,
+  have unchanged : current.current.LedgerSuffix [] returned.start.current :=
+    ⟨by rw [returned.position]; simp, by rw [returned.position]; simp, by simpa using priorReads, by simp⟩
+  refine ⟨published, layout, checkpoint, selected, opening, chronology, raw, next, returned,
+    resetCensus, resetLock, sameImage.symm.trans (congrArg LockedFileState.image raw.raw.entryFiles), survivor,
     raw.raw.entryFiles, opened, captures.1, captures.2, missing, manifestRead, markerRead, runRead, walReads,
-    selectedAgain, priorReads, replay, ledger⟩
+    selectedAgain, priorReads, unchanged, replay, ledger, ?_⟩
+  intro α request compareAtAcquire
+  obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, snapshotReplay, agrees⟩ :=
+    returned.start.acquiresAndReadsLatest request (fun reached => by
+      rw [returned.comparesTokens]
+      exact compareAtAcquire reached)
+  have sameHistory : returned.start.current.history = current.current.history := by rw [returned.position]
+  refine ⟨last, _, reference, calls, ?_, sameHistory ▸ snapshotReplay, ?_, agrees⟩
+  · simpa only [List.nil_append] using unchanged.append calls.common.ledgerSuffix
+  · rwa [priorReads] at reads
 
 end Alvoki.Storage.DiskSession

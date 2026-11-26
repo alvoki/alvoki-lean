@@ -1,16 +1,24 @@
 # Current handoff
 
-The healthy aligned `DiskTable.open` after a final checkpoint directory-fsync stop now
-returns the exact table recovered from the sampled manifest and WAL. One selected crash
-image supplies the manifest, the runs it names, the marker, the keeper and all required
-sealed segments. The held reader identifies the same directory, LOCK and file inodes.
-The fixed source interpreter returns the table with its actual phase and token
-allocations and preserves the earlier client read ledger. The old manifest, including
-absence, and the new manifest use the same recovery proof. The local filesystem effects
-and healthy open observations are explicit premises. The next composition connects this
-return to finalized failed attempts, a new write and an actual snapshot in the common
-execution trace.
-[Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
+After the final checkpoint directory-fsync stop, one chosen crash image supplies
+the manifest, selected runs and WAL. The reboot contract restores exactly that
+footprint with an empty descriptor census and a vacant lock. The fixed opener's
+actual failed returns carry the footprint to the next entry, where the aligned
+reader acquires the same directory and LOCK and returns the exact replayed table.
+A failed MANIFEST lookup supplies this frame from its reached callbacks and
+cleanup. The same returned handle can acquire and read the latest snapshot with
+its own token, extending the existing client ledger. The theorem covers both
+manifest generations and an absent prior manifest. It assumes the scoped reboot
+and callback effects and observes the healthy aligned route. A subsequent write
+and retries that mutate the selected image remain separate obligations.
+[Selected reboot and snapshot](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
+
+The source checkpoint stop has one terminal case for every reached stage.
+The source call and poisoned phase identify the stop, and the existing
+client ledger supplies its logical replay. The early recovery proof carries
+the earlier physical storage separately, and later recovery uses the
+sampled manifest and each file it selects.
+[Terminal checkpoint stop](../lean/Alvoki/Storage/Disk/NativeEarlyCheckpointTerminal.lean)
 
 At a final manifest-directory stop, the source prefix now identifies each
 new run write and the returned file fsync on its remembered handle. Local

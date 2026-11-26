@@ -347,9 +347,6 @@ def stopsAfterWrites {last : NativeOpenedPosition opened.handle} {requests : Lis
     {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
     {stage : Step} {reason : FilePath} {reached : CheckpointWorld heap}
     (stop : NativeCheckpointSourceStop last primitives fsync stage reason reached)
-    {storage : heap → CheckpointStorageObservation}
-    (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
-    (stable : NativeReadyStorage last.current.ready.state (storage reached.2))
     (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
       (primitives.checkpointStepUntilStop last.current.ready.state.session.directory
         fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
@@ -357,7 +354,7 @@ def stopsAfterWrites {last : NativeOpenedPosition opened.handle} {requests : Lis
     (stoppedKeeps : opened.handle.contents reached.2 opened.handle.phase =
       opened.handle.contents stop.atIssue.2 opened.handle.phase) :
     NativeReachedExecutionPrefix opened.start.current (requests.map NativeExecutionInstruction.write) .checkpoint :=
-  stop.terminalPrefix early stable returnedKeeps stoppedKeeps (trace.writeInstructions rfl) trace.common
+  stop.terminalPrefix returnedKeeps stoppedKeeps (trace.writeInstructions rfl) trace.common
 
 end FreshBootstrapOpenHeap.Returned
 end Alvoki.Storage.DiskSession

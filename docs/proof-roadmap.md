@@ -116,10 +116,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   table returned by the fixed marked opener. One reached storage observation
   supplies the terminal ledger and the admitted reboot. The failed MANIFEST
   open precedes the successful aligned retry at its exact cleanup heap. Both
-  early stops share the terminal and recovery proofs. At the last directory-fsync
-  stop, the healthy aligned opener reads the manifest, runs and WAL from the same
-  chosen sample and returns the exact replayed table. Composition with the reboot
-  heap, prior failed attempts and a subsequent snapshot remains open.
+  early stops share the terminal and recovery proofs. The same terminal
+  case now applies to every source stage, leaving physical survival to
+  recovery. At the last directory-fsync stop, the chosen file sample is
+  preserved through the reboot and actual read-only failed calls. The
+  aligned opener returns the exact replayed table, and its own token
+  supplies a later snapshot on the same ledger.
   [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean) ·
   [Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
@@ -892,16 +894,17 @@ A returned checkpoint manifest rename error now starts from the actual native re
 
 A reported power loss after a returned checkpoint manifest rename error can now lead directly to a healthy aligned open. The same reported crash namespace selects either the old manifest inode or the synced replacement inode. Every selected manifest and run payload follows from that map and the durable bytes of the reached rename. The protected WAL observations use that same map. The opener starts with an empty descriptor census, reads the selected files and returns a fresh table whose checkpoint generation matches the survivor. It preserves the acknowledged history and earlier reads. The proof uses reported crash choices, stable directory and lock bindings and healthy open callbacks. [Reboot after checkpoint manifest rename error](../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameReboot.lean)
 
-The healthy aligned `DiskTable.open` after a final checkpoint directory-fsync stop now
-returns the exact table recovered from the sampled manifest and WAL. One selected crash
-image supplies the manifest, the runs it names, the marker, the keeper and all required
-sealed segments. The held reader identifies the same directory, LOCK and file inodes.
-The fixed source interpreter returns the table with its actual phase and token
-allocations and preserves the earlier client read ledger. The old manifest, including
-absence, and the new manifest use the same recovery proof. The local filesystem effects
-and healthy open observations are explicit premises. The next composition connects this
-return to finalized failed attempts, a new write and an actual snapshot in the common
-execution trace. [Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
+After the final checkpoint directory-fsync stop, one chosen crash image supplies
+the manifest, selected runs and WAL. The reboot contract restores exactly that
+footprint with an empty descriptor census and a vacant lock. The fixed opener's
+actual failed returns carry the footprint to the next entry, where the aligned
+reader acquires the same directory and LOCK and returns the exact replayed table.
+A failed MANIFEST lookup supplies this frame from its reached callbacks and
+cleanup. The same returned handle can acquire and read the latest snapshot with
+its own token, extending the existing client ledger. The theorem covers both
+manifest generations and an absent prior manifest. It assumes the scoped reboot
+and callback effects and observes the healthy aligned route. A subsequent write
+and retries that mutate the selected image remain separate obligations. [Selected reboot and snapshot](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 A restart after a returned checkpoint manifest rename error can reach one or more reported rejected opens before the healthy aligned open. The rejected-open lineage starts at the exact reported crash image and empty reboot descriptor inventory. When the final disposal leaves the lock available, the lineage proves that it kept the chosen files and inode map. The aligned open starts at the descriptor inventory left by the last rejection and reads the chosen crash bindings and durable bytes. It returns the matching checkpoint generation and preserves the acknowledged history and earlier reads. The proof uses the supported rejection callbacks, observed disposal and healthy final open callbacks. [Retry after rejected checkpoint open](../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameRetry.lean)
 
