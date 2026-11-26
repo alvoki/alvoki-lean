@@ -46,9 +46,8 @@ variable {heap stream : Type} {state : NativeReadyState} {input : FilePath} {dir
   {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
   {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
 
-/-- The exact post-reboot admission reacquires the prior directory and
-LOCK inodes at the names retained across the failed attempts. The raw
-handles belong to the new admission. -/
+/-- The actual admission's new handles reacquire the prior directory and
+LOCK inodes through the chosen sample and the observed entry names. -/
 theorem RawAlignedCheckpointReopenEffects.capturesRebootAuthority
     (raw : RawAlignedCheckpointReopenEffects opening chronology view calls init entry phaseIdentity tokenIdentity
       allocatePhase allocateToken stream)

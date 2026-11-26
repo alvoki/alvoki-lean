@@ -116,11 +116,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   table returned by the fixed marked opener. One reached storage observation
   supplies the terminal ledger and the admitted reboot. The failed MANIFEST
   open precedes the successful aligned retry at its exact cleanup heap. Both
-  early stops share the terminal and recovery proofs. The last directory-fsync
-  has a scoped physical-to-model manifest selection and samples settled files
-  from the same chosen map. The exact reopen still has to consume the chosen
-  manifest, run and WAL files together.
-  [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
+  early stops share the terminal and recovery proofs. At the last directory-fsync
+  stop, the healthy aligned opener reads the manifest, runs and WAL from the same
+  chosen sample and returns the exact replayed table. Composition with the reboot
+  heap, prior failed attempts and a subsequent snapshot remains open.
+  [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean) ·
+  [Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 - [ ] **Derive an integrated execution proof from fresh state.** Start with the ordered primitive returns and interruptions of the production schedules under the filesystem contract. Derive coverage and invariant preservation for each admitted step, including the exact returned value or error for a completed call and the reached state for an interrupted or still-running call. Connect fresh admission and terminal prefixes with one induction that reuses the existing replay. Exercise an acknowledged batch followed by an uncertain batch and independent retry attempts. [Raw open return classifier](../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean) · [Current opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
