@@ -542,16 +542,14 @@ and the physical entry used by later writes. Admission still depends
 on the observed lock state.
 [Ready writer from aligned retry](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
-The late WAL publication proof derives the public `commitUnknown`
-return from the actual prepared write and its failed commit callback.
-The reported reboot samples that exact failure heap. The selected
-history and ready replay follow through the same retry prefix, using
-the original write request and public diagnostic in the ledger. The
-source proof covers marker rename and final directory sync errors
-with one selected-recovery continuation. Its write entry and the new
-table's own pin carry an observed acknowledgement and snapshot into
-the same ledger. The continuation also extends the checkpoint and
-grouped-write ledgers.
+A write returning `commitUnknown` can have stopped before or after the two files
+were synced. If marker rename reports an error, its filesystem effect determines
+which inode is live. After a successful rename, a failed cache lookup or an
+empty cache ends the barrier before fsync. The old marker can still survive with its old bytes.
+If the lookup returned a handle, the proof uses the effect of the fsync on that
+handle. An effective sync settles the new marker even if it reports an error.
+Both late paths supply the keeper and marker choices at the failed write's
+heap. The reboot proof samples one joint choice and hands it to recovery.
 [Late write and ready recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
 Read-only failures frame the keeper they enter with. A repair failure

@@ -4050,8 +4050,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootBarrierResult
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedWalPayloadsFromPublication
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedMarkerRenameSelects
-#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedRootSyncSelects
+#check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selections.frameCacheRead
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedRootSyncFromPublication
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reachedLatePublicationPayloads
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write

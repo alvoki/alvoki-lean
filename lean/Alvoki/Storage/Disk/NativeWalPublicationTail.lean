@@ -50,6 +50,39 @@ structure Selections (payloads : WalPublicationPayloads) (directory : DiskDirect
   survivors : ∀ names ∈ atHeap.crashNames, ∃ published,
     allows published ∧ payloads.Selection directory first atHeap names published
 
+/-- A cache read preserves the two publication paths in the live map
+and in one preceding map for each survivor. The old marker may be
+named only in that preceding crash map. -/
+structure CacheReadFrame (directory : DiskDirectory) (first : Nat)
+    (before reached : CheckpointStorageObservation) : Prop where
+  live : before.files.Frames
+    (fun path => path = directory.file (.walSegment first) ∨ path = directory.file .walBoundary) reached.files
+  survivors : ∀ names ∈ reached.crashNames, ∃ prior ∈ before.crashNames,
+    (⟨prior, before.files.bytes⟩ : CheckpointSurvivingFiles).Frames
+      (fun path => path = directory.file (.walSegment first) ∨ path = directory.file .walBoundary)
+      ⟨names, reached.files.bytes⟩
+
+theorem Selections.frameCacheRead {payloads : WalPublicationPayloads} {directory : DiskDirectory} {first : Nat}
+    {before reached : CheckpointStorageObservation} {liveNew : Bool} {allows : Bool → Prop}
+    (selected : payloads.Selections directory first before liveNew allows)
+    (frame : CacheReadFrame directory first before reached) :
+    payloads.Selections directory first reached liveNew allows := by
+  have transfer {names prior : FilePath → Option Nat} {published : Bool}
+      (kept : (⟨prior, before.files.bytes⟩ : CheckpointSurvivingFiles).Frames
+        (fun path => path = directory.file (.walSegment first) ∨ path = directory.file .walBoundary)
+        ⟨names, reached.files.bytes⟩)
+      (one : payloads.Selection directory first before prior published) :
+      payloads.Selection directory first reached names published := by
+    obtain ⟨keeper, keeperBytes⟩ := kept _ (.inl rfl)
+    obtain ⟨marker, markerBytes⟩ := kept _ (.inr rfl)
+    exact ⟨keeper.trans one.keeperNamed, (keeperBytes _ one.keeperNamed).trans one.keeperStored,
+      marker.trans one.markerNamed, (markerBytes _ one.markerNamed).trans one.markerStored⟩
+  refine ⟨transfer frame.live selected.live, ?_⟩
+  intro names survives
+  obtain ⟨prior, possible, same⟩ := frame.survivors names survives
+  obtain ⟨published, allowed, one⟩ := selected.survivors prior possible
+  exact ⟨published, allowed, transfer same one⟩
+
 end WalPublicationPayloads
 
 /-- Observed binding update of a same-directory marker replacement. -/
@@ -142,60 +175,4 @@ theorem WalRootSyncEffect.selects {directory : DiskDirectory} {first : Nat}
     exact ⟨true, rfl, transfer (.inr survives)
       (fun file => (effect.settled applied names survives file).trans (effect.visible file)) renamed.live⟩
 
-namespace RawSyncCalls
-
-variable {heap : Type} {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
-  (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
-  (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap)
-  (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-
-local notation "append" => appender.run cache.active
-local notation "stage" => stager.run cache.pending
-local notation "sync" => calls.group directory.path cache.directory cache.active cache.pending
-local notation "source" => directory.file DiskFile.stagedWalBoundary
-local notation "marker" => directory.file DiskFile.walBoundary
-
-/-- The successful rename and original cached directory cell select
-one literal final fsync. A reported error can follow settlement, in
-which case each joint survivor has the new marker and full keeper. -/
-theorem failedRootSyncSelects {image : Type} {first count : Nat} {bytes : ByteArray}
-    {entry appended staged grouped renamed issued reached : heap} {handle : IO.FS.Handle}
-    {cause : IO.Error} {effective : Bool} (storage : heap → CheckpointStorageObservation)
-    (view : OpenCloseHeapView heap image) (payloads : WalPublicationPayloads)
-    (wrote : append (directory.file (.walSegment first)) bytes entry = .ok () appended)
-    (remembered : stage source (WAL.Boundary.encode count.toUInt64) appended = .ok () staged)
-    (synced : sync #[directory.file (.walSegment first), source] staged = .ok () grouped)
-    (moved : rename source marker grouped = .ok () renamed)
-    (loaded : calls.readDirectory cache.directory renamed = .ok (some handle) issued)
-    (failed : calls.fsync handle issued = .error cause reached)
-    (target : RawFsyncTarget view renamed issued handle)
-    (root : (storage renamed).files.names directory.path =
-      some ((view.handle renamed handle).1.inode (view.handle renamed handle).2.1.description))
-    (selected : payloads.Grouped directory first (storage grouped))
-    (renameEffect : WalMarkerRenameEffect directory payloads.newMarker true (storage grouped) (storage renamed))
-    (loadKeeps : storage issued = storage renamed)
-    (syncEffect : calls.fsync handle issued = .error cause reached →
-      (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
-      (storage issued).files.names directory.path =
-        some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
-      WalRootSyncEffect directory effective (storage issued) (storage reached)) :
-    commitBytesAt directory first bytes count append stage sync rename entry =
-      .error (IO.userError s!"sync failed for '{directory.path}': {cause}") reached ∧
-    payloads.Selections directory first (storage reached) true (fun published => effective = true → published = true) := by
-  have issuedRoot : (storage issued).files.names directory.path =
-      some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) := by
-    rw [loadKeeps, target.inode]
-    exact root
-  have effect := syncEffect failed target.live issuedRoot
-  have renamedSelection := renameEffect.selects selected
-  rw [← loadKeeps] at renamedSelection
-  obtain ⟨live, survivors⟩ := effect.selects renamedSelection
-  refine ⟨?_, live, fun names allowed => ?_⟩
-  · rw [calls.commitAfterRename cache appender stager rename wrote remembered synced moved loaded, failed]
-  · obtain ⟨published, possible, stored⟩ := survivors names allowed
-    refine ⟨published, ?_, stored⟩
-    intro applied
-    simpa only [applied, ite_true] using possible
-
-end RawSyncCalls
 end Alvoki.Storage.DiskSession

@@ -10,6 +10,18 @@ open System CheckpointPublication SyncHandleRouting WalSegmentCommit WalSegmentR
 open WAL.Boundary (WalInodeImage)
 open Sequential (SnapshotTable)
 
+/-- The file group is the append, staging write and grouped sync
+already executed by the commit schedule before marker rename. -/
+noncomputable def RawSyncCalls.publicationFileGroup
+    {heap : Type} {files : DiskTable.OpenSyncFiles} {directory : DiskDirectory}
+    (calls : RawSyncCalls heap) (cache : OpenSyncCacheRefs files directory.path)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap)
+    (first count : Nat) (bytes : ByteArray) : EStateM IO.Error heap Unit := do
+  appender.run cache.active (directory.file (.walSegment first)) bytes
+  stager.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
+  calls.group directory.path cache.directory cache.active cache.pending
+    #[directory.file (.walSegment first), directory.file .stagedWalBoundary]
+
 section
 
 variable {heap stream : Type} {opened : NativeOpenedHandle heap}
@@ -26,6 +38,81 @@ local notation "append" => appender.run cache.active
 local notation "stage" => stager.run cache.pending
 local notation "sync" => syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending
 local notation "storageNames" => fun atHeap => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage atHeap))
+
+/-- Classify the publication tail from the public return of the issued
+write. The local effects apply only after the reached file group, at
+the literal rename or returned directory-barrier error. -/
+theorem NativeOpenedPosition.reachedLatePublicationPayloads
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView dir (inodes atHeap) (runs atHeap))
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    {cause : IO.Error} {failed : heap} (nonempty : request.rows ≠ [])
+    (returned : request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
+      .error (.commitUnknown cause) failed)
+    (initial : NativeReadyStorage state (observe current.reached).storageObservation)
+    (effects : ∀ {batch : List WAL.Write} {table guarded poisoned appended staged grouped},
+      prepareBatch (installed).table request.rows = some (batch, table) →
+      checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded →
+      opened.set opened.phase .poisoned guarded = .ok () poisoned →
+      append ((dir).file (.walSegment (installed).activeFirst)) (WAL.encodeBatch batch) poisoned = .ok () appended →
+      stage ((dir).file .stagedWalBoundary)
+        (WAL.Boundary.encode ((installed).walBytes + WAL.frameSize * request.rows.length).toUInt64)
+        appended = .ok () staged →
+      sync #[((dir).file (.walSegment (installed).activeFirst)), ((dir).file .stagedWalBoundary)] staged = .ok () grouped →
+      (observe current.reached).storageObservation.Frames (state).crashPath (observe poisoned).storageObservation ∧
+      syncer.WalGroupEffects cache view appender stager inodes observe inode buffered (installed).activeFirst
+        ((installed).walBytes + WAL.frameSize * request.rows.length) (state).writer.wal.active.bytes
+        (WAL.encodeBatch batch) poisoned appended staged grouped ∧
+      (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .error cause failed →
+        ∃ effective : Bool, ∀ marker, (observe grouped).visible ((dir).file .stagedWalBoundary) = some marker →
+          WalMarkerRenameEffect dir marker effective (observe grouped).storageObservation (observe failed).storageObservation) ∧
+      (∀ {renamed}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .ok () renamed →
+        sync #[(dir).path] renamed = .error cause failed →
+        (∀ marker, (observe grouped).visible ((dir).file .stagedWalBoundary) = some marker →
+          WalMarkerRenameEffect dir marker true (observe grouped).storageObservation (observe renamed).storageObservation) ∧
+        ∃ effective, syncer.FinalRootEffects cache view (fun atHeap => (observe atHeap).storageObservation)
+          (installed).activeFirst renamed failed effective)) :
+    ∃ batch table guarded poisoned,
+      prepareBatch (installed).table request.rows = some (batch, table) ∧
+      (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
+      checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded ∧
+      opened.set opened.phase .poisoned guarded = .ok () poisoned ∧
+      let fileGroup := syncer.publicationFileGroup cache appender stager (installed).activeFirst
+        ((installed).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch)
+      fileGroup poisoned = .error cause failed ∨
+      ∃ grouped, fileGroup poisoned = .ok () grouped ∧
+        (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .error cause failed ∨
+          ∃ renamed, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .ok () renamed ∧
+            sync #[(dir).path] renamed = .error cause failed) ∧
+        ∃ liveNew allows,
+          WalPublicationPayloads.ReachedWrite state batch request.rows (observe failed).storageObservation liveNew allows := by
+  obtain ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, _, outcome⟩ :=
+    current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
+  refine ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, ?_⟩
+  have valid := (ready).readPrefix.refines.1
+  cases outcome with
+  | appendError stopped =>
+    exact .inl (by simp only [RawSyncCalls.publicationFileGroup, Bind.bind, EStateM.bind, stopped])
+  | stageError wrote stopped =>
+    exact .inl (by simp only [RawSyncCalls.publicationFileGroup, Bind.bind, EStateM.bind, wrote, stopped])
+  | groupError wrote remembered stopped =>
+    exact .inl (by simp only [RawSyncCalls.publicationFileGroup, Bind.bind, EStateM.bind, wrote, remembered, stopped])
+  | renameError wrote remembered synced failedRename =>
+    obtain ⟨frame, group, renameError, _⟩ := effects prepared guard assigned wrote remembered synced
+    obtain ⟨effective, renamed⟩ := renameError failedRename
+    obtain ⟨_, payloads⟩ := syncer.failedMarkerRenameSelects cache view appender stager inodes observe inode buffered
+      (rows := request.rows) valid (initial.frame frame) wrote remembered synced group rename failedRename renamed
+    exact .inr ⟨_, by simp only [RawSyncCalls.publicationFileGroup, Bind.bind, EStateM.bind, wrote, remembered, synced],
+      .inl failedRename, effective, _, payloads⟩
+  | directory wrote remembered synced moved barrier =>
+    obtain ⟨frame, group, _, directoryError⟩ := effects prepared guard assigned wrote remembered synced
+    obtain ⟨renamed, effective, root⟩ := directoryError moved barrier
+    obtain ⟨_, payloads⟩ := syncer.failedRootSyncFromPublication cache view appender stager inodes observe inode buffered
+      (rows := request.rows) valid (initial.frame frame) wrote remembered synced group rename moved barrier renamed root
+    exact .inr ⟨_, by simp only [RawSyncCalls.publicationFileGroup, Bind.bind, EStateM.bind, wrote, remembered, synced],
+      .inr ⟨_, moved, barrier⟩, true, _, payloads⟩
 
 private theorem NativeOpenedPosition.selectsReachedWrite
     {batch : List WAL.Write} {table : PackedTable} {rows : List (UInt64 × Option UInt64)}

@@ -50,6 +50,31 @@ def WalPublicationPayloads.ReachedWrite (state : NativeReadyState) (batch : List
     payloads.newMarkerBytes = WAL.Boundary.encode (state.writer.installed.walBytes + WAL.frameSize * rows.length).toUInt64 ∧
     payloads.Selections state.session.directory state.writer.wal.active.first atHeap liveNew allows
 
+/-- A failed final barrier always reaches the cache read. A successful
+lookup of a handle can additionally issue an fsync against the named
+database root. Only that syscall has a directory settlement effect. -/
+structure RawSyncCalls.FinalRootEffects {heap image : Type} (calls : RawSyncCalls heap)
+    {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path) (view : OpenCloseHeapView heap image)
+    (storage : heap → CheckpointStorageObservation) (first : Nat)
+    (renamed reached : heap) (effective : Bool) : Prop where
+  cacheRead : WalPublicationPayloads.CacheReadFrame directory first (storage renamed)
+    (storage (reachedState (calls.readDirectory cache.directory renamed)))
+  target : ∀ {handle issued syncCause},
+    calls.readDirectory cache.directory renamed = .ok (some handle) issued →
+    calls.fsync handle issued = .error syncCause reached →
+    RawFsyncTarget view renamed issued handle ∧
+      (storage renamed).files.names directory.path =
+        some ((view.handle renamed handle).1.inode (view.handle renamed handle).2.1.description) ∧
+      (storage issued).files.names directory.path = (storage renamed).files.names directory.path
+  sync : ∀ {handle issued syncCause},
+    calls.readDirectory cache.directory renamed = .ok (some handle) issued →
+    calls.fsync handle issued = .error syncCause reached →
+    (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
+    (storage issued).files.names directory.path =
+      some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
+    WalRootSyncEffect directory effective (storage issued) (storage reached)
+
 section
 
 variable {heap image : Type} {state : NativeReadyState}
@@ -138,9 +163,10 @@ theorem RawSyncCalls.failedMarkerRenameSelects (valid : state.Valid)
   refine ⟨?_, payloads, keeper, oldMarker, newMarker, selectedReturn⟩
   simp only [calls.commitAfterStaging cache appender stager rename wrote remembered, synced, failed]
 
-/-- Follow the actual successful file group and rename to the cached
-root's reported error. The cache read selects the literal fsync. Its
-local effect applies to the joint namespace maps returned by the sync. -/
+/-- Follow the actual successful file group and rename to the final
+barrier error. A cache failure or missing handle carries the rename's
+survivors to the returned heap. An issued fsync may settle the new
+marker even when it reports an error. -/
 theorem RawSyncCalls.failedRootSyncFromPublication (valid : state.Valid)
     (old : NativeReadyStorage state (observe entry).storageObservation)
     (wrote : append keeperPath bytes entry = .ok () appended)
@@ -149,47 +175,66 @@ theorem RawSyncCalls.failedRootSyncFromPublication (valid : state.Valid)
     (effects : calls.WalGroupEffects cache view appender stager inodes observe inode buffered
       first count priorBytes bytes entry appended staged grouped)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {renamed issued reached : heap} {rootHandle : IO.FS.Handle} {cause : IO.Error} {effective : Bool}
+    {renamed reached : heap} {cause : IO.Error} {effective : Bool}
     (moved : rename stagedPath markerPath grouped = .ok () renamed)
-    (loaded : calls.readDirectory cache.directory renamed = .ok (some rootHandle) issued)
     (failedGroup : sync #[(dir).path] renamed = .error cause reached)
-    (target : RawFsyncTarget view renamed issued rootHandle)
-    (root : (observe renamed).visible (dir).path =
-      some ((view.handle renamed rootHandle).1.inode (view.handle renamed rootHandle).2.1.description))
     (renameEffect : ∀ ino, (observe grouped).visible stagedPath = some ino →
       WalMarkerRenameEffect dir ino true (observe grouped).storageObservation (observe renamed).storageObservation)
-    (loadKeeps : (observe issued).storageObservation = (observe renamed).storageObservation)
-    (syncEffect : ∀ {syncCause}, calls.fsync rootHandle issued = .error syncCause reached →
-      (view.handle issued rootHandle).2.1 ∈ (view.descriptors issued).slots →
-      (observe issued).visible (dir).path =
-        some ((view.descriptors issued).inode (view.handle issued rootHandle).2.1.description) →
-      WalRootSyncEffect dir effective (observe issued).storageObservation (observe reached).storageObservation) :
+    (rootEffects : calls.FinalRootEffects cache view (fun atHeap => (observe atHeap).storageObservation)
+      first renamed reached effective) :
+    let settled := match calls.readDirectory cache.directory renamed with
+      | .ok (some _) _ => effective
+      | _ => false
     commitBytesAt dir first bytes count append stage sync rename entry = .error cause reached ∧
     WalPublicationPayloads.ReachedWrite state batch rows (observe reached).storageObservation true
-      (fun published => effective = true → published = true) := by
-  have actualSync := (calls.rootBarrier cache loaded).2.symm.trans failedGroup
-  obtain ⟨syncCause, failed, diagnostic⟩ : ∃ syncCause,
-      calls.fsync rootHandle issued = .error syncCause reached ∧
-      IO.userError s!"sync failed for '{(dir).path}': {syncCause}" = cause := by
-    cases returned : calls.fsync rootHandle issued with
-    | ok value _ =>
-      cases value
-      rw [returned] at actualSync
-      contradiction
-    | error syncCause after =>
-      rw [returned] at actualSync
-      obtain ⟨diagnostic, sameHeap⟩ := EStateM.Result.error.inj actualSync
-      exact ⟨syncCause, sameHeap ▸ rfl, diagnostic⟩
+      (fun published => settled = true → published = true) := by
+  intro settled
   obtain ⟨payloads, selected, keeper, oldMarker, newMarker⟩ :=
     calls.groupedWalPayloadsFromPublication cache view appender stager inodes observe inode buffered
       (rows := rows) valid old wrote remembered synced effects
-  obtain ⟨returned, selections⟩ := calls.failedRootSyncSelects cache appender stager rename
-    (fun atHeap => (observe atHeap).storageObservation) view payloads
-    wrote remembered synced moved loaded failed target root selected
-    (renameEffect payloads.newMarker selected.stagedNamed) loadKeeps syncEffect
+  have atRename := (renameEffect payloads.newMarker selected.stagedNamed).selects selected
+  have afterCache := atRename.frameCacheRead rootEffects.cacheRead
+  have raw := (calls.rootBarrierResult cache renamed).symm.trans failedGroup
+  have selections : payloads.Selections dir first (observe reached).storageObservation true
+      (fun published => settled = true → published = true) := by
+    cases load : calls.readDirectory cache.directory renamed with
+    | error diagnostic after =>
+      simp only [load] at raw
+      have same := (EStateM.Result.error.inj raw).2
+      subst after
+      have kept := (congrArg reachedState load) ▸ afterCache
+      simpa [settled, load, reachedState] using kept
+    | ok cached issued =>
+      cases cached with
+      | none =>
+        simp only [load] at raw
+        have same := (EStateM.Result.error.inj raw).2
+        subst issued
+        have kept := (congrArg reachedState load) ▸ afterCache
+        simpa [settled, load, reachedState] using kept
+      | some handle =>
+        simp only [load] at raw
+        cases failed : calls.fsync handle issued with
+        | ok value after =>
+          cases value
+          simp [failed] at raw
+        | error diagnostic after =>
+          simp only [failed] at raw
+          have same := (EStateM.Result.error.inj raw).2
+          subst after
+          obtain ⟨target, rootAtRename, keptRoot⟩ := rootEffects.target load failed
+          have issuedRoot := keptRoot.trans (rootAtRename.trans (congrArg some target.inode.symm))
+          have atIssue := (congrArg reachedState load) ▸ afterCache
+          obtain ⟨live, survivors⟩ := (rootEffects.sync load failed target.live issuedRoot).selects atIssue
+          refine ⟨live, fun names allowed => ?_⟩
+          obtain ⟨published, permit, observed⟩ := survivors names allowed
+          refine ⟨published, fun applied => ?_, observed⟩
+          have barrier : effective = true := by simpa only [settled, load] using applied
+          simpa only [barrier, ite_true] using permit
   have firstExact : first = state.writer.wal.active.first := valid.retained.resumed.keeper.trans valid.retained.active
   rw [firstExact] at selections
-  exact ⟨diagnostic ▸ returned, payloads, keeper, oldMarker, newMarker, selections⟩
+  refine ⟨?_, payloads, keeper, oldMarker, newMarker, selections⟩
+  simpa only [synced, moved, failedGroup] using calls.commitAfterStaging cache appender stager rename wrote remembered
 
 end
 end Alvoki.Storage.DiskSession
