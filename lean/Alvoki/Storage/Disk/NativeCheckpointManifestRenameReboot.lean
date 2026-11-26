@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
-import Alvoki.Storage.Disk.Checkpoint.Reopen.HeldInstallation
+import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 
 namespace Alvoki.Storage.DiskSession
 
@@ -267,18 +267,6 @@ def ReadsSurvivor (seen : NativeCheckpointManifestRenameReads crash input plan i
   ∃ read : seen.opening.reads.reads.ObservesFile path payload,
     crash.names path = some read.object ∧ (report.synced.settled.runs.inodes report.after).crashBytes read.object = [payload]
 
-private theorem readsFile (seen : NativeCheckpointManifestRenameReads crash input plan inventory)
-    {path : FilePath} {name : String} {child : DeviceInode} {payload : ByteArray}
-    (same : CheckpointCrashChild crash.names seen.opening.admission path name)
-    (bound : seen.opening.admission.view.child seen.opening.admission.root name = some child)
-    (contents : seen.opening.reads.reads.objectBytes (seen.opening.admission.view.modelObject child) = some payload)
-    (calls : RunChunkPathReport seen.opening.reads.reads path name seen.opening.admission.root seen.opening.admission.view)
-    (stored : crash.Stored path payload) : seen.ReadsSurvivor path payload := by
-  obtain ⟨inode, named, _, durable⟩ := stored
-  let read := calls.observesFile bound contents
-  have observed := same.sameObject calls bound contents
-  exact ⟨read, observed, (Option.some.inj (observed.symm.trans named)).symm ▸ durable⟩
-
 structure SelectedReads (seen : NativeCheckpointManifestRenameReads crash input plan inventory) : Prop where
   manifestAbsent : crash.pair.manifest = none → crash.names (state.session.directory.file .manifest) = none ∧
     ∃ name message, seen.opening.reads.reads.stat (state.session.directory.file .manifest) =
@@ -302,38 +290,39 @@ theorem readsSelected (seen : NativeCheckpointManifestRenameReads crash input pl
     change state.writer.files.directory.active.walBoundary = _ at prior
     rw [valid.retained.directoryFiles] at prior
     exact (report.crashSelection valid crash.chosen).1.trans prior
-  obtain ⟨boundary, _⟩ := opening.reads.metadata.markerFile _ marker
-  obtain ⟨_, stableMarker⟩ := crash.marker _ marker
-  refine ⟨?_, ?_, ?_, seen.readsFile opening.markerChild boundary.bound boundary.contents boundary.calls
-    (NativeCheckpointManifestRenameCrash.Stored.ofStable crash stableMarker), ?_⟩
-  · intro absent
-    have map := (crash.manifestPayload valid).trans absent
-    have missing : crash.names (state.session.directory.file .manifest) = none := by
-      cases bound : crash.names (state.session.directory.file .manifest) <;> simp [bound] at map ⊢
-    exact ⟨missing, (opening.reads.metadata.manifestMissing absent).2⟩
-  · intro bytes present
-    obtain ⟨⟨file⟩, _⟩ := opening.reads.metadata.manifestFile bytes present
-    exact seen.readsFile opening.manifestChild file.bound file.contents file.calls (crash.manifestStored valid present)
-  · intro bytes metadata present decoded index within payload stored
-    obtain ⟨_, bound, contents, ⟨calls⟩⟩ := opening.reads.runs bytes metadata present decoded index within payload stored
-    exact seen.readsFile (opening.runChild bytes metadata present decoded index within) bound contents calls
-      (crash.runStored valid present decoded within stored)
-  · intro segment appears
+  let contents := (report.synced.settled.runs.inodes report.after).visible
+  have sampled {path payload} (stored : crash.Stored path payload) : (crash.names path).map contents = some payload := by
+    obtain ⟨inode, named, actual, _⟩ := stored
+    exact Option.map_eq_some_iff.mpr ⟨inode, named, actual⟩
+  have runSource bytes metadata present decoded index within payload stored :=
+    crash.runStored valid (manifest := bytes) (metadata := metadata) (index := index) (payload := payload)
+      present decoded within stored
+  have walSource (segment : WalSegment) (appears : segment ∈ plan.layout.sealed ++ [plan.layout.keeper]) :
+      crash.Stored (state.session.directory.file (.walSegment segment.first)) segment.bytes := by
     have saved : segment ∈ state.writer.wal.segments := by
       rw [plan.descriptors, WalSegmentImage.readDescriptors] at appears
       split at appears
       · exact (List.mem_filter.mp appears).1
       · exact List.mem_append_right _ appears
     obtain ⟨_, bytes⟩ := crash.wal segment saved
-    have stored := NativeCheckpointManifestRenameCrash.Stored.ofStable crash bytes
-    rcases List.mem_append.mp appears with sealed | last
-    · let file := opening.reads.wal.sealedFile segment sealed
-      exact seen.readsFile (opening.sealChild segment sealed) file.bound file.contents file.calls stored
-    · obtain rfl := List.mem_singleton.mp last
-      let file := opening.reads.wal.keeper
-      have contents : opening.reads.reads.objectBytes (opening.admission.view.modelObject file.object) =
-          some plan.layout.keeper.bytes := by simpa only [plan.aligned, ByteArray.append_empty] using file.contents
-      exact seen.readsFile opening.keeperChild file.bound contents file.calls stored
+    exact NativeCheckpointManifestRenameCrash.Stored.ofStable crash bytes
+  obtain ⟨_, stableMarker⟩ := crash.marker _ marker
+  have markerSource := NativeCheckpointManifestRenameCrash.Stored.ofStable crash stableMarker
+  obtain ⟨absent, manifestRead, markerRead, runRead, walRead⟩ := opening.readsSelectedSamples contents
+    (crash.manifestPayload valid) ((sampled markerSource).trans marker.symm) marker
+    (fun bytes metadata present decoded index within payload stored =>
+      sampled (runSource bytes metadata present decoded index within payload stored))
+    plan.aligned (fun segment appears => sampled (walSource segment appears))
+  have durable {path payload} (read : opening.ReadsSample contents path payload)
+      (stored : crash.Stored path payload) : seen.ReadsSurvivor path payload := by
+    obtain ⟨inode, named, _, durable⟩ := stored
+    obtain ⟨read, actual, _⟩ := read
+    exact ⟨read, actual, (Option.some.inj (actual.symm.trans named)).symm ▸ durable⟩
+  exact ⟨absent, fun bytes present => durable (manifestRead bytes present) (crash.manifestStored valid present),
+    fun bytes metadata present decoded index within payload stored =>
+      durable (runRead bytes metadata present decoded index within payload stored)
+        (runSource bytes metadata present decoded index within payload stored),
+    durable markerRead markerSource, fun segment appears => durable (walRead segment appears) (walSource segment appears)⟩
 
 end NativeCheckpointManifestRenameReads
 

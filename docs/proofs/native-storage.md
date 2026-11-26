@@ -473,16 +473,17 @@ returned table and heap. The chosen reboot and each call's primitive
 effects are explicit.
 [Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
 
-At the final MANIFEST directory-fsync stop, the successful run writes, file syncs and first
-directory barrier establish both the prior selected footprint and the new run bytes. One
-admitted crash name map supplies the manifest, the WAL marker, keeper and sealed segment
-bytes, and every run named by the manifest. It also preserves the directory and LOCK inode
-identities. `replaysSampledFinalCheckpoint` derives the exact aligned recovery layout and
-replay through the last acknowledged write. The same layout and replay proofs serve the
-existing MANIFEST rename-error recovery. The filesystem effect assumptions apply at the
-reached calls. The concrete reopen still needs to read the selected inodes under the
-reacquired lock.
-[Sampled checkpoint replay](../../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
+The healthy aligned `DiskTable.open` after a final checkpoint directory-fsync stop now
+returns the exact table recovered from the sampled manifest and WAL. One selected crash
+image supplies the manifest, the runs it names, the marker, the keeper and all required
+sealed segments. The held reader identifies the same directory, LOCK and file inodes.
+The fixed source interpreter returns the table with its actual phase and token
+allocations and preserves the earlier client read ledger. The old manifest, including
+absence, and the new manifest use the same recovery proof. The local filesystem effects
+and healthy open observations are explicit premises. The next composition connects this
+return to finalized failed attempts, a new write and an actual snapshot in the common
+execution trace.
+[Exact aligned reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 The late source prefix identifies each new run write and its returned
 file fsync on the same remembered descriptor. The file effects give

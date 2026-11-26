@@ -6,6 +6,75 @@ namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication WalSegmentRepair
 
+section Admission
+
+variable {heap image : Type} {input : FilePath} {directory : DiskDirectory} {initial : DescriptorInventory}
+  {files : LockedFileState image} {admission : CensusOpenAdmissionReports input directory initial files}
+  {view : OpenCloseHeapView heap image} {calls : RawOpenAdmissionCallbacks heap}
+  {init : OpenSyncCacheCallbacks heap} {entry : heap}
+
+/-- The names captured by the modeled admission identify the same
+descriptions as the actual cache open and acquired flock. -/
+theorem RawOpenAdmissionReport.capturesNamedAuthority
+    (raw : RawOpenAdmissionReport admission view calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view init raw.afterFlock)
+    (names : FilePath → Option Nat)
+    (root : names directory.path = some (admission.reached.inode admission.cached.description))
+    (lock : names (directory.file .lock) = some (admission.reached.inode admission.owner.description)) :
+    names directory.path = some ((view.handle seed.afterPending seed.handle).1.inode
+      (view.handle seed.afterPending seed.handle).2.1.description) ∧
+    names (directory.file .lock) = some ((view.handle raw.afterFlock raw.lock).1.inode
+      (view.handle raw.afterFlock raw.lock).2.1.description) := by
+  rw [seed.sameHandle, seed.openedHandle, raw.sameLock, raw.appendHandle]
+  exact ⟨root, lock⟩
+
+end Admission
+
+section AlignedOpen
+
+variable {heap stream : Type} {state : NativeReadyState} {input : FilePath} {directory : DiskDirectory}
+  {inventory : DescriptorInventory} {retry : LockedFileState FileImage} {history : List WAL.Write}
+  {layout : CanonicalKeeperLayout retry.image history} {published : Image}
+  {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
+  {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
+  {bindings : FilePath → Option Nat}
+  {opening : CheckpointBarrierAlignedReports input directory inventory retry layout published vacant selected bindings}
+  {chronology : CapturedMarkedReadCensus opening.reads opening.finish.readCustody}
+  {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+  {init : OpenSyncCacheCallbacks heap} {entry : heap}
+  {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+  {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+  {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+
+/-- The exact post-reboot admission reacquires the prior directory and
+LOCK inodes at the names retained across the failed attempts. The raw
+handles belong to the new admission. -/
+theorem RawAlignedCheckpointReopenEffects.capturesRebootAuthority
+    (raw : RawAlignedCheckpointReopenEffects opening chronology view calls init entry phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream)
+    (resolved : directory = state.session.directory)
+    (namesAt : heap → FilePath → Option Nat) (chosen : FilePath → Option Nat)
+    (authority : RebootDirectoryBindings state chosen)
+    (entryKeeps : ∀ path, path = directory.path ∨ path = directory.file .lock →
+      namesAt entry path = chosen path)
+    (readsAtEntry : ∀ path, path = directory.path ∨ path = directory.file .lock →
+      opening.reads.bindings path = namesAt entry path) :
+    (view.handle raw.seed.afterPending raw.seed.handle).1.inode
+      (view.handle raw.seed.afterPending raw.seed.handle).2.1.description =
+      state.census.inode state.directorySlot.description ∧
+    (view.handle raw.raw.afterFlock raw.raw.lock).1.inode
+      (view.handle raw.raw.afterFlock raw.raw.lock).2.1.description =
+      state.census.inode state.owner.description := by
+  subst directory
+  have witnessed := opening.reads.sameObjects
+  obtain ⟨directory, lock⟩ := raw.raw.capturesNamedAuthority raw.seed chosen
+    (((readsAtEntry _ (.inl rfl)).trans (entryKeeps _ (.inl rfl))).symm.trans witnessed.1)
+    (((readsAtEntry _ (.inr rfl)).trans (entryKeeps _ (.inr rfl))).symm.trans witnessed.2.1)
+  exact ⟨Option.some.inj (directory.symm.trans authority.directory),
+    Option.some.inj (lock.symm.trans authority.lock)⟩
+
+end AlignedOpen
+
 section
 
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
@@ -90,6 +159,94 @@ theorem RawAlignedCheckpointReopenEffects.ReturnedAt.returnsFixedInterpreter
   simp only [recover, Bind.bind, EStateM.bind]
   rw [raw.heldRecoveryAgrees valid following accepted ordered source.remove write source.stage source.rename
     source.bootstrap fixed, files, directoryReads, keeper]
+
+/-- The aligned source opener installs the checkpoint selected by its
+actual reader. The fixed interpreter returns that same table and heap,
+and the returned position preserves the earlier client replay. -/
+theorem RawAlignedCheckpointReopenEffects.returnsSelectedFromFixedInterpreter
+    {source : RawMarkedOpenInterpreter heap stream}
+    (raw : RawAlignedCheckpointReopenEffects opening chronology view source.calls source.init entry
+      phaseIdentity tokenIdentity source.allocatePhase source.allocateToken stream)
+    (files : raw.fileCalls = source.fileCalls) (directoryReads : raw.directoryCalls = source.directoryCalls)
+    (keeperCallbacks : raw.callbacks = source.keeperCallbacks)
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    {wal : WalSegmentImage} (walLayout : wal.ReadLayout history) (walValid : wal.Valid history)
+    (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize)
+    (active : wal.directory.active = layout.target.pair) (keeper : layout.target.first = wal.active.first)
+    (kept : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept)
+    {ledgerHistory : List WAL.Write} {log : List DatabaseSubmissions} {recorded : List RecordedSnapshotRead}
+    (sameHistory : history = ledgerHistory) (pending : PendingClientReplay log recorded ledgerHistory)
+    (bounded : ∀ read ∈ recorded, read.BoundedBy ledgerHistory.length)
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects view.phase get set) (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    ∃ (next : NativeReadPosition ledgerHistory log)
+      (returned : raw.ReturnedAt next source.remove write source.rename source.bootstrap
+        RawMarkedOpenInterpreter.assemble get set ptrEq),
+      source.openTable input entry = .ok returned.handle.table returned.start.reached ∧
+      returned.start.current.ready.state.writer.checkpoint = checkpoint ∧
+      returned.start.current.ready.reads = recorded ∧
+      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode ledgerHistory) =
+        .ok returned.start.current.ready.state.writer.installed.table ∧
+      InstalledClientReplay log recorded ledgerHistory
+        returned.start.current.ready.state.writer.installed returned.start.current.ready.state.session := by
+  subst ledgerHistory
+  let finish : CapturedKeeperFinish opening.callbacks opening.reads vacant selected := .aligned opening.finish
+  let report : MarkedOpenSuccessReports input directory history log recorded :=
+    { inventory := inventory
+      retry := retry
+      layout := layout
+      published := published
+      checkpoint := checkpoint
+      selected := selected
+      vacant := vacant
+      opening := ⟨opening.admission, opening.callbacks, opening.reads, finish, chronology, opening.marker,
+        opening.markerFound⟩
+      prepared := prepared
+      following := following
+      accepted := accepted
+      ordered := ordered
+      wal := wal
+      walLayout := walLayout
+      walValid := walValid
+      spans := spans
+      active := active
+      keeper := keeper
+      kept := kept
+      pending := pending
+      bounded := bounded }
+  obtain ⟨state, seeded, cache, _, owner, slot, _, _, selectedAtReturn, _, _, _, _, _⟩ :=
+    finish.startsNativeReadPrefix chronology opening.markerFound prepared following accepted ordered walLayout walValid
+      spans active keeper kept pending bounded
+  obtain ⟨session, final, replayReturn, _, _, _, installed⟩ :=
+    finish.installsFromCensus chronology opening.markerFound prepared following accepted ordered
+  obtain ⟨replayedSession, replayedFiles, replayed, replayedCheckpoint, installedReturn, sessionPhase,
+    replayedSelection, recovered, _⟩ := CachedRetryInstalled.refinesPendingClient installed pending
+  have sameSession := (EStateM.Result.ok.inj (seeded.frames.1.symm.trans replayReturn)).1.trans
+    (EStateM.Result.ok.inj installedReturn).1
+  have sameInstalled := Phase.ready.inj (seeded.refines.1.phase.symm.trans (sameSession.symm ▸ sessionPhase))
+  have sameCheckpoint := replayedSelection.uniqueResult selected
+  let next : NativeReadPosition history log := ⟨finish.run chronology, state, state, recorded, seeded⟩
+  obtain ⟨returned⟩ := raw.installsAtReportedPosition (report := report) next source.remove write source.rename
+    source.bootstrap RawMarkedOpenInterpreter.assemble ptrEq rfl rfl seeded.frames.1 cache owner slot
+    RawMarkedOpenInterpreter.assembles effects
+  have opened := returned.returnsFixedInterpreter files directoryReads keeperCallbacks prepared following accepted ordered
+  refine ⟨next, returned, opened, ?_, ?_, ?_, ?_⟩
+  · rw [returned.position]
+    exact selectedAtReturn
+  · rw [returned.position]
+  · rw [returned.position]
+    change recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok state.writer.installed.table
+    rw [sameInstalled, ← sameCheckpoint]
+    exact recovered
+  · rw [returned.position]
+    exact seeded.guardedReplay
 
 end
 

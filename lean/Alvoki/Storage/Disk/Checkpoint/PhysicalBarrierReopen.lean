@@ -66,6 +66,94 @@ structure CheckpointBarrierAlignedReports (input : FilePath) (directory : DiskDi
     CheckpointCrashChild names admission (directory.file (.run metadata.header.generation index))
       (renderRunFileName metadata.header.generation index)
 
+section SampledReads
+
+variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
+  {retry : LockedFileState FileImage} {history : List WAL.Write}
+  {layout : CanonicalKeeperLayout retry.image history} {published : Image}
+  {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
+  {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
+  {names : FilePath → Option Nat}
+
+namespace CheckpointBarrierAlignedReports
+
+def ReadsSample (opening : CheckpointBarrierAlignedReports input directory inventory retry layout published
+    vacant selected names) (contents : Nat → ByteArray) (path : FilePath) (payload : ByteArray) : Prop :=
+  ∃ read : opening.reads.reads.ObservesFile path payload,
+    names path = some read.object ∧ contents read.object = payload
+
+/-- The read report supplies the actual child, so equality with the
+sampled value can be established at that inode. -/
+theorem readsSample (opening : CheckpointBarrierAlignedReports input directory inventory retry layout published
+      vacant selected names) {contents : Nat → ByteArray}
+    {path : FilePath} {name : String} {child : DeviceInode} {payload : ByteArray}
+    (same : CheckpointCrashChild names opening.admission path name)
+    (bound : opening.admission.view.child opening.admission.root name = some child)
+    (actual : opening.reads.reads.objectBytes (opening.admission.view.modelObject child) = some payload)
+    (calls : RunChunkPathReport opening.reads.reads path name opening.admission.root opening.admission.view)
+    (sampled : (names path).map contents = some payload) :
+    opening.ReadsSample contents path payload := by
+  let read := calls.observesFile bound actual
+  have observed : names path = some read.object := same.sameObject calls bound actual
+  rw [observed, Option.map_some] at sampled
+  exact ⟨read, observed, Option.some.inj sampled⟩
+
+/-- The aligned reader's exact held objects carry the manifest and marker
+it selected, every run named by the strict manifest, and the WAL suffix. -/
+theorem readsSelectedSamples (opening : CheckpointBarrierAlignedReports input directory inventory retry layout published
+      vacant selected names) (contents : Nat → ByteArray)
+    (manifest : (names (directory.file .manifest)).map contents = retry.image.directory.active.manifest)
+    (marker : (names (directory.file .walBoundary)).map contents = retry.image.directory.active.walBoundary)
+    (markerSelected : retry.image.directory.active.walBoundary =
+      some (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
+    (runs : ∀ bytes metadata, retry.image.directory.active.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, ∀ payload,
+        published.durable metadata.header.generation index = some payload →
+        (names (directory.file (.run metadata.header.generation index))).map contents = some payload)
+    (aligned : layout.tail = ByteArray.empty)
+    (segments : ∀ segment ∈ layout.sealed ++ [layout.keeper],
+      (names (directory.file (.walSegment segment.first))).map contents = some segment.bytes) :
+    (retry.image.directory.active.manifest = none → names (directory.file .manifest) = none ∧
+      ∃ filename message, opening.reads.reads.stat (directory.file .manifest) =
+        .error (.noFileOrDirectory filename 2 message)) ∧
+    (∀ bytes, retry.image.directory.active.manifest = some bytes →
+      opening.ReadsSample contents (directory.file .manifest) bytes) ∧
+    opening.ReadsSample contents (directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode history).size.toUInt64) ∧
+    (∀ bytes metadata, retry.image.directory.active.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, ∀ payload,
+        published.durable metadata.header.generation index = some payload →
+        opening.ReadsSample contents (directory.file (.run metadata.header.generation index)) payload) ∧
+    ∀ segment ∈ layout.sealed ++ [layout.keeper],
+      opening.ReadsSample contents (directory.file (.walSegment segment.first)) segment.bytes := by
+  obtain ⟨markerFile, _⟩ := opening.reads.metadata.markerFile _ markerSelected
+  refine ⟨?_, ?_, opening.readsSample opening.markerChild markerFile.bound markerFile.contents markerFile.calls
+    (marker.trans markerSelected), ?_, ?_⟩
+  · intro absent
+    exact ⟨Option.map_eq_none_iff.mp (manifest.trans absent), (opening.reads.metadata.manifestMissing absent).2⟩
+  · intro bytes present
+    obtain ⟨⟨file⟩, _⟩ := opening.reads.metadata.manifestFile bytes present
+    exact opening.readsSample opening.manifestChild file.bound file.contents file.calls (manifest.trans present)
+  · intro bytes metadata present decoded index within payload stored
+    obtain ⟨_, bound, actual, ⟨calls⟩⟩ := opening.reads.runs bytes metadata present decoded index within payload stored
+    exact opening.readsSample (opening.runChild bytes metadata present decoded index within) bound actual calls
+      (runs bytes metadata present decoded index within payload stored)
+  · intro segment occurs
+    have sampled := segments segment occurs
+    rcases List.mem_append.mp occurs with sealed | last
+    · let file := opening.reads.wal.sealedFile segment sealed
+      exact opening.readsSample (opening.sealChild segment sealed) file.bound file.contents file.calls sampled
+    · obtain rfl := List.mem_singleton.mp last
+      let file := opening.reads.wal.keeper
+      have actual : opening.reads.reads.objectBytes (opening.admission.view.modelObject file.object) =
+          some layout.keeper.bytes := by simpa only [aligned, ByteArray.append_empty] using file.contents
+      exact opening.readsSample opening.keeperChild file.bound actual file.calls sampled
+
+end CheckpointBarrierAlignedReports
+end SampledReads
+
 /-- Follow the selected survivor through the reported failed opens. The
 healthy aligned attempt uses the reached files and still explains every
 earlier submission and snapshot response with the same WAL. -/

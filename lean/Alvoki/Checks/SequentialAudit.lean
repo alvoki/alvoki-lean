@@ -436,6 +436,7 @@ import Alvoki.Storage.Disk.NativeCheckpointStopContinuation
 import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.NativeCheckpointFinalManifest
+import Alvoki.Storage.Disk.NativeCheckpointSampledTableOpen
 import Alvoki.Storage.Disk.NativeFreshCheckpointReplay
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
@@ -2486,6 +2487,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.preparedManifestEncoding
 #check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.publicationReplays
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.CheckpointBarrierAlignedReports.readsSelectedSamples
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.capturesRebootAuthority
+#check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.returnsSelectedFromFixedInterpreter
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.rebootDirectoryBindings
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.samplesWal
 #check_axioms Alvoki.Storage.WalSegmentImage.ReadLayout.checkpointCrashReopen
