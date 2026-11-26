@@ -96,53 +96,95 @@ inductive RawOpenRetryTrace (view : OpenCloseHeapView heap FileImage) (directory
       (failed : RawFinalizedOpenAttempt view directory calls init release input entry workerImage) :
       RawOpenRetryTrace view directory calls init release start (earlier ++ [(input, failed.diagnostic)]) failed.reached
 
+/-- A scoped frame over singleton live observations carries a named
+payload without constraining absent paths or unrelated inode contents. -/
+theorem CheckpointSurvivingFiles.Frames.visiblePayload {before after : heap} {scope : FilePath → Prop}
+    {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray}
+    (frame : (⟨names before, fun inode => [bytes before inode]⟩ : CheckpointSurvivingFiles).Frames scope
+      ⟨names after, fun inode => [bytes after inode]⟩) {path : FilePath} (selected : scope path) :
+    (names after path).map (bytes after) = (names before path).map (bytes before) := by
+  obtain ⟨named, contents⟩ := frame path selected
+  change names after path = names before path at named
+  rw [named]
+  cases found : names before path with
+  | none => rfl
+  | some inode =>
+    have same : [bytes after inode] = [bytes before inode] := contents inode found
+    exact congrArg some (List.cons.inj same).1
+
+/-- The live keeper is the file currently bound at the selected path.
+Its previous binding can still be a crash alternative. -/
+def RawOpenRetryTrace.KeeperAt (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
+    (target : Target) (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (atHeap : heap) : Prop :=
+  (view.files atHeap).image.keeper.active = (names atHeap (directory.file (.walSegment target.first))).map (bytes atHeap)
+
+/-- A read-only block carries the named keeper using the scoped live
+file frame, leaving repairs to establish their own local effect. -/
+theorem RawFinalizedOpenAttempts.keepsVisibleKeeper {target : Target}
+    {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray}
+    {returns : List (FilePath × IO.Error)} {reached : heap}
+    (block : RawFinalizedOpenAttempts view directory calls init release start returns reached)
+    (frame : (⟨names start, fun inode => [bytes start inode]⟩ : CheckpointSurvivingFiles).Frames
+      (· = directory.file (.walSegment target.first)) ⟨names reached, fun inode => [bytes reached inode]⟩)
+    (keeper : RawOpenRetryTrace.KeeperAt view directory target names bytes start) :
+    RawOpenRetryTrace.KeeperAt view directory target names bytes reached := by
+  unfold RawOpenRetryTrace.KeeperAt at keeper ⊢
+  rw [block.preserves.2, keeper]
+  exact (frame.visiblePayload rfl).symm
+
 /-- Local file effects for the already recorded attempts. Repair may
 replace the keeper or prune later names. The caller supplies a separate
-frame for paths outside those effects, such as the selected runs. -/
+frame for paths outside those effects, such as the selected runs.
+An independent observation, such as the live keeper, can be carried by
+local laws for just the attempts in this trace. -/
 inductive RawOpenRetryTrace.SelectedEffects (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
     (calls : RawOpenAdmissionCallbacks heap) (init : OpenSyncCacheCallbacks heap)
     (release : IO.FS.Handle → heap → heap) (start : heap) (target : Target)
-    (files : heap → CheckpointSurvivingFiles) (protectedPaths : FilePath → Prop) :
+    (files : heap → CheckpointSurvivingFiles) (protectedPaths : FilePath → Prop)
+    (keep : heap → Prop) :
     ∀ {returns : List (FilePath × IO.Error)} {reached : heap},
       RawOpenRetryTrace view directory calls init release start returns reached → Prop where
-  | empty : SelectedEffects view directory calls init release start target files protectedPaths .empty
+  | empty : SelectedEffects view directory calls init release start target files protectedPaths keep .empty
   | readOnly {earlier more : List (FilePath × IO.Error)} {entry reached : heap}
       {prior : RawOpenRetryTrace view directory calls init release start earlier entry}
       {attempts : RawFinalizedOpenAttempts view directory calls init release entry more reached}
-      (before : SelectedEffects view directory calls init release start target files protectedPaths prior)
-      (frame : (files entry).Frames protectedPaths (files reached)) :
-      SelectedEffects view directory calls init release start target files protectedPaths (.readOnly prior attempts)
+      (before : SelectedEffects view directory calls init release start target files protectedPaths keep prior)
+      (frame : (files entry).Frames protectedPaths (files reached))
+      (carries : keep entry → keep reached) :
+      SelectedEffects view directory calls init release start target files protectedPaths keep (.readOnly prior attempts)
   | repair {earlier : List (FilePath × IO.Error)} {entry : heap} {workerImage : FileImage}
       {prior : RawOpenRetryTrace view directory calls init release start earlier entry}
       {input : FilePath} {failed : RawFinalizedOpenAttempt view directory calls init release input entry workerImage}
-      (before : SelectedEffects view directory calls init release start target files protectedPaths prior)
+      (before : SelectedEffects view directory calls init release start target files protectedPaths keep prior)
       (repair : EffectTrace target (view.files entry).image workerImage)
-      (frame : (files entry).Frames protectedPaths (files failed.reached)) :
-      SelectedEffects view directory calls init release start target files protectedPaths (.repair prior input failed)
+      (frame : (files entry).Frames protectedPaths (files failed.reached))
+      (carries : keep entry → keep failed.reached) :
+      SelectedEffects view directory calls init release start target files protectedPaths keep (.repair prior input failed)
 
 /-- Read-only failures keep the current image. The repair effects start
 at that same image and are preserved through finalization. Both cases
 compose the independent frame on the unchanged physical files. -/
 theorem RawOpenRetryTrace.SelectedEffects.preserves {target : Target} {files : heap → CheckpointSurvivingFiles}
-    {protectedPaths : FilePath → Prop} {returns : List (FilePath × IO.Error)} {reached : heap}
+    {protectedPaths : FilePath → Prop} {keep : heap → Prop} {returns : List (FilePath × IO.Error)} {reached : heap}
     {attempts : RawOpenRetryTrace view directory calls init release start returns reached}
-    (effects : RawOpenRetryTrace.SelectedEffects view directory calls init release start target files protectedPaths attempts)
+    (effects : RawOpenRetryTrace.SelectedEffects view directory calls init release start target files protectedPaths keep attempts)
     (valid : (view.files start).image.Valid target) :
     (view.files reached).image.Valid target ∧
       (view.files reached).image.kept = (view.files start).image.kept ∧
       (files start).Frames protectedPaths (files reached) ∧
-      (view.descriptors reached).inode = (view.descriptors start).inode := by
+      (view.descriptors reached).inode = (view.descriptors start).inode ∧
+      (keep start → keep reached) := by
   induction effects with
-  | empty => exact ⟨valid, rfl, fun _ _ => ⟨rfl, fun _ _ => rfl⟩, rfl⟩
-  | @readOnly _ _ entry reached prior block _ frame ih =>
+  | empty => exact ⟨valid, rfl, fun _ _ => ⟨rfl, fun _ _ => rfl⟩, rfl, id⟩
+  | @readOnly _ _ entry reached prior block _ frame carries ih =>
     obtain ⟨sameInodes, sameImage⟩ := block.preserves
     exact ⟨sameImage.symm ▸ ih.1, (congrArg FileImage.kept sameImage).trans ih.2.1,
-      ih.2.2.1.trans frame, sameInodes.trans ih.2.2.2⟩
-  | @repair _ entry workerImage prior input failed _ repair frame ih =>
+      ih.2.2.1.trans frame, sameInodes.trans ih.2.2.2.1, carries ∘ ih.2.2.2.2⟩
+  | @repair _ entry workerImage prior input failed _ repair frame carries ih =>
     obtain ⟨_, _, _, _, _, sameInodes, returnedImage, _⟩ := failed.returns
     have next := repair.valid ih.1.selected ih.1.keeper ih.1.later
     exact ⟨returnedImage.symm ▸ next, (congrArg FileImage.kept returnedImage).trans (repair.keepsSealed.trans ih.2.1),
-      ih.2.2.1.trans frame, sameInodes.trans ih.2.2.2⟩
+      ih.2.2.1.trans frame, sameInodes.trans ih.2.2.2.1, carries ∘ ih.2.2.2.2⟩
 
 /-- After a sequence of read-only and mutating failed opens, the new
 reader uses the keeper and later names at the last returned heap. The
@@ -154,14 +196,14 @@ theorem NativeReadPosition.preparesWriteRetry {prior : List WAL.Write} {log : Li
     {target : Target} (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
     (manifest : target.pair.manifest = current.state.writer.target.pair.manifest)
     {returns : List (FilePath × IO.Error)} {reached : heap} {files : heap → CheckpointSurvivingFiles}
-    {protectedPaths : FilePath → Prop}
+    {protectedPaths : FilePath → Prop} {keep : heap → Prop}
     {attempts : RawOpenRetryTrace view current.state.session.directory calls init release start returns reached}
     (effects : RawOpenRetryTrace.SelectedEffects view current.state.session.directory calls init release start
-      target files protectedPaths attempts) (initial : (view.files start).image.Valid target) :
-    current.SelectedWriteLayout batch target (view.files reached).image ∧
+      target files protectedPaths keep attempts) (initial : (view.files start).image.Valid target) :
+    Nonempty (current.SelectedWritePlan batch target (view.files reached).image) ∧
       (view.files reached).image.kept = (view.files start).image.kept ∧
-      (files start).Frames protectedPaths (files reached) := by
-  obtain ⟨observed, sealed, frame, _⟩ := effects.preserves initial
-  exact ⟨current.preparesSelectedWrite prepared fits admitted observed manifest, sealed, frame⟩
+      (files start).Frames protectedPaths (files reached) ∧ (keep start → keep reached) := by
+  obtain ⟨observed, sealed, frame, _, carries⟩ := effects.preserves initial
+  exact ⟨current.preparesSelectedWrite prepared fits admitted observed manifest, sealed, frame, carries⟩
 
 end Alvoki.Storage.DiskSession

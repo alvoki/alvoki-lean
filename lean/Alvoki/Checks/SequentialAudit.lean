@@ -343,6 +343,7 @@ import Alvoki.Storage.Disk.NativeMutatingOpenRetries
 import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
 import Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
+import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncObservation
 import Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 import Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
 import Alvoki.Storage.Disk.NativeFinalizedListingRetry
@@ -3874,6 +3875,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesSelectedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesWriteReboot
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesWriteRetry
+#check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Frames.visiblePayload
+#check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.keepsVisibleKeeper
+#check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.keepsObservedKeeper
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.observesFinalSyncError
+#check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.opensWithSelectedReplay
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensAfterWriteRetries
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.selectedFilePath
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.reopenPath
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.reopensAfterReadOnlyAttempts

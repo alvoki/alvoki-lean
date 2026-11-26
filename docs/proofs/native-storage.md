@@ -320,6 +320,16 @@ uncertain batch under a sublist-only rule. It rejected the same fragment under
 `DatabaseSubmissions.Retains`, and rejected replacing an acknowledged row with an unsubmitted row.
 [Batch retention](../../lean/Alvoki/Storage/Disk/SegmentedBatchDatabaseTrace.lean) · [IronSpec](https://www.usenix.org/conference/osdi24/presentation/goldweber)
 
+The shared marked installation now takes the descriptor inventory at the actual next open. A local
+keeper projection links the visible name to the inode's current bytes through failed repairs and
+cleanup. The protected checkpoint frame supplies the exact manifest and selected run payloads at
+that same open. A final directory fsync error before effect can leave a replacement live while the
+old inode can still survive a subsequent power loss. The live retry proof uses the reached name,
+while the crash proof requires a separate correlated survivor observation. The installation still
+uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
+[Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+· [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
 ## Why adding cases is expensive
 
 The architecture review uses GitHub `main` at `e71b55afbb3a5bd963a0320affda01c986bf131a`.

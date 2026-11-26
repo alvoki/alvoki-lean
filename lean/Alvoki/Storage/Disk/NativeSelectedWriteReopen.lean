@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
-import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+import Alvoki.Storage.Disk.NativeMutatingOpenRetries
 import Alvoki.Storage.Disk.NativeWriteCrashReads
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 
@@ -26,7 +26,7 @@ def CanonicalKeeperLayout.reopenPath {image : FileImage} {history : List WAL.Wri
 section
 
 variable {heap stream : Type} {state : NativeReadyState} {crash : WriteCrashView} {input : FilePath}
-  {retry : LockedFileState FileImage} {vacant : TryLockObserves retry.owners state.session.directory (.ok true)}
+  {inventory : DescriptorInventory} {retry : LockedFileState FileImage} {vacant : TryLockObserves retry.owners state.session.directory (.ok true)}
   {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {selected : SelectedIntegrityCheckpoint state.writer.published.durable
     retry.image.directory.active.manifest state.writer.checkpoint}
@@ -42,6 +42,114 @@ variable {heap stream : Type} {state : NativeReadyState} {crash : WriteCrashView
 local notation "dir" => state.session.directory
 local notation "selection" => layout.selectedFilePath state.session.directory
 local notation "footprint" => layout.reopenPath state.session.directory
+
+/-- Result of the reported source open at its own entry heap, including
+the exact installed session and the replay used for prior snapshot reads. -/
+def RawHealthyMarkedOpenEffects.SelectedReturn
+    {opening : MarkedReadyOpenObservations input dir inventory retry layout state.writer.published vacant selected}
+    (raw : RawHealthyMarkedOpenEffects opening view calls init entry phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream remove stage rename)
+    (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) : Prop :=
+    opening.finish.UsesMeasuredRepair ∧
+    ∃ (next : NativeReadPosition history log)
+      (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
+      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
+      raw.openTable bootstrap assemble makeCache = .ok handle.table start.reached ∧
+      start.current = ⟨history, log, next⟩ ∧ next.reads = reads ∧ next.initial = next.state ∧
+      next.state.writer.target = layout.target ∧ next.state.files.image.Ready layout.target ∧
+      next.state.writer.checkpoint = state.writer.checkpoint ∧
+      next.state.writer.published.durable = state.writer.published.durable ∧
+      handle.lock = raw.raw.lock ∧ handle.files.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef
+        raw.seed.directoryRef ∧ handle.files.AtDirectory (dir).path ∧
+      handle.contents = view.phase ∧ handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
+      phaseIdentity handle.phase = next.state.session.phaseRef ∧ tokenIdentity handle.token = next.state.session.sessionRef ∧
+      phaseIdentity handle.phase ≠ state.session.phaseRef ∧ tokenIdentity handle.token ≠ state.session.sessionRef ∧
+      start.pins = [] ∧
+      view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
+      view.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef = next.state.cache
+
+/-- Install the marked replay from the files and descriptor inventory used
+by the actual healthy admission. The earlier write, crash and failed
+opens have no role in the worker and reference allocation proof. -/
+theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
+    {opening : MarkedReadyOpenObservations input dir inventory retry layout state.writer.published vacant selected}
+    (raw : RawHealthyMarkedOpenEffects opening view calls init entry phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream remove stage rename)
+    (previousTokens : state.session.phaseRef ∈ opening.callbacks.liveRefs ∧
+      state.session.sessionRef ∈ opening.callbacks.liveRefs)
+    (prepared : Prepared retry.image layout.target layout.plan)
+    (accepted : state.writer.published.AcceptsVersioned history.length.toUInt64
+      (WAL.Boundary.CheckpointRepresentsPrefix history) retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    {wal : WalSegmentImage} (walLayout : wal.ReadLayout history) (walValid : wal.Valid history)
+    (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize)
+    (active : wal.directory.active = layout.target.pair) (keeper : layout.target.first = wal.active.first)
+    (descriptors : layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark)
+    (offsets : selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
+      some (layout.first, (wal.readDescriptors layout.range.watermark).map WalSegment.first))
+    (kept : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept)
+    {log : List DatabaseSubmissions} {reads : List RecordedSnapshotRead}
+    (pending : PendingClientReplay log reads history) (bounded : ∀ read ∈ reads, read.BoundedBy history.length)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ resolved lock cache, DiskTable.OpenReferenceAssembly resolved lock cache
+      (assemble resolved lock cache))
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (phase : OpenPhaseCellEffects view.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    raw.SelectedReturn log reads bootstrap assemble get set ptrEq := by
+  have following := opening.reads.walReads.selectedAfterWatermark offsets descriptors
+  let marked : MarkedOpenSuccessReports input dir history log reads := {
+    inventory := inventory
+    retry := retry
+    layout := layout
+    published := state.writer.published
+    checkpoint := state.writer.checkpoint
+    selected := selected
+    vacant := vacant
+    opening := opening
+    prepared := prepared
+    following := following
+    accepted := accepted
+    ordered := ordered
+    wal := wal
+    walLayout := walLayout
+    walValid := walValid
+    spans := spans
+    active := active
+    keeper := keeper
+    kept := kept
+    pending := pending
+    bounded := bounded
+  }
+  obtain ⟨next, seeded, cache, _, owner, slot, _, durable, checkpoint, _, target, _, freshRefs⟩ :=
+    opening.finish.startsNativeReadPrefix opening.chronology opening.markerFound
+      prepared following accepted ordered walLayout walValid spans active keeper kept pending bounded
+  let position : NativeReadPosition history log :=
+    ⟨opening.finish.run opening.chronology, next, next, reads, seeded⟩
+  obtain ⟨measured, installed, _, makeCache, _, _, ran⟩ :=
+    marked.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
+      raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
+  obtain ⟨handle, start, table, _, sameLock, sameCache, _, _, contents, sameGet, sameSet, sameCompare,
+    positionEq, reached, pins, sameFiles, sameCensus, cached, _, _, _, phaseId, tokenId⟩ :=
+    installed.startsAtReportedPosition position rfl seeded.frames.1 cache owner slot phase ptrEq
+  have freshPhase : phaseIdentity handle.phase ≠ state.session.phaseRef :=
+    fun same => freshRefs.1 ((phaseId.symm.trans same).symm ▸ previousTokens.1)
+  have freshToken : tokenIdentity handle.token ≠ state.session.sessionRef :=
+    fun same => freshRefs.2 ((tokenId.symm.trans same).symm ▸ previousTokens.2)
+  refine ⟨measured, position, makeCache, handle, start, ?_, positionEq, rfl, rfl, target,
+    target ▸ seeded.refines.1.retained.resumed.ready, checkpoint, durable, sameLock,
+    sameCache.symm ▸ installed.cacheReferences, sameCache.symm ▸ installed.cacheDirectory,
+    contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached⟩
+  rw [table, reached]
+  exact ran
 
 /-- A selected crash image supplies the same canonical inodes and
 bytes after the actual failed opens. The next measured keeper repair
@@ -91,89 +199,145 @@ theorem NativeWriteCrashReads.reopensAfterReadOnlyAttempts
     (∀ path payload, selection path → reader.ReadsSurvivor path payload →
       ∃ read : reader.opening.reads.reads.ObservesFile path payload,
         (files entry).names path = some read.object ∧ (files entry).bytes read.object = [payload]) ∧
-    reader.opening.finish.UsesMeasuredRepair ∧
-    ∃ (next : NativeReadPosition history log)
-      (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
-      raw.openTable bootstrap assemble makeCache = .ok handle.table start.reached ∧
-      start.current = ⟨history, log, next⟩ ∧ next.reads = reads ∧ next.initial = next.state ∧
-      next.state.writer.target = layout.target ∧ next.state.files.image.Ready layout.target ∧
-      next.state.writer.checkpoint = state.writer.checkpoint ∧
-      next.state.writer.published.durable = state.writer.published.durable ∧
-      handle.lock = raw.raw.lock ∧ handle.files.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef
-        raw.seed.directoryRef ∧ handle.files.AtDirectory (dir).path ∧
-      handle.contents = view.phase ∧ handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
-      phaseIdentity handle.phase = next.state.session.phaseRef ∧ tokenIdentity handle.token = next.state.session.sessionRef ∧
-      phaseIdentity handle.phase ≠ state.session.phaseRef ∧ tokenIdentity handle.token ≠ state.session.sessionRef ∧
-      start.pins = [] ∧
-      view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
-      view.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef = next.state.cache := by
+    raw.SelectedReturn log reads bootstrap assemble get set ptrEq := by
   have frame := attempts.frames (frame := fun a b => (files a).Frames footprint (files b))
     (fun _ _ _ => ⟨rfl, fun _ _ => rfl⟩) CheckpointSurvivingFiles.Frames.trans
     beforeFlockFrame flockErrorFrame heldFrame
-  have fileImage := attempts.preserves.2
-  rw [raw.raw.entryFiles] at fileImage
-  have root := (frame _ (.inl rfl)).1.trans (rebootNames _ (.inl rfl))
-  have lock := (frame _ (.inr (.inl rfl))).1.trans (rebootNames _ (.inr (.inl rfl)))
-  rw [raw.seed.sameHandle, raw.seed.openedHandle]
-  rw [raw.raw.sameLock, raw.raw.appendHandle]
-  refine ⟨fileImage.symm, root.trans (reader.directory.symm.trans reader.opening.reads.sameObjects.1),
-    lock.trans (reader.lock.symm.trans reader.opening.reads.sameObjects.2.1), ?_, ?_, ?_⟩
+  have names : ∀ path, footprint path → (files entry).names path = crash.names path := by
+    intro path inScope
+    exact (frame path inScope).1.trans (rebootNames path inScope)
+  have reachedBytes : ∀ path, selection path → ∀ inode, crash.names path = some inode →
+      (files entry).bytes inode = [crash.contents inode] := by
+    intro path inScope inode bound
+    have protects : footprint path := .inr (.inr inScope)
+    exact ((frame path protects).2 _ ((rebootNames path protects).trans bound)).trans (rebootBytes path inScope inode bound)
+  have entryImage := congrArg LockedFileState.image raw.raw.entryFiles
+  refine ⟨attempts.preserves.2.symm.trans entryImage, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [raw.seed.sameHandle, raw.seed.openedHandle]
+    exact (names _ (.inl rfl)).trans (reader.directory.symm.trans reader.opening.reads.sameObjects.1)
+  · rw [raw.raw.sameLock, raw.raw.appendHandle]
+    exact (names _ (.inr (.inl rfl))).trans (reader.lock.symm.trans reader.opening.reads.sameObjects.2.1)
   · intro path selectedFile
-    have selectedScope : footprint path := .inr (.inr selectedFile)
-    exact (frame path selectedScope).1.trans (rebootNames path selectedScope)
+    exact names path (.inr (.inr selectedFile))
   · intro path payload selectedFile ⟨read, bound, bytes⟩
-    obtain ⟨nameFrame, byteFrame⟩ := frame path (.inr (.inr selectedFile))
-    have before := (rebootNames _ (.inr (.inr selectedFile))).trans bound
-    exact ⟨read, nameFrame.trans before, (byteFrame _ before).trans
-      ((rebootBytes path selectedFile _ bound).trans (congrArg (fun payload => [payload]) bytes))⟩
-  have following := reader.opening.reads.walReads.selectedAfterWatermark offsets descriptors
-  let marked : MarkedOpenSuccessReports input dir history log reads := {
-    inventory := crash.reboot
-    retry := retry
-    layout := layout
-    published := state.writer.published
-    checkpoint := state.writer.checkpoint
-    selected := selected
-    vacant := vacant
-    opening := reader.opening
-    prepared := prepared
-    following := following
-    accepted := accepted
-    ordered := ordered
-    wal := wal
-    walLayout := walLayout
-    walValid := walValid
-    spans := spans
-    active := active
-    keeper := keeper
-    kept := kept
-    pending := pending
-    bounded := bounded
-  }
-  obtain ⟨next, seeded, cache, _, owner, slot, _, durable, checkpoint, _, target, _, freshRefs⟩ :=
-    reader.opening.finish.startsNativeReadPrefix reader.opening.chronology reader.opening.markerFound
-      prepared following accepted ordered walLayout walValid spans active keeper kept pending bounded
-  let position : NativeReadPosition history log :=
-    ⟨reader.opening.finish.run reader.opening.chronology, next, next, reads, seeded⟩
-  obtain ⟨measured, installed, _, makeCache, _, _, ran⟩ :=
-    marked.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
-      raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
-  obtain ⟨handle, start, table, _, sameLock, sameCache, _, _, contents, sameGet, sameSet, sameCompare,
-    positionEq, reached, pins, sameFiles, sameCensus, cached, _, _, _, phaseId, tokenId⟩ :=
-    installed.startsAtReportedPosition position rfl seeded.frames.1 cache owner slot phase ptrEq
-  have freshPhase : phaseIdentity handle.phase ≠ state.session.phaseRef :=
-    fun same => freshRefs.1 ((phaseId.symm.trans same).symm ▸ reader.previousTokens.1)
-  have freshToken : tokenIdentity handle.token ≠ state.session.sessionRef :=
-    fun same => freshRefs.2 ((tokenId.symm.trans same).symm ▸ reader.previousTokens.2)
-  refine ⟨measured, position, makeCache, handle, start, ?_, positionEq, rfl, rfl, target,
-    target ▸ seeded.refines.1.retained.resumed.ready, checkpoint, durable, sameLock,
-    sameCache.symm ▸ installed.cacheReferences, sameCache.symm ▸ installed.cacheDirectory,
-    contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached⟩
-  rw [table, reached]
-  exact ran
+    exact ⟨read, (names _ (.inr (.inr selectedFile))).trans bound,
+      (reachedBytes path selectedFile _ bound).trans (congrArg (fun payload => [payload]) bytes)⟩
+  · exact raw.opensWithSelectedReplay reader.previousTokens prepared accepted ordered walLayout walValid spans
+      active keeper descriptors offsets kept pending bounded bootstrap assemble constructs phase ptrEq
 
 end
+
+section Retry
+
+variable {heap stream : Type} {input : FilePath}
+  {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+  {init : OpenSyncCacheCallbacks heap} {returns : List (FilePath × IO.Error)}
+  {release : IO.FS.Handle → heap → heap}
+  {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+  {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+  {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+  {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)} {stage : LongKeeperStageCallbacks heap}
+  {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+
+variable {prior : List WAL.Write} {log : List DatabaseSubmissions} {batch : List WAL.Write}
+  (current : NativeReadPosition prior log) {target : Target} {reached : heap}
+
+local notation "dir" => current.state.session.directory
+local notation "retryFiles" => (view.files reached)
+local notation "census" => (view.descriptors reached)
+
+/-- The next successful open uses the actual last retry heap. Its native
+stat and open identify the live keeper, while the derived bounded plan
+carries the selected checkpoint and earlier client reads into the table. -/
+theorem NativeReadPosition.opensAfterWriteRetries
+    {rows : List (UInt64 × Option UInt64)} {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
+    (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
+    (manifest : target.pair.manifest = current.state.writer.target.pair.manifest)
+    {first : heap} (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    {attempts : RawOpenRetryTrace view dir calls init release first returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view dir calls init release first target
+      (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.writeFramePath
+      (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts)
+    (initialFiles : NativeReadyProtectedStorage current.state ⟨names first, fun inode => [visible first inode]⟩)
+    (valid : (view.files first).image.Valid target)
+    (seals : (view.files first).image.kept = current.state.writer.files.kept)
+    (vacant : TryLockObserves (retryFiles).owners dir (.ok true))
+    (firstKeeper : RawOpenRetryTrace.KeeperAt view dir target names visible first)
+    (observe : ∀ plan : current.SelectedWritePlan batch target (retryFiles).image,
+      ∃ (opening : MarkedReadyOpenObservations input dir census retryFiles plan.layout
+          current.state.writer.published vacant plan.selected)
+        (_ : RawHealthyMarkedOpenEffects opening view calls init reached phaseIdentity tokenIdentity
+          allocatePhase allocateToken stream remove stage rename),
+        (current.state.session.phaseRef ∈ opening.callbacks.liveRefs ∧
+          current.state.session.sessionRef ∈ opening.callbacks.liveRefs) ∧
+        ∀ path metadata inode, plan.layout.selectedFilePath dir path →
+          opening.reads.reads.stat path = .ok (metadata, inode) → names reached path = some inode)
+    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
+    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
+    (constructs : ∀ resolved lock cache, DiskTable.OpenReferenceAssembly resolved lock cache
+      (assemble resolved lock cache))
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (phase : OpenPhaseCellEffects view.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    NativeReadyProtectedStorage current.state ⟨names reached, fun inode => [visible reached inode]⟩ ∧
+    ∃ (plan : current.SelectedWritePlan batch target (retryFiles).image)
+      (opening : MarkedReadyOpenObservations input dir census retryFiles plan.layout
+        current.state.writer.published vacant plan.selected)
+      (raw : RawHealthyMarkedOpenEffects opening view calls init reached phaseIdentity tokenIdentity
+        allocatePhase allocateToken stream remove stage rename),
+      (∃ read : opening.reads.reads.ObservesFile ((dir).file (.walSegment plan.layout.keeper.first))
+          (plan.layout.keeper.bytes ++ plan.layout.tail),
+        names reached ((dir).file (.walSegment target.first)) = some read.object ∧
+        visible reached read.object = plan.layout.keeper.bytes ++ plan.layout.tail) ∧
+      (∀ bytes, (retryFiles).image.directory.active.manifest = some bytes →
+        ∃ read : opening.reads.reads.ObservesFile ((dir).file .manifest) bytes,
+          names reached ((dir).file .manifest) = some read.object ∧ visible reached read.object = bytes) ∧
+      (∀ bytes metadata, (retryFiles).image.directory.active.manifest = some bytes →
+        Manifest.IntegrityCheckpoint.decode bytes = .ok metadata → ∀ index < metadata.header.runCount.toNat,
+        ∀ payload, current.state.writer.published.durable metadata.header.generation index = some payload →
+        ∃ run : opening.reads.reads.ObservesFile ((dir).file (.run metadata.header.generation index)) payload,
+          names reached ((dir).file (.run metadata.header.generation index)) = some run.object ∧ visible reached run.object = payload) ∧
+      raw.SelectedReturn (log ++ [.uncertainBatch batch]) current.reads bootstrap assemble get set ptrEq := by
+  obtain ⟨⟨plan⟩, kept, frame, carries⟩ := current.preparesWriteRetry prepared fits admitted manifest effects valid
+  obtain ⟨opening, raw, refs, actualStat⟩ := observe plan
+  let file := opening.reads.wal.keeper
+  let read := file.calls.observesFile file.bound file.contents
+  have named := actualStat _ _ _ (.inr (.inr (.inl ⟨plan.layout.keeper, by simp, rfl⟩))) read.stat
+  have samePath := congrArg (fun (target : Target) => (dir).file (.walSegment target.first)) plan.targetEq
+  change (dir).file (.walSegment plan.layout.keeper.first) = _ at samePath
+  have keeperName := (congrArg (names reached) samePath).symm.trans named
+  have keeperAt := carries firstKeeper
+  unfold RawOpenRetryTrace.KeeperAt at keeperAt
+  have contents : visible reached read.object = plan.layout.keeper.bytes ++ plan.layout.tail := by
+    rw [keeperName, Option.map_some, plan.layout.visible] at keeperAt
+    exact (Option.some.inj keeperAt).symm
+  have keptFiles := initialFiles.frame frame
+  have reachedManifest : (retryFiles).image.directory.active.manifest = current.state.writer.target.pair.manifest :=
+    (congrArg (fun (target : Target) => target.pair.manifest) plan.targetEq).trans manifest
+  refine ⟨keptFiles, plan, opening, raw, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
+  · intro bytes present
+    obtain ⟨⟨file⟩, _⟩ := opening.reads.metadata.manifestFile bytes present
+    let read := file.calls.observesFile file.bound file.contents
+    have bound := actualStat _ _ _ (.inl rfl) read.stat
+    have stored := keptFiles.manifest
+    rw [← reachedManifest, present] at stored
+    obtain ⟨inode, named, payload⟩ := stored
+    exact ⟨read, bound, (Option.some.inj (named.symm.trans bound)) ▸ (List.cons.inj payload).1⟩
+  · intro bytes metadata present decoded index within payload stored
+    obtain ⟨run⟩ := opening.reads.chunkReads bytes metadata present decoded index within payload stored
+    have bound := actualStat _ _ _ (.inr (.inr (.inr ⟨bytes, metadata, index, present, decoded, within, rfl⟩))) run.stat
+    obtain ⟨inode, named, exactBytes⟩ := keptFiles.runs bytes metadata (reachedManifest.symm.trans present)
+      decoded index within payload stored
+    exact ⟨run, bound, (Option.some.inj (named.symm.trans bound)) ▸ (List.cons.inj exactBytes).1⟩
+  ·
+    obtain ⟨ready, _, _⟩ := current.readPrefix.refines
+    exact raw.opensWithSelectedReplay refs plan.prepared plan.accepted plan.ordered plan.walLayout plan.walValid
+      ready.retained.spans rfl (congrArg WalSegment.first plan.keeper) plan.descriptors plan.offsets
+      (kept.trans (seals.trans ready.retained.sealedFiles)) plan.pending plan.bounded bootstrap assemble constructs phase ptrEq
+
+end Retry
 
 end Alvoki.Storage.DiskSession

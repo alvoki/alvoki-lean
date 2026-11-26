@@ -301,24 +301,29 @@ variable {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : Na
 
 local notation "state" => current.state
 
-/-- The selected repair input and replay derived from one admitted
-history. Both a newly selected reboot and a reached repair retry can
-supply the file image for this plan. -/
-def NativeReadPosition.SelectedWriteLayout (batch : List WAL.Write) (target : Target) (image : FileImage) : Prop :=
-    ∃ history, (history = prior ∨ history = prior ++ batch) ∧
-      let wal := (state).writer.wal.appendSelectedView image.directory.active history
-      wal.ReadLayout history ∧ wal.Valid history ∧
-      ∃ layout : CanonicalKeeperLayout image history,
-        layout.target = target ∧ layout.target.first = (state).writer.wal.active.first ∧ layout.keeper = wal.active ∧
-        layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark ∧
-        selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
-          some (layout.first, (wal.readDescriptors layout.range.watermark).map WalSegment.first) ∧
-        Prepared image layout.target layout.plan ∧
-        SelectedIntegrityCheckpoint (state).writer.published.durable image.directory.active.manifest (state).writer.checkpoint ∧
-        (state).writer.published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
-          image.directory.active.manifest ∧ WAL.OrdinalsFrom 1 history ∧
-        PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads history ∧
-        ∀ read ∈ current.reads, read.BoundedBy history.length
+/-- The bounded reader input derived from one admitted WAL target. -/
+structure NativeReadPosition.SelectedWritePlan (batch : List WAL.Write) (target : Target) (image : FileImage) where
+  history : List WAL.Write
+  allowed : history = prior ∨ history = prior ++ batch
+  layout : CanonicalKeeperLayout image history
+  targetEq : layout.target = target
+  walLayout : ((state).writer.wal.appendSelectedView image.directory.active history).ReadLayout history
+  walValid : ((state).writer.wal.appendSelectedView image.directory.active history).Valid history
+  keeper : layout.keeper = ((state).writer.wal.appendSelectedView image.directory.active history).active
+  descriptors : layout.sealed ++ [layout.keeper] =
+    ((state).writer.wal.appendSelectedView image.directory.active history).readDescriptors layout.range.watermark
+  offsets : selectWalSegmentReads (((state).writer.wal.appendSelectedView image.directory.active history).segments.map
+    WalSegment.first) layout.range.watermark = some
+      (layout.first, (((state).writer.wal.appendSelectedView image.directory.active history).readDescriptors
+        layout.range.watermark).map WalSegment.first)
+  prepared : Prepared image layout.target layout.plan
+  selected : SelectedIntegrityCheckpoint (state).writer.published.durable image.directory.active.manifest
+    (state).writer.checkpoint
+  accepted : (state).writer.published.AcceptsVersioned history.length.toUInt64
+    (WAL.Boundary.CheckpointRepresentsPrefix history) image.directory.active.manifest
+  ordered : WAL.OrdinalsFrom 1 history
+  pending : PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads history
+  bounded : ∀ read ∈ current.reads, read.BoundedBy history.length
 
 /-- Rebuild the bounded reader and replay at an image that implements
 an already selected target. Repair may change the keeper and later names. -/
@@ -329,7 +334,7 @@ theorem NativeReadPosition.preparesSelectedWrite
     {target : Target} (admitted : BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target)
     {image : FileImage} (observed : image.Valid target)
     (manifest : target.pair.manifest = (state).writer.target.pair.manifest) :
-    current.SelectedWriteLayout batch target image := by
+    Nonempty (current.SelectedWritePlan batch target image) := by
   have imageManifest := (congrArg DirectoryPublication.Bindings.manifest observed.selected).trans manifest
   obtain ⟨valid, priorHistory, replay⟩ := current.readPrefix.refines
   let ready := valid.retained
@@ -347,14 +352,14 @@ theorem NativeReadPosition.preparesSelectedWrite
   have committed : (state).writer.history.length = (state).writer.installed.table.committed.toNat :=
     represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
   have count := NativeReadyState.preparedWalCount valid prepared
-  obtain ⟨history, allowed, _, layoutValid, walValid, layout, targetEq, _, first, exactKeeper,
+  obtain ⟨history, allowed, _, layoutValid, walValid, layout, targetEq, _, _, exactKeeper,
     descriptors, offsets, plan, accepted, ordered, _⟩ :=
     selectedBatchReopenLayout ready.layout ready.valid oldRange ready.resumed.ordered committed prepared
       (count.symm ▸ fits) checkpoint admitted sameManifest observed.selected observed.keeper observed.later
   have selectedHistory := allowed.imp (·.trans priorHistory) (·.trans (congrArg (· ++ batch) priorHistory))
   obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded selectedHistory ordered
-  exact ⟨history, selectedHistory, layoutValid, walValid, layout, targetEq, first, exactKeeper, descriptors, offsets, plan,
-    imageManifest.symm ▸ ready.resumed.selected, accepted, ordered, pending, bounded⟩
+  exact ⟨⟨history, selectedHistory, layout, targetEq, layoutValid, walValid, exactKeeper, descriptors, offsets, plan,
+    imageManifest.symm ▸ ready.resumed.selected, accepted, ordered, pending, bounded⟩⟩
 
 /-- Project the chosen durable manifest, marker and keeper into the
 bounded reader's file image. The logical image keeps the immutable
@@ -378,7 +383,7 @@ theorem NativeReadPosition.preparesWriteReboot
     let image := (state).writer.files.crash
       ⟨(names (directory.file .manifest)).map contents, (names (directory.file .walBoundary)).map contents⟩
       ((names (directory.file (.walSegment (state).writer.wal.active.first))).map contents) later
-    current.SelectedWriteLayout batch target image := by
+    Nonempty (current.SelectedWritePlan batch target image) := by
   intro directory image
   have pair : image.directory.active = target.pair := selectedPair.symm
   have manifest := old.selectedWriteManifest frame names chosen contents manifestBytes

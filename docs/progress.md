@@ -1,5 +1,28 @@
 # Current handoff
 
+A single marked installation proof now serves both the reboot path and a live open after failed
+repairs. The next admission uses the last reached heap and its descriptor inventory. For an
+already selected uncertain batch, the same retry induction carries the valid repair plan, the
+protected checkpoint files and an independent observation of the live keeper. A read-only block
+uses its local file frame. A failed repair can supply the replacement inode and its exact payload
+before cache and lock cleanup. The final reader's stat and open observations identify that live
+inode and the exact manifest and ordered run bytes. The actual interpreted open installs the
+selected history with the prior snapshot ledger and fresh session references.
+[Reached-file installation](../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+· [Live keeper after a sync error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
+Linux checked all four combinations of staging and final directory fsync errors before or after
+effect. With both errors before effect, a separate run kept descriptors for the original keeper and
+an unrelated file open during the healthy retry. The retry opened and synced the new empty keeper,
+replayed snapshots 1–5 and appended the next write. The test observes live Linux behavior. The proof
+keeps the older physical crash alternative explicit before directory settlement.
+
+The composed theorem starts with one admitted write target, actual failed-attempt effects and
+reported healthy callbacks at the reached heap. The common execution still needs to derive those
+premises from its fixed source schedules across starting states, other operation cuts and repeated
+crashes. The protected-file and live-keeper observations remain separate from the validity of the
+selected history.
+
 The marked worker now uses the same chronological reads and measured repair dispatch for a
 returned error and for a success. On error, the actual worker heap supplies the file image to
 the shared cache and lock finalizers. The original read-only proof specializes that argument to
@@ -16,8 +39,7 @@ one production prefix. A staged-file error leaves the scratch inode and the old 
 After the rename, the final error leaves the replacement inode visible with the exact trimmed
 bytes. If the directory sync took effect, the replacement is the only admitted crash binding and
 the reached logical image is ready for reopening. The proofs use measured extent, actual cache
-routing, descriptor identity and reported filesystem effects. Deriving the next actual selected
-reader across the whole mutating retry trace remains open. [Stage error](../lean/Alvoki/Storage/Disk/NativeLongKeeperStageSyncError.lean)
+routing, descriptor identity and reported filesystem effects. Those local effects can supply the reached keeper observation used by the retry induction. [Stage error](../lean/Alvoki/Storage/Disk/NativeLongKeeperStageSyncError.lean)
 · [Final repair error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncError.lean)
 
 The final WAL write directory-fsync error also derives its payloads from the actual successful
@@ -44,9 +66,7 @@ sequence of actual read-only open failures. It reuses the measured aligned or lo
 repair and returns the actual table on the reached heap with the same selected target, its reached
 cache, fresh phase and token, and prior read ledger. Its existing admission index requires the failed
 attempts to release their resources back to the reboot inventory. The proof uses raw admission,
-reader, repair and allocation effects for the final healthy attempt. The common execution still
-needs to derive those effects and join the selected layout and this reader to all operation cuts,
-including failed opens that have already changed the selected files. [Selected raw reopen](../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+reader, repair and allocation effects for the final healthy attempt. The shared installation proof now also serves the live retry theorem above. [Selected raw reopen](../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 
 The returned WAL rename error now derives its input payloads from the actual successful
 append, marker stage and grouped file sync on the same reached heap. The late effect must use
