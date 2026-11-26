@@ -16,6 +16,76 @@ def MarkedTemporaryReadCalls.readKeeperWithRelease (reader : MarkedTemporaryRead
     if size < physical then reader.release file
     pure bytes) remember path count physical
 
+/-- Recover the actual prefix read and final callback from a successful
+keeper return. Only an aligned keeper is remembered. A longer keeper
+returns after the separate release of that same read handle. -/
+theorem MarkedTemporaryReadCalls.readKeeperWithRelease_ok (calls : MarkedTemporaryReadCalls heap)
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (path : FilePath) (count physical : Nat) {before reached : heap} {bytes : ByteArray}
+    (returned : calls.readKeeperWithRelease remember path count physical before = .ok bytes reached) :
+    ∃ (file : IO.FS.Handle) (opened readHeap : heap),
+      count ≤ physical ∧ count < USize.size ∧ calls.openRead path before = .ok file opened ∧
+      readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
+        (calls.readChunk file) count .empty opened = .ok bytes readHeap ∧
+      ((count = physical ∧ remember path file readHeap = .ok () reached) ∨
+        (count < physical ∧ calls.release file readHeap = .ok () reached)) := by
+  unfold readKeeperWithRelease readKeeperWith at returned
+  by_cases admitted : count ≤ physical ∧ count < USize.size
+  · simp only [ite_eq_left admitted, Bind.bind, EStateM.bind, Pure.pure] at returned
+    cases acquired : calls.openRead path before with
+    | error cause after => simp [acquired] at returned
+    | ok file opened =>
+      simp only [acquired] at returned
+      cases read : readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
+          (calls.readChunk file) count .empty opened with
+      | error cause after => simp [read] at returned
+      | ok payload readHeap =>
+        simp only [read] at returned
+        by_cases aligned : count = physical
+        · have finalized := returned
+          subst physical
+          simp only [Nat.lt_irrefl, ↓reduceIte, BEq.rfl, EStateM.bind, EStateM.pure] at finalized
+          cases remembered : remember path file readHeap with
+          | error cause after => simp [remembered] at finalized
+          | ok value after =>
+            cases value
+            obtain ⟨rfl, rfl⟩ : payload = bytes ∧ after = reached := by
+              simpa only [remembered, EStateM.Result.ok.injEq] using finalized
+            exact ⟨file, opened, readHeap, admitted.1, admitted.2, rfl, read, .inl ⟨rfl, remembered⟩⟩
+        · have longer := Nat.lt_of_le_of_ne admitted.1 aligned
+          simp only [longer, ↓reduceIte, EStateM.bind, EStateM.pure, beq_iff_eq, aligned] at returned
+          cases released : calls.release file readHeap with
+          | error cause after => simp [released] at returned
+          | ok value after =>
+            cases value
+            obtain ⟨rfl, rfl⟩ : payload = bytes ∧ after = reached := by
+              simpa only [released, EStateM.Result.ok.injEq] using returned
+            exact ⟨file, opened, readHeap, admitted.1, admitted.2, rfl, read, .inr ⟨longer, released⟩⟩
+  · simp [admitted, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+
+/-- The literal keeper prefix comes from the chosen inode at the read heap.
+The reported physical extent controls how that same handle is finalized.
+It is independent of the length of the consumed prefix. -/
+theorem MarkedTemporaryReadCalls.readSelectedKeeper (calls : MarkedTemporaryReadCalls heap)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (path : FilePath) (count physical : Nat) {before reached : heap} {bytes : ByteArray}
+    (returned : calls.readKeeperWithRelease remember path count physical before = .ok bytes reached) :
+    ∃ (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat) (opened readHeap : heap),
+      count ≤ physical ∧ count < USize.size ∧ calls.openRead path before = .ok file opened ∧
+      names before path = some inode ∧ attachedReadSlot view file slot inode opened ∧
+      attachedReadSlot view file slot inode readHeap ∧ (view.handle readHeap file).2.2 = count ∧
+      visible readHeap inode = visible before inode ∧ bytes = (visible readHeap inode).extract 0 count ∧
+      ((count = physical ∧ remember path file readHeap = .ok () reached) ∨
+        (count < physical ∧ calls.release file readHeap = .ok () reached)) := by
+  obtain ⟨file, opened, readHeap, covered, fits, acquired, payload, finished⟩ :=
+    calls.readKeeperWithRelease_ok remember path count physical returned
+  obtain ⟨slot, inode, name, openedSlot, readSlot, cursor, stable, bytes⟩ :=
+    calls.readExactOpenedFile view names visible opens reads path (IO.userError "short or oversized WAL keeper read")
+      count acquired payload
+  exact ⟨file, slot, inode, opened, readHeap, covered, fits, acquired, name, openedSlot, readSlot, cursor, stable, bytes, finished⟩
+
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}

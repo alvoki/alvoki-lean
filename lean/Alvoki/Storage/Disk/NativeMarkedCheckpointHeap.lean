@@ -69,6 +69,32 @@ def MarkedTemporaryReadCalls.readOptional (calls : MarkedTemporaryReadCalls heap
     (fun metadata => calls.readWith path (calls.readMetadata directory path metadata))
     (fun _ => IO.userError s!"expected a regular database file: '{path}'") throw
 
+/-- The absent result comes directly from a no-follow ENOENT. Its
+reported heap is the reached stat heap, before any file open or read. -/
+theorem MarkedTemporaryReadCalls.readOptional_none (calls : MarkedTemporaryReadCalls heap)
+    (directory : DiskDirectory) (path : FilePath) {before reached : heap}
+    (returned : calls.readOptional directory path before = .ok none reached) :
+    ∃ name message, calls.stat path before = .ok (.error (.noFileOrDirectory name 2 message)) reached := by
+  simp only [readOptional, readOptionalDatabaseFileWithMetadata, Bind.bind, EStateM.bind] at returned
+  cases observed : calls.stat path before with
+  | error cause failed => simp [observed] at returned
+  | ok stat afterStat =>
+    cases stat with
+    | error cause =>
+      cases cause <;> simp [observed, throw, throwThe, MonadExceptOf.throw, EStateM.throw, Pure.pure] at returned
+      rename_i name code message
+      by_cases missing : code = 2
+      · subst code
+        have atStat : afterStat = reached := by simpa [EStateM.pure] using returned
+        exact ⟨name, message, congrArg (fun heap => EStateM.Result.ok
+          (Except.error (IO.Error.noFileOrDirectory name 2 message)) heap) atStat⟩
+      · simp [missing, EStateM.throw] at returned
+    | ok metadata =>
+      cases regular : metadata.type == .file
+      · simp [observed, regular, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+      · cases body : calls.readWith path (calls.readMetadata directory path metadata) afterStat <;>
+          simp [observed, regular, body, EStateM.bind, Pure.pure, EStateM.pure] at returned
+
 /-- The manifest and marker return their observed bytes only after a
 successful regular-file check and read on the opened description. -/
 theorem MarkedTemporaryReadCalls.readOptionalPresent (calls : MarkedTemporaryReadCalls heap)
@@ -215,6 +241,20 @@ def MarkedTemporaryReadCalls.ReadsAtCursor (calls : MarkedTemporaryReadCalls hea
     (view.handle after file).2.2 = (view.handle before file).2.2 + chunk.size ∧
     chunk = (visible before inode).extract (view.handle before file).2.2 (view.handle after file).2.2
 
+/-- Freeze the source bytes of an attached description at the observed
+entry. Each successful primitive read supplies the next cursor slice. -/
+private theorem MarkedTemporaryReadCalls.ReadsAtCursor.onSource {calls : MarkedTemporaryReadCalls heap}
+    {view : OpenCloseHeapView heap image} {visible : heap → Nat → ByteArray}
+    (reads : calls.ReadsAtCursor view visible) (file : IO.FS.Handle) (slot : DescriptorSlot)
+    (inode : Nat) (source : ByteArray) (request : USize) (entry after : heap) (chunk : ByteArray)
+    (atEntry : attachedReadSlot view file slot inode entry ∧ visible entry inode = source)
+    (success : calls.readChunk file request entry = .ok chunk after) :
+    (attachedReadSlot view file slot inode after ∧ visible after inode = source) ∧
+    (view.handle after file).2.2 = (view.handle entry file).2.2 + chunk.size ∧
+    chunk = source.extract (view.handle entry file).2.2 (view.handle after file).2.2 := by
+  obtain ⟨held, preserved, advanced, payload⟩ := reads _ _ _ _ _ _ _ atEntry.1 success
+  exact ⟨⟨held, preserved.trans atEntry.2⟩, advanced, atEntry.2 ▸ payload⟩
+
 /-- A successful open binds the actual returned handle to the selected
 path at acquisition. It begins at cursor zero on the same visible bytes. -/
 def MarkedTemporaryReadCalls.OpensReadSlot (calls : MarkedTemporaryReadCalls heap)
@@ -223,6 +263,29 @@ def MarkedTemporaryReadCalls.OpensReadSlot (calls : MarkedTemporaryReadCalls hea
   ∀ path before file opened, calls.openRead path before = .ok file opened →
     ∃ slot inode, names before path = some inode ∧ attachedReadSlot view file slot inode opened ∧
       (view.handle opened file).2.2 = 0 ∧ visible opened inode = visible before inode
+
+/-- The reached raw chunk loop reads from the same inode at every
+cursor and leaves that description available to the next callback. -/
+theorem MarkedTemporaryReadCalls.readExactOpenedFile (calls : MarkedTemporaryReadCalls heap)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    (path : FilePath) (mismatch : IO.Error) (count : Nat) {before opened readHeap : heap} {file : IO.FS.Handle}
+    {bytes : ByteArray} (acquired : calls.openRead path before = .ok file opened)
+    (read : readExactPrefixWith mismatch (calls.readChunk file) count .empty opened = .ok bytes readHeap) :
+    ∃ (slot : DescriptorSlot) (inode : Nat), names before path = some inode ∧
+      attachedReadSlot view file slot inode opened ∧ attachedReadSlot view file slot inode readHeap ∧
+      (view.handle readHeap file).2.2 = count ∧ visible readHeap inode = visible before inode ∧
+      bytes = (visible readHeap inode).extract 0 count := by
+  obtain ⟨slot, inode, named, bound, beginAt, unchanged⟩ := opens _ _ _ _ acquired
+  let source := visible before inode
+  let stable entry := attachedReadSlot view file slot inode entry ∧ visible entry inode = source
+  have observes := MarkedTemporaryReadCalls.ReadsAtCursor.onSource reads file slot inode source
+  obtain ⟨sameHandle, endedAt, delivered⟩ := readExactPrefixWith_successAtCursor mismatch
+    (fun heap => (view.handle heap file).2.2) stable observes count ⟨bound, unchanged⟩ read
+  simp only [beginAt, Nat.zero_add] at endedAt delivered
+  rw [endedAt, ByteArray.empty_append] at delivered
+  exact ⟨slot, inode, named, bound, sameHandle.1, endedAt, sameHandle.2, sameHandle.2.symm ▸ delivered⟩
 
 /-- One scoped exact-prefix law works for a complete run, a seal and a
 prefix of a longer file. The durability claim is left to the caller. -/
@@ -239,20 +302,9 @@ theorem MarkedTemporaryReadCalls.readExactSelectedFile (calls : MarkedTemporaryR
       (view.handle readHeap file).2.2 = count ∧ bytes = (visible before inode).extract 0 count ∧
       dataErrorDropState calls.release file readHeap = reached := by
   obtain ⟨file, opened, readHeap, acquired, read, dropped⟩ := calls.readWith_ok path _ returned
-  obtain ⟨slot, inode, named, bound, beginAt, unchanged⟩ := opens _ _ _ _ acquired
-  let source := visible before inode
-  let stable entry := attachedReadSlot view file slot inode entry ∧ visible entry inode = source
-  have observes request entry after chunk (atEntry : stable entry)
-      (success : calls.readChunk file request entry = .ok chunk after) :
-      stable after ∧ (view.handle after file).2.2 = (view.handle entry file).2.2 + chunk.size ∧
-      chunk = source.extract (view.handle entry file).2.2 (view.handle after file).2.2 := by
-    obtain ⟨held, preserved, advanced, payload⟩ := reads _ _ _ _ _ _ _ atEntry.1 success
-    exact ⟨⟨held, preserved.trans atEntry.2⟩, advanced, atEntry.2 ▸ payload⟩
-  obtain ⟨sameHandle, endedAt, delivered⟩ := readExactPrefixWith_successAtCursor mismatch
-    (fun heap => (view.handle heap file).2.2) stable observes count ⟨bound, unchanged⟩ read
-  simp only [beginAt, Nat.zero_add] at endedAt delivered
-  rw [endedAt, ByteArray.empty_append] at delivered
-  exact ⟨file, slot, inode, opened, readHeap, acquired, named, bound, sameHandle.1, endedAt, delivered, dropped⟩
+  obtain ⟨slot, inode, named, bound, held, cursor, sameBytes, delivered⟩ :=
+    calls.readExactOpenedFile view names visible opens reads path mismatch count acquired read
+  exact ⟨file, slot, inode, opened, readHeap, acquired, named, bound, held, cursor, sameBytes ▸ delivered, dropped⟩
 
 /-- The sized checkpoint reader checks the true current extent and reads
 the entire selected file from the live handle at the reached size heap. -/
@@ -281,6 +333,100 @@ theorem MarkedTemporaryReadCalls.readSelectedRun (calls : MarkedTemporaryReadCal
     obtain ⟨extent, visibleSame⟩ := sameBytes inode beforeName
     rw [visibleSame, extent, ByteArray.extract_zero_size] at delivered
     exact ⟨file, slot, inode, afterSize, opened, readHeap, beforeName, measured, acquired, bound, delivered, released⟩
+
+/-- A strict accepted manifest read observes the whole visible contents
+of the actual inode bound to the selected name at the stat entry. -/
+theorem MarkedTemporaryReadCalls.readSelectedManifest (calls : MarkedTemporaryReadCalls heap)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    (directory : DiskDirectory) {before reached : heap} {raw : ByteArray} {manifest : IntegrityCheckpoint}
+    (stat : ∀ {metadata afterStat}, calls.stat (directory.file .manifest) before = .ok (.ok metadata) afterStat →
+      names afterStat (directory.file .manifest) = names before (directory.file .manifest) ∧
+      ∀ inode, names before (directory.file .manifest) = some inode →
+        metadata.byteSize.toNat = (visible before inode).size ∧ visible afterStat inode = visible before inode)
+    (returned : calls.readOptional directory (directory.file .manifest) before = .ok (some raw) reached)
+    (accepted : IntegrityCheckpoint.decode raw = .ok manifest) :
+    ∃ (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat) (afterStat opened readHeap : heap),
+      names before (directory.file .manifest) = some inode ∧
+      calls.openRead (directory.file .manifest) afterStat = .ok file opened ∧
+      attachedReadSlot view file slot inode readHeap ∧ raw = visible before inode ∧
+      dataErrorDropState calls.release file readHeap = reached := by
+  obtain ⟨metadata, afterStat, file, opened, readHeap, checked, _, openedRaw, body, dropped⟩ :=
+    calls.readOptionalPresent directory (directory.file .manifest) returned
+  obtain ⟨slot, inode, named, bound, beginAt, openedBytes⟩ := opens _ _ _ _ openedRaw
+  obtain ⟨sameName, stored⟩ := stat checked
+  have beforeName := sameName.symm.trans named
+  obtain ⟨extent, afterBytes⟩ := stored inode beforeName
+  let source := visible before inode
+  let stable entry := attachedReadSlot view file slot inode entry ∧ visible entry inode = source
+  have observes := MarkedTemporaryReadCalls.ReadsAtCursor.onSource reads file slot inode source
+  have read : readIntegrityManifestPrefixWith (calls.readChunk file) source.size opened = .ok raw readHeap := by
+    simpa only [beq_iff_eq, manifestPath_ne_boundary, ↓reduceIte, extent, source] using body
+  obtain ⟨held, _, delivered⟩ := readIntegrityManifestPrefixWith_successAtCursor
+    (fun heap => (view.handle heap file).2.2) stable observes ⟨bound, openedBytes.trans afterBytes⟩ beginAt read
+  have actualAccepted := (IntegrityCheckpoint.decode_acquisitionPrefix source).symm.trans
+    ((congrArg IntegrityCheckpoint.decode delivered).symm.trans accepted)
+  have exactBytes := delivered.trans (IntegrityCheckpoint.acquisitionPrefix_eq_of_decode actualAccepted)
+  exact ⟨file, slot, inode, afterStat, opened, readHeap, beforeName, openedRaw, held.1, exactBytes, dropped⟩
+
+/-- The accepted marker belongs to the selected visible inode. The
+bounded loop admits a short result only at genuine EOF. -/
+theorem MarkedTemporaryReadCalls.readSelectedMarker (calls : MarkedTemporaryReadCalls heap)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    (directory : DiskDirectory) {before reached : heap} {raw : ByteArray} {length : UInt64}
+    (statFrame : ∀ {metadata afterStat},
+      calls.stat (directory.file .walBoundary) before = .ok (.ok metadata) afterStat →
+      names afterStat (directory.file .walBoundary) = names before (directory.file .walBoundary) ∧
+      ∀ inode, names before (directory.file .walBoundary) = some inode → visible afterStat inode = visible before inode)
+    (eof : ∀ file slot inode (request : USize) entry after,
+      attachedReadSlot view file slot inode entry → 0 < request.toNat →
+      calls.readChunk file request entry = .ok .empty after →
+      (visible entry inode).size ≤ (view.handle entry file).2.2)
+    (returned : calls.readOptional directory (directory.file .walBoundary) before = .ok (some raw) reached)
+    (accepted : WAL.Boundary.decode raw = .ok length) :
+    ∃ (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat) (afterStat opened readHeap : heap),
+      names before (directory.file .walBoundary) = some inode ∧
+      calls.openRead (directory.file .walBoundary) afterStat = .ok file opened ∧
+      attachedReadSlot view file slot inode readHeap ∧ raw = visible before inode ∧
+      dataErrorDropState calls.release file readHeap = reached := by
+  obtain ⟨metadata, afterStat, file, opened, readHeap, checked, _, openedRaw, body, dropped⟩ :=
+    calls.readOptionalPresent directory (directory.file .walBoundary) returned
+  obtain ⟨slot, inode, named, bound, beginAt, openedBytes⟩ := opens _ _ _ _ openedRaw
+  obtain ⟨sameName, frames⟩ := statFrame checked
+  have beforeName := sameName.symm.trans named
+  let source := visible before inode
+  let stable entry := attachedReadSlot view file slot inode entry ∧ visible entry inode = source
+  have observes request entry after chunk (atEntry : stable entry)
+      (success : calls.readChunk file request entry = .ok chunk after) :
+      stable after ∧ (view.handle after file).2.2 = (view.handle entry file).2.2 + chunk.size ∧
+      chunk = source.extract (view.handle entry file).2.2 (view.handle after file).2.2 ∧
+      (0 < request.toNat → chunk.size = 0 → source.size ≤ (view.handle entry file).2.2) := by
+    obtain ⟨held, advanced, payload⟩ :=
+      MarkedTemporaryReadCalls.ReadsAtCursor.onSource reads file slot inode source request entry after chunk atEntry success
+    refine ⟨held, advanced, payload, ?_⟩
+    intro positive empty
+    have stopped := eof file slot inode request entry after atEntry.1 positive
+      ((ByteArray.size_eq_zero_iff.mp empty) ▸ success)
+    simpa only [atEntry.2] using stopped
+  have read : readPrefixUntilEofWith (IO.userError "invalid WAL boundary length")
+      (calls.readChunk file) WAL.Boundary.acquisitionLimit ByteArray.empty opened = .ok raw readHeap := by
+    simpa only [beq_self_eq_true, ↓reduceIte] using body
+  have cap : WAL.Boundary.acquisitionLimit < USize.size :=
+    Nat.lt_of_lt_of_le (by decide) USize.le_size
+  obtain ⟨held, atEnd, delivered⟩ := readPrefixUntilEofWith_successAtCursor
+    (IO.userError "invalid WAL boundary length") (fun heap => (view.handle heap file).2.2) stable observes
+    WAL.Boundary.acquisitionLimit cap ⟨bound, openedBytes.trans (frames inode beforeName)⟩
+    (beginAt.symm ▸ Nat.zero_le _) read
+  simp only [beginAt, Nat.zero_add, Nat.sub_zero] at atEnd delivered
+  rw [atEnd, ByteArray.empty_append] at delivered
+  have actualAccepted := (WAL.Boundary.decode_acquisitionPrefix source).symm.trans
+    ((congrArg WAL.Boundary.decode delivered).symm.trans accepted)
+  have exactBytes := (WAL.Boundary.decode_reencode accepted).symm.trans
+    (WAL.Boundary.decode_reencode actualAccepted)
+  exact ⟨file, slot, inode, afterStat, opened, readHeap, beforeName, openedRaw, held.1, exactBytes, dropped⟩
 
 /-- Local effects at the actual open, bounded read, and scope release.
 The same relation can track any filesystem projection left intact by these callbacks. -/
@@ -406,6 +552,33 @@ private theorem MarkedTemporaryReadCalls.metadataReadFrames (calls : MarkedTempo
   split
   · exact prefixUntilEofFrames refl trans _ _ (laws.readChunk file) _ _ _
   · exact manifestReadFrames refl trans _ (laws.readChunk file) _ _
+
+/-- The optional read composes the reached no-follow stat with the
+temporary descriptor scope, on either result of the actual dispatcher. -/
+theorem MarkedTemporaryReadCalls.readOptionalFrames (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (stat : ∀ path entry, frame entry (reachedState (calls.stat path entry)))
+    (directory : DiskDirectory) (path : FilePath) (entry : heap) :
+    frame entry (reachedState (calls.readOptional directory path entry)) := by
+  have atStat := stat path entry
+  simp only [readOptional, readOptionalDatabaseFileWithMetadata, Bind.bind, EStateM.bind]
+  cases observed : calls.stat path entry with
+  | error cause reached => simpa only [observed, reachedState] using atStat
+  | ok result afterStat =>
+    have first : frame entry afterStat := by simpa only [observed, reachedState] using atStat
+    cases result with
+    | error cause =>
+      cases cause <;> simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState, first]
+      rename_i name code message
+      by_cases missing : code = 2 <;> simp [missing, Pure.pure, EStateM.pure, EStateM.throw, first]
+    | ok metadata =>
+      cases regular : metadata.type == .file
+      · simpa [regular, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState] using first
+      · have scope := calls.readWithFrames laws trans path (calls.readMetadata directory path metadata)
+          (calls.metadataReadFrames laws refl trans directory path metadata) afterStat
+        cases returned : calls.readWith path (calls.readMetadata directory path metadata) afterStat <;>
+          simpa [regular, EStateM.bind, returned, Pure.pure, EStateM.pure, reachedState] using trans first scope
 
 theorem MarkedTemporaryReadCalls.runPrefixFrames (calls : MarkedTemporaryReadCalls heap)
     (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)

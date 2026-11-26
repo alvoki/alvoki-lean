@@ -67,6 +67,71 @@ theorem readIntegrityManifestPrefixWith_headerError {state : Type}
     readIntegrityManifestPrefixWith read extent before = .error cause failed := by
   simp only [readIntegrityManifestPrefixWith, Bind.bind, EStateM.bind, header]
 
+/-- A successful manifest acquisition reads its decoder's prefix of the
+same opened file across both bounded phases. -/
+theorem readIntegrityManifestPrefixWith_successAtCursor {state : Type}
+    {source : ByteArray} {read : USize → EStateM IO.Error state ByteArray}
+    (cursor : state → Nat) (bound : state → Prop)
+    (observes : ∀ requested before after chunk, bound before → read requested before = .ok chunk after →
+      bound after ∧ cursor after = cursor before + chunk.size ∧
+      chunk = source.extract (cursor before) (cursor after))
+    {before after : state} {out : ByteArray}
+    (initial : bound before) (atStart : cursor before = 0)
+    (reported : readIntegrityManifestPrefixWith read source.size before = .ok out after) :
+    bound after ∧ cursor after = IntegrityCheckpoint.acquisitionSize source ∧
+      out = source.extract 0 (IntegrityCheckpoint.acquisitionSize source) := by
+  let mismatch := IO.userError "integrity manifest extent changed while reading"
+  unfold readIntegrityManifestPrefixWith at reported
+  change (readExactPrefixWith mismatch read (min 48 source.size) ByteArray.empty >>= _) before =
+    .ok out after at reported
+  simp only [Bind.bind, EStateM.bind] at reported
+  cases first : readExactPrefixWith mismatch read (min 48 source.size) ByteArray.empty before with
+  | error cause reached => simp [first] at reported
+  | ok header reached =>
+    simp only [first] at reported
+    obtain ⟨kept, atHeader, headerBytes⟩ := readExactPrefixWith_successAtCursor mismatch cursor bound
+      observes (min 48 source.size) initial first
+    simp only [atStart, Nat.zero_add, ByteArray.empty_append] at atHeader headerBytes
+    have headerSize : header.size = min 48 source.size := by
+      rw [headerBytes, atHeader, ByteArray.size_extract, Nat.sub_zero,
+        Nat.min_eq_left (Nat.min_le_right _ _)]
+    by_cases short : source.size < 48
+    · have exactSize : IntegrityCheckpoint.acquisitionSize source = source.size := by
+        unfold IntegrityCheckpoint.acquisitionSize
+        exact Nat.min_eq_left (by omega)
+      simp only [Nat.min_eq_right (Nat.le_of_lt short)] at atHeader
+      have result : header = out ∧ reached = after := by
+        simpa only [headerSize, Nat.min_eq_right (Nat.le_of_lt short), short,
+          ↓reduceIte, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] using reported
+      obtain ⟨rfl, rfl⟩ := result
+      exact ⟨kept, atHeader.trans exactSize.symm, headerBytes.trans (congrArg (source.extract 0) (atHeader.trans exactSize.symm))⟩
+    · have enough : 48 ≤ source.size := Nat.le_of_not_gt short
+      simp only [Nat.min_eq_left enough] at atHeader headerSize
+      have declared : IntegrityCheckpoint.declaredStampBytes header =
+          IntegrityCheckpoint.declaredStampBytes source := by
+        unfold IntegrityCheckpoint.declaredStampBytes
+        rw [headerBytes, atHeader, ByteWords.word_extract _ 0 48 32 (by decide) enough]
+      let rest := min (source.size - 48) (IntegrityCheckpoint.declaredStampBytes header + 1)
+      have endAt : 48 + rest = IntegrityCheckpoint.acquisitionSize source := by
+        dsimp only [rest, IntegrityCheckpoint.acquisitionSize]
+        rw [declared]
+        omega
+      change (if header.size < 48 then (pure header : EStateM IO.Error state ByteArray) else
+        if 48 + rest < USize.size then readExactPrefixWith mismatch read rest header
+        else (throw (IO.userError "integrity manifest prefix exceeds machine size") >>= fun _ =>
+          readExactPrefixWith mismatch read rest header)) reached = .ok out after at reported
+      by_cases fits : 48 + rest < USize.size
+      · simp only [headerSize, Nat.lt_irrefl, ↓reduceIte, fits] at reported
+        obtain ⟨held, ended, payload⟩ :=
+          readExactPrefixWith_successAtCursor mismatch cursor bound observes rest kept reported
+        rw [atHeader, endAt] at ended
+        refine ⟨held, ended, ?_⟩
+        rw [payload, headerBytes, ended, ← ByteArray.extract_eq_extract_append_extract (cursor reached)]
+        · omega
+        · rw [atHeader, ← endAt]
+          omega
+      · simp [headerSize, fits, throw, throwThe, MonadExceptOf.throw, EStateM.throw, Bind.bind, EStateM.bind] at reported
+
 /-- Given the extent and successful chunk observations for the same stable
 opened description, acquisition supplies exactly the decoder's prefix.
 Only that prefix has to fit the platform, with no separate run-count cap. -/

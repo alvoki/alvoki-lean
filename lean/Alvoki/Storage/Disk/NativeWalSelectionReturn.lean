@@ -211,4 +211,144 @@ theorem SelectedWalReadReturn.successfulPayloads
     | payloadReturned selected read ordered =>
       exact ⟨_, _, _, _, _, checked, listed, scan, selected, read, ordered⟩
 
+private theorem returnedExtentOffset (directory : DiskDirectory)
+    (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    {name : String} {before reached : heap} {found : Option (Nat × IO.FS.Metadata)}
+    (returned : readWalSegmentExtentWith directory lstat name before = .ok found reached)
+    (present : ∀ {first statHeap filename message}, parseWalSegmentName name = some first →
+      lstat (directory.file (.walSegment first)) before ≠
+        .ok (.error (.noFileOrDirectory filename 2 message)) statHeap) :
+    found.map Prod.fst = parseWalSegmentName name := by
+  cases parsed : parseWalSegmentName name with
+  | none =>
+    simp [readWalSegmentExtentWith, parsed, Pure.pure, EStateM.pure] at returned
+    obtain ⟨rfl, _⟩ := returned
+    rfl
+  | some first =>
+    simp only [readWalSegmentExtentWith, parsed, Bind.bind, EStateM.bind] at returned
+    cases probed : lstat (directory.file (.walSegment first)) before with
+    | error cause after => simp [probed] at returned
+    | ok report after =>
+      rw [probed] at returned
+      cases report with
+      | ok metadata =>
+        by_cases regular : (metadata.type == .file) = true
+        · simp [classifyWalSegmentLookup, regular, Pure.pure, Except.toOption] at returned
+          obtain ⟨rfl, _⟩ := returned
+          rfl
+        · simp [classifyWalSegmentLookup, regular, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+      | error cause =>
+        cases cause <;> simp [classifyWalSegmentLookup, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+        rename_i filename code message
+        by_cases missing : code = 2
+        · subst code
+          exact (present parsed probed).elim
+        · simp [missing, EStateM.throw] at returned
+
+private theorem filterMapM_extend {α β : Type}
+    (read : α → EStateM IO.Error heap (Option β)) (scanned : List α) (name : α)
+    {entry before after : heap} {found : List β} {value : Option β}
+    (earlier : (scanned.filterMapM read) entry = .ok found before)
+    (called : read name before = .ok value after) :
+    ((scanned ++ [name]).filterMapM read) entry = .ok (found ++ value.toList) after := by
+  induction scanned generalizing entry found with
+  | nil =>
+    simp [Pure.pure, EStateM.pure] at earlier
+    obtain ⟨rfl, rfl⟩ := earlier
+    cases value <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, called, Pure.pure, EStateM.pure]
+  | cons first rest ih =>
+    cases head : read first entry with
+    | error cause reached => simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head] at earlier
+    | ok kept atTail =>
+      cases tail : (rest.filterMapM read) atTail with
+      | error cause reached =>
+        cases kept <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, tail] at earlier
+      | ok foundTail next =>
+        have extended := ih (entry := atTail) (found := foundTail)
+        cases kept <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, tail,
+          Pure.pure, EStateM.pure] at earlier <;> obtain ⟨rfl, rfl⟩ := earlier <;>
+          simp [List.cons_append, List.filterMapM_cons, Bind.bind, EStateM.bind, head, extended tail,
+            Pure.pure, EStateM.pure]
+
+/-- A successful raw scan retains exactly the canonical listed names if
+the no-follow probes cannot report ENOENT for those still-bound names. -/
+theorem readWalSegmentExtentsWith_exactOffsets (directory : DiskDirectory)
+    (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (names : List String) {before reached : heap} {extents : List (Nat × IO.FS.Metadata)}
+    (scanned : readWalSegmentExtentsWith directory lstat names before = .ok extents reached)
+    (present : ∀ {scanned rest : List String} {name : String} {first : Nat},
+      names = scanned ++ name :: rest → parseWalSegmentName name = some first →
+      ∀ {earlier : List (Nat × IO.FS.Metadata)} {atStat after filename message},
+      (scanned.filterMapM (readWalSegmentExtentWith directory lstat)) before = .ok earlier atStat →
+      lstat (directory.file (.walSegment first)) atStat ≠ .ok (.error (.noFileOrDirectory filename 2 message)) after) :
+    extents.map Prod.fst = (names.filterMap parseWalSegmentName).mergeSort := by
+  let probe := readWalSegmentExtentWith directory lstat
+  have collect (items scanned : List String) (order : names = scanned ++ items) {atStat after : heap}
+      {earlier results : List (Nat × IO.FS.Metadata)}
+      (entered : (scanned.filterMapM probe) before = .ok earlier atStat)
+      (returned : (items.filterMapM probe) atStat = .ok results after) :
+      results.map Prod.fst = items.filterMap parseWalSegmentName := by
+    induction items generalizing scanned atStat after earlier results with
+    | nil =>
+      simp [Pure.pure, EStateM.pure] at returned
+      rw [returned.1]
+      rfl
+    | cons name rest ih =>
+      cases head : probe name atStat with
+      | error cause heap => simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head] at returned
+      | ok value heap =>
+        have offset := returnedExtentOffset directory lstat head (fun parsed missing => present order parsed entered missing)
+        have enteredTail := filterMapM_extend probe scanned name entered head
+        have restOrder : names = (scanned ++ [name]) ++ rest := by
+          simpa only [List.append_assoc, List.singleton_append] using order
+        cases runTail : (rest.filterMapM probe) heap with
+        | error cause reached =>
+          cases value <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, runTail] at returned
+        | ok values next =>
+          have map := ih (scanned ++ [name]) restOrder enteredTail runTail
+          cases value <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, runTail,
+            Pure.pure, EStateM.pure] at returned <;> obtain ⟨rfl, _⟩ := returned <;>
+            simp [← offset, map]
+  change ((names.filterMapM probe) >>= fun result => pure (result.mergeSort _)) before = _ at scanned
+  cases collected : (names.filterMapM probe) before with
+  | error cause after => simp [Bind.bind, EStateM.bind, collected] at scanned
+  | ok entries after =>
+    simp [Bind.bind, EStateM.bind, collected, Pure.pure, EStateM.pure] at scanned
+    obtain ⟨rfl, _⟩ := scanned
+    exact (List.map_mergeSort (f := Prod.fst) (s := fun a b : Nat => decide (a ≤ b)) (fun _ _ _ _ => rfl)).trans
+      (congrArg (fun xs : List Nat => xs.mergeSort) (collect names [] rfl rfl collected))
+
+private theorem dropWhileCovered (through : Nat) (offsets : List Nat) (ordered : offsets.Pairwise (· ≤ ·)) :
+    offsets.dropWhile (fun start => decide (start ≤ through)) =
+      offsets.filter (fun start => decide (through < start)) := by
+  induction offsets with
+  | nil => rfl
+  | cons start rest ih =>
+    obtain ⟨before, tail⟩ := List.pairwise_cons.mp ordered
+    by_cases below : start ≤ through
+    · simp [below, Nat.not_lt.mpr below, ih tail]
+    · have later : through < start := Nat.lt_of_not_ge below
+      have allLater : rest.filter (fun start => decide (through < start)) = rest :=
+        List.filter_eq_self.mpr fun next inside => decide_eq_true (Nat.lt_of_lt_of_le later (before next inside))
+      simp [below, later, allLater]
+
+/-- The selector reports every present start after the marker, regardless
+of which covered names it skipped before the checkpoint watermark. -/
+theorem selectWalSegmentReadsThrough_later {offsets required later : List Nat} {watermark through : Nat}
+    (selected : selectWalSegmentReadsThrough offsets watermark through = some (required, later))
+    (covers : watermark ≤ through) (ordered : offsets.Pairwise (· ≤ ·)) :
+    later = offsets.filter (fun start => decide (through < start)) := by
+  unfold selectWalSegmentReadsThrough selectWalSegmentReads at selected
+  cases first : (offsets.filter (fun start => decide (start ≤ watermark))).max? with
+  | none => simp [first, Bind.bind, Option.bind] at selected
+  | some start =>
+    simp [first, Bind.bind, Option.bind, Pure.pure] at selected
+    have lower := of_decide_eq_true ((List.mem_filter.mp (List.max?_mem first)).2)
+    rw [← selected.2, dropWhileCovered through _ (List.Pairwise.filter _ ordered), List.filter_filter]
+    apply List.filter_congr
+    intro next _
+    by_cases beyond : through < next
+    · simp [beyond, Nat.le_trans lower (Nat.le_trans covers (Nat.le_of_lt beyond))]
+    · simp [beyond]
+
 end Alvoki.Storage

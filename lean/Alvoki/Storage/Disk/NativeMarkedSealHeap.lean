@@ -2,13 +2,31 @@ import Alvoki.Storage.Disk.NativeMarkedWalExtentsHeap
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair
+open System WalSegmentRepair SyncHandleRouting
 
 /-- Use the bounded production seal reader and retain the report of its
 scoped descriptor release before the next selected read. -/
 def MarkedTemporaryReadCalls.seal (calls : MarkedTemporaryReadCalls heap) (path : FilePath) (count : Nat) :
     EStateM IO.Error heap ByteArray :=
   calls.readWith path fun file => readExactPrefixWith selectedWalSpanError (calls.readChunk file) count ByteArray.empty
+
+/-- The selected seal consumes its checked span on the exact opened inode.
+The cursor and visible prefix refer to the read heap before its scope releases
+the handle. Matching the cached extent to the whole visible file is separate. -/
+theorem MarkedTemporaryReadCalls.readSelectedSeal (calls : MarkedTemporaryReadCalls heap)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    (path : FilePath) (count : Nat) {before reached : heap} {bytes : ByteArray}
+    (returned : calls.seal path count before = .ok bytes reached) :
+    ∃ (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat) (opened readHeap : heap),
+      calls.openRead path before = .ok file opened ∧ names before path = some inode ∧
+      attachedReadSlot view file slot inode opened ∧ attachedReadSlot view file slot inode readHeap ∧
+      (view.handle readHeap file).2.2 = count ∧ visible readHeap inode = visible before inode ∧
+      bytes = (visible readHeap inode).extract 0 count ∧ dataErrorDropState calls.release file readHeap = reached := by
+  obtain ⟨file, opened, readHeap, acquired, payload, released⟩ := calls.readWith_ok path _ returned
+  obtain ⟨slot, inode, name, openedSlot, readSlot, cursor, stable, bytes⟩ :=
+    calls.readExactOpenedFile view names visible opens reads path selectedWalSpanError count acquired payload
+  exact ⟨file, slot, inode, opened, readHeap, acquired, name, openedSlot, readSlot, cursor, stable, bytes, released⟩
 
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}

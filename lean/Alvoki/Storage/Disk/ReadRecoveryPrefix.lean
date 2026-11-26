@@ -153,6 +153,59 @@ def PrefixChunksAvailable (source : ByteArray) (read : USize → EStateM IO.Erro
   ∀ offset count, 0 < count → count < USize.size → offset + count ≤ source.size →
     ∃ chunk next, read count.toUSize offset = .ok chunk next ∧ 0 < chunk.size ∧ chunk.size ≤ count
 
+/-- Bounded reads return the same cursor prefix, including a short
+prefix only when a positive request actually reaches EOF. -/
+theorem readPrefixUntilEofWith_successAtCursor {state : Type} (mismatch : IO.Error)
+    {source : ByteArray} {read : USize → EStateM IO.Error state ByteArray}
+    (cursor : state → Nat) (bound : state → Prop)
+    (observes : ∀ requested before after chunk, bound before → read requested before = .ok chunk after →
+      bound after ∧ cursor after = cursor before + chunk.size ∧
+      chunk = source.extract (cursor before) (cursor after) ∧
+      (0 < requested.toNat → chunk.size = 0 → source.size ≤ cursor before))
+    (remaining : Nat) (fits : remaining < USize.size) {before after : state} {bytes out : ByteArray}
+    (initial : bound before) (covered : cursor before ≤ source.size)
+    (reported : readPrefixUntilEofWith mismatch read remaining bytes before = .ok out after) :
+    bound after ∧ cursor after = cursor before + min remaining (source.size - cursor before) ∧
+      out = bytes ++ source.extract (cursor before) (cursor after) := by
+  rw [readPrefixUntilEofWith] at reported
+  by_cases finished : remaining = 0
+  · subst remaining
+    have result : bytes = out ∧ before = after := by
+      simpa only [↓reduceIte, EStateM.pure, Pure.pure, EStateM.Result.ok.injEq] using reported
+    obtain ⟨rfl, rfl⟩ := result
+    simp [initial]
+  · rw [ite_eq_right finished] at reported
+    simp only [Bind.bind, EStateM.bind] at reported
+    cases reading : read remaining.toUSize before with
+    | error cause reached => rw [reading] at reported; contradiction
+    | ok chunk reached =>
+      rw [reading] at reported
+      obtain ⟨kept, advanced, payload, eof⟩ :=
+        observes remaining.toUSize before reached chunk initial reading
+      by_cases empty : chunk.size = 0
+      · have requested : 0 < remaining.toUSize.toNat := by
+          simpa only [USize.toNat_ofNat_of_lt' fits] using Nat.pos_of_ne_zero finished
+        have exhausted := eof requested empty
+        simp only [empty, ↓reduceIte, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at reported
+        obtain ⟨rfl, rfl⟩ := reported
+        simp [kept, show cursor reached = cursor before by omega,
+          show source.size - cursor before = 0 by omega]
+      · by_cases within : chunk.size ≤ remaining
+        · simp only [empty, ↓reduceIte, within, ↓reduceDIte] at reported
+          have readSize := congrArg ByteArray.size payload
+          rw [ByteArray.size_extract] at readSize
+          have stillCovered : cursor reached ≤ source.size := by omega
+          obtain ⟨finalBinding, endAt, output⟩ :=
+            readPrefixUntilEofWith_successAtCursor mismatch cursor bound observes
+              (remaining - chunk.size) (by omega) kept stillCovered reported
+          refine ⟨finalBinding, by omega, ?_⟩
+          rw [output, appendPrefixChunk, ByteArray.append_assoc, payload]
+          rw [← ByteArray.extract_eq_extract_append_extract (cursor reached) (by omega) (by omega)]
+        · simp only [empty, ↓reduceIte, within, ↓reduceDIte] at reported
+          contradiction
+termination_by remaining
+decreasing_by omega
+
 /-- Healthy primitive reads of the covered interval complete despite
 positive short reads and leave the cursor at the end of the interval. -/
 theorem readExactPrefixWith_completes (mismatch : IO.Error)

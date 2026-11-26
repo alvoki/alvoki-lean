@@ -1,5 +1,20 @@
 # Current handoff
 
+The actual sized checkpoint reader now derives its selected
+publication from the protected file footprint and local I/O effects.
+The manifest read proves either a genuine missing-name report or
+the full visible bytes of the accepted manifest. Each reached run
+read then supplies the matching published bytes and preserves the
+footprint at its own release. The same cursor proof accounts for a
+short marker read and the actual seal and keeper prefixes. For an
+aligned keeper the reader passes that description to the cache
+callback. A longer keeper closes it before replacement.
+The successful WAL selector now accounts for every canonical WAL name
+under the observed root, including names beyond the marker, given
+complete EOF and truthful no-follow lookup at each reached call.
+[Checkpoint from the reached files](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean) ·
+[WAL keeper read](../lean/Alvoki/Storage/Disk/NativeLongKeeperMarkedWorker.lean)
+
 The sized checkpoint reader's successful run receipt now yields the
 full visible bytes of the inode opened at the actual read, under local
 stat, open and chunk effects. One cursor proof handles short reads

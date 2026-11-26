@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
+import Alvoki.Storage.Disk.NativeWalSelectionReturn
 
 namespace Alvoki.Storage.DiskSession
 
@@ -24,6 +25,67 @@ def MarkedDirectoryReadCalls.run (calls : MarkedDirectoryReadCalls heap stream) 
       | .error cause reached => (.error cause, reached)
     (liftExcept ((CheckedDirectoryReadReport.scanned ⟨names, terminal, closed⟩).result path) :
       EStateM IO.Error heap _) reached
+
+/-- Invert the successful checked directory callback without a read plan.
+The same stream supplies the names, clean EOF and successful close. -/
+theorem MarkedDirectoryReadCalls.returnedScan {heap stream : Type}
+    (calls : MarkedDirectoryReadCalls heap stream) (path : FilePath)
+    {before reached : heap} {entries : Array IO.FS.DirEntry}
+    (returned : calls.run path before = .ok entries reached) :
+    ∃ (descriptor : stream) (opened scanned : heap) (names : List String),
+      calls.openDir path before = .ok descriptor opened ∧
+      calls.readDir descriptor opened = ((names, .ok ()), scanned) ∧
+      calls.closeDir descriptor scanned = .ok () reached ∧
+      entries = (⟨names, .ok (), .ok ()⟩ : OpenedDirectoryScan).entries path := by
+  cases opened : calls.openDir path before with
+  | error cause after =>
+    simp [MarkedDirectoryReadCalls.run, opened] at returned
+  | ok descriptor openHeap =>
+    cases scanned : calls.readDir descriptor openHeap with
+    | mk readReport scanHeap =>
+      cases readReport with
+      | mk names terminal =>
+        cases terminal with
+        | error cause =>
+          cases closed : calls.closeDir descriptor scanHeap <;>
+            simp [MarkedDirectoryReadCalls.run, opened, scanned, closed,
+              CheckedDirectoryReadReport.result, Bind.bind, Except.bind, liftExcept,
+              throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+        | ok value =>
+          cases value
+          cases closed : calls.closeDir descriptor scanHeap with
+          | error cause after =>
+            simp [MarkedDirectoryReadCalls.run, opened, scanned, closed,
+              CheckedDirectoryReadReport.result, Bind.bind, Except.bind, liftExcept,
+              throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+          | ok value after =>
+            cases value
+            simp [MarkedDirectoryReadCalls.run, opened, scanned, closed, CheckedDirectoryReadReport.result,
+              Bind.bind, Except.bind, Pure.pure, Except.pure, liftExcept] at returned
+            obtain ⟨rfl, rfl⟩ := returned
+            exact ⟨descriptor, openHeap, scanHeap, names, rfl, scanned, closed, rfl⟩
+
+/-- A checked listing is complete for the held root only if the actual
+stream saw that root and its clean EOF report is complete. -/
+theorem MarkedDirectoryReadCalls.listedRootNames {heap stream : Type}
+    (calls : MarkedDirectoryReadCalls heap stream) (path : FilePath)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (streamObject : heap → stream → DeviceInode)
+    {before reached : heap} {entries : Array IO.FS.DirEntry}
+    (returned : calls.run path before = .ok entries reached)
+    (sameRoot : ∀ descriptor opened, calls.openDir path before = .ok descriptor opened →
+      streamObject opened descriptor = root)
+    (complete : ∀ descriptor opened scanned names,
+      calls.openDir path before = .ok descriptor opened →
+      calls.readDir descriptor opened = ((names, .ok ()), scanned) →
+      calls.closeDir descriptor scanned = .ok () reached →
+      (⟨names, .ok (), .ok ()⟩ : OpenedDirectoryScan).visibleNames.Perm
+        (namespaceView.names (streamObject opened descriptor))) :
+    (entries.toList.map (·.fileName)).Perm (namespaceView.names root) := by
+  obtain ⟨descriptor, opened, scanned, names, openCall, readCall, closeCall, rfl⟩ := calls.returnedScan path returned
+  have truthful := complete descriptor opened scanned names openCall readCall closeCall
+  rw [sameRoot descriptor opened openCall] at truthful
+  exact (CheckedDirectoryReadReport.scan_complete path rfl rfl truthful).2
 
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
@@ -240,4 +302,117 @@ theorem selects (seen : MarkedWalExtentReports prepared listing)
 
 end MarkedWalExtentReports
 
+/-- The guarded inventory callback returns the exact no-follow report.
+An ENOENT can come only from that actual stat. -/
+theorem MarkedWalExtentReports.inspectReturned {heap : Type}
+    (fileCalls : MarkedTemporaryReadCalls heap) (path : FilePath)
+    {before reached : heap} {report : Except IO.Error IO.FS.Metadata}
+    (returned : inspect fileCalls path before = .ok report reached) :
+    fileCalls.stat path before = .ok report reached := by
+  change inspectWalSegmentWith path (fileCalls.stat path) before = _ at returned
+  unfold inspectWalSegmentWith at returned
+  cases stat : fileCalls.stat path before with
+  | error cause after => simp [Bind.bind, EStateM.bind, stat] at returned
+  | ok called after =>
+    cases called with
+    | error cause => simpa only [Bind.bind, EStateM.bind, stat, Pure.pure, EStateM.pure] using returned
+    | ok metadata =>
+      cases checked : (metadata.type == .file && metadata.numLinks == 1) <;>
+        simp [Bind.bind, EStateM.bind, stat, checkPrivateRegularWith, checked, Pure.pure, EStateM.pure,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+      obtain ⟨rfl, rfl⟩ := returned
+      rfl
+
 end Alvoki.Storage.DiskSession
+
+namespace Alvoki.Storage
+
+open System WalSegmentRepair
+open DiskSession (MarkedDirectoryReadCalls DirectoryReadNamespace DeviceInode
+  MarkedTemporaryReadCalls MarkedWalExtentReports)
+
+variable {heap : Type}
+
+/-- The actual successful selected WAL read consumes an exact inventory.
+The scope fixes the stream's held root and makes an ENOENT report
+evidence that the no-follow binding is absent, rather than a silent
+omission. No healthy keeper layout is an input. -/
+theorem SelectedWalReadReturn.successfulExtentInventory
+    {stream : Type} {directory : DiskDirectory} {watermark : Nat} {length : UInt64}
+    {listing : MarkedDirectoryReadCalls heap stream}
+    {fileCalls : MarkedTemporaryReadCalls heap}
+    {readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    {readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray}
+    {entry reached : heap} {reads : WalSegmentMarkerReads} {size : Nat}
+    (observed : SelectedWalReadReturn directory watermark length listing.run
+      (MarkedWalExtentReports.inspect fileCalls) readSeal readKeeper entry
+      (.ok (reads, size) reached))
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (streamObject : heap → stream → DeviceInode)
+    (sameRoot : ∀ descriptor opened, listing.openDir directory.path entry = .ok descriptor opened →
+      streamObject opened descriptor = root)
+    (complete : ∀ descriptor opened scanned closed names,
+      listing.openDir directory.path entry = .ok descriptor opened →
+      listing.readDir descriptor opened = ((names, .ok ()), scanned) →
+      listing.closeDir descriptor scanned = .ok () closed →
+      (⟨names, .ok (), .ok ()⟩ : OpenedDirectoryScan).visibleNames.Perm
+        (namespaceView.names (streamObject opened descriptor)))
+    (absent : ∀ {entries : Array IO.FS.DirEntry} {listed : heap},
+      listing.run directory.path entry = .ok entries listed →
+      ∀ {scanned rest : List String} {name : String} {first : Nat},
+      entries.toList.map (·.fileName) = scanned ++ name :: rest → parseWalSegmentName name = some first →
+      ∀ {earlier : List (Nat × IO.FS.Metadata)} {before after filename message},
+      (scanned.filterMapM (readWalSegmentExtentWith directory (MarkedWalExtentReports.inspect fileCalls))) listed = .ok earlier before →
+      fileCalls.stat (directory.file (.walSegment first)) before =
+        .ok (.error (.noFileOrDirectory filename 2 message)) after →
+      namespaceView.child root (renderWalSegmentName first) = none) :
+    ∃ (entries : Array IO.FS.DirEntry) (listed scanned : heap) (extents required : List (Nat × IO.FS.Metadata)),
+      listing.run directory.path entry = .ok entries listed ∧
+      (entries.toList.map (·.fileName)).Perm (namespaceView.names root) ∧
+      readWalSegmentExtentsWith directory (MarkedWalExtentReports.inspect fileCalls) (entries.toList.map (·.fileName)) listed = .ok extents scanned ∧
+      (extents.map Prod.fst) = ((namespaceView.names root).filterMap parseWalSegmentName).mergeSort ∧
+      (∀ first, first ∈ extents.map Prod.fst ↔
+        ∃ object, namespaceView.child root (renderWalSegmentName first) = some object) ∧
+      selectWalExtentsThrough extents watermark (length.toNat / WAL.frameSize) = some (required, reads.newer) ∧
+      (∀ first, first ∈ reads.newer ↔ length.toNat / WAL.frameSize < first ∧
+        ∃ object, namespaceView.child root (renderWalSegmentName first) = some object) ∧
+      readCachedWalPayloads directory (length.toNat / WAL.frameSize) readSeal readKeeper required scanned =
+        .ok (reads.files, size) reached := by
+  obtain ⟨entries, listed, extents, scanned, required, checked, listedCall, scan, select, payload, _⟩ :=
+    observed.successfulPayloads
+  have names := listing.listedRootNames directory.path namespaceView root streamObject listedCall sameRoot
+    (fun _ _ _ _ opened read closed => complete _ _ _ _ _ opened read closed)
+  have exactOffsets := readWalSegmentExtentsWith_exactOffsets directory (MarkedWalExtentReports.inspect fileCalls) _ scan
+    (fun {scanned rest name first} order parsed {_ _ _ _ _} entered missing => by
+      have inListing : name ∈ entries.toList.map (·.fileName) :=
+        order.symm ▸ List.mem_append_right scanned List.mem_cons_self
+      have seen : renderWalSegmentName first ∈ entries.toList.map (·.fileName) :=
+        (parseWalSegmentName_eq_some_iff.mp parsed) ▸ inListing
+      obtain ⟨object, bound⟩ := (namespaceView.namesExact _ _).mp (names.mem_iff.mp seen)
+      have raw := MarkedWalExtentReports.inspectReturned fileCalls _ missing
+      exact Option.some_ne_none object (bound.symm.trans (absent listedCall order parsed entered raw)))
+  have ordered (values : List Nat) : values.mergeSort.Pairwise (· ≤ ·) :=
+    (List.pairwise_mergeSort (le := fun a b => decide (a ≤ b))
+      (fun a b c ab bc => decide_eq_true (Nat.le_trans (of_decide_eq_true ab) (of_decide_eq_true bc)))
+      (fun a b => Bool.or_eq_true_iff.mpr ((Nat.le_total a b).imp decide_eq_true decide_eq_true)) values).imp
+        (fun bound => of_decide_eq_true bound)
+  have sorted := List.Perm.eq_of_pairwise (fun _ _ _ _ ab ba => Nat.le_antisymm ab ba)
+    (ordered _) (ordered _) ((List.mergeSort_perm _ _).trans
+      ((names.filterMap parseWalSegmentName).trans (List.mergeSort_perm _ _).symm))
+  have inventory : extents.map Prod.fst = ((namespaceView.names root).filterMap parseWalSegmentName).mergeSort :=
+    exactOffsets.trans sorted
+  have exactNames (first : Nat) : first ∈ extents.map Prod.fst ↔
+      ∃ object, namespaceView.child root (renderWalSegmentName first) = some object := by
+    rw [inventory, List.mem_mergeSort, List.mem_filterMap, ← namespaceView.namesExact]
+    exact ⟨fun ⟨name, listed, parsed⟩ => (parseWalSegmentName_eq_some_iff.mp parsed) ▸ listed,
+      fun listed => ⟨_, listed, parseWalSegmentName_render first⟩⟩
+  have selectedOffsets := selectWalExtentsThrough_offsets extents watermark (length.toNat / WAL.frameSize)
+  rw [select, Option.map_some] at selectedOffsets
+  have later := selectWalSegmentReadsThrough_later selectedOffsets.symm checked.2 (inventory.symm ▸ ordered _)
+  dsimp only at later
+  refine ⟨entries, listed, scanned, extents, required, listedCall, names, scan, inventory, exactNames, select, ?_, payload⟩
+  intro first
+  rw [later, List.mem_filter, exactNames first]
+  simp only [decide_eq_true_eq, and_comm]
+
+end Alvoki.Storage

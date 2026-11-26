@@ -24,6 +24,217 @@ abbrev MarkedTemporaryReadCalls.FileFrames (calls : MarkedTemporaryReadCalls hea
     (files : heap → CheckpointSurvivingFiles) (selectedPath : FilePath → Prop) :=
   calls.ScopeFrames (fun before after => (files before).Frames selectedPath (files after))
 
+/-- The actual ordered checkpoint run loop restores exactly the bytes
+from the selected publication. The initial live footprint is transported
+through the reached stat, open, chunk, and release of each run. -/
+theorem MarkedTemporaryReadCalls.restoresSelectedRunBytes (calls : MarkedTemporaryReadCalls heap)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray) (directory : DiskDirectory)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    {durable : CheckpointPublication.RunFiles} {manifest : Manifest.IntegrityCheckpoint}
+    (scope : FilePath → Prop)
+    (inScope : ∀ index < manifest.header.runCount.toNat,
+      scope (directory.file (.run manifest.header.generation index)))
+    {initial entry reached : heap} {bytes : List ByteArray}
+    (stored : ∀ index < manifest.header.runCount.toNat, ∃ payload,
+      durable manifest.header.generation index = some payload ∧
+      (observedFiles names visible initial).Stored (directory.file (.run manifest.header.generation index)) payload)
+    (starts : (observedFiles names visible initial).Frames scope (observedFiles names visible entry))
+    (sized : ∀ {path before size after}, calls.runSize path before = .ok size after →
+      (observedFiles names visible before).Frames scope (observedFiles names visible after) ∧
+      ∀ inode, names before path = some inode → size = (visible before inode).size)
+    (scopedReads : calls.FileFrames (observedFiles names visible) scope)
+    (returned : readIntegrityRunBytesSized directory manifest calls.runSize calls.runPrefix entry = .ok bytes reached) :
+    (List.range manifest.header.runCount.toNat).mapM (durable manifest.header.generation) = some bytes ∧
+      (observedFiles names visible initial).Frames scope (observedFiles names visible reached) := by
+  apply readIntegrityRunBytesSized_refinesSuccess directory calls.runSize calls.runPrefix _ ?_ starts returned
+  intro index within stamp _ before after got held receipt
+  let path := directory.file (.run manifest.header.generation index)
+  have admitted : scope path := inScope index within
+  cases receipt with
+  | @accepted afterSize _ _ measured fits readPayload size =>
+    have sizeFrame := (sized measured).1
+    obtain ⟨_, _, inode, _, _, _, bound, _, _, _, same, _⟩ :=
+      calls.readSelectedRun view names visible opens reads path stamp.byteCount.toNat
+        (fun ret => by
+          obtain ⟨framed, extent⟩ := sized ret
+          obtain ⟨nameSame, bytesSame⟩ := framed path admitted
+          exact ⟨nameSame, fun found named =>
+            ⟨extent found named, (List.cons.inj (bytesSame found named)).1⟩⟩)
+        (.accepted measured fits readPayload size)
+    obtain ⟨payload, durableBytes, origin, nameAtStart, exactAtStart⟩ := stored index within
+    obtain ⟨nameAtRead, contentsAtRead⟩ := held path admitted
+    have sameInode : origin = inode := Option.some.inj ((nameAtRead.trans nameAtStart).symm.trans bound)
+    subst origin
+    have live := (List.cons.inj ((contentsAtRead inode nameAtStart).trans exactAtStart)).1
+    change calls.runPrefix path stamp.byteCount.toNat afterSize = .ok got after at readPayload
+    have returnedFrame := calls.runPrefixFrames scopedReads
+      (fun heap => frameRefl (files := observedFiles names visible) (selectedPath := scope) heap)
+      CheckpointSurvivingFiles.Frames.trans path stamp.byteCount.toNat afterSize
+    have prefixFrame : (observedFiles names visible afterSize).Frames scope (observedFiles names visible after) := by
+      simpa only [readPayload, reachedState] using returnedFrame
+    exact ⟨durableBytes.trans (congrArg some (same.trans live).symm), held.trans (sizeFrame.trans prefixFrame)⟩
+
+/-- Derive the checkpoint selection for the actual result of the sized
+reader. Only the manifest observation crosses the optional-read boundary.
+Run identity and bytes follow from the local read effects and the
+immutable files of the selected publication. -/
+theorem MarkedTemporaryReadCalls.selectedCheckpointOfReturn (calls : MarkedTemporaryReadCalls heap)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray) (directory : DiskDirectory)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    {durable : CheckpointPublication.RunFiles} {binding : Option ByteArray}
+    {actual : Option (PackedTable × UInt64)}
+    (scope : FilePath → Prop) {initial entry reached : heap}
+    (inScope : ∀ raw manifest, binding = some raw → Manifest.IntegrityCheckpoint.decode raw = .ok manifest →
+      ∀ index < manifest.header.runCount.toNat, scope (directory.file (.run manifest.header.generation index)))
+    (stored : ∀ raw manifest, binding = some raw → Manifest.IntegrityCheckpoint.decode raw = .ok manifest →
+      ∀ index < manifest.header.runCount.toNat, ∃ payload,
+      durable manifest.header.generation index = some payload ∧
+      (observedFiles names visible initial).Stored (directory.file (.run manifest.header.generation index)) payload)
+    (manifestAbsent : ∀ {after}, calls.readOptional directory (directory.file .manifest) entry = .ok none after →
+      binding = none ∧ (observedFiles names visible initial).Frames scope (observedFiles names visible after))
+    (manifestPresent : ∀ {raw manifest after},
+      calls.readOptional directory (directory.file .manifest) entry = .ok (some raw) after →
+      Manifest.IntegrityCheckpoint.decode raw = .ok manifest →
+      binding = some raw ∧ (observedFiles names visible initial).Frames scope (observedFiles names visible after))
+    (sized : ∀ {path before size after}, calls.runSize path before = .ok size after →
+      (observedFiles names visible before).Frames scope (observedFiles names visible after) ∧
+      ∀ inode, names before path = some inode → size = (visible before inode).size)
+    (scopedReads : calls.FileFrames (observedFiles names visible) scope)
+    (returned : readIntegrityCheckpointSized directory (calls.readOptional directory (directory.file .manifest))
+      calls.runSize calls.runPrefix entry = .ok actual reached) :
+    SelectedIntegrityCheckpoint durable binding actual ∧
+      (observedFiles names visible initial).Frames scope (observedFiles names visible reached) := by
+  have outcome := SizedCheckpointReadReturn.classifies directory
+    (calls.readOptional directory (directory.file .manifest)) calls.runSize calls.runPrefix entry
+  rw [returned] at outcome
+  cases outcome with
+  | absent seen =>
+    obtain ⟨rfl, frame⟩ := manifestAbsent seen
+    exact ⟨.absent, frame⟩
+  | restored seen decoded runs loaded =>
+    obtain ⟨rfl, frame⟩ := manifestPresent seen decoded
+    obtain ⟨storedList, finalFrame⟩ := calls.restoresSelectedRunBytes view names visible directory opens reads
+      scope (inScope _ _ rfl decoded) (stored _ _ rfl decoded) frame sized scopedReads runs
+    exact ⟨.present decoded storedList loaded, finalFrame⟩
+
+private theorem MarkedTemporaryReadCalls.runSize_stat (calls : MarkedTemporaryReadCalls heap)
+    (path : FilePath) {entry reached : heap} {size : Nat}
+    (returned : calls.runSize path entry = .ok size reached) :
+    ∃ metadata, calls.stat path entry = .ok (.ok metadata) reached ∧ metadata.byteSize.toNat = size := by
+  simp only [MarkedTemporaryReadCalls.runSize, Bind.bind, EStateM.bind] at returned
+  cases raw : calls.stat path entry with
+  | error error after => simp [raw] at returned
+  | ok outcome after =>
+    cases outcome with
+    | error error => simp [raw, liftExcept, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+    | ok metadata =>
+      simp only [raw, liftExcept, Pure.pure, EStateM.pure] at returned
+      split at returned
+      · have exact := EStateM.Result.ok.inj returned
+        obtain ⟨rfl, rfl⟩ := exact
+        exact ⟨metadata, rfl, rfl⟩
+      · simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw, EStateM.bind] at returned
+
+/-- The current open restores the checkpoint from the protected files,
+using the actual optional metadata result and each reached run callback.
+The file frame includes the live manifest and runs at the selected
+retry entry, and permits independent changes to other paths. -/
+theorem MarkedTemporaryReadCalls.selectedCheckpointOfProtectedReturn
+    (calls : MarkedTemporaryReadCalls heap) (state : NativeReadyState)
+    (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray)
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    {initial entry reached : heap} {expected actual : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint state.writer.published.durable state.writer.target.pair.manifest expected)
+    (footprint : NativeReadyProtectedStorage state (observedFiles names visible initial))
+    (starts : (observedFiles names visible initial).Frames state.writeFramePath (observedFiles names visible entry))
+    (scopedReads : calls.FileFrames (observedFiles names visible) state.writeFramePath)
+    (statFrame : ∀ path before, (observedFiles names visible before).Frames state.writeFramePath
+      (observedFiles names visible (reachedState (calls.stat path before))))
+    (statExtent : ∀ {path before metadata after inode}, calls.stat path before = .ok (.ok metadata) after →
+      names before path = some inode → metadata.byteSize.toNat = (visible before inode).size)
+    (statMissing : ∀ {path before name message after},
+      calls.stat path before = .ok (.error (.noFileOrDirectory name 2 message)) after →
+      names before path = none)
+    (returned : readIntegrityCheckpointSized state.session.directory
+      (calls.readOptional state.session.directory (state.session.directory.file .manifest))
+      calls.runSize calls.runPrefix entry = .ok actual reached) :
+    SelectedIntegrityCheckpoint state.writer.published.durable state.writer.target.pair.manifest actual ∧
+      (observedFiles names visible initial).Frames state.writeFramePath (observedFiles names visible reached) := by
+  let directory := state.session.directory
+  let path := directory.file .manifest
+  have manifestPath : state.writeFramePath path := .inr (.inr (.inl rfl))
+  have manifestFrame {found : Option ByteArray} {after : heap}
+      (seen : calls.readOptional directory path entry = .ok found after) :
+      (observedFiles names visible initial).Frames state.writeFramePath (observedFiles names visible after) := by
+    have kept := calls.readOptionalFrames scopedReads
+      (fun heap => frameRefl (files := observedFiles names visible) (selectedPath := state.writeFramePath) heap)
+      CheckpointSurvivingFiles.Frames.trans statFrame directory path entry
+    exact starts.trans (by simpa only [seen, reachedState] using kept)
+  have sized {path before size after} (result : calls.runSize path before = .ok size after) :
+      (observedFiles names visible before).Frames state.writeFramePath (observedFiles names visible after) ∧
+      ∀ inode, names before path = some inode → size = (visible before inode).size := by
+    obtain ⟨metadata, returnedStat, extent⟩ := calls.runSize_stat path result
+    have frame := statFrame path before
+    rw [returnedStat, reachedState] at frame
+    exact ⟨frame, fun inode named => extent.symm.trans (statExtent returnedStat named)⟩
+  apply calls.selectedCheckpointOfReturn view names visible directory opens reads state.writeFramePath
+    ?_ ?_ ?_ ?_ sized scopedReads returned
+  · intro raw manifest present decoded index within
+    exact .inr (.inr (.inr (.inr ⟨raw, manifest, index, present, decoded, within, rfl⟩)))
+  · intro raw manifest present decoded index within
+    have visit : index < selectedRunCount state.writer.target.pair.manifest := by
+      simpa [selectedRunCount, present, decoded, Except.toOption] using within
+    obtain ⟨otherRaw, otherManifest, payload, rawEq, manifestEq, _, stored⟩ := selected.selectedRun visit
+    cases Option.some.inj (rawEq.symm.trans present)
+    cases Except.ok.inj (manifestEq.symm.trans decoded)
+    exact ⟨payload, stored, footprint.runs _ _ present decoded index within payload stored⟩
+  · intro after seen
+    obtain ⟨name, message, stat⟩ := calls.readOptional_none directory path seen
+    have missing : names entry path = none := statMissing stat
+    have absent := (starts path manifestPath).1.symm.trans missing
+    refine ⟨?_, manifestFrame seen⟩
+    cases binding : state.writer.target.pair.manifest with
+    | none => rfl
+    | some payload =>
+      have current := footprint.manifest
+      rw [binding] at current
+      obtain ⟨inode, named, _⟩ := current
+      rw [absent] at named
+      contradiction
+  · intro raw manifest after seen accepted
+    have preservesStat {metadata afterStat}
+        (measured : calls.stat path entry = .ok (.ok metadata) afterStat) :
+        names afterStat path = names entry path ∧
+        ∀ inode, names entry path = some inode →
+          metadata.byteSize.toNat = (visible entry inode).size ∧ visible afterStat inode = visible entry inode := by
+      have frame := statFrame path entry
+      rw [measured, reachedState] at frame
+      obtain ⟨sameName, sameContents⟩ := frame path manifestPath
+      exact ⟨sameName, fun inode named => ⟨statExtent measured named, (List.cons.inj (sameContents inode named)).1⟩⟩
+    obtain ⟨_, _, inode, _, _, _, bound, _, _, exactBytes, _⟩ :=
+      calls.readSelectedManifest view names visible opens reads directory preservesStat seen accepted
+    obtain ⟨nameEq, contents⟩ := starts path manifestPath
+    have origin : names initial path = some inode := nameEq.symm.trans bound
+    refine ⟨?_, manifestFrame seen⟩
+    cases binding : state.writer.target.pair.manifest with
+    | none =>
+      have absent := footprint.manifest
+      rw [binding] at absent
+      change names initial path = none at absent
+      rw [absent] at origin
+      contradiction
+    | some payload =>
+      have current := footprint.manifest
+      rw [binding] at current
+      obtain ⟨expectedInode, named, stored⟩ := current
+      have sameInode : expectedInode = inode := Option.some.inj (named.symm.trans origin)
+      subst expectedInode
+      have agrees := (List.cons.inj ((contents inode origin).trans stored)).1
+      exact congrArg some (exactBytes.trans agrees).symm
+
 end SelectedReadFiles
 
 section ReachedSelectedFiles

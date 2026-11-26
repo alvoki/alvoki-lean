@@ -302,6 +302,66 @@ theorem readIntegrityRunBytesSized_returnedAt (directory : DiskDirectory)
     rw [List.take_range, Nat.min_eq_left withinNext] at afterRead
     simpa only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, shortenedNext] using afterRead
 
+private theorem mapM_refinesSuccess {α β : Type} (perform : α → EStateM IO.Error heap β)
+    (project : α → Option β) {invariant : heap → Prop} (items : List α)
+    (step : ∀ item ∈ items, ∀ {before after value}, invariant before →
+      perform item before = .ok value after → project item = some value ∧ invariant after)
+    {entry reached : heap} {values : List β} (initial : invariant entry)
+    (returned : (items.mapM perform) entry = .ok values reached) :
+    items.mapM project = some values ∧ invariant reached := by
+  induction items generalizing entry values with
+  | nil =>
+    simp only [List.mapM_nil, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
+    obtain ⟨rfl, rfl⟩ := returned
+    exact ⟨rfl, initial⟩
+  | cons item rest ih =>
+    simp only [List.mapM_cons, Bind.bind, EStateM.bind] at returned
+    cases head : perform item entry with
+    | error cause failed => simp [head] at returned
+    | ok value middle =>
+      cases tail : (rest.mapM perform) middle with
+      | error cause failed => simp [head, tail] at returned
+      | ok outputs final =>
+        simp only [head, tail, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
+        obtain ⟨rfl, rfl⟩ := returned
+        obtain ⟨valueEq, atMiddle⟩ := step item List.mem_cons_self initial head
+        obtain ⟨restEq, atEnd⟩ := ih (fun next member => step next (List.mem_cons_of_mem _ member)) atMiddle tail
+        exact ⟨by simp [List.mapM_cons, valueEq, restEq, Bind.bind, Option.bind], atEnd⟩
+
+/-- Each successful reached run read supplies its matching stored bytes
+and preserves a caller-chosen frame. The actual restore inputs are
+exactly the stored bytes in the manifest's index order. -/
+theorem readIntegrityRunBytesSized_refinesSuccess (directory : DiskDirectory)
+    {manifest : IntegrityCheckpoint}
+    (readSize : FilePath → EStateM IO.Error heap Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray)
+    (stored : Nat → Option ByteArray) {invariant : heap → Prop}
+    (step : ∀ index < manifest.header.runCount.toNat, ∀ stamp, manifest.runs[index]? = some stamp →
+      ∀ {before after bytes}, invariant before →
+      ExactRecoveryFileReturn (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
+        (IO.userError checkpointIntegrityMismatch) readSize readPrefix before (.ok bytes after) →
+      stored index = some bytes ∧ invariant after)
+    {entry reached : heap} {files : List ByteArray} (initial : invariant entry)
+    (returned : readIntegrityRunBytesSized directory manifest readSize readPrefix entry = .ok files reached) :
+    (List.range manifest.header.runCount.toNat).mapM stored = some files ∧ invariant reached := by
+  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM] at returned
+  refine mapM_refinesSuccess _ stored _ (fun index member before after bytes known observed => ?_) initial returned
+  change ((do
+    let some stamp := manifest.runs.toArray[index]? | throw (IO.userError checkpointIntegrityMismatch)
+    readExactRecoveryFileWith (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
+      (IO.userError checkpointIntegrityMismatch) readSize readPrefix) : EStateM IO.Error heap ByteArray) before =
+      .ok bytes after at observed
+  cases found : manifest.runs[index]? with
+  | none =>
+    simp [List.getElem?_toArray, found, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at observed
+  | some stamp =>
+    simp only [List.getElem?_toArray, found] at observed
+    have outcome := ExactRecoveryFileReturn.classifies
+      (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
+      (IO.userError checkpointIntegrityMismatch) readSize readPrefix before
+    rw [observed] at outcome
+    exact step index (List.mem_range.mp member) stamp found known outcome
+
 /-- Invert a present return of the literal sized reader. The decoder and
 restore receive the bytes supplied by the original ordered callbacks. -/
 theorem readIntegrityCheckpointSized_restoredInputs (directory : DiskDirectory)
