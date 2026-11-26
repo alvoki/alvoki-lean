@@ -542,7 +542,9 @@ theorem RawWriteRebootEntry.startsRecoveryAfterFailedPrune
       some ((view.descriptors afterKeeper).inode admission.cached.description))
     (readsRoot : ∀ {before result issued}, (callbacks).getDirectory seed.directoryRef before = .ok result issued →
       result = view.directory before seed.directoryRef)
-    (crashFrame : (observe authorized).CrashFileFrame (state.pruneRecoveryScope target.range.through) (observe failed))
+    (crashFiles : (observe authorized).SettledCrashFiles (state.pruneRecoveryScope target.range.through)
+      (observe authorized) →
+      (observe authorized).SettledCrashFiles (state.pruneRecoveryScope target.range.through) (observe failed))
     (secondBoot : RawWriteRebootEntry state view observe (fun atHeap => (observe atHeap).files.names)
       readBytes failed rebooted)
     (secondReset : secondBoot.DurableReset) :
@@ -570,18 +572,21 @@ theorem RawWriteRebootEntry.startsRecoveryAfterFailedPrune
     rw [sameDirectory]
     exact authorization
   obtain ⟨_, _, _, _, settled, _⟩ := authEffects.framesRootSync rootAtRepair heldRoot readsRoot authorizedAtDirectory
-  refine ⟨.next prior input returned, ?_⟩
-  exact secondBoot.startsRecoveryAfterFramedPrune secondReset sameFirst atBoot.manifest durable
-    (fun names possible path inside => by
-      obtain ⟨file, rfl⟩ := NativeReadyState.pruneRecoveryScope_child inside
-      exact settled names possible file)
-    authKeeper authWindow crashFrame
+  have authSettled : (observe authorized).SettledCrashFiles
+      (state.pruneRecoveryScope target.range.through) (observe authorized) := by
+    refine ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, ?_, fun _ _ _ _ _ _ _ present => present⟩
+    intro names possible path inside
+    obtain ⟨file, rfl⟩ := NativeReadyState.pruneRecoveryScope_child inside
+    exact settled names possible file
+  exact ⟨.next prior input returned,
+    secondBoot.startsRecoveryAfterFramedPrune secondReset sameFirst atBoot.manifest durable
+      authKeeper authWindow (crashFiles authSettled)⟩
 
 /-- Both a failed suffix removal and an error at the following root
 barrier extend the same failed-open chronology. Accepted removals
-retain their live effects at the error heap. A barrier error before
-settlement can also preserve earlier crash bindings beyond the cutoff.
-The shared authorization and public-return frames feed a later reboot. -/
+retain their live effects at the error heap. A barrier error may keep
+an earlier map or settle the issued live map. The selected children
+through the cutoff feed the same reboot proof in either case. -/
 theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     {first : heap} {earlier : List (FilePath × IO.Error)} (prior : source.FailedCalls first earlier entry)
     (readerFrames : source.fileCalls.ScopeFrames sampledFrame)
@@ -622,30 +627,25 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
       source.FailedCalls first (earlier ++ [(input, dispose.diagnostic cause)]) finalized.reached ∧
       sampledFrame entry finalized.reached ∧
       sampledFrame entry authorized ∧
-      (∀ {state : NativeReadyState} {unlinked issued : heap} {handle : IO.FS.Handle},
+      (∀ {state : NativeReadyState} {unlinked : heap},
         state.session.directory = directory → state.Valid →
         layout.target.first = state.writer.wal.active.first →
         ((layout.boundedPlan.newer.map Step.unlink).forM
           (performPaths directory layout.boundedPlan source.remove throw stageWrite groupSync source.rename))
           authorized = .ok () unlinked →
-        (callbacks).getDirectory seed.directoryRef unlinked = .ok (some handle) issued →
-        RawFsyncTarget view unlinked issued handle →
-        (observe issued).files.names directory.path =
-          some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
-        (∀ diagnostic, (callbacks).sync handle issued = .error diagnostic reached →
-          (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
-          (observe issued).files.names directory.path =
-            some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
-          WalRootSyncEffect directory false (observe issued) (observe reached)) →
         (∀ {ordinal before after result},
           ¬ state.pruneRecoveryScope layout.target.range.through (directory.file (.walSegment ordinal)) →
           source.remove (directory.file (.walSegment ordinal)) before = .ok result after →
           RunCollection.ownedUnlinkResult result = .ok () →
           (observe before).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe after)) →
-        (observe unlinked).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe issued) →
+        (∀ {issued : heap} {handle : IO.FS.Handle},
+          (callbacks).getDirectory seed.directoryRef unlinked = .ok (some handle) issued →
+          (observe unlinked).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe issued)) →
         dispose.ScopeFrames finalized (fun before after =>
           (observe before).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe after)) →
-        (observe authorized).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through)
+        (observe authorized).SettledCrashFiles (state.pruneRecoveryScope layout.target.range.through)
+          (observe authorized) →
+        (observe authorized).SettledCrashFiles (state.pruneRecoveryScope layout.target.range.through)
           (observe finalized.reached)) := by
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have checked := layout.boundedPlan_valid ((Plan.valid_iff layout.plan).mp valid.valid).2.2
@@ -669,8 +669,7 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     sameStat flat marked keeperRead SampledCheckpointRetryFrame.refl SampledCheckpointRetryFrame.trans readerFrames
     listingFrames keeperFrame repair repairFrame dispose sameDisposal owner finalized cleanup
   refine ⟨returned, .next prior input returned, framed, beforeRepair.trans authorizedFrame, ?_⟩
-  intro state unlinked issued handle sameDirectory ready targetFirst unlinks loaded
-    target bound physical unlinkCrash loadCrash cleanupCrash
+  intro state unlinked sameDirectory ready targetFirst unlinks unlinkCrash loadCrash cleanupCrash settled
   let selectedScope := state.pruneRecoveryScope layout.target.range.through
   have managed (path : FilePath) (inside : selectedScope path) : ∃ file, path = directory.file file := by
     obtain ⟨file, named⟩ := NativeReadyState.pruneRecoveryScope_child inside
@@ -682,11 +681,12 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
     exact state.pruneRecoveryScope_excludesLater ready targetFirst later
   have throughUnlinks := CheckpointStorageObservation.CrashFileFrame.afterReturnedWalUnlinks offTarget unlinkCrash unlinks
   have returnedBarrier := failedPruneDirectoryOfReturnedUnlinks unlinks stopped
-  obtain ⟨diagnostic, failedSync, _⟩ := (callbacks).rawPruneDirectoryError seed.directoryRef seed.activeRef seed.pendingRef
-    loaded returnedBarrier
-  have atError := (physical diagnostic failedSync target.live bound).crashFilesBeforeEffect managed
-  exact throughUnlinks.trans
-    (loadCrash.trans (atError.trans (cleanupCrash.afterWorker (fun earlier later => earlier.trans later))))
+  obtain ⟨issued, handle, effective, loaded, target, bound, load, managedForRead, physical⟩ := barrier unlinks returnedBarrier
+  obtain ⟨_, _, _, _, rootEffect⟩ := (callbacks).framesPruneDirectoryError seed.directoryRef seed.activeRef seed.pendingRef
+    loaded returnedBarrier target bound load managedForRead (fun diagnostic raw _ _ => physical diagnostic raw)
+  have throughIssue := throughUnlinks.trans (loadCrash loaded)
+  exact (rootEffect.keepsSettledCrashFiles managed throughIssue settled).frame
+    (cleanupCrash.afterWorker (fun earlier later => earlier.trans later))
 
 end FailedMarkedRepair
 

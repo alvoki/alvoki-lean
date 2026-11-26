@@ -367,8 +367,11 @@ WAL interval to the names on disk, the live keeper binding to its bytes, the sel
 immutable files to their durable contents, and later WAL names to the physical suffix.
 The selected marker bounds replay. Above it, the successful directory scan must enumerate
 every later canonical WAL name, including any restored by power loss before pruning was durable.
-When all unlinks return and the prune barrier fails before taking effect, a frame keeps
-the selected files and the names through the marker together in one surviving map.
+After all unlinks return, the directory barrier can report an error before or after
+taking effect. Before the effect, a surviving map keeps the protected bindings of a
+predecessor. After the effect, it reflects the live directory at fsync. In either case,
+`SettledCrashFiles` relates each sampled name and payload through the marker to the
+protected files at prune authorization.
 The reboot reader uses that map for the later suffix as well. The successful authorization
 fsync on the held directory settles the protected names. The first reboot selects the keeper. Given the bounded catalog at that sample,
 the failed-attempt and read frames carry both to authorization. The frame

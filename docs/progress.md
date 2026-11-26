@@ -45,8 +45,8 @@ the first sample supplies the keeper and selected window through the actual read
 The failed return supplies the frame used to carry checkpoint durability into the retry.
 
 **Next obligation.** When pruning stops at an unlink after some earlier removals,
-derive the same scoped crash frame through the failed unlink and cleanup. Also
-connect an effective prune barrier that reports an error to the sampled retry.
+derive the same scoped crash frame through the failed unlink and cleanup. Both
+effect timings of the post-prune barrier already feed the same sampled retry.
 Mixed sessions and maintenance remain on the roadmap.
 
 **Verification baseline.** See commit `f5bb038a` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

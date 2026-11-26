@@ -46,6 +46,60 @@ theorem WalRootSyncEffect.crashFilesBeforeEffect
     obtain ⟨file, rfl⟩ := managed path inside
     exact effect.bytes names (.inr possible) file inode bound ▸ sampled
 
+/-- Every reached crash namespace retains the settled bindings of the
+source files in scope. Its named inode can use a durable payload from
+the source. A successful barrier can select the current live bindings
+even when no earlier crash namespace was observed. -/
+structure CheckpointStorageObservation.SettledCrashFiles (scope : FilePath → Prop)
+    (source reached : CheckpointStorageObservation) : Prop where
+  visible : source.files.Frames scope reached.files
+  names : ∀ names ∈ reached.crashNames, ∀ path, scope path → names path = source.files.names path
+  bytes : ∀ names ∈ reached.crashNames, ∀ path, scope path → ∀ inode, names path = some inode →
+    ∀ payload ∈ reached.files.bytes inode, payload ∈ source.files.bytes inode
+
+theorem CheckpointStorageObservation.SettledCrashFiles.frame {scope : FilePath → Prop}
+    {source before reached : CheckpointStorageObservation}
+    (kept : source.SettledCrashFiles scope before) (frame : before.CrashFileFrame scope reached) :
+    source.SettledCrashFiles scope reached := by
+  refine ⟨kept.visible.trans frame.toFrames.visible, ?_, ?_⟩
+  · intro names possible path inside
+    obtain ⟨prior, earlier, same⟩ := frame.toFrames.survivors names possible
+    exact (same path inside).trans (kept.names prior earlier path inside)
+  · intro names possible path inside inode bound payload durable
+    obtain ⟨prior, earlier, same⟩ := frame.toFrames.survivors names possible
+    exact kept.bytes prior earlier path inside inode ((same path inside).symm.trans bound) payload
+      (frame.bytes names possible path inside inode bound payload durable)
+
+/-- A returned error before settlement keeps an earlier map. An error
+after settlement instead keeps the issued live map. Both preserve the
+same already-settled authorization footprint through the cutoff. -/
+theorem WalRootSyncEffect.keepsSettledCrashFiles
+    {directory : DiskDirectory} {scope : FilePath → Prop} {effective : Bool}
+    {source before reached : CheckpointStorageObservation}
+    (effect : WalRootSyncEffect directory effective before reached)
+    (managed : ∀ path, scope path → ∃ file, path = directory.file file)
+    (beforeSync : source.CrashFileFrame scope before)
+    (settled : source.SettledCrashFiles scope source) :
+    source.SettledCrashFiles scope reached := by
+  cases effective
+  · exact settled.frame (beforeSync.trans (effect.crashFilesBeforeEffect managed))
+  · have afterSync : before.files.Frames scope reached.files := by
+      intro path inside
+      obtain ⟨file, rfl⟩ := managed path inside
+      have kept := effect.visible file
+      exact ⟨kept, fun inode named => effect.bytes _ (.inl rfl) file inode (kept.trans named)⟩
+    refine ⟨beforeSync.toFrames.visible.trans afterSync, ?_, ?_⟩
+    · intro names possible path inside
+      obtain ⟨file, rfl⟩ := managed path inside
+      exact (effect.settled rfl names possible file).trans
+        ((effect.visible file).trans (beforeSync.toFrames.visible _ inside).1)
+    · intro names possible path inside inode bound payload durable
+      obtain ⟨file, rfl⟩ := managed path inside
+      have atIssue := ((effect.settled rfl names possible file).trans (effect.visible file)).symm.trans bound
+      obtain ⟨sameName, sameBytes⟩ := beforeSync.toFrames.visible _ inside
+      have atSource := sameName.symm.trans atIssue
+      exact sameBytes inode atSource ▸ (effect.bytes names (.inr possible) file inode bound ▸ durable)
+
 /-- Fold the same primitive frame over the literal accepted unlinks.
 The frame covers only unaffected paths, with byte choices of crash
 inodes included even when those inodes are not live. -/
@@ -83,32 +137,32 @@ theorem RawWriteRebootEntry.startsRecoveryAfterFramedPrune
     (first : target.first = state.writer.wal.active.first)
     (sameManifest : target.pair.manifest = state.writer.target.pair.manifest)
     (durable : state.SelectedRetryDurability target (observe failed))
-    (settled : ∀ names ∈ (observe authorized).crashNames, ∀ path,
-      state.pruneRecoveryScope target.range.through path → names path = (observe authorized).files.names path)
     (keeper : RawOpenRetryTrace.LiveKeeperCrashChoices state.session.directory target (observe authorized))
     (window : state.writer.wal.NamespaceWindow state.session.directory firstOffset target.range.through
       (observe authorized).files.names)
-    (frame : (observe authorized).CrashFileFrame (state.pruneRecoveryScope target.range.through) (observe failed)) :
+    (survivors : (observe authorized).SettledCrashFiles (state.pruneRecoveryScope target.range.through) (observe failed)) :
     RawOpenRetryTrace.SelectedEntry view state target (fun atHeap => (observe atHeap).files.names) visible rebooted ∧
       TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
       (view.descriptors rebooted).slots = [] ∧
       RawOpenRetryTrace.RecoveryObservations view state target observe visible firstOffset target.range.through rebooted := by
   let directory := state.session.directory
-  have kept := frame.toFrames.settledFrom settled
   obtain ⟨inode, bound, accepted⟩ := keeper
   have keeperChoices : RawOpenRetryTrace.KeeperCrashChoices directory target (observe failed) := by
     intro names survives
     let path := directory.file (.walSegment target.first)
     have inside : state.pruneRecoveryScope target.range.through path := .inr ⟨_, target.firstCovered, rfl⟩
-    have named := (kept names survives path inside).trans ((frame.toFrames.visible path inside).1.trans bound)
-    exact ⟨inode, named, fun payload member => accepted payload (frame.bytes names survives path inside inode named payload member)⟩
+    have named := (survivors.names names survives path inside).trans bound
+    exact ⟨inode, named, fun payload member =>
+      accepted payload (survivors.bytes names survives path inside inode named payload member)⟩
   obtain ⟨selected, vacant, empty⟩ := seen.selectsRetryAfterRepair first sameManifest durable
-    (fun path protectedPath notRoot => kept _ seen.chosen path (.inl ⟨protectedPath, notRoot⟩)) keeperChoices
+    (fun path protectedPath notRoot =>
+      (survivors.names _ seen.chosen path (.inl ⟨protectedPath, notRoot⟩)).trans
+        (survivors.visible path (.inl ⟨protectedPath, notRoot⟩)).1.symm) keeperChoices
   have chosenWindow := window.frame (by
     intro start _ within
     let path := directory.file (.walSegment start)
     have inside : state.pruneRecoveryScope target.range.through path := .inr ⟨start, within, rfl⟩
-    exact congrArg Option.isSome ((kept _ seen.chosen path inside).trans (frame.toFrames.visible path inside).1))
+    exact congrArg Option.isSome (survivors.names _ seen.chosen path inside))
   exact ⟨selected, vacant, empty, seen.startsRecoveryObservations reset selected chosenWindow⟩
 
 section SuffixRetryFrame
