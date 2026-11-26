@@ -85,11 +85,10 @@ theorem OpenRotationObservation.Reached.walWindow
     position.WalWindowAt storage first through := by
   let frame := fun before after => RotationWalNameFrame directory first through (wal).active.last
     (storage before) (storage after)
-  have refl (atHeap : heap) : frame atHeap atHeap := fun _ _ _ _ => .refl _
   have trans {before middle reached : heap} (earlier : frame before middle) (later : frame middle reached) :
       frame before reached :=
     fun start low high apart => (earlier start low high apart).trans (later start low high apart)
-  have kept := reached.frames (frame := frame) refl trans effects
+  have kept := reached.frames (frame := frame) trans effects
   have priorFacts := current.current.ready.readPrefix.refines
   have onEnd : (wal).active.last = current.current.history.length :=
     priorFacts.1.retained.layout.activeEnd.trans (congrArg List.length priorFacts.2.1)

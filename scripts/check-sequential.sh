@@ -186,6 +186,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointManifestRenameTableOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenCheckpointReadTrace
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenRotation
+lake env leanchecker Alvoki.Storage.Disk.NativeRawRotationDirectoryError
 lake env leanchecker Alvoki.Storage.Disk.NativeRotationWriteEntry
 lake env leanchecker Alvoki.Storage.Disk.NativeRotationReadyStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeRotationWalWindow

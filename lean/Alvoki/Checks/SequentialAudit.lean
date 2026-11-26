@@ -404,6 +404,7 @@ import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeOpenedWalPlanning
 import Alvoki.Storage.Disk.NativeOpenRotation
+import Alvoki.Storage.Disk.NativeRawRotationDirectoryError
 import Alvoki.Storage.Disk.NativeRotationWriteEntry
 import Alvoki.Storage.Disk.NativeRotationReadyStorage
 import Alvoki.Storage.Disk.NativeRotationWalWindow
@@ -2751,6 +2752,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.writeStorageEntryCreated
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.writeStorageEntryExisting
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.frames
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotationReturnsDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeCreatedRotationContinuation.writeStorageEntry
 #check_axioms Alvoki.Storage.DiskSession.NativeExistingRotationContinuation.writeStorageEntry
 #check_axioms Alvoki.Storage.WalSegmentImage.settlesRotatedNamespace

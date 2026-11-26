@@ -114,9 +114,16 @@ batch supplies the storage entry and bounded name interval. The rotation uses
 the same cache references, and the rebooted lookup records that batch’s value.
 [Rotation through reopen](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
 
-**Next obligation.** At a failed rotation barrier, carry the surviving
-namespace and reached cleanup inventory into the next admission. The live
-successor can still disappear on power loss after an ineffective directory fsync.
+A rotation whose final directory fsync returns an error shares the same
+successor probe and file-sync proof. The cached root descriptor and its
+failed fsync determine the public diagnostic and exact return heap. Local
+callback frames carry the poisoned phase to that heap.
+[Returned root error](../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean)
+
+**Next obligation.** Carry that heap through close or power loss into the
+next admission. A live reopen sees the created successor. After an ineffective
+directory fsync, a reboot can also lose its binding. The selected keeper and
+the cleanup inventory must come from the same execution.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

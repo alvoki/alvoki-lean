@@ -286,6 +286,23 @@ structure OpenRotationCallbacks.SuccessorFilePrefix (calls : OpenRotationCallbac
     (fun bytes => bytes.size = 0 ∧ beforeSync = afterRead)
   sync : calls.sync (directory.file (.walSegment first)) beforeSync = .ok () synced
 
+/-- Preserve a local relation through the actual successor file prefix.
+An existing empty file reaches the file sync without a create. -/
+theorem OpenRotationCallbacks.SuccessorFilePrefix.frames
+    {calls : OpenRotationCallbacks heap} {directory : DiskDirectory} {first : Nat} {entry synced : heap}
+    (filePrefix : calls.SuccessorFilePrefix directory first entry synced)
+    {frame : heap → heap → Prop}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (read : frame entry filePrefix.afterRead)
+    (created : filePrefix.observed = none → frame filePrefix.afterRead filePrefix.beforeSync)
+    (fileSync : frame filePrefix.beforeSync synced) : frame entry synced := by
+  have selected := filePrefix.successor
+  cases observed : filePrefix.observed with
+  | none => exact trans read (trans (created observed) fileSync)
+  | some bytes =>
+    simp only [observed, Option.elim] at selected
+    exact trans read (selected.2 ▸ fileSync)
+
 private theorem OpenRotationCallbacks.reachesSuccessor (calls : OpenRotationCallbacks heap)
     (directory : DiskDirectory) (first : Nat) {entry reached : heap}
     (returned : WalSegmentRotation.runAt directory first calls.read calls.create calls.sync entry = .ok () reached) :
@@ -381,20 +398,12 @@ def OpenRotationObservation.LocalFrames
 theorem OpenRotationObservation.Reached.frames
     {read create sync entry settled reset} {seen : OpenRotationObservation current read create sync entry settled reset}
     {lookup position} (reached : seen.Reached lookup position)
-    {frame : heap → heap → Prop} (refl : ∀ h, frame h h)
+    {frame : heap → heap → Prop}
     (trans : ∀ {a b c}, frame a b → frame b c → frame a c) (effects : seen.LocalFrames frame) :
     frame current.reached position.reached := by
   obtain ⟨steps⟩ := reached.successfulSteps
   obtain ⟨poison, read, create, fileSync, directorySync, clear, restore⟩ := effects reached steps
-  have beforeSync : frame steps.file.afterRead steps.file.beforeSync := by
-    cases found : steps.file.observed with
-    | none => exact create found
-    | some bytes =>
-      have same := steps.file.successor
-      simp only [found, Option.elim] at same
-      rw [same.2]
-      exact refl _
-  exact trans poison (trans read (trans beforeSync (trans fileSync (trans directorySync (trans clear restore)))))
+  exact trans poison (trans (steps.file.frames trans read create fileSync) (trans directorySync (trans clear restore)))
 
 private theorem OpenRotationObservation.reachesReady {read create sync entry settled reset}
     (seen : OpenRotationObservation current read create sync entry settled reset)

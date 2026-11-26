@@ -137,7 +137,6 @@ theorem NativeCreatedRotationContinuation.writeStorageEntry
   rw [← sameReady] at keeper settled live
   have inodes := (report.custody current.current.ready.readPrefix.refines.1).2.1
   have framed := returned.frames (frame := fun before after => (storage before).Frames (oldState).crashPath (storage after))
-    (fun h => CheckpointStorageObservation.Frames.refl (oldState).crashPath (storage h))
     CheckpointStorageObservation.Frames.trans keeps
   apply returned.writeStorageEntryCreated rotation atState _ live
   refine initial.afterRotation current.current.ready.readPrefix.refines.1 ?_ sameDirectory ?_ ?_ framed keeper settled
@@ -179,7 +178,6 @@ theorem NativeExistingRotationContinuation.writeStorageEntry
   rw [← sameReady] at keeper settled live
   have inodes := (report.custody current.current.ready.readPrefix.refines.1).2.1
   have framed := returned.frames (frame := fun before after => (storage before).Frames (oldState).crashPath (storage after))
-    (fun h => CheckpointStorageObservation.Frames.refl (oldState).crashPath (storage h))
     CheckpointStorageObservation.Frames.trans keeps
   apply returned.writeStorageEntryExisting rotation atState _ live
   refine initial.afterRotation current.current.ready.readPrefix.refines.1 ?_ sameDirectory ?_ ?_ framed keeper settled

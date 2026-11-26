@@ -253,6 +253,13 @@ entry and the WAL name interval on the same heap and cache.
 [Name interval](../../lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean) ·
 [Returned handle and replay](../../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
 
+A returned directory-sync error uses the same successor file prefix as
+success. The root descriptor load and failed fsync fix the returned heap and
+diagnostic. The file callbacks preserve the poisoned phase there. A later
+close or reboot still has to supply the actual cleanup inventory and the
+chosen directory bindings to the opener.
+[Failed directory sync](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean)
+
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the
 sampled reboot and the effects of the intervening failed opens, it establishes
