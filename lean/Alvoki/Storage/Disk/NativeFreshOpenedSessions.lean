@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.NativeRawWriteReboot
 import Alvoki.Storage.Disk.NativeRawWriteRootStop
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
+import Alvoki.Storage.Disk.NativeRotationWalReplay
 
 namespace Alvoki.Storage.DiskSession
 
@@ -763,6 +764,77 @@ theorem replaysFirstAcknowledgedWrite {stream : Type} (wrote : observedFirstWrit
   rw [← history]
   exact @RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen _ _ _ _ source _ _ _ _ namespaceView root
     sampled next.current.ready.readPrefix.refines.1 readyPhysical reset finalWindow noManifest
+
+include covered in
+/-- The first acknowledged WAL batch survives creation of the successor,
+one sampled power loss, and a lookup on the table returned by the next open. -/
+theorem readsAfterCreatedRotation {stream : Type} (wrote : observedFirstWrite)
+    (source : RawMarkedOpenInterpreter heap stream) (namespaceView : DirectoryReadNamespace) (root : DeviceInode) :
+    ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
+      (batch : List WAL.Write) (preparedTable : PackedTable) (next : NativeOpenedPosition opened.handle),
+      call entry = .ok opened.handle.table opened.start.reached ∧
+      request.runOnRawOpenPhase directory lookup (appender.run seed.activeRef) (stager.run seed.pendingRef)
+        (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
+        rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
+      prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (batch, preparedTable) ∧
+      sequence = preparedTable.committed ∧ sequence.toNat = batch.length ∧ next.reached = reached ∧
+      ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 request.rows.length)
+        (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
+            (storage preReady) (storage reached))
+        (report : NativeReadyCreatedRotation next.current.ready.state)
+        (rotation : OpenRotationObservation.Created next report),
+        ∃ rotated, rotation.Reached report.lookup rotated ∧
+          rotation.active = seed.activeRef ∧ rotation.pending = seed.pendingRef ∧ rotation.directory = seed.directoryRef ∧
+          opened.start.current.LedgerSuffix [.acknowledged request batch, .rotatedWal] rotated.current ∧
+          let old := next.current.ready.state
+          let state := rotated.current.ready.state
+          let reopenView := rotation.view.withFileProjection (fun h => ⟨modeledFiles h, (rotation.view.files h).owners⟩)
+          ∀ (_keeps : rotation.LocalFrames (fun a b => (storage a).Frames old.crashPath (storage b)))
+            (_child : (rotation.view.files rotated.reached).image.ObservesWalChild report.parent.root
+              state.session.directory state.writer.wal.active.first (storage rotated.reached) (visible rotated.reached))
+            (_otherNames : rotation.LocalFrames (fun a b => RotationWalNameFrame old.session.directory 0
+              request.rows.length old.writer.wal.active.last (storage a) (storage b)))
+            {rebooted : heap} (sample : RawWriteRebootEntry state reopenView storage names visible rotated.reached rebooted),
+            sample.DurableReset →
+            source.ReadsClientHistoryAtOpen reopenView state storage visible rebooted
+              namespaceView root [.acknowledgedBatch batch] [] batch := by
+  obtain ⟨cache, batch, preparedTable, next, _, atOpen, write, prepared, number, count, _, _, _,
+    exactHeap, _, batchHistory, firstLedger, physical, ⟨noManifest, _, _, _⟩, carries⟩ :=
+    opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
+      liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+      modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
+  refine ⟨cache, batch, preparedTable, next, atOpen, write, prepared, number, count, exactHeap, ?_⟩
+  intro firstNames restore report rotation
+  obtain ⟨rotated, returned, step, continues⟩ :=
+    NativeOpenedPosition.rotatesCreatedWithWal (current := next) report rotation storage visible
+  have ledger := firstLedger.append step.ledgerSuffix
+  refine ⟨rotated, returned, rotation.references.1.symm.trans references.1,
+    rotation.references.2.1.symm.trans references.2.1, rotation.references.2.2.symm.trans references.2.2, ledger, ?_⟩
+  intro old state reopenView keeps child otherNames rebooted sample reset
+  have window := carries request.rows.length covered firstNames restore
+  have gaps (start : Nat) (bound : start ≤ request.rows.length) (_apart : start ≠ old.writer.wal.active.last) :
+      old.writer.wal.SettledNamespaceWindow old.session.directory start start (storage next.reached) :=
+    ⟨window.2.1.restrict (Nat.zero_le _) bound,
+      fun surviving chosen => (window.2.2 surviving chosen).restrict (Nat.zero_le _) bound⟩
+  have post := continues physical.physical keeps child
+  obtain ⟨_, readsAfterOpen⟩ := post.2 request.rows.length gaps otherNames
+  obtain ⟨valid, writerHistory, _⟩ := rotated.current.ready.readPrefix.refines
+  have history : rotated.current.history = batch := by
+    simpa only [NativeExecutionEvent.writes, List.append_nil, batchHistory] using step.ledgers.1
+  have cutoff : state.writer.target.range.through ≤ request.rows.length := by
+    change rotated.current.ready.state.writer.target.range.through ≤ request.rows.length
+    rw [valid.retained.resumed.through, writerHistory, history, (prepareBatch_spec prepared).1]
+    exact Nat.le_refl _
+  obtain ⟨_, log, reads, _⟩ := opened.refinesLedger firstLedger
+  have submitted : next.current.submissions = [.acknowledgedBatch batch] := by
+    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.submissions, List.append_nil] using log
+  have noReads : next.current.ready.reads = [] := by
+    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.reads, List.append_nil] using reads
+  change source.ReadsClientHistoryAtOpen reopenView state storage visible rebooted namespaceView root
+    [.acknowledgedBatch batch] [] batch
+  rw [← submitted, ← noReads, ← batchHistory]
+  exact @readsAfterOpen stream source modeledFiles rebooted namespaceView root sample reset cutoff noManifest
 
 /-- The actual first acknowledgement starts the interrupted second
 write. One reboot sample selects its replay and the subsequent lookup

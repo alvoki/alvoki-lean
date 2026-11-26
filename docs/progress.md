@@ -109,11 +109,14 @@ cache, census and empty successor. The old keeper becomes a seal. Creating
 the successor and reusing an existing private empty file establish the same
 WAL interval and feed the same reboot and snapshot proof. This uses the
 local callback frames and the association between the observed child and
-the joint crash namespace. [Rotation through reopen](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
+the joint crash namespace. On the fresh create path, the first acknowledged
+batch supplies the storage entry and bounded name interval. The rotation uses
+the same cache references, and the rebooted lookup records that batch’s value.
+[Rotation through reopen](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
 
 **Next obligation.** At a failed rotation barrier, carry the surviving
-namespace and reached cleanup inventory into the next admission. Also connect
-the successful rotation observations to a mixed execution from fresh state.
+namespace and reached cleanup inventory into the next admission. The live
+successor can still disappear on power loss after an ineffective directory fsync.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

@@ -273,74 +273,109 @@ structure OpenRotationObservation.Reached {read create sync entry settled reset}
   lockSlot : (seen.view.handle position.reached opened.lock).2.1 = current.current.ready.state.owner
   held : (seen.view.files position.reached).owners = current.current.ready.state.files.owners
 
-/-- A callback's successful return preserves the indicated relation between heaps. -/
-abbrev RotationProjects.OnReturn {α : Type} (frame : heap → heap → Prop)
-    (call : EStateM IO.Error heap α) : Prop :=
-  ∀ {before value after}, call before = .ok value after → frame before after
+/-- The reached successor probe and file barrier. Creation is issued only
+after an absent result. Reusing an empty file leaves the probe heap unchanged. -/
+structure OpenRotationCallbacks.SuccessorFilePrefix (calls : OpenRotationCallbacks heap)
+    (directory : DiskDirectory) (first : Nat) (entry synced : heap) where
+  observed : Option ByteArray
+  afterRead : heap
+  beforeSync : heap
+  read : calls.read (directory.file (.walSegment first)) entry = .ok observed afterRead
+  successor : observed.elim
+    (calls.create (directory.file (.walSegment first)) afterRead = .ok () beforeSync)
+    (fun bytes => bytes.size = 0 ∧ beforeSync = afterRead)
+  sync : calls.sync (directory.file (.walSegment first)) beforeSync = .ok () synced
 
-private theorem RotationProjects.OnReturn.bind {α β : Type} {frame : heap → heap → Prop}
-    {call : EStateM IO.Error heap α} {next : α → EStateM IO.Error heap β}
-    (first : OnReturn frame call)
-    (trans : ∀ {a b c}, frame a b → frame b c → frame a c)
-    (later : ∀ value, OnReturn frame (next value)) : OnReturn frame (call >>= next) := by
-  intro before result after returned
-  cases ran : call before with
-  | error cause failed => simp [Bind.bind, EStateM.bind, ran] at returned
-  | ok value middle =>
-    exact trans (first ran) (later value (by simpa only [Bind.bind, EStateM.bind, ran] using returned))
-
-/-- The two successful successor branches carry the same local frame. Only
-the absent branch calls create. Both sync the successor and its directory. -/
-private theorem RotationProjects.framesSuccessor
-    (directory : DiskDirectory) (first : Nat) (calls : OpenRotationCallbacks heap)
-    {frame : heap → heap → Prop} (refl : ∀ h, frame h h)
-    (trans : ∀ {a b c}, frame a b → frame b c → frame a c)
-    (read : OnReturn frame (calls.read (directory.file (.walSegment first))))
-    (create : OnReturn frame (calls.create (directory.file (.walSegment first))))
-    (fileSync : OnReturn frame (calls.sync (directory.file (.walSegment first))))
-    (dirSync : OnReturn frame (calls.sync directory.path)) :
-    OnReturn frame (WalSegmentRotation.runAt directory first calls.read calls.create calls.sync) := by
-  have pureFrame {α : Type} (value : α) : OnReturn frame (Pure.pure value) := by
-    intro before returned after same
-    exact (EStateM.Result.ok.inj same).2 ▸ refl before
-  rw [WalSegmentRotation.runAt_fileEffects]
-  apply OnReturn.bind (frame := frame) (trans := trans)
-  · unfold WalSegmentRotation.observeSuccessorWith
-    apply read.bind trans
-    intro bytes
-    cases bytes with
-    | none => exact pureFrame false
+private theorem OpenRotationCallbacks.reachesSuccessor (calls : OpenRotationCallbacks heap)
+    (directory : DiskDirectory) (first : Nat) {entry reached : heap}
+    (returned : WalSegmentRotation.runAt directory first calls.read calls.create calls.sync entry = .ok () reached) :
+    ∃ synced, Nonempty (calls.SuccessorFilePrefix directory first entry synced) ∧
+      calls.sync directory.path synced = .ok () reached := by
+  let path := directory.file (.walSegment first)
+  let barriers : EStateM IO.Error heap Unit := do
+    calls.sync path
+    calls.sync directory.path
+    pure ()
+  have syncedAt {before : heap} (done : barriers before = .ok () reached) :
+      ∃ synced, calls.sync path before = .ok () synced ∧ calls.sync directory.path synced = .ok () reached := by
+    cases fileSync : calls.sync path before with
+    | error cause failed =>
+      simp [barriers, Bind.bind, EStateM.bind, fileSync] at done
+    | ok value synced =>
+      cases value
+      cases dirSync : calls.sync directory.path synced with
+      | error cause failed =>
+        simp [barriers, Bind.bind, EStateM.bind, fileSync, dirSync] at done
+      | ok value after =>
+        cases value
+        have endpoint : after = reached := by
+          simpa [barriers, Bind.bind, EStateM.bind, fileSync, dirSync, Pure.pure, EStateM.pure] using done
+        exact ⟨synced, rfl, endpoint ▸ dirSync⟩
+  rw [WalSegmentRotation.runAt_fileEffects] at returned
+  change (do
+    let present ← WalSegmentRotation.observeSuccessorWith (calls.read path)
+    if present then barriers else do calls.create path; barriers) entry = .ok () reached at returned
+  cases read : calls.read path entry with
+  | error cause failed =>
+    simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, read] at returned
+  | ok observed afterRead =>
+    cases observed with
+    | none =>
+      simp only [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, read, Pure.pure, EStateM.pure,
+        Bool.false_eq_true, ↓reduceIte] at returned
+      cases made : calls.create path afterRead with
+      | error cause failed => simp [made] at returned
+      | ok value beforeSync =>
+        cases value
+        have complete : barriers beforeSync = .ok () reached := by
+          simpa only [made] using returned
+        obtain ⟨synced, fileSync, directorySync⟩ := syncedAt complete
+        exact ⟨synced, ⟨⟨none, afterRead, beforeSync, read, made, fileSync⟩⟩, directorySync⟩
     | some bytes =>
       by_cases empty : bytes.size = 0
-      · simpa only [empty, ↓reduceIte] using pureFrame true
-      · simp only [empty, ↓reduceIte]
-        intro impossible
-        contradiction
-  · intro present
-    have barriers : OnReturn frame (do
-        calls.sync (directory.file (.walSegment first))
-        calls.sync directory.path
-        pure ()) := fileSync.bind trans fun _ => dirSync.bind trans fun _ => pureFrame ()
-    cases present
-    · simp only [Bool.false_eq_true, ↓reduceIte]
-      apply create.bind trans
-      intro _
-      exact @barriers
-    · exact @barriers
+      · have complete : barriers afterRead = .ok () reached := by
+          simpa only [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, read, empty, ↓reduceIte,
+            Pure.pure, EStateM.pure] using returned
+        obtain ⟨synced, fileSync, directorySync⟩ := syncedAt complete
+        exact ⟨synced, ⟨⟨some bytes, afterRead, afterRead, read, ⟨empty, rfl⟩, fileSync⟩⟩, directorySync⟩
+      · simp [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, read, empty,
+          throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
 
-/-- Each successful primitive preserves one footprint of the caller's choice. -/
-structure OpenRotationObservation.LocalFrames
+/-- The actual primitive returns of a successful rotation on the opened table. -/
+structure OpenRotationObservation.SuccessfulSteps
     {read create sync entry settled reset} (seen : OpenRotationObservation current read create sync entry settled reset)
-    (frame : heap → heap → Prop) : Prop where
-  phase : ∀ value, RotationProjects.OnReturn frame (opened.set opened.phase value)
-  reads : RotationProjects.OnReturn frame (seen.calls.read (opened.directory.file
-    (.walSegment (current.current.ready.state.writer.installed.walBytes / WAL.frameSize))))
-  creates : RotationProjects.OnReturn frame (seen.calls.create (opened.directory.file
-    (.walSegment (current.current.ready.state.writer.installed.walBytes / WAL.frameSize))))
-  syncFile : RotationProjects.OnReturn frame (seen.calls.sync (opened.directory.file
-    (.walSegment (current.current.ready.state.writer.installed.walBytes / WAL.frameSize))))
-  syncDirectory : RotationProjects.OnReturn frame (seen.calls.sync opened.directory.path)
-  clear : RotationProjects.OnReturn frame (seen.calls.setActive seen.active none)
+    (position : NativeOpenedPosition opened) where
+  poisoned : heap
+  fileSynced : heap
+  beforeClear : heap
+  cleared : heap
+  poison : opened.set opened.phase .poisoned current.reached = .ok () poisoned
+  file : seen.calls.SuccessorFilePrefix opened.directory
+    (current.current.ready.state.writer.installed.walBytes / WAL.frameSize) poisoned fileSynced
+  directorySync : seen.calls.sync opened.directory.path fileSynced = .ok () beforeClear
+  clear : seen.calls.setActive seen.active none beforeClear = .ok () cleared
+  restore : opened.set opened.phase position.current.ready.state.session.phase cleared = .ok () position.reached
+
+private theorem OpenRotationObservation.Reached.successfulSteps
+    {read create sync entry settled reset} {seen : OpenRotationObservation current read create sync entry settled reset}
+    {lookup position} (reached : seen.Reached lookup position) : Nonempty (seen.SuccessfulSteps position) := by
+  obtain ⟨poisoned, beforeClear, cleared, poison, ran, clear, restore⟩ := reached.steps
+  obtain ⟨synced, ⟨file⟩, directorySync⟩ := seen.calls.reachesSuccessor opened.directory _ ran
+  exact ⟨⟨poisoned, synced, beforeClear, cleared, poison, file, directorySync, clear, restore⟩⟩
+
+/-- Frame the primitive edges actually reached by this successful rotation.
+The existing successor branch requires no creation effect. -/
+def OpenRotationObservation.LocalFrames
+    {read create sync entry settled reset} (seen : OpenRotationObservation current read create sync entry settled reset)
+    (frame : heap → heap → Prop) : Prop :=
+  ∀ {lookup position}, seen.Reached lookup position → ∀ steps : seen.SuccessfulSteps position,
+    frame current.reached steps.poisoned ∧
+    frame steps.poisoned steps.file.afterRead ∧
+    (steps.file.observed = none → frame steps.file.afterRead steps.file.beforeSync) ∧
+    frame steps.file.beforeSync steps.fileSynced ∧
+    frame steps.fileSynced steps.beforeClear ∧
+    frame steps.beforeClear steps.cleared ∧
+    frame steps.cleared position.reached
 
 /-- Carry a footprint from the installed phase to the literal rotation return. -/
 theorem OpenRotationObservation.Reached.frames
@@ -349,10 +384,17 @@ theorem OpenRotationObservation.Reached.frames
     {frame : heap → heap → Prop} (refl : ∀ h, frame h h)
     (trans : ∀ {a b c}, frame a b → frame b c → frame a c) (effects : seen.LocalFrames frame) :
     frame current.reached position.reached := by
-  obtain ⟨_, _, _, poison, published, cleared, restored⟩ := reached.steps
-  have group := RotationProjects.framesSuccessor opened.directory _ seen.calls refl trans
-    effects.reads effects.creates effects.syncFile effects.syncDirectory published
-  exact trans (effects.phase _ poison) (trans group (trans (effects.clear cleared) (effects.phase _ restored)))
+  obtain ⟨steps⟩ := reached.successfulSteps
+  obtain ⟨poison, read, create, fileSync, directorySync, clear, restore⟩ := effects reached steps
+  have beforeSync : frame steps.file.afterRead steps.file.beforeSync := by
+    cases found : steps.file.observed with
+    | none => exact create found
+    | some bytes =>
+      have same := steps.file.successor
+      simp only [found, Option.elim] at same
+      rw [same.2]
+      exact refl _
+  exact trans poison (trans read (trans beforeSync (trans fileSync (trans directorySync (trans clear restore)))))
 
 private theorem OpenRotationObservation.reachesReady {read create sync entry settled reset}
     (seen : OpenRotationObservation current read create sync entry settled reset)

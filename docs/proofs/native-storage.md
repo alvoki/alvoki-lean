@@ -243,9 +243,13 @@ whether a canonical WAL name exists. An extra name between two seals can
 change replay, so preserving only the files that exist would be insufficient.
 These facts give the next write its entry and let a between-call reboot reuse
 the checkpoint-free reader with the same client history and prior reads.
-The argument takes the rotation branch observations, local frames and a
-projection of the held child into the live directory and each joint crash
-sample. [Physical storage](../../lean/Alvoki/Storage/Disk/NativeRotationReadyStorage.lean) ·
+The rotation proof consumes the observed file and directory barriers. Each
+callback frame applies between its actual issue and return heaps. A separate
+filesystem premise links the observed child and its bytes to live storage
+and constrains its binding in each admitted joint crash sample. For a freshly
+created successor, the initial acknowledged write supplies both the storage
+entry and the WAL name interval on the same heap and cache.
+[Fresh write, rotation and lookup](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Physical storage](../../lean/Alvoki/Storage/Disk/NativeRotationReadyStorage.lean) ·
 [Name interval](../../lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean) ·
 [Returned handle and replay](../../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
 
