@@ -191,9 +191,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   checkpoint and marker supplied to that same WAL selector. The
   selected extent identifies its original no-follow stat, in
   directory order, on the reached heap before any payload read.
-  The payload fold uses that read order and carries one file frame
-  through the real seal releases and keeper callback. Connect each
-  stat's identity and extent to the file opened for that prefix.
+  The payload fold carries one file frame through the scan, seal
+  releases and keeper callback. With the local stat identity and
+  extent laws, the keeper's reached stat and read refer to the same
+  inode. The reported full extent is its visible size, separately
+  from the marker prefix. To derive the canonical replay, connect
+  the held namespace to the selected writer's complete WAL footprint.
   The next obligation is to obtain these local effects and the
   protected footprint from the independently admitted execution,
   then use the actual WAL selection and repair to retire the

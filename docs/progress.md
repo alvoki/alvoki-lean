@@ -7,10 +7,11 @@ the same name and byte frame as the checkpoint and marker callbacks.
 Each selected WAL extent also traces to its actual no-follow stat in
 directory order. The physical extent stays distinct from the bounded
 prefix passed to recovery.
-An independent fold carries the visible file frame through the reached
-seal releases and the keeper callback. The ordered payloads use the
-same starting file image. The reached stat must still identify the same
-inode as the payload read to justify the full physical extent.
+The payload loop carries one visible file image through the reached
+seal releases and keeper callback. Using the local stat identity,
+true extent and frame laws, the keeper's actual stat and open refer
+to the same inode. Its actual size and the marker prefix determine
+whether recovery calls the cache callback or releases the handle.
 [Exact marked selection](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean) ·
 [Reached WAL stats](../lean/Alvoki/Storage/Disk/NativeMarkedWalExtentsHeap.lean)
 

@@ -1957,6 +1957,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SelectedWalReadReturn.successfulExtentInventory
 #check_axioms Alvoki.Storage.readWalSegmentExtentsWith_memberStat
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.selectedStat
+#check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadCalls.successKeepsFrame
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.selectedPhysicalExtent
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readsMarkedKeeperWithPhysicalExtent
 #check_axioms Alvoki.Storage.SelectedWalReadReturn.classifies
 #check_axioms Alvoki.Storage.WalSegmentRepair.MarkedPreparationReturn.classifies
 #check_axioms Alvoki.Storage.WalSegmentRepair.reopenMarkedBoundedWithCachedExtents_classifies
