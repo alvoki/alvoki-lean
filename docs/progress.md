@@ -1,5 +1,16 @@
 # Current handoff
 
+The aligned marked repair without pruning now establishes physical readiness for the writer
+returned by the actual successful open. The directory fsync settles the child names. The
+retained keeper descriptor then supplies a regular-file fsync of the committed bytes. The
+existing phase and token frames carry those facts to the exact returned heap, where the
+census, cached directory inode and live keeper also match the returned writer. The longer-keeper repair has
+a local physical readiness proof at the reached repair heap using staged-file fsync, the
+rename of that inode, and the final directory fsync. Root settlement in the parent
+namespace and the durable checkpoint footprint remain separate premises.
+[Aligned returned writer](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
+· [Long keeper repair](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
+
 Marked recovery now uses the fixed interpreter's exact failed-call sequence as its only
 retry chronology. Read-only errors and failed repairs supply local preservation facts for
 one shared fold. It carries the selected image, protected files, inode identities and current

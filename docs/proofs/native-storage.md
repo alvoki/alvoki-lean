@@ -447,10 +447,17 @@ by the rebooted manifest and marker. That pair fixes the repair target uniquely 
 batch targets. The shared ledger derives the old-or-whole history for the exact source return.
 A successful marked installer exposes its own phase and token allocations. The same frame
 used by bootstrap preserves the repair output through those allocations, including the
-visible keeper bytes needed by the next append. Establishing the durable files and bindings
-at the marked repair output remains a separate obligation of the keeper and directory barriers.
+visible keeper bytes needed by the next append. The aligned path without pruning derives physical readiness at the exact returned writer
+from the cached directory and keeper fsyncs and the allocation frames. The longer-keeper
+path derives readiness before allocation from the staged-file fsync, the rename of that
+inode and the final directory fsync. These local steps assume scoped effects of the reached
+callbacks, durable protected files, a durable marker and settlement of the root name in
+its parent. The final returned writer and subsequent acknowledged write still need to
+consume the remaining repair paths.
 [Late publication recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 · [Ready allocations](../../lean/Alvoki/Storage/Disk/NativeOpenReadyStorage.lean)
+· [Aligned returned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
+· [Long keeper repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 A marked repair that fails after changing files supplies its reached image through the same
 worker and finalizers as the read-only error path. The local stage-sync and final-directory

@@ -3,7 +3,56 @@ import Alvoki.Storage.Disk.NativeOpenReferences
 
 namespace Alvoki.Storage.DiskSession
 
-open System
+open System WalSegmentRepair
+
+theorem NativeReadyState.crashPath_rootOrChild {state : NativeReadyState} {path : FilePath}
+    (selected : state.crashPath path) :
+    path = state.session.directory.path ∨ ∃ file, path = state.session.directory.file file := by
+  rcases NativeReadyState.crashPath_iff_write.mp selected with rfl | rfl | frame
+  · exact .inr ⟨.walBoundary, rfl⟩
+  · exact .inr ⟨.walSegment _, rfl⟩
+  · rcases frame with rfl | rfl | rfl | ⟨segment, _, rfl⟩ | ⟨_, metadata, index, _, _, _, rfl⟩
+    · exact .inl rfl
+    · exact .inr ⟨.lock, rfl⟩
+    · exact .inr ⟨.manifest, rfl⟩
+    · exact .inr ⟨.walSegment segment.first, rfl⟩
+    · exact .inr ⟨.run metadata.header.generation index, rfl⟩
+
+/-- A directory fsync settles its children. Its own name is an entry in
+the parent, whose independent settlement must survive the call. -/
+theorem NativeReadyState.settledByDirectory {state : NativeReadyState} {issued reached : CheckpointStorageObservation}
+    (parent : issued.Frames (· = state.session.directory.path) reached)
+    (rootSettled : ∀ names ∈ issued.crashNames, names state.session.directory.path =
+      issued.files.names state.session.directory.path)
+    (children : ∀ names ∈ reached.crashNames, ∀ file, names (state.session.directory.file file) =
+      reached.files.names (state.session.directory.file file)) :
+    ∀ names ∈ reached.crashNames, ∀ path, state.crashPath path → names path = reached.files.names path := by
+  intro names member path selected
+  rcases NativeReadyState.crashPath_rootOrChild selected with same | ⟨file, rfl⟩
+  · exact parent.settledFrom (by intro prior allowed name eq; cases eq; exact rootSettled prior allowed)
+      names member path same
+  · exact children names member file
+
+/-- The final regular-file barrier establishes keeper bytes. Earlier
+directory settlement and the durable unrelated files are preserved. -/
+theorem NativeReadyStorage.afterKeeperSync {state : NativeReadyState} {issued reached : CheckpointStorageObservation}
+    {inode : Nat} (sync : RegularFileSyncEffect inode [state.writer.wal.active.bytes] issued reached)
+    (keeper : issued.files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode)
+    (protectedFiles : NativeReadyProtectedStorage state issued.files)
+    (marker : issued.files.Stored (state.session.directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64))
+    (apart : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
+      issued.files.names path ≠ some inode)
+    (settled : ∀ names ∈ issued.crashNames, ∀ path, state.crashPath path → names path = issued.files.names path) :
+    NativeReadyStorage state reached := by
+  have frame := sync.frames (footprint := fun path =>
+    path = state.session.directory.file .walBoundary ∨ state.writeFramePath path)
+      (fun path selected other bound same => apart path selected (bound.trans (congrArg some same)))
+  refine ⟨protectedFiles.frame (fun path keep => frame.visible path (.inr keep)),
+    frame.visible.stored (.inl rfl) marker, sync.stored keeper, ?_⟩
+  intro names allowed path selected
+  rw [sync.crashNames] at allowed
+  exact (settled names allowed path selected).trans (congrFun sync.names path).symm
 
 /-- The ready phase and token allocations preserve settled files and the
 visible keeper bytes that the next append uses. Their local frames start
@@ -38,5 +87,24 @@ theorem OpenReferenceAllocations.framesReadyStorage {heap : Type}
   have atPhase := ((tokenFrame.visible path selected).1).symm.trans bound
   have atRepair := ((phaseFrame.visible path selected).1).symm.trans atPhase
   exact (tokenKeeper inode atPhase).trans ((phaseKeeper inode atRepair).trans (keeperLive inode atRepair))
+
+/-- The literal cached directory handle still identifies the named root
+when its captured inventory and the ready census agree on inode identity. -/
+theorem NativeReadyStorage.bindsOpenCacheDirectory {heap image : Type}
+    {state : NativeReadyState} {storage : CheckpointStorageObservation}
+    (ready : NativeReadyStorage state storage) (view : OpenCloseHeapView heap image) {reached : heap}
+    {directory : IO.Ref (Option IO.FS.Handle)} {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {captured : DescriptorInventory}
+    (cache : view.cacheAt reached directory active pending = state.cache)
+    (atOpen : state.cache.directory = some (captured, state.directorySlot, 0))
+    (inodes : captured.inode = state.census.inode)
+    {literal : IO.FS.Handle} (found : view.directory reached directory = some literal) :
+    storage.files.names state.session.directory.path =
+      some ((view.handle reached literal).1.inode (view.handle reached literal).2.1.description) := by
+  have same := (congrArg SyncHandleRouting.Cache.directory cache).trans atOpen
+  change (view.directory reached directory).map (view.handle reached) = _ at same
+  rw [found] at same
+  rw [Option.some.inj same, inodes]
+  exact ready.directoryBound
 
 end Alvoki.Storage.DiskSession

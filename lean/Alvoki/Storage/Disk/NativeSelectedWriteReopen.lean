@@ -81,6 +81,11 @@ def RawHealthyMarkedOpenEffects.SelectedReturn
       start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
       view.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef = next.state.cache ∧
+      next.state.session.directory = dir ∧ next.state.census = opening.finish.census ∧
+      next.state.owner = opening.admission.owner ∧ next.state.directorySlot = opening.admission.cached ∧
+      next.state.cache = opening.admission.cache ∧
+      next.state.files.image.kept = retry.image.kept ∧
+      next.state.writer.wal.active.first = layout.keeper.first ∧ next.state.writer.wal.active.bytes = layout.keeper.bytes ∧
       ∃ allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase next.state.writer.installed raw.repaired,
         (handle.phase, handle.token, start.reached) = (allocation.phase, allocation.token, allocation.afterToken)
 
@@ -139,7 +144,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
     pending := pending
     bounded := bounded
   }
-  obtain ⟨next, seeded, cache, _, owner, slot, _, durable, checkpoint, _, target, _, freshRefs⟩ :=
+  obtain ⟨next, seeded, cache, census, owner, slot, _, durable, checkpoint, directory, target, seals, freshRefs⟩ :=
     opening.finish.startsNativeReadPrefix opening.chronology opening.markerFound
       prepared following accepted ordered walLayout walValid spans active keeper kept pending bounded
   let position : NativeReadPosition history log :=
@@ -154,10 +159,16 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
     fun same => freshRefs.1 ((phaseId.symm.trans same).symm ▸ previousTokens.1)
   have freshToken : tokenIdentity handle.token ≠ state.session.sessionRef :=
     fun same => freshRefs.2 ((tokenId.symm.trans same).symm ▸ previousTokens.2)
+  have retained := seeded.refines.1.retained
+  have keeperFirst : next.writer.wal.active.first = layout.keeper.first :=
+    retained.active.symm.trans (congrArg Target.first target)
+  have keeperBytes : next.writer.wal.active.bytes = layout.keeper.bytes :=
+    retained.layout.activeBytes.trans (by rw [seeded.refines.2.1, keeperFirst, layout.chain.keeperBytes])
   refine ⟨measured, position, makeCache, handle, start, ⟨cacheOpen, action, source⟩, cacheUses, ?_, positionEq, rfl, rfl, target,
     target ▸ seeded.refines.1.retained.resumed.ready, checkpoint, durable, sameLock,
     sameCache.symm ▸ installed.cacheReferences, sameCache.symm ▸ installed.cacheDirectory,
-    contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached, ?_⟩
+    contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached,
+    directory, census, owner, slot, cache, seals, keeperFirst, keeperBytes, ?_⟩
   · rw [table, reached]
     exact ran
   · have session := (EStateM.Result.ok.inj (installed.nativeReturned.symm.trans seeded.frames.1)).1
