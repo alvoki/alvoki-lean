@@ -11,27 +11,23 @@ local preservation rule. A complete scan at the reached root then gives
 both directions of membership for the observed suffix. The failed-call
 prefix still requires evidence for the effects of each reached repair.
 
-The selected marked reader now derives the measured keeper extent and the exact
-set of later starts in the observed directory for every successful bounded repair.
-The common finisher exposes the ordered unlink pass and the final keeper sync
-or staged replacement. The existing aligned writer consumes both results.
-For a nonempty suffix, the successful unlink loop now yields the exact heap
-at the directory barrier. Local unlink and sync effects determine its file
-image. If the observed list covers the visible suffix, the barrier settles
-the later-name choices to the empty list in any scan order. The existing
-frame proof uses the same induction. The pruned writer now uses the raw
-unlink loop to derive which names disappeared and which canonical paths
-kept their bindings. This replaces its report-specific induction. For a retained
-keeper, the common readiness rule needs its exact live bytes at fsync,
-the selected and settled directory, and a durably empty suffix. The
-selected writer now derives retained readiness for a covering, nonempty
-suffix from the actual accepted unlink calls, the second directory fsync,
-and the fsync of the remembered keeper. The existing pruned installer now uses the same physical storage theorem as
-the aligned installer after the last directory barrier. It separately proves
-the durable absence of removed names. The longer-keeper path reuses
-the same split of the unlink pass from its barrier. Returning the literal
-table after nonempty pruning still requires tracking live descriptors and
-physical inode bindings through that pass.
+When the selected keeper already has the committed length, the same
+literal-open proof now returns a usable table for an empty or nonempty
+suffix. After the authorization fsync, each accepted unlink preserves
+the cached root and the remembered keeper descriptor. Its canonical
+target lies beyond the selected WAL range, outside the protected paths.
+The nonempty path settles the resulting names with a second directory
+fsync. Both paths sync the original keeper and carry the storage guarantee
+through the phase and token allocations of the actual returned table.
+Grouped-sync and late-publication recovery share this proof.
+
+A subsequent crash needs an additional namespace guarantee. The returned
+write entry protects the active keeper and checkpoint footprint. For a
+later batch crossing a removed segment boundary, recovery also needs
+agreement on that name in **every** jointly selectable crash map.
+Derive this from the complete reached listing, the last directory barrier,
+and the frames through allocation. The older pruned installer already
+carries durable absence for the explicitly removed names.
 
 The grouped and late write proofs now derive the cache entry of their
 literal aligned reopen. The actual path and no-follow lookups supply
@@ -39,14 +35,12 @@ their reached heaps. The selected retry already binds the existing
 `LOCK` inode, which the actual no-follow check verifies as private and
 the append-open and flock attach to a fresh live owner. The readonly
 directory open creates a distinct description. That open and the three
-new references supply the
-captured census, live root slot and exact initial cache contents. The
+new references supply the captured census, live root slot and exact initial
+cache contents. The
 aligned reader consumes this authority and the separate file frame.
 The older reported admission and cache initializer remain in other
-recovery paths. The aligned theorem still assumes an exact keeper, no
-later WAL names, and local effects from an isolated Linux storage
-model. Next, derive the recovery entry and retain the common reader
-when trimming or pruning changes the keeper or its siblings.
+recovery paths. The aligned theorem still assumes an exact-length keeper
+and local effects from the isolated Linux storage model.
 [Literal admission](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
 [Aligned writer and its callback assumptions](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
@@ -57,8 +51,8 @@ literal successful open. The returned table supports the next write and
 snapshot under the existing client ledger. The grouped case omits the
 failed batch. The late case admits the whole batch or omits it according
 to the selected marker. The old aligned report adapter and its
-installation wrappers were removed. Longer keepers and pruning retain
-their own proofs. The raw admission, local Linux callback effects and
+installation wrappers were removed. Longer keepers require staged replacement
+and a distinct inode proof. Raw admission, local Linux callback effects and
 coverage of other recovery states still need to enter the common
 production execution.
 [Shared retry proof](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·

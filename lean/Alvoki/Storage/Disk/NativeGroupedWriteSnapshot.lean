@@ -66,7 +66,6 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     {returnedAt : heap} {reopened : DiskTable}
     (openedTable : source.openTable input reached = .ok reopened returnedAt)
     (exactKeeper : (view.files reached).image.keeper.active = some (state).writer.target.trimmed)
-    (noLater : (view.files reached).image.later.visible = [])
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (effects : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch (state).writer.target (view.files reached).image),
@@ -135,7 +134,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical⟩ :=
       (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
         covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
-        (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects) admission namespaceView root rootBinding (effects prepared) exactKeeper noLater phaseIdentity tokenIdentity
+        (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects) admission namespaceView root rootBinding (effects prepared) exactKeeper phaseIdentity tokenIdentity
         phase ptrEq openedTable
     have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by

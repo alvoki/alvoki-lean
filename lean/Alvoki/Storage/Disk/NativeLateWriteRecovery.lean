@@ -197,7 +197,6 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (exactKeeper : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       (view.files reached).image.keeper.active = some target.trimmed)
-    (noLater : (view.files reached).image.later.visible = [])
     (openEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
@@ -255,7 +254,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
       covers selected window (reboot.startsDurableRetry reset selected).2
       (reboot.laterNames active) (retryEffects target admitted active)
-      admission namespaceView root rootBinding (openEffects target admitted active) (exactKeeper target admitted active) noLater
+      admission namespaceView root rootBinding (openEffects target admitted active) (exactKeeper target admitted active)
       phaseIdentity tokenIdentity phase ptrEq openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
   refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,

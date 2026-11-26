@@ -4124,9 +4124,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.keeperAtIssue
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.AlignedRepairStorageEffects.readyAfterSyncs
+#check_axioms Alvoki.Storage.DiskSession.AlignedRepairStorageEffects.readyAfterSyncsWithPrune
 #check_axioms Alvoki.Storage.DiskSession.ReadSlotDrops.keepsAttachment
 #check_axioms Alvoki.Storage.DiskSession.ReadSlotDrops.keepsDeviceInode
 #check_axioms Alvoki.Storage.DiskSession.AlignedRepairHandleEffects.issuedAttachments
+#check_axioms Alvoki.Storage.DiskSession.AlignedRepairHandleEffects.issuedAttachmentsWithPrune
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterAlignedBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSettlementHeap.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.preservesSelectedStage
