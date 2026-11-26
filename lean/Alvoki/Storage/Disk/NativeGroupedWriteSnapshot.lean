@@ -166,12 +166,6 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
 
 end
 
-private theorem storageObservation_cast {first last : DiskDirectory} {inodes : WalInodeImage} {runs : RunUnlinkImage}
-    (same : first = last) (files : RunDirectoryInodeView first inodes runs) :
-    (same ▸ files : RunDirectoryInodeView last inodes runs).storageObservation = files.storageObservation := by
-  subst last
-  rfl
-
 /-- The final uncertain write fixes the preceding ready calls on the
 same handle. Grouped recovery and the next write and snapshot extend
 that exact ledger on the actual table returned by the opener. -/
@@ -280,27 +274,17 @@ theorem NativeOpenedPosition.groupedRetryAndReads
               handle.ReturnsLatestAfter (reopened.readyWriteCalls refs writes.appender writes.stager writes.syncer
                 writes.lookup writes.rename) [.write nextRequest (.ok nextSequence)] read nextSequence
                 (some (read.replay reference nextSequence)) reopened.reached last.reached) := by
-  obtain ⟨current, beforeEvents, ran, _, prefixStorage, length, records, suffix, window, observed⟩ :=
-    executed.refinesReadyBeforeWrite (fun _ declared => by cases declared) view inodes runs
-      (fun atHeap => (observe atHeap).storageObservation) inode buffered effects start rfl rfl initial readyNames initialWindow
-  have through := prior.append suffix
-  refine ⟨current, beforeEvents, ran, length, records, through, observed, ?_⟩
+  obtain ⟨current, beforeEvents, ran, length, records, through, uncertain⟩ :=
+    executed.refinesReadyBeforeCommitUnknown start prior view inodes runs observe inode buffered effects
+      initial readyNames initialWindow
+  refine ⟨current, beforeEvents, ran, length, records, through, uncertain.observed, ?_⟩
   intro state dir installed files storage names visible cache groupEffects reboot reset nameEffects retryEffects admission
     rootBinding openEffects alignedEffects replacementEffects nextCall
-  have sameStorage : storage = fun atHeap => (observe atHeap).storageObservation := by
-    funext atHeap
-    exact storageObservation_cast current.directory.symm (observe atHeap)
-  have ready : NativeReadyStorage state (storage current.reached) := by
-    rw [sameStorage]
-    exact prefixStorage.physical
-  have readyWindow : current.WalWindowAt storage firstOffset (current.current.history.length + request.rows.length) :=
-    sameStorage.symm ▸ window
-  have nonempty := writes.commitUnknownHasRows current observed
-  have returned := writes.returnedWriteAt current observed
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, guard, assigned, classified⟩ :=
     current.reopensAfterGroupedError view cache writes.appender writes.stager writes.syncer inodes runs files
-      inode buffered request writes.lookup writes.rename nonempty returned ready groupEffects reboot reset source
-      nameEffects readyWindow admission namespaceView root rootBinding openedTable phaseIdentity tokenIdentity
+      inode buffered request writes.lookup writes.rename uncertain.nonempty uncertain.returned uncertain.physical
+      groupEffects reboot reset source nameEffects uncertain.window admission namespaceView root rootBinding
+      openedTable phaseIdentity tokenIdentity
       openEffects alignedEffects replacementEffects phase ptrEq attempts retryEffects
   refine ⟨schedules, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with elsewhere |

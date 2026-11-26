@@ -4053,6 +4053,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selections.frameCacheRead
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedRootSyncFromPublication
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reachedLatePublicationPayloads
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.selectsAfterLatePublicationError
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write
@@ -4076,6 +4077,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCall.Records.writesBound
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.splitAppend
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyBeforeWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyBeforeCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readyCallStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCall.Reaches.writeNotPoisoned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteCalls.commitUnknownHasRows

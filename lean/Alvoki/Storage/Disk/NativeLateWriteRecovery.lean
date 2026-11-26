@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.NativeRawWriteReboot
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
 import Alvoki.Storage.Disk.NativeFailedOpenTerminalLedger
+import Alvoki.Storage.Disk.NativeReadyCallRefinement
 
 namespace Alvoki.Storage.DiskSession
 
@@ -39,6 +40,37 @@ local notation "stage" => stager.run cache.pending
 local notation "sync" => syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending
 local notation "storageNames" => fun atHeap => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage atHeap))
 
+/-- Local physical effects of the reached file group and a late publication callback. -/
+def NativeOpenedPosition.LatePublicationEffects
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView dir (inodes atHeap) (runs atHeap))
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (cause : IO.Error) (failed : heap) : Prop :=
+  ∀ {batch : List WAL.Write} {table guarded poisoned appended staged grouped},
+    prepareBatch (installed).table request.rows = some (batch, table) →
+    checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded →
+    opened.set opened.phase .poisoned guarded = .ok () poisoned →
+    append ((dir).file (.walSegment (installed).activeFirst)) (WAL.encodeBatch batch) poisoned = .ok () appended →
+    stage ((dir).file .stagedWalBoundary)
+      (WAL.Boundary.encode ((installed).walBytes + WAL.frameSize * request.rows.length).toUInt64)
+      appended = .ok () staged →
+    sync #[((dir).file (.walSegment (installed).activeFirst)), ((dir).file .stagedWalBoundary)] staged = .ok () grouped →
+    (observe current.reached).storageObservation.Frames (state).crashPath (observe poisoned).storageObservation ∧
+    syncer.WalGroupEffects cache view appender stager inodes observe inode buffered (installed).activeFirst
+      ((installed).walBytes + WAL.frameSize * request.rows.length) (state).writer.wal.active.bytes
+      (WAL.encodeBatch batch) poisoned appended staged grouped ∧
+    (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .error cause failed →
+      ∃ effective : Bool, ∀ marker, (observe grouped).visible ((dir).file .stagedWalBoundary) = some marker →
+        WalMarkerRenameEffect dir marker effective (observe grouped).storageObservation (observe failed).storageObservation) ∧
+    (∀ {renamed}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .ok () renamed →
+      sync #[(dir).path] renamed = .error cause failed →
+      (∀ marker, (observe grouped).visible ((dir).file .stagedWalBoundary) = some marker →
+        WalMarkerRenameEffect dir marker true (observe grouped).storageObservation (observe renamed).storageObservation) ∧
+      ∃ effective, syncer.FinalRootEffects cache view (fun atHeap => (observe atHeap).storageObservation)
+        (installed).activeFirst renamed failed effective)
+
 /-- Classify the publication tail from the public return of the issued
 write. The local effects apply only after the reached file group, at
 the literal rename or returned directory-barrier error. -/
@@ -52,33 +84,16 @@ theorem NativeOpenedPosition.reachedLatePublicationPayloads
     (returned : request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
       .error (.commitUnknown cause) failed)
     (initial : NativeReadyStorage state (observe current.reached).storageObservation)
-    (effects : ∀ {batch : List WAL.Write} {table guarded poisoned appended staged grouped},
-      prepareBatch (installed).table request.rows = some (batch, table) →
-      checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded →
-      opened.set opened.phase .poisoned guarded = .ok () poisoned →
-      append ((dir).file (.walSegment (installed).activeFirst)) (WAL.encodeBatch batch) poisoned = .ok () appended →
-      stage ((dir).file .stagedWalBoundary)
-        (WAL.Boundary.encode ((installed).walBytes + WAL.frameSize * request.rows.length).toUInt64)
-        appended = .ok () staged →
-      sync #[((dir).file (.walSegment (installed).activeFirst)), ((dir).file .stagedWalBoundary)] staged = .ok () grouped →
-      (observe current.reached).storageObservation.Frames (state).crashPath (observe poisoned).storageObservation ∧
-      syncer.WalGroupEffects cache view appender stager inodes observe inode buffered (installed).activeFirst
-        ((installed).walBytes + WAL.frameSize * request.rows.length) (state).writer.wal.active.bytes
-        (WAL.encodeBatch batch) poisoned appended staged grouped ∧
-      (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .error cause failed →
-        ∃ effective : Bool, ∀ marker, (observe grouped).visible ((dir).file .stagedWalBoundary) = some marker →
-          WalMarkerRenameEffect dir marker effective (observe grouped).storageObservation (observe failed).storageObservation) ∧
-      (∀ {renamed}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) grouped = .ok () renamed →
-        sync #[(dir).path] renamed = .error cause failed →
-        (∀ marker, (observe grouped).visible ((dir).file .stagedWalBoundary) = some marker →
-          WalMarkerRenameEffect dir marker true (observe grouped).storageObservation (observe renamed).storageObservation) ∧
-        ∃ effective, syncer.FinalRootEffects cache view (fun atHeap => (observe atHeap).storageObservation)
-          (installed).activeFirst renamed failed effective)) :
+    (effects : current.LatePublicationEffects view cache appender stager syncer request lookup rename
+      inodes runs observe inode buffered cause failed) :
     ∃ batch table guarded poisoned,
       prepareBatch (installed).table request.rows = some (batch, table) ∧
       (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
       checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded ∧
       opened.set opened.phase .poisoned guarded = .ok () poisoned ∧
+      syncer.PublicationOutcome cache appender stager rename (installed).activeFirst
+        ((installed).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch) poisoned
+        (.error cause failed) ∧
       let fileGroup := syncer.publicationFileGroup cache appender stager (installed).activeFirst
         ((installed).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch)
       fileGroup poisoned = .error cause failed ∨
@@ -90,7 +105,7 @@ theorem NativeOpenedPosition.reachedLatePublicationPayloads
           WalPublicationPayloads.ReachedWrite state batch request.rows (observe failed).storageObservation liveNew allows := by
   obtain ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, _, outcome⟩ :=
     current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
-  refine ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, ?_⟩
+  refine ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, outcome, ?_⟩
   have valid := (ready).readPrefix.refines.1
   cases outcome with
   | appendError stopped =>
@@ -248,6 +263,34 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
     recovered.replaysSelectedLedger request cause⟩
 
 
+private theorem NativeOpenedPosition.selectsDurableReachedWrite
+    {request : WriteRequest} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch (installed).table request.rows = some (batch, table))
+    (fits : (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    {failed rebooted : heap} (initial : NativeReadyStorage state (storage current.reached))
+    (frame : (storage current.reached).Frames (state).writeFramePath (storage failed))
+    {liveNew : Bool} {allows : Bool → Prop}
+    (published : WalPublicationPayloads.ReachedWrite state batch request.rows (storage failed) liveNew allows)
+    (visible : heap → Nat → ByteArray)
+    (reboot : RawWriteRebootEntry state view storage storageNames visible failed rebooted)
+    (reset : reboot.DurableReset) {firstOffset : Nat}
+    (names : WalNamePresenceFrame dir firstOffset (current.current.history.length + request.rows.length)
+      (storage current.reached) (storage failed))
+    (initialWindow : current.WalWindowAt storage firstOffset (current.current.history.length + request.rows.length)) :
+    TryLockObserves (view.files rebooted).owners dir (.ok true) ∧
+    (view.descriptors rebooted).slots = [] ∧
+    ∃ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target ∧
+      target.pair = (view.files rebooted).image.directory.active ∧
+      RawOpenRetryTrace.SelectedEntry view state target storageNames visible rebooted ∧
+      RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
+        target.range.through rebooted := by
+  obtain ⟨rebootVacant, slots, target, admitted, active, selected⟩ :=
+    current.selectsReachedWrite view storage prepared fits initial frame published reboot
+  have cutoff := current.current.ready.retryThrough_le prepared admitted
+  have window := reboot.walNamespace names initialWindow.2
+  exact ⟨rebootVacant, slots, target, admitted, active, selected,
+    reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff)⟩
+
 section LiteralRetry
 
 variable
@@ -297,14 +340,10 @@ theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
     current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
   have protectedFiles := fileFrames.throughPublication CheckpointStorageObservation.Frames.trans
     actualBatch guarded poisoned outcome
-  obtain ⟨rebootVacant, slots, target, admitted, active, selected⟩ :=
-    current.selectsReachedWrite view storage prepared fits initial protectedFiles publication reboot
-  have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
-    nonempty returned nameEffects
-  have cutoff := current.current.ready.retryThrough_le prepared admitted
-  have window := reboot.walNamespace nameFrame initialWindow.2
-  exact ⟨current.uses.writeSchedules, fits, rebootVacant, slots, target, admitted, active, selected,
-    reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff)⟩
+  have nameFrame := nameEffects.throughPublication WalNamePresenceFrame.trans actualBatch guarded poisoned outcome
+  exact ⟨current.uses.writeSchedules, fits,
+    current.selectsDurableReachedWrite view storage prepared fits initial protectedFiles publication visible reboot reset
+      nameFrame initialWindow⟩
 
 /-- A late publication error and its joint reboot reach the ready table
 through the same interpreter's failed opens. The recovery event uses
@@ -452,5 +491,97 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
 end LiteralRetry
 
 end
+
+/-- The observed ready prefix and the uncertain write share a handle and
+an entry heap. Sample the resulting publication at its returned heap and
+place the selected old-or-whole batch after that exact client prefix. -/
+theorem NativeReturnedCalls.selectsAfterLatePublicationError
+    {heap : Type} {opened : NativeOpenedHandle heap} {writes : NativeReadyWriteCalls opened}
+    {issuer : opened.LatestIssuer} {request : WriteRequest} {cause : IO.Error}
+    {calls : List (NativeReturnedCall opened)} {failed : heap}
+    (start : NativeOpenedPosition opened)
+    (executed : NativeReturnedCalls writes issuer start.reached (start.pins.map NativeOpenedPin.raw)
+      (calls ++ [.write request (.error (.commitUnknown cause))]) failed)
+    {origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent}
+    (prior : origin.LedgerSuffix earlier start.current)
+    (view : OpenCloseHeapView heap FileImage) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView opened.directory (inodes atHeap) (runs atHeap))
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (effects : writes.ReturnEffects view inodes runs (fun atHeap => (observe atHeap).storageObservation) inode buffered)
+    (initial : writes.StorageAt view (fun atHeap => (observe atHeap).storageObservation)
+      (fun atHeap => (inodes atHeap).visible) start)
+    {firstOffset : Nat}
+    (readyNames : writes.WalWindowEffects (fun atHeap => (observe atHeap).storageObservation) firstOffset
+      (start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum + request.rows.length))
+    (initialWindow : start.WalWindowAt (fun atHeap => (observe atHeap).storageObservation) firstOffset
+      (start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum + request.rows.length)) :
+    ∃ (last : NativeOpenedPosition opened) (events : List NativeExecutionEvent),
+      NativeReturnedCalls writes issuer start.reached (start.pins.map NativeOpenedPin.raw) calls last.reached ∧
+      events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
+      origin.LedgerSuffix (earlier ++ events) last.current ∧
+      (NativeReturnedCall.write request (.error (.commitUnknown cause))).Reaches
+        writes issuer (last.pins.map NativeOpenedPin.raw) last.reached failed ∧
+      let state := last.current.ready.state
+      let files := fun atHeap => last.directory.symm ▸ observe atHeap
+      let storage := fun atHeap => (files atHeap).storageObservation
+      let names := fun atHeap => (storage atHeap).files.names
+      let visible := fun atHeap => (inodes atHeap).visible
+      let cache := writes.cacheAtPosition last
+      last.LatePublicationEffects view cache writes.appender writes.stager writes.syncer request writes.lookup
+        writes.rename inodes runs files inode buffered cause failed →
+      last.WriteCallbackFrames writes.appender writes.stager writes.syncer cache request writes.lookup writes.rename
+        (fun before after => (storage before).Frames state.writeFramePath (storage after)) →
+      last.WalNameEffects writes.appender writes.stager writes.syncer cache request writes.lookup writes.rename
+        storage firstOffset (last.current.history.length + request.rows.length) →
+      ∃ batch table guarded poisoned,
+        prepareBatch state.writer.installed.table request.rows = some (batch, table) ∧
+        state.writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
+        checkActiveSegmentWith state.session.directory state.writer.installed writes.lookup last.reached = .ok () guarded ∧
+        opened.set opened.phase .poisoned guarded = .ok () poisoned ∧
+        let fileGroup := writes.syncer.publicationFileGroup cache writes.appender writes.stager
+          state.writer.installed.activeFirst (state.writer.installed.walBytes + WAL.frameSize * request.rows.length)
+          (WAL.encodeBatch batch)
+        fileGroup poisoned = .error cause failed ∨
+        ∃ grouped, fileGroup poisoned = .ok () grouped ∧
+          ∀ {rebooted : heap} (reboot : RawWriteRebootEntry state view storage names visible failed rebooted),
+            reboot.DurableReset →
+            TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+            (view.descriptors rebooted).slots = [] ∧
+            ∃ (target : Target) (plan : last.current.ready.SelectedWritePlan batch target (view.files rebooted).image),
+              BatchRetryTarget state.writer.history batch state.writer.wal.active.first target ∧
+              RawOpenRetryTrace.SelectedEntry view state target names visible rebooted ∧
+              RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset target.range.through rebooted ∧
+              target.range.through = plan.history.length ∧
+              let history := origin.history ++ (earlier ++ events).flatMap NativeExecutionEvent.writes
+              let submissions := (origin.submissions ++ (earlier ++ events).flatMap NativeExecutionEvent.submissions) ++
+                [.uncertainBatch batch]
+              let reads := origin.ready.reads ++ (earlier ++ events).flatMap NativeExecutionEvent.reads
+              (plan.history = history ∨ plan.history = history ++ batch) ∧
+              PendingClientReplay submissions reads plan.history ∧
+              ∀ read ∈ reads, read.BoundedBy plan.history.length := by
+  obtain ⟨last, events, ran, length, records, through, write⟩ :=
+    executed.refinesReadyBeforeCommitUnknown start prior view inodes runs observe inode buffered effects
+      initial readyNames initialWindow
+  refine ⟨last, events, ran, length, records, through, write.observed, ?_⟩
+  intro state files storage names visible cache lateEffects fileFrames nameEffects
+  obtain ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, source, classified⟩ :=
+    last.reachedLatePublicationPayloads view cache writes.appender writes.stager writes.syncer request writes.lookup
+      writes.rename inodes runs files inode buffered write.nonempty write.returned write.physical lateEffects
+  refine ⟨batch, table, guarded, poisoned, prepared, fits, guard, assigned, ?_⟩
+  rcases classified with early | ⟨grouped, groupReturned, _, _, _, publication⟩
+  · exact .inl early
+  refine .inr ⟨grouped, groupReturned, ?_⟩
+  intro rebooted reboot reset
+  have fileFrame := fileFrames.throughPublication CheckpointStorageObservation.Frames.trans prepared guard assigned source
+  have nameFrame := nameEffects.throughPublication WalNamePresenceFrame.trans prepared guard assigned source
+  obtain ⟨vacant, slots, target, admitted, _, selected, recovery⟩ :=
+    last.selectsDurableReachedWrite view storage prepared fits write.physical fileFrame publication visible reboot
+      reset nameFrame write.window
+  obtain ⟨plan⟩ := last.current.ready.preparesSelectedWrite prepared fits admitted selected.valid selected.manifest
+  refine ⟨vacant, slots, target, plan, admitted, selected, recovery,
+    (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through, ?_, ?_, ?_⟩
+  · simpa only [← through.history] using plan.allowed
+  · simpa only [← through.submissions, ← through.reads] using plan.pending
+  · simpa only [← through.reads] using plan.bounded
 
 end Alvoki.Storage.DiskSession

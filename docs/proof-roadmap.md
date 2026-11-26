@@ -168,12 +168,14 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   [Ready-call induction](../lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean)
 
   A first acknowledged write on the fresh table carries the WAL namespace
-  through the finite offset needed by the next batch. For a late publication
-  error, one marker selected at reboot determines whether recovery retains the
-  old history or the whole batch. The retry proof can end at the last failed
-  open. A successful recovery can instead supply the next writer and snapshot.
-  These paths still require local storage effects at the calls that ran.
-  [Grouped write pilot](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
+  through the finite offset needed by the next batch. On a late publication
+  error, the actual preceding calls determine the client history and reads
+  before that write. One reboot sample selects either this history or its
+  extension by the entire prepared batch. Two different attempted batches can
+  leave identical recovered bytes when the old marker survives. The issued
+  request determines which batch belongs in the submissions ledger. Later open attempts have their own local effects.
+  [Late write selection](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+  · [Grouped write pilot](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
 
   The observed write prefix can now start on the table returned by fresh bootstrap and end at a source-derived checkpoint stop on its reached heap. The prefix derives client instruction matching from the actual requests, including preflight denials. The fresh-open type carries the empty ledger used by the common replay. The observed initial barriers now establish the ready storage invariant and the empty visible keeper at the actual phase and token allocation endpoint. The proof uses the held lock and directory identities, exact child and byte projections, and durable binding of the directory in its parent. [Fresh opened prefix](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 

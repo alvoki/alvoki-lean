@@ -45,14 +45,18 @@ scan to the physical WAL names above the marker. The reader uses it to interpret
 a missing-file stat. The installer uses it to show that pruning covered every
 later name. Write retries share the stat proof using their held inode bindings.
 
-**Next obligation.** Supply the remaining read, cache and installation effects
-from the fixed production callbacks. A late `commitUnknown` now supplies the exact append,
-staging and file-sync prefix. Given the effects at the reached rename and
-directory callbacks, the failed heap supplies the old-or-whole batch choices
-that both retry continuations require. Their shared selector derives preservation of the root,
-lock, manifest, selected runs and sealed WALs from local effects along the
-actual write. The same rule carries WAL name presence for acknowledged writes.
-Join the late payload producer and the incoming client ledger at that selector. Earlier write interruptions,
-mixed sessions and maintenance remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
+For a late publication error, the observed calls on the original handle
+determine the prior client history, reads and submissions. The final write's
+preparation identifies the attempted batch even when the old marker survives.
+Under the local write effects, the marker and keeper from one reboot select
+a replay of that history with zero or all of the batch. Both grouped-error
+continuations now use the same prefix proof.
+
+**Next obligation.** Connect the rooted namespace observed at fresh bootstrap
+to the physical names used by the first write. Carry the late selection
+through the actual subsequent open attempts on that execution. Read, cache
+and installation effects still need to come from the reached callbacks.
+Further interruptions, mixed sessions and maintenance remain in the
+[checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).

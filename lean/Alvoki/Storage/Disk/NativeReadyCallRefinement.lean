@@ -776,4 +776,73 @@ theorem NativeReturnedCalls.refinesReadyBeforeWrite
     rw [atMiddle, pins]
     exact returned
 
+/-- The final write reached by a ready prefix. Its physical entry and
+bounded WAL namespace refer to the same ready heap as the public call. -/
+structure NativeReadyWriteCalls.ReachedUncertainWrite (writes : NativeReadyWriteCalls opened)
+    (issuer : opened.LatestIssuer) (current : NativeOpenedPosition opened)
+    {inodes : heap → WalInodeImage} {runs : heap → RunUnlinkImage}
+    (observe : ∀ atHeap, RunDirectoryInodeView opened.directory (inodes atHeap) (runs atHeap))
+    (first : Nat) (request : WriteRequest) (cause : IO.Error) (failed : heap) : Prop where
+  observed : (NativeReturnedCall.write request (.error (.commitUnknown cause))).Reaches
+    writes issuer (current.pins.map NativeOpenedPin.raw) current.reached failed
+  nonempty : request.rows ≠ []
+  returned :
+    let directory := current.current.ready.state.session.directory
+    let cache := writes.cacheAtPosition current
+    request.runOnRawOpenPhase directory writes.lookup (writes.appender.run cache.active)
+      (writes.stager.run cache.pending) (writes.syncer.group directory.path cache.directory cache.active cache.pending)
+      writes.rename opened.phase opened.get opened.set current.reached = .error (.commitUnknown cause) failed
+  physical : NativeReadyStorage current.current.ready.state
+    ((current.directory.symm ▸ observe current.reached : RunDirectoryInodeView _ _ _).storageObservation)
+  window : current.WalWindowAt
+    (fun atHeap => (current.directory.symm ▸ observe atHeap : RunDirectoryInodeView _ _ _).storageObservation) first
+    (current.current.history.length + request.rows.length)
+
+private theorem storageObservation_cast {first last : DiskDirectory} {inodes : WalInodeImage} {runs : RunUnlinkImage}
+    (same : first = last) (files : RunDirectoryInodeView first inodes runs) :
+    (same ▸ files : RunDirectoryInodeView last inodes runs).storageObservation = files.storageObservation := by
+  subst last
+  rfl
+
+/-- Refine the actual ready calls before an uncertain write and attach
+their ledger to the incoming client's history. The final observed call
+also supplies the raw write equality used by both retry branches. -/
+theorem NativeReturnedCalls.refinesReadyBeforeCommitUnknown
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {failed : heap} {prefixCalls : List (NativeReturnedCall opened)}
+    {request : WriteRequest} {cause : IO.Error}
+    (start : NativeOpenedPosition opened)
+    (executed : NativeReturnedCalls writes issuer start.reached (start.pins.map NativeOpenedPin.raw)
+      (prefixCalls ++ [.write request (.error (.commitUnknown cause))]) failed)
+    {origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent}
+    (prior : origin.LedgerSuffix earlier start.current)
+    (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView opened.directory (inodes atHeap) (runs atHeap))
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (effects : writes.ReturnEffects view inodes runs (fun atHeap => (observe atHeap).storageObservation) inode buffered)
+    (initial : writes.StorageAt view (fun atHeap => (observe atHeap).storageObservation)
+      (fun atHeap => (inodes atHeap).visible) start)
+    {first : Nat}
+    (names : writes.WalWindowEffects (fun atHeap => (observe atHeap).storageObservation) first
+      (start.current.history.length + (prefixCalls.map NativeReturnedCall.requestedRows).sum + request.rows.length))
+    (window : start.WalWindowAt (fun atHeap => (observe atHeap).storageObservation) first
+      (start.current.history.length + (prefixCalls.map NativeReturnedCall.requestedRows).sum + request.rows.length)) :
+    ∃ (last : NativeOpenedPosition opened) (events : List NativeExecutionEvent),
+      NativeReturnedCalls writes issuer start.reached (start.pins.map NativeOpenedPin.raw) prefixCalls last.reached ∧
+      events.length = prefixCalls.length ∧ (∀ pair ∈ prefixCalls.zip events, pair.1.Records pair.2) ∧
+      origin.LedgerSuffix (earlier ++ events) last.current ∧
+      writes.ReachedUncertainWrite issuer last observe first request cause failed := by
+  obtain ⟨last, events, ran, _, physical, length, records, suffix, bounded, observed⟩ :=
+    executed.refinesReadyBeforeWrite (fun _ declared => by cases declared) view inodes runs
+      (fun atHeap => (observe atHeap).storageObservation) inode buffered effects start rfl rfl initial names window
+  have sameStorage :
+      (fun atHeap => (last.directory.symm ▸ observe atHeap : RunDirectoryInodeView _ _ _).storageObservation) =
+        fun atHeap => (observe atHeap).storageObservation := by
+    funext atHeap
+    exact storageObservation_cast last.directory.symm (observe atHeap)
+  refine ⟨last, events, ran, length, records, prior.append suffix,
+    ⟨observed, writes.commitUnknownHasRows last observed, writes.returnedWriteAt last observed, ?_, ?_⟩⟩
+  · exact (congrFun sameStorage last.reached).symm ▸ physical.physical
+  · exact sameStorage.symm ▸ bounded
+
 end Alvoki.Storage.DiskSession

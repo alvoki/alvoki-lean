@@ -7,12 +7,6 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting WalSegmentCommit WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 
-private theorem storageObservation_cast {first last : DiskDirectory} {inodes : WalInodeImage} {runs : RunUnlinkImage}
-    (same : first = last) (files : RunDirectoryInodeView first inodes runs) :
-    (same ▸ files : RunDirectoryInodeView last inodes runs).storageObservation = files.storageObservation := by
-  subst last
-  rfl
-
 /-- The final uncertain write determines the ready prefix on the same
 handle. If its file group returned the error, the sampled reboot and
 actual failed opens may end execution without a successful reopen.
@@ -88,35 +82,24 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
               [.uncertainBatch batch]
             let reads := origin.ready.reads ++ (earlier ++ events).flatMap NativeExecutionEvent.reads
             PendingClientReplay submissions reads history ∧ ∀ read ∈ reads, read.BoundedBy history.length) := by
-  obtain ⟨current, events, ran, _, physical, length, records, suffix, window, observed⟩ :=
-    executed.refinesReadyBeforeWrite (fun _ declared => by cases declared) view inodes runs
-      (fun atHeap => (observe atHeap).storageObservation) inode buffered effects start rfl rfl initial readyNames initialWindow
-  have through := prior.append suffix
-  refine ⟨current, events, ran, length, records, through, observed, ?_⟩
+  obtain ⟨current, events, ran, length, records, through, uncertain⟩ :=
+    executed.refinesReadyBeforeCommitUnknown start prior view inodes runs observe inode buffered effects
+      initial readyNames initialWindow
+  refine ⟨current, events, ran, length, records, through, uncertain.observed, ?_⟩
   intro state dir installed files storage names visible cache groupEffects reboot reset nameEffects retryEffects
-  have sameStorage : storage = fun atHeap => (observe atHeap).storageObservation := by
-    funext atHeap
-    exact storageObservation_cast current.directory.symm (observe atHeap)
-  have ready : NativeReadyStorage state (storage current.reached) := by
-    rw [sameStorage]
-    exact physical.physical
-  have readyWindow : current.WalWindowAt storage firstOffset (current.current.history.length + request.rows.length) :=
-    sameStorage.symm ▸ window
-  have nonempty := writes.commitUnknownHasRows current observed
-  have returned := writes.returnedWriteAt current observed
   obtain ⟨_, batch, table, guarded, poisoned, prepared, fits, guard, assigned, classified⟩ :=
     current.selectsAfterGroupedError view cache writes.appender writes.stager writes.syncer inodes files inode buffered
-      request writes.lookup writes.rename nonempty returned ready groupEffects reboot
+      request writes.lookup writes.rename uncertain.nonempty uncertain.returned uncertain.physical groupEffects reboot
   refine ⟨through.whole, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with ⟨grouped, admitted, selected, _, _⟩ | other
   · refine .inr ⟨grouped, ?_⟩
     have framed := current.preservesWalNamesAfterCommitUnknown writes.appender writes.stager writes.syncer cache
-      request writes.lookup writes.rename nonempty returned nameEffects
-    have window := reboot.walNamespace framed readyWindow.2
+      request writes.lookup writes.rename uncertain.nonempty uncertain.returned nameEffects
+    have window := reboot.walNamespace framed uncertain.window.2
     have cutoff := current.current.ready.retryThrough_le prepared admitted
     obtain ⟨_, previous, input, diagnostic, issued, reported, earlierCalls, call, plan, _, last, durable, _, _, replay, bounded⟩ :=
       NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current)
-        through prepared fits admitted storage visible readyWindow.1 selected
+        through prepared fits admitted storage visible uncertain.window.1 selected
         (reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff))
         attempts retried retryEffects
     have old : plan.history = origin.history ++ (earlier ++ events).flatMap NativeExecutionEvent.writes :=
