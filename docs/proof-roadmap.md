@@ -123,7 +123,8 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   aligned opener supplies the exact replayed table, its keeper sync and any
   suffix pruning. The reboot and failed-open frames preserve the selected
   durable files, marker and root through the reader’s preparation. With
-  later names matched to the complete scan, the opener supplies its own
+  the held scan covering all physically present later names, the successful
+  no-follow stats derive presence for each selected unlink. The opener supplies its own
   installation and repair to the finite ready-call proof. The reinstalled handle starts
   with empty pins and carries its actual predecessor’s incoming ledger.
   Coverage of those file effects for all reachable failed opens remains open.

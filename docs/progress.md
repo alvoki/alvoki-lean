@@ -138,9 +138,11 @@ name coverage and local effects of the reached operations remain explicit.
 The sampled checkpoint opener supplies the reached callbacks for the same
 aligned repair used by uncertain-write recovery. The keeper read, cache
 update, directory sync, any later-segment unlinks and final keeper sync
-refer to the same prepared and repaired heaps. The actual directory scan,
-together with name agreement at the successful attempt's entry, accounts
-for every later WAL name. The proof applies when either manifest survives.
+refer to the same prepared and repaired heaps. Every later segment selected
+for removal has a successful no-follow stat in the actual scan. Its name
+was therefore present at entry. The reverse direction uses completeness:
+every later WAL file present at entry must occur in the held directory's
+inventory. The proof applies when either manifest survives.
 
 The sampled checkpoint reader passes the installation and repair observations
 from that open directly to the ready-call proof. It derives the keeper bytes
@@ -154,8 +156,7 @@ The proof carries the selected
 durable files and marker from the reboot through the actual failed opens and
 the successful reader's preparation. It also preserves the root binding in
 each allowed crash namespace. It assumes that the reboot restores the sampled
-files, each failed open preserves the selected files and root, and the later
-WAL names at the successful entry agree with the complete directory scan.
+files and each failed open preserves the selected files and root.
 For an open that fails before flock, the resolver, metadata checks and
 LOCK append-open supply both the live and durable frames at the exact
 public error heap. A failed append-open needs its own local effect. If

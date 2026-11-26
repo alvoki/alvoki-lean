@@ -121,9 +121,9 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
     {lower : Nat}
     (window : wal.NamespaceWindow directory lower layout.range.through (observe entry).files.names)
     (boundedStarts : ∀ start ∈ wal.segments.map WalSegment.first, start ≤ layout.range.through)
-    (child : ∀ start, layout.range.through < start →
-      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        (observe entry).files.names (directory.file (.walSegment start)))
+    (laterComplete : ∀ start, layout.range.through < start →
+      (∃ inode, (observe entry).files.names (directory.file (.walSegment start)) = some inode) →
+      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object)
     (effects : OpenPhaseCellEffects view.phase get set) (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
     source.AlignedReadyCalls input entry returnedAt table directory cache view writer allocation phaseIdentity tokenIdentity
       origin earlier inodes runs observe lower := by
@@ -153,7 +153,7 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
     exact boundedStarts
   obtain ⟨settled, live, _, repairedWindow⟩ := seen.readyStorage valid rfl rfl rfl
     (congrArg WalSegment.first activeKeeper) authority physical protectedFiles marker rootSettled
-    keeperBytes exactWindow allBounded child
+    keeperBytes exactWindow allBounded laterComplete
   have carriedHistory : state.writer.history = previous.history := history.trans sameHistory
   have replay : PendingClientReplay previous.submissions previous.ready.reads state.writer.history := by
     rw [carriedHistory]
@@ -314,8 +314,8 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
                 (observe before).files.Frames footprint (observe after).files ∧
                 (observe before).Frames (· = dir.path) (observe after)) →
               (∀ start, layout.range.through < start →
-                (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-                  (observe entry).files.names (dir.file (.walSegment start))) →
+                (∃ inode, (observe entry).files.names (dir.file (.walSegment start)) = some inode) →
+                ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) →
               ∀ (origin : NativeExecutionPosition) (earlier : List NativeExecutionEvent),
                 origin.LedgerSuffix earlier current.current → OpenPhaseCellEffects view.phase get set →
                 ∀ _ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool,
@@ -419,7 +419,7 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (fun ordinal member => (suffix ordinal member).imp_left (fun after => layout.through.symm ▸ after))
     repair allocate phaseId tokenId
   refine ⟨repaired, reopened, allocation, installed, ?_⟩
-  intro observed included restored rootReset failedDurable laterChild origin earlier carried phaseEffects ptrEq
+  intro observed included restored rootReset failedDurable laterComplete origin earlier carried phaseEffects ptrEq
   obtain ⟨durableAtEntry, rootAtEntry⟩ := attempts.carriesCheckpointReset observe footprint dir.path sampleFiles
     (.inl rfl) restored rootReset failedDurable
   have readDurable := seen.storageFrame.weaken included
@@ -473,7 +473,7 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
   exact installed.refinesReadyCalls returned current.current.ready.readPrefix.refines.2.1 carried inodes runs observe
     namespaceView root seen observed allocate protectedFiles durableMarker
     (fun surviving possible => rootSettled surviving possible dir.path rfl) aligned keeper physical.keeper
-    (fun start lower upper => window start lower (layout.through ▸ upper)) boundedStarts laterChild phaseEffects ptrEq
+    (fun start lower upper => window start lower (layout.through ▸ upper)) boundedStarts laterComplete phaseEffects ptrEq
 
 end
 
