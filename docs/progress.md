@@ -116,13 +116,15 @@ The latest snapshot acquisition likewise refines the raw return of the same
 issuer used in the public call sequence.
 [Session step composition](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
-The successful marked reader now uses the manifest and runs selected by
-the same crash sample for both checkpoint generations. Its returned reads,
-WAL replay, repair and table follow from the fixed worker's successful run
-and local observations. The name scan needs a complete bounded window:
-an extra canonical segment can change the replay start while leaving all
-listed checkpoint and WAL payloads intact. Carrying those absences through
-publication and failed opens remains a separate obligation.
+The public successful open now identifies the held lock, allocated cache,
+selected manifest, runs and WAL from the same crash image for either
+checkpoint generation. The publication proof carries the bounded WAL name
+window to that image under local namespace effects. A later open carries
+both present and absent names through reboot and failed attempts using
+per-call frames. This matters because an extra canonical WAL segment can
+change the replay start even when the expected files have the correct bytes.
+The remaining installer obligation is to derive writable storage and handle
+custody after the repair actually performed by the opener.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and

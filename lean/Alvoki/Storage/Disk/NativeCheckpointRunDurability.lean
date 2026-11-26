@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeCheckpointStopContinuation
+import Alvoki.Storage.Disk.NativeRawUncertainWrite
 
 namespace Alvoki.Storage.DiskSession
 
@@ -177,6 +178,76 @@ theorem CheckpointRunsDirectoryEffect.weaken {root : FilePath} {wide scope : Fil
   intro names survives
   obtain ⟨prior, previous, root, children⟩ := effect.survivors names survives
   exact ⟨prior, previous, root, fun path kept => children path (included path kept)⟩
+
+/-- The missing child-name observation at the runs barrier concerns the
+bounded WAL window, including absent names. It adds no file-byte premise. -/
+abbrev CheckpointRunDirectoryWalNames (directory : DiskDirectory) (fsync : CheckpointFsync heap)
+    (storage : heap → CheckpointStorageObservation) (lower upper : Nat) : Prop :=
+  ∀ (handle : CheckpointOpenHandle) (issued after : CheckpointWorld heap),
+    issued.1.directory = some handle → fsync handle issued.2 = .ok (.ok ()) after.2 →
+    ∀ names ∈ (storage after.2).crashNames, ∀ start, lower ≤ start → start ≤ upper →
+      (names (directory.file (.walSegment start))).isSome =
+        ((storage issued.2).files.names (directory.file (.walSegment start))).isSome
+
+/-- Run writes and the corresponding returned file syncs preserve the
+same WAL window through the actual returned runs-directory barrier. -/
+theorem NativeCheckpointSourcePrefix.walNamesBeforeStagedManifest
+    (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
+      (inodes atHeap) (runs atHeap))
+    {lower upper : Nat} {children : FilePath → Prop}
+    (phaseNames : opened.set opened.phase .poisoned current.reached = .ok () stop.poisoned →
+      WalNamePresenceFrame current.current.ready.state.session.directory lower upper
+        (observe current.reached).storageObservation (observe stop.poisoned).storageObservation)
+    (effects : CheckpointRunPrefixEffects stop stop.next.table.runs.length inodes runs observe)
+    (barrier : ∀ (handle : CheckpointOpenHandle) (issued after : CheckpointWorld heap),
+      issued.1.directory = some handle → fsync handle issued.2 = .ok (.ok ()) after.2 →
+      CheckpointRunsDirectoryEffect current.current.ready.state.session.directory.path children
+        (observe issued.2).storageObservation (observe after.2).storageObservation)
+    (walNames : CheckpointRunDirectoryWalNames current.current.ready.state.session.directory fsync
+      (fun atHeap => (observe atHeap).storageObservation) lower upper)
+    {afterBarrier : CheckpointWorld heap}
+    (returned : let directory := current.current.ready.state.session.directory
+      let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+      ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) afterBarrier) :
+    WalNamePresenceFrame current.current.ready.state.session.directory lower upper
+      (observe current.reached).storageObservation (observe afterBarrier.2).storageObservation := by
+  let directory := current.current.ready.state.session.directory
+  let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+  let storage := fun atHeap => (observe atHeap).storageObservation
+  obtain ⟨afterRuns, handle, atSync, runCalls, resolved, synced⟩ := stop.returnedRunsBarrier returned
+  let invariant (_ : Nat) (world : CheckpointWorld heap) :=
+    WalNamePresenceFrame directory lower upper (storage current.reached) (storage world.2)
+  have throughRuns : invariant stop.next.table.runs.length afterRuns := by
+    refine returnedRunPairsPreserve perform stop.next.table.runs.length invariant (phaseNames stop.setsPoisoned) ?_ runCalls
+    intro index within before written after wrote synced prior
+    obtain ⟨run, descriptor, _, writtenRun, remembered, syncedRun, consumed⟩ :=
+      primitives.returnedRunPair directory fsync stop.next stop.manifest index wrote synced
+    have resolvedRun : written.1.resolve directory.path (directory.file (.run stop.next.generation index))
+        primitives.openRead written.2 = .ok descriptor (after.1, written.2) := by
+      rw [remembered, Cache.resolveRemembered (file_ne_directory _ _) descriptor primitives.openRead, consumed]
+    obtain ⟨writeFrame, privateBinding⟩ := effects.write index within before.2 written.2 run.run.bytes descriptor writtenRun
+    obtain ⟨_, _, _, bytes, visible, surviving⟩ := effects.sync index within written after descriptor written.2
+      resolvedRun syncedRun
+    have writeNames : WalNamePresenceFrame directory lower upper (storage before.2) (storage written.2) := by
+      apply WalNamePresenceFrame.ofStorageFrame
+        (writeFrame.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding
+          (footprint := fun path => path ≠ directory.file (.run stop.next.generation index)) (fun _ apart => apart))
+      intro start _ _ equal
+      obtain ⟨_, impossible⟩ := directory.walSegment_exclusive equal.symm
+      cases impossible
+    have syncNames : WalNamePresenceFrame directory lower upper (storage written.2) (storage after.2) :=
+      .ofFileSync ((observe written.2).fileSyncEffect (observe after.2) bytes visible surviving)
+    exact prior.trans (writeNames.trans syncNames)
+  obtain ⟨cached, unchanged⟩ := resolveDirectoryReceipt resolved
+  have sameHeap := congrArg Prod.snd unchanged
+  have literal : fsync handle afterRuns.2 = .ok (.ok ()) afterBarrier.2 := sameHeap ▸ synced
+  have effect := barrier handle afterRuns afterBarrier cached literal
+  exact throughRuns.trans ⟨fun start _ _ => congrArg Option.isSome (congrFun effect.visible (directory.file (.walSegment start))),
+    fun names chosen => ⟨(storage afterRuns.2).files.names, .inl rfl,
+      walNames handle afterRuns afterBarrier cached literal names chosen⟩⟩
 
 /-- The completed first directory barrier settles the new run names.
 Their bytes already survived the preceding successful file syncs.

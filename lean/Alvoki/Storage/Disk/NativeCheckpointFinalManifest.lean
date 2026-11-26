@@ -691,4 +691,84 @@ theorem NativeCheckpointSourceError.replaysSampledRenameError
     exact selected.imp_right And.right
   exact ⟨choice, prior.replaysSampledManifest inodes runs observe storage names chosen contents sampled manifest⟩
 
+/-- The successful manifest staging keeps the earlier WAL catalog,
+including unbound offset names, before either rename outcome. -/
+private theorem NativeCheckpointSourcePrefix.walNamesThroughStaging
+    (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (storage : CheckpointPublicationStorageEffects stop inodes runs observe)
+    {lower upper : Nat} {beforeRename : CheckpointWorld heap}
+    (phaseNames : opened.set opened.phase .poisoned current.reached = .ok () stop.poisoned →
+      WalNamePresenceFrame dbDir lower upper (observe current.reached).storageObservation (observe stop.poisoned).storageObservation)
+    (runNames : CheckpointRunDirectoryWalNames dbDir fsync (fun atHeap => (observe atHeap).storageObservation) lower upper)
+    (through : let perform := primitives.checkpointStepUntilStop dbDir fsync stop.next stop.manifest
+      ((runSteps stop.next.table.runs.length ++
+        [Step.syncRunsDirectory, Step.manifest .writeStaged, Step.manifest .syncStaged]).forM perform).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) beforeRename) :
+    WalNamePresenceFrame dbDir lower upper (observe current.reached).storageObservation
+      (observe beforeRename.2).storageObservation := by
+  obtain ⟨_, _, beforeStaging, _, _, stored⟩ :=
+    stop.stageManifestBeforeRename through inodes runs observe storage.stageEffects
+  have beforeStage := stop.walNamesBeforeStagedManifest inodes runs observe phaseNames storage.runEffects
+    storage.runBarrier runNames beforeStaging
+  refine beforeStage.trans (.ofStorageFrame stored ?_)
+  intro start _ _ collision
+  obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive collision.symm
+  cases impossible
+
+/-- Recover the bounded WAL window from the same survivor map as the
+manifest at the final directory fsync stop. -/
+theorem NativeCheckpointSourceStop.sampledFinalWalWindow
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (storage : CheckpointPublicationStorageEffects stop.toNativeCheckpointSourcePrefix inodes runs observe)
+    {lower upper : Nat}
+    (initial : current.current.ready.state.writer.wal.SettledNamespaceWindow dbDir lower upper
+      (observe current.reached).storageObservation)
+    (phaseNames : opened.set opened.phase .poisoned current.reached = .ok () stop.poisoned →
+      WalNamePresenceFrame dbDir lower upper (observe current.reached).storageObservation (observe stop.poisoned).storageObservation)
+    (runNames : CheckpointRunDirectoryWalNames dbDir fsync (fun atHeap => (observe atHeap).storageObservation) lower upper)
+    (renameNames : ∀ before, primitives.rename ((dbDir).file .stagedManifest) ((dbDir).file .manifest) before =
+      .ok () stop.atIssue.2 → WalNamePresenceFrame dbDir lower upper (observe before).storageObservation
+        (observe stop.atIssue.2).storageObservation)
+    (directoryNames : ∀ (handle : CheckpointOpenHandle) atSync,
+      stop.atIssue.1.resolve (dbDir).path (dbDir).path primitives.openRead stop.atIssue.2 =
+        .ok handle (reached.1, atSync) → fsync handle atSync = .error reason reached.2 →
+      WalNamePresenceFrame dbDir lower upper (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
+    (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings) :
+    current.current.ready.state.writer.wal.NamespaceWindow dbDir lower upper names := by
+  obtain ⟨beforeRename, handle, atSync, through, renamed, _, resolved, stopped⟩ := stop.manifestDirectoryFollowsRename
+  have prefixFrame := stop.toNativeCheckpointSourcePrefix.walNamesThroughStaging
+    inodes runs observe storage phaseNames runNames through
+  have reachedFrame := (prefixFrame.trans (renameNames beforeRename.2 renamed)).trans
+    (directoryNames handle atSync resolved stopped)
+  exact (reachedFrame.preservesNamespaceWindow initial).2 names chosen
+
+/-- A returned manifest rename error preserves the bounded WAL window
+on the exact map used for the next open, independently of its manifest choice. -/
+theorem NativeCheckpointSourceError.sampledRenameErrorWalWindow
+    (stop : NativeCheckpointSourceError current primitives fsync (.manifest .renameStaged) cause reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (storage : CheckpointPublicationStorageEffects stop.toNativeCheckpointSourcePrefix inodes runs observe)
+    {lower upper : Nat}
+    (initial : current.current.ready.state.writer.wal.SettledNamespaceWindow dbDir lower upper
+      (observe current.reached).storageObservation)
+    (phaseNames : opened.set opened.phase .poisoned current.reached = .ok () stop.poisoned →
+      WalNamePresenceFrame dbDir lower upper (observe current.reached).storageObservation (observe stop.poisoned).storageObservation)
+    (runNames : CheckpointRunDirectoryWalNames dbDir fsync (fun atHeap => (observe atHeap).storageObservation) lower upper)
+    (renameNames : primitives.rename ((dbDir).file .stagedManifest) ((dbDir).file .manifest) stop.atIssue.2 =
+      .error cause reached.2 → WalNamePresenceFrame dbDir lower upper (observe stop.atIssue.2).storageObservation
+        (observe reached.2).storageObservation)
+    (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings) :
+    current.current.ready.state.writer.wal.NamespaceWindow dbDir lower upper names := by
+  have through := stop.returnedPrefix
+  rw [prefixBeforeManifestRename stop.ordered] at through
+  obtain ⟨failed, _⟩ := stop.manifestRenameFailed
+  have prefixFrame := stop.toNativeCheckpointSourcePrefix.walNamesThroughStaging
+    inodes runs observe storage phaseNames runNames through
+  exact ((prefixFrame.trans (renameNames failed)).preservesNamespaceWindow initial).2 names chosen
+
 end Alvoki.Storage.DiskSession
