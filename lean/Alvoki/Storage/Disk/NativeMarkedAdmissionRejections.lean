@@ -60,31 +60,6 @@ private theorem openWith_reachedState (realPath : FilePath → EStateM IO.Error 
   intro path reached
   split <;> rfl
 
-private theorem optionalMetadata_reachedState
-    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) :
-    reachedState (optionalMetadataWith lookup entry) = reachedState (lookup entry) := by
-  unfold optionalMetadataWith
-  apply reachedState_bindWithoutEffects
-  intro result reached
-  cases result with
-  | ok => rfl
-  | error cause =>
-    cases cause <;> try rfl
-    rename_i name code message
-    by_cases missing : code = 2
-    · subst code
-      rfl
-    · simp [missing, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState]
-
-private theorem rejectFlatWal_reachedState
-    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) :
-    reachedState (rejectFlatWalWith directory (optionalMetadataWith lookup) entry) = reachedState (lookup entry) := by
-  rw [← optionalMetadata_reachedState lookup]
-  unfold rejectFlatWalWith
-  apply reachedState_bindWithoutEffects
-  intro metadata reached
-  split <;> rfl
-
 private theorem checkLock_reachedState (calls : RawOpenAdmissionCallbacks heap) :
     reachedState (calls.checkLock directory entry) = reachedState (calls.lookup (directory.file .lock) entry) := by
   rw [← optionalMetadata_reachedState (calls.lookup (directory.file .lock))]

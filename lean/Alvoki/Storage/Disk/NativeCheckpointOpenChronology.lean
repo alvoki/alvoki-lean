@@ -292,25 +292,35 @@ section ActualMarkedSelection
 
 variable {heap : Type} {frame : heap → heap → Prop}
 
-private theorem flatGuard_passed_frames (directory : DiskDirectory)
-    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
-    {before after : heap} (keeps : frame before (reachedState (lookup before)))
-    (returned : rejectFlatWalWith directory (optionalMetadataWith lookup) before = .ok () after) :
-    frame before after := by
-  simp only [rejectFlatWalWith, Bind.bind, EStateM.bind] at returned
-  cases tested : optionalMetadataWith lookup before with
-  | error cause reached => simp [tested] at returned
-  | ok metadata reached =>
-    have known := optionalMetadata_success_frames lookup (fun ran => by simpa only [ran, reachedState] using keeps) tested
-    cases metadata with
-    | none =>
-      simp [tested, Pure.pure, EStateM.pure] at returned
-      exact returned ▸ known
-    | some _ =>
-      simp [tested, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+/-- The two lookups performed by the held recovery worker before
+choosing marked recovery or bootstrap. An absent marker selects bootstrap. -/
+abbrev segmentedWalGuardsWith (directory : DiskDirectory)
+    (lookup : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) :
+    EStateM IO.Error heap (Option IO.FS.Metadata) := do
+  rejectFlatWalWith directory (optionalMetadataWith (lookup (directory.file .wal)))
+  optionalMetadataWith (lookup (directory.file .walBoundary))
 
-/-- The two marked-open guards compose only the frames of their reached
-lookup calls. An ordinary missing legacy WAL still follows its stat. -/
+private theorem flatWalGuard_frames (directory : DiskDirectory)
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (keeps : KeepsReadFrame frame lookup) :
+    KeepsReadFrame frame (rejectFlatWalWith directory (optionalMetadataWith lookup)) := by
+  intro before
+  rw [rejectFlatWal_reachedState]
+  exact keeps before
+
+/-- Only reached lookup callbacks contribute to the frame. Even the
+flat-WAL rejection and a metadata error retain their callback's heap. -/
+theorem segmentedWalGuards_keepFrame (directory : DiskDirectory)
+    (lookup : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (trans : ∀ {before middle reached}, frame before middle → frame middle reached → frame before reached)
+    (keeps : ∀ path, KeepsReadFrame frame (lookup path)) :
+    KeepsReadFrame frame (segmentedWalGuardsWith directory lookup) := by
+  apply (flatWalGuard_frames directory _ (keeps (directory.file .wal))).bind trans
+  intro result before
+  rw [optionalMetadata_reachedState]
+  exact keeps (directory.file .walBoundary) before
+
+/-- A successful marked dispatch is one return of the shared guard frame. -/
 theorem markedGuards_keepFrame (directory : DiskDirectory)
     (lookup : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
     (trans : ∀ {before middle reached}, frame before middle → frame middle reached → frame before reached)
@@ -318,10 +328,10 @@ theorem markedGuards_keepFrame (directory : DiskDirectory)
     {entry checked marked : heap} {metadata : IO.FS.Metadata}
     (flat : rejectFlatWalWith directory (optionalMetadataWith (lookup (directory.file .wal))) entry = .ok () checked)
     (marker : optionalMetadataWith (lookup (directory.file .walBoundary)) checked = .ok (some metadata) marked) :
-    frame entry marked :=
-  trans (flatGuard_passed_frames directory _ (keeps (directory.file .wal) entry) flat)
-    (optionalMetadata_success_frames _ (fun ran => by
-      simpa only [ran, reachedState] using keeps (directory.file .walBoundary) checked) marker)
+    frame entry marked := by
+  have returned : segmentedWalGuardsWith directory lookup entry = .ok (some metadata) marked := by
+    simp only [segmentedWalGuardsWith, Bind.bind, EStateM.bind, flat, marker]
+  simpa only [returned, reachedState] using segmentedWalGuards_keepFrame (frame := frame) directory lookup trans keeps entry
 
 /-- The accepted marker used by the bounded production reader belongs to
 the reached namespace of this retry. Framing the chosen live bytes to the
@@ -588,6 +598,39 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   {source : RawMarkedOpenInterpreter heap stream}
   {raw : RawOpenAdmissionReport admission view source.calls entry}
   {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+
+variable (source) in
+/-- Both held recovery guards use the same public error cleanup. Only
+the reached metadata lookups frame the worker between cache allocation
+and its error return. -/
+theorem RawMarkedOpenInterpreter.framesRecoveryGuardError
+    {workerReached : heap} {cause : IO.Error}
+    (failed : segmentedWalGuardsWith directory source.calls.lookup allocation.afterPending = .error cause workerReached)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation workerReached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    {frame : heap → heap → Prop}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (guards : ∀ path, KeepsReadFrame frame (source.calls.lookup path))
+    (cleanup : disposal.ScopeFrames finalized frame) :
+    source.openTable input entry = .error (disposal.diagnostic cause) finalized.reached ∧
+      frame entry finalized.reached := by
+  have recoveryStopped (marked bootstrap : EStateM IO.Error heap Reopened) :
+      recoverSegmentedWalWith (rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal))))
+        (optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)))
+        marked bootstrap allocation.afterPending = .error cause workerReached := by
+    unfold recoverSegmentedWalWith
+    rw [← bind_assoc]
+    change ((segmentedWalGuardsWith directory source.calls.lookup >>= _) allocation.afterPending) = _
+    simp only [Bind.bind, EStateM.bind, failed]
+  let cache := RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef
+  have stopped : source.worker allocation.directoryRef allocation.activeRef allocation.pendingRef directory raw.lock cache
+      allocation.afterPending = .error cause workerReached := by
+    simp only [RawMarkedOpenInterpreter.worker, recoverHealthyMarkedWithRefs, Bind.bind, EStateM.bind, recoveryStopped]
+  have framed := segmentedWalGuards_keepFrame (frame := frame) directory source.calls.lookup trans guards
+    allocation.afterPending
+  rw [failed, reachedState] at framed
+  exact ⟨disposal.returnsMarkedInterpreter source sameDisposal stopped finalized, cleanup.preserves trans framed⟩
 
 variable (source) in
 /-- Cleanup starts at the actual failed preparation. The same guard

@@ -2177,6 +2177,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.KeepsReadFrame.preparesMarked
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.workerRejectsPreparation
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.finalizesMarkedPreparationError
+#check_axioms Alvoki.Storage.DiskSession.optionalMetadata_reachedState
+#check_axioms Alvoki.Storage.DiskSession.rejectFlatWal_reachedState
+#check_axioms Alvoki.Storage.DiskSession.segmentedWalGuards_keepFrame
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesRecoveryGuardError
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesMarkedPreparationError
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesSelectedWalReadError
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.framesCheckpointRead

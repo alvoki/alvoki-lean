@@ -12,7 +12,8 @@ calls extend the incoming client ledger. The supported calls also determine the
 heap, cache and ledger at the next observed checkpoint interruption. The
 final manifest-directory recovery follows its cached root through the rename to the interrupted
 raw fsync. The effect of that syscall on crash bindings remains a local filesystem premise. Failed opens before the file lock,
-a refused lock, errors during marked checkpoint, marker and WAL preparation, and partial
+a refused lock, errors in the held flat-WAL and marker metadata checks,
+errors during marked checkpoint, marker and WAL preparation, and partial
 pruning of later WAL segments each supply a retry frame under local callback
 and cleanup laws. Given such a frame for each failed call, one induction
 carries the live files, bounded WAL names, durable files and root binding
@@ -21,11 +22,11 @@ retry can start after an earlier unlink took effect. The canonical keeper
 layout supplies the same byte-prefix and cutoff facts to repair, installation
 and work accounting. [Failed repair](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) · [Keeper facts](../lean/Alvoki/Storage/Disk/WalSegmentBoundedRetry.lean)
 
-**Next obligation.** Derive the retry frame for the remaining failed guards and mutating repairs from their actual callbacks. Extend coverage to interrupted
+**Next obligation.** Derive the retry frame for mutating keeper repairs from their actual callbacks. Extend coverage to interrupted
 calls, whose handles and durable effects can differ from ordinary errors. A successful reopen needs the held scan to cover all
 physical later WAL names. This remains a local filesystem enumeration law.
 Mixed sessions and interruptions outside the covered paths remain open.
 
-**Verification baseline.** At `4a7ff54c`, 779 kernel checks, the axiom audit
+**Verification baseline.** At `006f7924`, 779 kernel checks, the axiom audit
 and its negative control, native fault tests and reproduction passed. For
 commands see [local verification](../README.md#reproduce-on-linux-x86-64).

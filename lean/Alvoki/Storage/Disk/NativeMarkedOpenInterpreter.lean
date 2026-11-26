@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair
+open System WalSegmentRepair SyncHandleRouting
 
 private theorem openCacheConstructor (path : FilePath) :
     ∃ makeCache : IO.Ref (Option IO.FS.Handle) →
@@ -429,28 +429,43 @@ private theorem realPathFrame
       exact returned.2 ▸ keeps observed
     · simp [observed, absolute, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
 
+/-- Turning the metadata response into an option retains the lookup heap on every outcome. -/
+theorem optionalMetadata_reachedState
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) {before : heap} :
+    reachedState (optionalMetadataWith lookup before) = reachedState (lookup before) := by
+  simp only [optionalMetadataWith, Bind.bind, EStateM.bind]
+  cases lookup before with
+  | error => rfl
+  | ok result =>
+    cases result with
+    | ok => rfl
+    | error cause =>
+      cases cause <;> try rfl
+      rename_i _ code _
+      by_cases missing : code = 2 <;>
+        simp [missing, Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState]
+
+/-- Rejecting a flat WAL is a pure decision after the filesystem lookup. -/
+theorem rejectFlatWal_reachedState {directory : DiskDirectory} {entry : heap}
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) :
+    reachedState (rejectFlatWalWith directory (optionalMetadataWith lookup) entry) = reachedState (lookup entry) := by
+  rw [← optionalMetadata_reachedState lookup]
+  simp only [rejectFlatWalWith, Bind.bind, EStateM.bind]
+  cases optionalMetadataWith lookup entry with
+  | error => rfl
+  | ok metadata => cases metadata <;> rfl
+
 theorem optionalMetadata_success_frames
     (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
     {before after : heap} {metadata : Option IO.FS.Metadata}
     (keeps : ∀ {result reached}, lookup before = .ok result reached → frame before reached)
     (returned : optionalMetadataWith lookup before = .ok metadata after) : frame before after := by
-  simp only [optionalMetadataWith, Bind.bind, EStateM.bind] at returned
+  have sameHeap := optionalMetadata_reachedState lookup (before := before)
   cases observed : lookup before with
-  | error cause reached => simp [observed] at returned
+  | error => simp [optionalMetadataWith, Bind.bind, EStateM.bind, observed] at returned
   | ok result reached =>
-    have actual := keeps observed
-    simp only [observed] at returned
-    cases result with
-    | ok stat =>
-      simp only [Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
-      exact returned.2 ▸ actual
-    | error cause =>
-      cases cause <;> simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
-      rename_i name code message
-      by_cases missing : code = 2
-      · simp [missing, Pure.pure, EStateM.pure] at returned
-        exact returned.2 ▸ actual
-      · simp [missing, EStateM.throw] at returned
+    simp only [returned, observed, reachedState] at sameHeap
+    exact sameHeap.symm ▸ keeps observed
 
 /-- Independent projections of the successful primitives that acquire a
 lock and initialize its cache. Each frame uses the actual reached heap. -/
