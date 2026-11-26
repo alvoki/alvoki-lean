@@ -1,5 +1,7 @@
 import Alvoki.Storage.Disk.NativeAlignedMarkedWorker
 import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
+import Alvoki.Storage.Disk.NativeWalPayloadReturn
+import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
 
 namespace Alvoki.Storage.DiskSession
 
@@ -85,6 +87,118 @@ theorem MarkedTemporaryReadCalls.readSelectedKeeper (calls : MarkedTemporaryRead
     calls.readExactOpenedFile view names visible opens reads path (IO.userError "short or oversized WAL keeper read")
       count acquired payload
   exact ⟨file, slot, inode, opened, readHeap, covered, fits, acquired, name, openedSlot, readSlot, cursor, stable, bytes, finished⟩
+
+section VisibleWal
+
+variable {heap image : Type} {directory : DiskDirectory}
+  (calls : MarkedTemporaryReadCalls heap) (view : OpenCloseHeapView heap image)
+  (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray) (scope : FilePath → Prop)
+
+private def visibleWalFiles (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (atHeap : heap) : CheckpointSurvivingFiles :=
+  ⟨names atHeap, fun inode => [visible atHeap inode]⟩
+
+local notation "frames" => fun first last =>
+  CheckpointSurvivingFiles.Frames scope (visibleWalFiles names visible first) (visibleWalFiles names visible last)
+
+/-- The successful selected WAL payload loop frames the same visible names
+and inode bytes across its actual seal releases and last keeper callback.
+Cached extents determine the requested seal lengths. The marker bounds the
+keeper prefix even if its inode has a longer visible tail. -/
+theorem MarkedTemporaryReadCalls.restoresSelectedWalBytes
+    (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
+    (scopedReads : calls.ScopeFrames (frames))
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (remembers : ∀ {path file before after}, remember path file before = .ok () after → (frames) before after)
+    {through : Nat} {initial entry : heap} {required : List (Nat × IO.FS.Metadata)}
+    (inScope : ∀ extent ∈ required, scope (directory.file (.walSegment extent.1)))
+    (starts : (frames) initial entry)
+    {result : EStateM.Result IO.Error heap (List (Nat × ByteArray) × Nat)}
+    (observed : CachedWalPayloadReturn directory through calls.seal (calls.readKeeperWithRelease remember)
+      required entry result)
+    {files : List (Nat × ByteArray)} {size : Nat} {reached : heap}
+    (returned : result = .ok (files, size) reached) :
+    let sealBytes := fun extent : Nat × IO.FS.Metadata =>
+      (names initial (directory.file (.walSegment extent.1))).map fun inode =>
+        (extent.1, (visible initial inode).extract 0 extent.2.byteSize.toNat)
+    ∃ (keeper : Nat) (metadata : IO.FS.Metadata) (earlier : List (Nat × ByteArray)) (bytes : ByteArray)
+      (beforeKeeper opened readHeap : heap) (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat),
+      required.getLast? = some (keeper, metadata) ∧ required.dropLast.mapM sealBytes = some earlier ∧
+      files = earlier ++ [(keeper, bytes)] ∧ size = metadata.byteSize.toNat ∧
+      names initial (directory.file (.walSegment keeper)) = some inode ∧
+      calls.openRead (directory.file (.walSegment keeper)) beforeKeeper = .ok file opened ∧
+      attachedReadSlot view file slot inode readHeap ∧
+      bytes = (visible initial inode).extract 0 ((through - keeper) * WAL.frameSize) ∧
+      (let count := (through - keeper) * WAL.frameSize
+       (count = size ∧ remember (directory.file (.walSegment keeper)) file readHeap = .ok () reached) ∨
+        (count < size ∧ calls.release file readHeap = .ok () reached)) ∧
+      (frames) initial beforeKeeper ∧ (frames) initial reached := by
+  have refl (atHeap : heap) : (frames) atHeap atHeap := fun _ _ => ⟨rfl, fun _ _ => rfl⟩
+  induction observed generalizing files size reached with
+  | noKeeper _ | keeperError _ | invalidKeeper _ _ | invalidOrder _ | sealError _ _ | sealedThenError _ _ _ =>
+    cases returned
+  | @kept keeper metadata entry reachedRead keeperBytes read checked =>
+    obtain ⟨payload, rfl⟩ := EStateM.Result.ok.inj returned
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj payload
+    let path := directory.file (.walSegment keeper)
+    let count := (through - keeper) * WAL.frameSize
+    let mismatch := IO.userError "short or oversized WAL keeper read"
+    obtain ⟨file, opened, readHeap, _, _, acquired, payloadRead, closed⟩ :=
+      calls.readKeeperWithRelease_ok remember path count metadata.byteSize.toNat read
+    obtain ⟨slot, inode, named, _, live, _, sameBytes, payload⟩ :=
+      calls.readExactOpenedFile view names visible opens reads path mismatch count acquired payloadRead
+    have selected : scope path := inScope (keeper, metadata) (List.mem_singleton_self _)
+    obtain ⟨sameName, beforeBytes⟩ := starts path selected
+    have original := sameName.symm.trans named
+    have visibleAtRead := sameBytes.trans (List.cons.inj (beforeBytes _ original)).1
+    have openFrame := scopedReads.openRead path entry
+    rw [acquired, reachedState] at openFrame
+    have readFrame := exactReadFrames (frame := (frames)) refl CheckpointSurvivingFiles.Frames.trans mismatch
+      (calls.readChunk file)
+      (scopedReads.readChunk file) count ByteArray.empty opened
+    rw [payloadRead, reachedState] at readFrame
+    have closeFrame : (frames) readHeap reachedRead := by
+      rcases closed with ⟨_, retained⟩ | ⟨_, released⟩
+      · exact remembers retained
+      · simpa only [dataErrorDropState, released] using scopedReads.release file readHeap
+    refine ⟨keeper, metadata, [], keeperBytes, entry, opened, readHeap, file, slot, inode, rfl, rfl, rfl, rfl,
+      original, acquired, live, ?_, closed, starts, starts.trans (openFrame.trans (readFrame.trans closeFrame))⟩
+    rwa [visibleAtRead] at payload
+  | @sealed first next metadata nextMetadata rest entry afterSeal reachedRead sealBytes restFiles fileSize forward read tail ih =>
+    obtain ⟨payload, rfl⟩ := EStateM.Result.ok.inj returned
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj payload
+    let path := directory.file (.walSegment first)
+    let count := (next - first) * WAL.frameSize
+    cases read with
+    | accepted sized fits readSeal exactSize =>
+      obtain ⟨extent, atEntry⟩ := EStateM.Result.ok.inj sized
+      subst atEntry
+      obtain ⟨file, slot, inode, opened, readHeap, _, named, _, _, _, stable, bytes, _⟩ :=
+        calls.readSelectedSeal view names visible opens reads path count readSeal
+      have selected : scope path := inScope (first, metadata) List.mem_cons_self
+      obtain ⟨sameName, contents⟩ := starts path selected
+      have namedInitially : names initial (directory.file (.walSegment first)) = some inode := sameName.symm.trans named
+      change metadata.byteSize.toNat = count at extent
+      have exactPrefix : sealBytes = (visible initial inode).extract 0 metadata.byteSize.toNat := by
+        rw [stable, (List.cons.inj (contents _ namedInitially)).1, ← extent] at bytes
+        exact bytes
+      have sealedFrame := calls.readWithFrames scopedReads CheckpointSurvivingFiles.Frames.trans path
+        (fun file => readExactPrefixWith selectedWalSpanError (calls.readChunk file) count ByteArray.empty)
+        (fun file => exactReadFrames (frame := (frames)) refl CheckpointSurvivingFiles.Frames.trans
+          selectedWalSpanError (calls.readChunk file) (scopedReads.readChunk file) count ByteArray.empty) entry
+      change (frames) entry (reachedState (calls.seal path count entry)) at sealedFrame
+      rw [readSeal, reachedState] at sealedFrame
+      obtain ⟨keeper, keeperMetadata, earlier, bytes, beforeKeeper, opened, readHeap, file, slot, inode, last, sealed,
+        exactFiles, size, bound, acquired, live, keeperPrefix, closed, beforeFrame, frame⟩ :=
+        ih (fun extent member => inScope extent (List.mem_cons_of_mem _ member)) (starts.trans sealedFrame) rfl
+      refine ⟨keeper, keeperMetadata, (first, sealBytes) :: earlier, bytes, beforeKeeper, opened, readHeap, file, slot, inode,
+        ?_, ?_, congrArg (List.cons (first, sealBytes)) exactFiles, size, bound, acquired, live, keeperPrefix, closed,
+        beforeFrame, frame⟩
+      · simpa only [List.getLast?_cons_cons] using last
+      · simp only [List.dropLast_cons_cons, List.mapM_cons, namedInitially, Option.map_some, ← exactPrefix,
+          sealed, Bind.bind, Option.bind, Pure.pure]
+
+end VisibleWal
 
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}

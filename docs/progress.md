@@ -1,5 +1,19 @@
 # Current handoff
 
+The literal marked-open return now identifies the checkpoint and marker
+of the protected retry files before following the actual selected WAL
+read. The admitted cache initialization and both reached guards preserve
+the same name and byte frame as the checkpoint and marker callbacks.
+Each selected WAL extent also traces to its actual no-follow stat in
+directory order. The physical extent stays distinct from the bounded
+prefix passed to recovery.
+An independent fold carries the visible file frame through the reached
+seal releases and the keeper callback. The ordered payloads use the
+same starting file image. The reached stat must still identify the same
+inode as the payload read to justify the full physical extent.
+[Exact marked selection](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean) ·
+[Reached WAL stats](../lean/Alvoki/Storage/Disk/NativeMarkedWalExtentsHeap.lean)
+
 The actual sized checkpoint reader now derives its selected
 publication from the protected file footprint and local I/O effects.
 The manifest read proves either a genuine missing-name report or

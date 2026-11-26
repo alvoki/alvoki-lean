@@ -187,6 +187,13 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   The reached checked listing and metadata traversal account for all
   canonical WAL names and the exact later removal set under the held
   root, with explicit complete EOF and no-follow absence premises.
+  A literal marked return and the protected retry frame now fix the
+  checkpoint and marker supplied to that same WAL selector. The
+  selected extent identifies its original no-follow stat, in
+  directory order, on the reached heap before any payload read.
+  The payload fold uses that read order and carries one file frame
+  through the real seal releases and keeper callback. Connect each
+  stat's identity and extent to the file opened for that prefix.
   The next obligation is to obtain these local effects and the
   protected footprint from the independently admitted execution,
   then use the actual WAL selection and repair to retire the

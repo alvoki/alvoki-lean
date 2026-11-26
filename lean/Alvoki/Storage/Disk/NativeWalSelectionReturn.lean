@@ -211,20 +211,24 @@ theorem SelectedWalReadReturn.successfulPayloads
     | payloadReturned selected read ordered =>
       exact ⟨_, _, _, _, _, checked, listed, scan, selected, read, ordered⟩
 
-private theorem returnedExtentOffset (directory : DiskDirectory)
+/-- A completed probe is either a noncanonical name, a positive stat, or
+an exact Linux ENOENT. The positive result keeps the stat's metadata intact. -/
+private theorem returnedExtentResult (directory : DiskDirectory)
     (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
     {name : String} {before reached : heap} {found : Option (Nat × IO.FS.Metadata)}
-    (returned : readWalSegmentExtentWith directory lstat name before = .ok found reached)
-    (present : ∀ {first statHeap filename message}, parseWalSegmentName name = some first →
-      lstat (directory.file (.walSegment first)) before ≠
-        .ok (.error (.noFileOrDirectory filename 2 message)) statHeap) :
-    found.map Prod.fst = parseWalSegmentName name := by
+    (returned : readWalSegmentExtentWith directory lstat name before = .ok found reached) :
+    (parseWalSegmentName name = none ∧ found = none) ∨
+      ∃ first, parseWalSegmentName name = some first ∧
+        ((∃ metadata, lstat (directory.file (.walSegment first)) before = .ok (.ok metadata) reached ∧
+          found = some (first, metadata)) ∨
+        (∃ filename message, lstat (directory.file (.walSegment first)) before =
+          .ok (.error (.noFileOrDirectory filename 2 message)) reached ∧ found = none)) := by
   cases parsed : parseWalSegmentName name with
   | none =>
     simp [readWalSegmentExtentWith, parsed, Pure.pure, EStateM.pure] at returned
-    obtain ⟨rfl, _⟩ := returned
-    rfl
+    exact .inl ⟨rfl, returned.1.symm⟩
   | some first =>
+    refine .inr ⟨first, rfl, ?_⟩
     simp only [readWalSegmentExtentWith, parsed, Bind.bind, EStateM.bind] at returned
     cases probed : lstat (directory.file (.walSegment first)) before with
     | error cause after => simp [probed] at returned
@@ -234,16 +238,33 @@ private theorem returnedExtentOffset (directory : DiskDirectory)
       | ok metadata =>
         by_cases regular : (metadata.type == .file) = true
         · simp [classifyWalSegmentLookup, regular, Pure.pure, Except.toOption] at returned
-          obtain ⟨rfl, _⟩ := returned
-          rfl
+          obtain ⟨rfl, rfl⟩ := returned
+          exact .inl ⟨metadata, rfl, rfl⟩
         · simp [classifyWalSegmentLookup, regular, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
       | error cause =>
         cases cause <;> simp [classifyWalSegmentLookup, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
         rename_i filename code message
         by_cases missing : code = 2
         · subst code
-          exact (present parsed probed).elim
+          simp [Pure.pure, EStateM.pure] at returned
+          obtain ⟨rfl, rfl⟩ := returned
+          exact .inr ⟨filename, message, rfl, rfl⟩
         · simp [missing, EStateM.throw] at returned
+
+private theorem returnedExtentOffset (directory : DiskDirectory)
+    (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    {name : String} {before reached : heap} {found : Option (Nat × IO.FS.Metadata)}
+    (returned : readWalSegmentExtentWith directory lstat name before = .ok found reached)
+    (present : ∀ {first statHeap filename message}, parseWalSegmentName name = some first →
+      lstat (directory.file (.walSegment first)) before ≠
+        .ok (.error (.noFileOrDirectory filename 2 message)) statHeap) :
+    found.map Prod.fst = parseWalSegmentName name := by
+  rcases returnedExtentResult directory lstat returned with ⟨parsed, rfl⟩ | ⟨first, parsed, positive | missing⟩
+  · exact parsed.symm
+  · obtain ⟨metadata, _, rfl⟩ := positive
+    exact parsed.symm
+  · obtain ⟨filename, message, stat, _⟩ := missing
+    exact (present parsed stat).elim
 
 private theorem filterMapM_extend {α β : Type}
     (read : α → EStateM IO.Error heap (Option β)) (scanned : List α) (name : α)
@@ -269,6 +290,78 @@ private theorem filterMapM_extend {α β : Type}
           Pure.pure, EStateM.pure] at earlier <;> obtain ⟨rfl, rfl⟩ := earlier <;>
           simp [List.cons_append, List.filterMapM_cons, Bind.bind, EStateM.bind, head, extended tail,
             Pure.pure, EStateM.pure]
+
+private theorem filterMapM_member {α β : Type} (read : α → EStateM IO.Error heap (Option β))
+    (names : List α) {entry reached : heap} {found : List β} {value : β}
+    (returned : (names.filterMapM read) entry = .ok found reached) (member : value ∈ found) :
+    ∃ earlier name rest collected issued after,
+      names = earlier ++ name :: rest ∧
+      (earlier.filterMapM read) entry = .ok collected issued ∧
+      read name issued = .ok (some value) after := by
+  induction names generalizing entry reached found with
+  | nil =>
+    simp [Pure.pure, EStateM.pure] at returned
+    obtain ⟨rfl, _⟩ := returned
+    simp at member
+  | cons name rest ih =>
+    cases head : read name entry with
+    | error cause after => simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head] at returned
+    | ok kept after =>
+      cases tail : (rest.filterMapM read) after with
+      | error cause atError =>
+        cases kept <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, tail] at returned
+      | ok collected atEnd =>
+        have prepend (member : value ∈ collected) :
+            ∃ earlier issuedName remaining previous issued afterRead,
+              name :: rest = earlier ++ issuedName :: remaining ∧
+              (earlier.filterMapM read) entry = .ok previous issued ∧
+              read issuedName issued = .ok (some value) afterRead := by
+          obtain ⟨earlier, issuedName, remaining, previous, issued, afterRead, order, scanned, probed⟩ := ih tail member
+          refine ⟨name :: earlier, issuedName, remaining, kept.toList ++ previous, issued, afterRead,
+            congrArg (List.cons name) order, ?_, probed⟩
+          cases kept <;> simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, scanned, Pure.pure, EStateM.pure]
+        cases kept with
+        | none =>
+          simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, tail] at returned
+          obtain ⟨rfl, _⟩ := returned
+          exact prepend member
+        | some kept =>
+          simp [List.filterMapM_cons, Bind.bind, EStateM.bind, head, tail, Pure.pure, EStateM.pure] at returned
+          obtain ⟨rfl, _⟩ := returned
+          rcases List.mem_cons.mp member with rfl | inTail
+          · exact ⟨[], name, rest, [], entry, after, rfl, rfl, head⟩
+          · exact prepend inTail
+
+/-- Sorting only reorders the retained extents. Each returned pair was
+admitted by the exact stat at its reached position in the original list. -/
+theorem readWalSegmentExtentsWith_memberStat (directory : DiskDirectory)
+    (lstat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (names : List String) {entry reached : heap} {extents : List (Nat × IO.FS.Metadata)}
+    {first : Nat} {metadata : IO.FS.Metadata}
+    (returned : readWalSegmentExtentsWith directory lstat names entry = .ok extents reached)
+    (member : (first, metadata) ∈ extents) :
+    ∃ earlier name rest collected issued after,
+      names = earlier ++ name :: rest ∧ parseWalSegmentName name = some first ∧
+      (earlier.filterMapM (readWalSegmentExtentWith directory lstat)) entry = .ok collected issued ∧
+      lstat (directory.file (.walSegment first)) issued = .ok (.ok metadata) after := by
+  let read := readWalSegmentExtentWith directory lstat
+  change ((names.filterMapM read) >>= fun result => pure (result.mergeSort _)) entry = _ at returned
+  cases scanned : (names.filterMapM read) entry with
+  | error cause after =>
+    simp [Bind.bind, EStateM.bind, scanned] at returned
+  | ok values after =>
+    simp [Bind.bind, EStateM.bind, scanned,
+      Pure.pure, EStateM.pure] at returned
+    obtain ⟨rfl, rfl⟩ := returned
+    obtain ⟨earlier, name, rest, collected, issued, after, order, steps, called⟩ :=
+      filterMapM_member read names scanned (List.mem_mergeSort.mp member)
+    rcases returnedExtentResult directory lstat called with ⟨_, contradiction⟩ | ⟨offset, parsed, positive | missing⟩
+    · cases contradiction
+    · obtain ⟨exactMetadata, probed, same⟩ := positive
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj same)
+      exact ⟨earlier, name, rest, collected, issued, after, order, parsed, steps, probed⟩
+    · obtain ⟨_, _, _, contradiction⟩ := missing
+      cases contradiction
 
 /-- A successful raw scan retains exactly the canonical listed names if
 the no-follow probes cannot report ENOENT for those still-bound names. -/

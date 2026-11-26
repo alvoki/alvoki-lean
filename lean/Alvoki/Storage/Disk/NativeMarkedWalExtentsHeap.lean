@@ -323,6 +323,28 @@ theorem MarkedWalExtentReports.inspectReturned {heap : Type}
       obtain ⟨rfl, rfl⟩ := returned
       rfl
 
+/-- Each required seal or keeper keeps the absolute extent reported by
+its actual no-follow stat. Before the stat, the worker has processed
+exactly the earlier names in the original stream order. -/
+theorem MarkedWalExtentReports.selectedStat {heap : Type}
+    (fileCalls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
+    (names : List String) {listed scanned : heap}
+    {extents required : List (Nat × IO.FS.Metadata)} {watermark through first : Nat}
+    {later : List Nat} {metadata : IO.FS.Metadata}
+    (scan : readWalSegmentExtentsWith directory (inspect fileCalls) names listed = .ok extents scanned)
+    (selected : selectWalExtentsThrough extents watermark through = some (required, later))
+    (member : (first, metadata) ∈ required) :
+    ∃ earlier rest collected issued after,
+      names = earlier ++ renderWalSegmentName first :: rest ∧
+      (earlier.filterMapM (readWalSegmentExtentWith directory (inspect fileCalls))) listed = .ok collected issued ∧
+      inspect fileCalls (directory.file (.walSegment first)) issued = .ok (.ok metadata) after ∧
+      fileCalls.stat (directory.file (.walSegment first)) issued = .ok (.ok metadata) after := by
+  obtain ⟨earlier, name, rest, collected, issued, after, order, parsed, steps, guarded⟩ :=
+    readWalSegmentExtentsWith_memberStat directory (inspect fileCalls) names scan
+      (selectWalExtentsThrough_required_subset selected member)
+  rw [parseWalSegmentName_eq_some_iff.mp parsed] at order
+  exact ⟨earlier, rest, collected, issued, after, order, steps, guarded, inspectReturned fileCalls _ guarded⟩
+
 end Alvoki.Storage.DiskSession
 
 namespace Alvoki.Storage
