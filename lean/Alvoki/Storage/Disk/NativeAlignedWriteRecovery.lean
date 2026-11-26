@@ -1601,11 +1601,8 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun atHeap => ⟨(observe atHeap).files.names, fun inode => [visible atHeap inode]⟩)
       current.state.selectedRetryPath
-      (fun atHeap =>
-        current.state.writer.wal.NamespaceWindow dir firstOffset (prior ++ batch).length (observe atHeap).files.names ∧
-        RawOpenRetryTrace.KeeperAt view dir target (fun atHeap => (observe atHeap).files.names) visible atHeap ∧
-        current.state.SelectedRetryDurability target (observe atHeap) ∧
-        RawOpenRetryTrace.LaterWalAt view dir target (fun heap => (observe heap).files.names) atHeap) attempts)
+      (RawOpenRetryTrace.RecoveryObservations view current.state target observe visible firstOffset
+        (prior ++ batch).length) attempts)
     (admission : source.AlignedAdmissionEffects view current.state input reached observe visible)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (rootBinding : (observe reached).files.names (dir).path = some (namespaceView.modelObject root))

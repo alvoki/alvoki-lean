@@ -62,11 +62,8 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
           storage firstOffset (current.current.history.length + request.rows.length) →
         RawOpenRetryTrace.SelectedEffects view source rebooted state.writer.target
           (fun atHeap => ⟨names atHeap, fun inode => [visible atHeap inode]⟩) state.selectedRetryPath
-          (fun atHeap => state.writer.wal.NamespaceWindow dir firstOffset
-            (current.current.history.length + request.rows.length) (names atHeap) ∧
-            RawOpenRetryTrace.KeeperAt view dir state.writer.target names visible atHeap ∧
-            state.SelectedRetryDurability state.writer.target (storage atHeap) ∧
-            RawOpenRetryTrace.LaterWalAt view dir state.writer.target names atHeap) attempts →
+          (RawOpenRetryTrace.RecoveryObservations view state state.writer.target storage visible firstOffset
+            (current.current.history.length + request.rows.length)) attempts →
         (∀ event ∈ earlier ++ events, event.uncertainBatchWhole) ∧
         ∃ batch table guarded poisoned,
           prepareBatch installed.table request.rows = some (batch, table) ∧

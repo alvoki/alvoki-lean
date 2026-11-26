@@ -222,11 +222,8 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       target.pair = (view.files rebooted).image.directory.active →
       RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun atHeap => ⟨storageNames atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
-        (fun atHeap => (state).writer.wal.NamespaceWindow dir firstOffset
-          (current.current.history ++ batch).length (storageNames atHeap) ∧
-          RawOpenRetryTrace.KeeperAt view dir target storageNames visible atHeap ∧
-          (state).SelectedRetryDurability target (storage atHeap) ∧
-          RawOpenRetryTrace.LaterWalAt view dir target storageNames atHeap) attempts)
+        (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
+          (current.current.history ++ batch).length) attempts)
     (openEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
@@ -324,11 +321,8 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
       target.pair = (view.files rebooted).image.directory.active →
       RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun atHeap => ⟨storageNames atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
-        (fun atHeap => (state).writer.wal.NamespaceWindow dir firstOffset
-          (current.current.history ++ batch).length (storageNames atHeap) ∧
-          RawOpenRetryTrace.KeeperAt view dir target storageNames visible atHeap ∧
-          (state).SelectedRetryDurability target (storage atHeap) ∧
-          RawOpenRetryTrace.LaterWalAt view dir target storageNames atHeap) attempts) :
+        (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
+          (current.current.history ++ batch).length) attempts) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
       .error (.commitUnknown cause) failed ∧

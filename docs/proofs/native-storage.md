@@ -362,10 +362,14 @@ The shared marked installation now takes the descriptor inventory at the actual 
 keeper projection links the visible name to the inode's current bytes through failed repairs and
 cleanup. The protected checkpoint frame supplies the exact manifest and selected run payloads at
 that same open. A final directory fsync error before effect can leave a replacement live while the
-old inode can still survive a subsequent power loss. The live retry proof uses the reached name,
-while the crash proof requires a separate correlated survivor observation. The installation still
+old inode can still survive a subsequent power loss. At the next open, `RecoveryObservations` relates the
+WAL interval to the names on disk, the live keeper binding to its bytes, the selected
+immutable files to their durable contents, and later WAL names to the physical suffix.
+An independent failure before flock also exposes its local file frame, including the keeper
+binding in place when the call began. Another crash requires a fresh correlated survivor observation.
+The installation still
 uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
-[Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+[Recovery observations](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 · [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 ## Why adding cases is expensive

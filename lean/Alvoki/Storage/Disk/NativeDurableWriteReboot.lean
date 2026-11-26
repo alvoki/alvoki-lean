@@ -237,7 +237,10 @@ private abbrev retryLiveFiles (storage : heap → CheckpointStorageObservation) 
     (atHeap : heap) : CheckpointSurvivingFiles :=
   ⟨(storage atHeap).files.names, fun inode => [visible atHeap inode]⟩
 
-private abbrev retryObservations (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+/-- Storage observations needed at the next marked open. The immutable
+files retain their durable contents. The keeper is read through the
+current live binding, which a previous repair may have replaced. -/
+abbrev RawOpenRetryTrace.RecoveryObservations (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
     (target : Target) (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (firstOffset through : Nat) (atHeap : heap) : Prop :=
   let names := fun atHeap => (storage atHeap).files.names
@@ -270,17 +273,19 @@ actual pre-flock outcome determines the public diagnostic and reached
 heap. When an append is reached, its error must supply its own frame. -/
 theorem RawOpenRetryTrace.SelectedEffects.beforeFlock
     (before : RawOpenRetryTrace.SelectedEffects view source first target (retryLiveFiles storage visible)
-      state.selectedRetryPath (retryObservations view state target storage visible firstOffset through) prior)
+      state.selectedRetryPath (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset through) prior)
     (failed : source.calls.beforeFlock input entry = .error cause reached)
     (effects : source.calls.BeforeFlockErrorFrames input entry cause reached
       (RawOpenRetryTrace.BeforeFlockFrame view state storage visible)) :
     ∃ returned : source.openTable input entry = .error cause reached,
       RawOpenRetryTrace.SelectedEffects view source first target (retryLiveFiles storage visible)
-        state.selectedRetryPath (retryObservations view state target storage visible firstOffset through)
-        (prior.next input returned) := by
+        state.selectedRetryPath (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset through)
+        (prior.next input returned) ∧
+      RawOpenRetryTrace.BeforeFlockFrame view state storage visible entry reached := by
   obtain ⟨returned, framed⟩ := source.framesBeforeFlock failed RawOpenRetryTrace.BeforeFlockFrame.trans effects
-  refine ⟨returned, .append (calls := .next .empty input returned) before (.inl framed.image)
-    (fun path selected => framed.live path (.inl selected)) ?_⟩
+  refine ⟨returned, ?_, framed⟩
+  apply RawOpenRetryTrace.SelectedEffects.append (calls := .next .empty input returned) before (.inl framed.image)
+    (fun path selected => framed.live path (.inl selected))
   intro carried
   let directory := state.session.directory
   have canonical (start : Nat) :
