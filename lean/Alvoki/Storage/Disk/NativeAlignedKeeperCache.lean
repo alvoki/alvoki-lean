@@ -72,6 +72,98 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSu
             cases result
             simpa only [kept] using schedule
 
+/-- Fold only the accepted removes of the actual WAL unlink loop,
+in their original order and at the heap returned by each call. -/
+theorem foldReturnedWalUnlinks {heap model : Type}
+    (directory : DiskDirectory) (plan : Plan)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (invariant : model → heap → Prop) (applyUnlink : model → Nat → model)
+    {initial : model} {first last : heap} (entered : invariant initial first)
+    (unlink : ∀ {ordinal start finish result before}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) start = .ok result finish →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      invariant before start → invariant (applyUnlink before ordinal) finish)
+    (returned : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
+    invariant (plan.newer.foldl applyUnlink initial) last := by
+  let run := performPaths directory plan remove throw write sync rename
+  have preserve {ordinals : List Nat} (included : ∀ ordinal ∈ ordinals, ordinal ∈ plan.newer)
+      {start finish : heap} {before : model} (known : invariant before start)
+      (ran : ((ordinals.map Step.unlink).forM run) start = .ok () finish) :
+      invariant (ordinals.foldl applyUnlink before) finish := by
+    induction ordinals generalizing start before with
+    | nil =>
+      have same : start = finish := (EStateM.Result.ok.inj ran).2
+      exact same ▸ known
+    | cons ordinal rest ih =>
+      simp only [List.map_cons, List.forM_eq_forM, List.forM_cons, run, performPaths,
+        RunCollection.performPaths, Bind.bind, EStateM.bind] at ran
+      cases removed : remove (directory.file (.walSegment ordinal)) start with
+      | error cause reached => simp [removed] at ran
+      | ok result reached =>
+        rw [removed] at ran
+        cases accepted : RunCollection.ownedUnlinkResult result with
+        | error cause =>
+          simp [accepted, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at ran
+        | ok value =>
+          cases value
+          simp only [accepted, Pure.pure, EStateM.pure] at ran
+          exact ih (fun other member => included other (List.mem_cons_of_mem _ member))
+            (unlink (included _ List.mem_cons_self) removed accepted known) ran
+  exact preserve (fun _ member => member) entered returned
+
+/-- Each selected name is absent after the actual checked unlink pass.
+Only paths in the caller's canonical scope need the off-target frame. -/
+theorem namesOfReturnedWalUnlinks {heap : Type}
+    (directory : DiskDirectory) (plan : Plan)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (names : heap → FilePath → Option Nat) (scope : FilePath → Prop)
+    (inScope : ∀ ordinal ∈ plan.newer, scope (directory.file (.walSegment ordinal)))
+    (unlink : ∀ {ordinal start finish result}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) start = .ok result finish →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      names finish (directory.file (.walSegment ordinal)) = none ∧
+      ∀ path, scope path → path ≠ directory.file (.walSegment ordinal) → names finish path = names start path)
+    {first last : heap}
+    (returned : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
+    (∀ ordinal ∈ plan.newer, names last (directory.file (.walSegment ordinal)) = none) ∧
+    ∀ path, scope path → (∀ ordinal ∈ plan.newer, path ≠ directory.file (.walSegment ordinal)) →
+      names last path = names first path := by
+  let invariant (removed : List Nat) (atHeap : heap) :=
+    (∀ ordinal ∈ plan.newer, ordinal ∈ removed → names atHeap (directory.file (.walSegment ordinal)) = none) ∧
+    ∀ path, scope path → (∀ ordinal ∈ removed, path ≠ directory.file (.walSegment ordinal)) →
+      names atHeap path = names first path
+  have start : invariant [] first := ⟨by simp, fun _ _ _ => rfl⟩
+  have step {ordinal : Nat} {before after : heap} {result : Except IO.Error Unit} {removed : List Nat}
+      (selected : ordinal ∈ plan.newer) (called : remove (directory.file (.walSegment ordinal)) before = .ok result after)
+      (accepted : RunCollection.ownedUnlinkResult result = .ok ()) (prior : invariant removed before) :
+      invariant (removed ++ [ordinal]) after := by
+    obtain ⟨gone, unchanged⟩ := prior
+    obtain ⟨absent, keeps⟩ := unlink selected called accepted
+    constructor
+    · intro other eligible member
+      by_cases same : other = ordinal
+      · simpa only [same] using absent
+      · have earlier : other ∈ removed := by simpa only [List.mem_append, List.mem_singleton, same, or_false] using member
+        have apart : directory.file (.walSegment other) ≠ directory.file (.walSegment ordinal) :=
+          fun collision => same (directory.walSegment_path_injective collision)
+        exact (keeps _ (inScope other eligible) apart).trans (gone other eligible earlier)
+    · intro path inside outside
+      exact (keeps path inside (outside ordinal (List.mem_append_right _ (List.mem_singleton_self _)))).trans
+        (unchanged path inside (fun other member => outside other (List.mem_append_left _ member)))
+  have complete : invariant plan.newer last := by
+    simpa [← List.flatMap_def] using
+      foldReturnedWalUnlinks directory plan remove write sync rename invariant
+        (fun done ordinal => done ++ [ordinal]) start step returned
+  exact ⟨fun ordinal member => complete.1 ordinal member member, complete.2⟩
+
 /-- A successful aligned finish with no later names uses exactly the
 directory barrier followed by the barrier on its existing keeper. -/
 theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSyncsReached {heap : Type}

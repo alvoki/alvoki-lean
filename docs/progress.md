@@ -8,7 +8,9 @@ For a nonempty suffix, the successful unlink loop now yields the exact heap
 at the directory barrier. Local unlink and sync effects determine its file
 image. If the observed list covers the visible suffix, the barrier settles
 the later-name choices to the empty list in any scan order. The existing
-frame proof uses the same induction. The next obligation is to establish
+frame proof uses the same induction. The pruned writer now uses the raw
+unlink loop to derive which names disappeared and which canonical paths
+kept their bindings. This replaces its report-specific induction. The next obligation is to establish
 that coverage and the local effects for the selected recovery entry, then
 carry the actual keeper handle through the barrier to the returned writer.
 

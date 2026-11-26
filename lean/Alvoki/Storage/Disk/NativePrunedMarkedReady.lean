@@ -9,49 +9,6 @@ open System SyncHandleRouting WalSegmentRepair CheckpointPublication
 
 section
 
-variable {heap : Type} {directory : DiskDirectory} {inventory : DescriptorInventory}
-  {retry : LockedFileState FileImage} {published : CheckpointPublication.Image}
-  {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
-  {operations : MarkedRetryChunkOperations CensusDirectoryCache directory layout}
-  {held : HeldDirectoryMarkedRetryReports operations published}
-
-/-- The observed raw unlink results determine the absent later names.
-The proof uses the accepted result of each actual unlink, including
-an accepted already-missing name. -/
-theorem PrunedWalUnlinkHeaps.removesNames
-    {view : OpenCloseHeapView heap FileImage} {cached active pending}
-    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
-    {initial : FileImage} {bindings final : FilePath → Option Nat} {names : List Nat}
-    {unlinks : HeldLaterWalUnlinks held initial bindings names final} {before after : heap}
-    (seen : PrunedWalUnlinkHeaps view cached active pending remove unlinks before after)
-    (observe : heap → FilePath → Option Nat)
-    (unlink : ∀ {first start reached result}, first ∈ names →
-      remove (directory.file (.walSegment first)) start = .ok result reached → RunCollection.ownedUnlinkResult result = .ok () →
-      observe reached (directory.file (.walSegment first)) = none ∧
-      ∀ path, path ≠ directory.file (.walSegment first) → observe reached path = observe start path) :
-    (∀ first ∈ names, observe after (directory.file (.walSegment first)) = none) ∧
-    ∀ path, (∀ first ∈ names, path ≠ directory.file (.walSegment first)) → observe after path = observe before path := by
-  induction seen with
-  | done => exact ⟨by simp, fun _ _ => rfl⟩
-  | @step first _ _ _ remaining _ _ _ _ head _ raw _ _ _ _ ih =>
-    obtain ⟨absent, unchanged⟩ := unlink List.mem_cons_self raw head.accepted
-    obtain ⟨removed, keeps⟩ := ih (fun member => unlink (List.mem_cons_of_mem _ member))
-    constructor
-    · intro ordinal member
-      rcases List.mem_cons.mp member with rfl | later
-      · by_cases repeated : ordinal ∈ remaining
-        · exact removed ordinal repeated
-        · exact (keeps (directory.file (.walSegment ordinal)) (fun other member collision =>
-            repeated ((directory.walSegment_path_injective collision).symm ▸ member))).trans absent
-      · exact removed ordinal later
-    · intro path separate
-      exact (keeps path (fun ordinal member => separate ordinal (List.mem_cons_of_mem _ member))).trans
-        (unchanged path (separate first List.mem_cons_self))
-
-end
-
-section
-
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {published : CheckpointPublication.Image} {checkpoint : Option (PackedTable × UInt64)}
@@ -143,7 +100,8 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterPrunedRepair
     (∀ {first start reached result}, first ∈ retry.image.later.visible →
       remove ((dir).file (.walSegment first)) start = .ok result reached → RunCollection.ownedUnlinkResult result = .ok () →
       (observe reached).files.names ((dir).file (.walSegment first)) = none ∧
-      ∀ path, path ≠ (dir).file (.walSegment first) → (observe reached).files.names path = (observe start).files.names path) →
+      ∀ path, (path = (dir).path ∨ ∃ file, path = (dir).file file) →
+        path ≠ (dir).file (.walSegment first) → (observe reached).files.names path = (observe start).files.names path) →
     (raw.callbacks.sync raw.seed.handle seen.pruned = .ok () seen.suffixSettled →
       (view.handle seen.pruned raw.seed.handle).2.1 ∈ (view.descriptors seen.pruned).slots →
       (observe seen.pruned).files.names (dir).path = some
@@ -178,7 +136,6 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterPrunedRepair
   have repairHeap : raw.repaired = seen.reached := congrArg (fun route => route.2.1) pruned
   have sameObjects : opening.finish.census.inode = opening.admission.reached.inode := by
     simpa only [prunedFinish, CapturedKeeperFinish.census] using finish.sameCensusObjects
-  have actualUnlinks := seen.unlinks.removesNames (fun heap => (observe heap).files.names) unlinked
   have keeperPruned : (observe seen.pruned).files.names keeperPath = some object :=
     (readKeeper keeperPath rfl).1.trans named
   have keeperFrames := readKeeper.trans ((suffixLive seen.suffixSync).trans (consumeLive seen.consume))
@@ -192,6 +149,11 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterPrunedRepair
   have keeperBytes : visible seen.consumed inode = layout.keeper.bytes := by
     rw [issued, keptBytes, payload, empty, ByteArray.append_empty]
   let write := stage.stage raw.seed.pendingRef raw.callbacks.modifyPending
+  let sync := raw.callbacks.syncPaths (dir).path raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef
+  have unlinkPass := (seen.unlinks.returns opening.admission.held seen.authorizedFiles layout.boundedPlan write sync rename).1
+  have actualUnlinks := namesOfReturnedWalUnlinks (dir) layout.boundedPlan remove write sync rename
+    (fun heap => (observe heap).files.names) (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
+    (fun first _ => .inr ⟨.walSegment first, rfl⟩) unlinked unlinkPass
   have ran := seen.returns later write rename
   have modelKeeper : finish.prune.reached keeperPath = some object := by
     rw [← issued]
@@ -225,7 +187,7 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterPrunedRepair
       apply NativeReadyState.protectedPathNeWalFromActive valid selectedPath
       rw [first]
       exact Nat.le_trans layout.target.firstCovered (Nat.le_of_lt (later firstLater listed))
-    have nameAfterAuthorization := (actualUnlinks.2 path apartFromSuffix).symm.trans bound
+    have nameAfterAuthorization := (actualUnlinks.2 path child apartFromSuffix).symm.trans bound
     have canonical := privateFrame.privateBindingOn keeperPrivate path child
       (nameAfterAuthorization.trans (congrArg some issued))
     exact NativeReadyState.protectedPathNeWalFromActive valid selectedPath (Nat.le_refl _)

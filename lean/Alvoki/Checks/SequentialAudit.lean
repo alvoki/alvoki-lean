@@ -2185,6 +2185,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.workerReturnsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFinalSyncError
+#check_axioms Alvoki.Storage.DiskSession.foldReturnedWalUnlinks
+#check_axioms Alvoki.Storage.DiskSession.namesOfReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.foldReturnedPrune
 #check_axioms Alvoki.Storage.DiskSession.framesReturnedPrune
 #check_axioms Alvoki.Storage.DiskSession.fileImageOfReturnedPrune
@@ -4124,7 +4126,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.preservesSelectedReplacement
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterLongerRetry
-#check_axioms Alvoki.Storage.DiskSession.PrunedWalUnlinkHeaps.removesNames
 #check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.keeperIssueInode
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterPrunedRepair
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.reopenedAuthority

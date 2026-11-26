@@ -43,36 +43,14 @@ theorem foldReturnedPrune {model : Type}
       sync #[directory.path] unlinked = .ok () last ∧
       invariant (plan.newer.foldl applyUnlink initial) unlinked := by
   intro run
-  have preserve {ordinals : List Nat} (included : ∀ ordinal ∈ ordinals, ordinal ∈ plan.newer)
-      {start finish : heap} {before : model} (known : invariant before start)
-      (ran : ((ordinals.map Step.unlink).forM run) start = .ok () finish) :
-      invariant (ordinals.foldl applyUnlink before) finish := by
-    induction ordinals generalizing start before with
-    | nil =>
-      have same : start = finish := (EStateM.Result.ok.inj ran).2
-      exact same ▸ known
-    | cons ordinal rest ih =>
-      simp only [List.map_cons, List.forM_eq_forM, List.forM_cons, run, performPaths,
-        RunCollection.performPaths, Bind.bind, EStateM.bind] at ran
-      cases removed : remove (directory.file (.walSegment ordinal)) start with
-      | error cause reached => simp [removed] at ran
-      | ok result reached =>
-        rw [removed] at ran
-        cases accepted : RunCollection.ownedUnlinkResult result with
-        | error cause =>
-          simp [accepted, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at ran
-        | ok value =>
-          cases value
-          simp only [accepted, Pure.pure, EStateM.pure] at ran
-          exact ih (fun other member => included other (List.mem_cons_of_mem _ member))
-            (unlink (included _ List.mem_cons_self) removed accepted known) ran
   change ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM run) first = _ at returned
   rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at returned
   cases passed : ((plan.newer.map Step.unlink).forM run) first with
   | error cause reached => simp [Bind.bind, EStateM.bind, passed] at returned
   | ok value reached =>
     cases value
-    refine ⟨reached, rfl, ?_, preserve (fun _ member => member) entered passed⟩
+    refine ⟨reached, rfl, ?_,
+      foldReturnedWalUnlinks directory plan remove write sync rename invariant applyUnlink entered unlink passed⟩
     simp only [Bind.bind, EStateM.bind, passed, List.forM_eq_forM, List.forM_cons, List.forM_nil,
       Pure.pure, EStateM.pure, run, performPaths] at returned
     cases status : sync #[directory.path] reached with
