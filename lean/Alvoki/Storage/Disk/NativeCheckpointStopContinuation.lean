@@ -99,7 +99,7 @@ variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpene
   {view : OpenCloseHeapView heap FileImage} {storage : heap → CheckpointStorageObservation}
   {rebooted : heap} {bytes : heap → Nat → ByteArray}
 
-private theorem stagedManifestOffSelected (state : NativeReadyState) {path : FilePath}
+theorem NativeReadyState.crashPath_ne_stagedManifest (state : NativeReadyState) {path : FilePath}
     (selected : state.crashPath path) : path ≠ state.session.directory.file .stagedManifest := by
   let directory := state.session.directory
   have basename (left right : String)
@@ -154,7 +154,7 @@ theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
     NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
   obtain ⟨literal, _, _, target, _, stopped, _⟩ := stop.manifestSyncIssuesRawSync calls cache projected pending
   have frame := target.stoppedRunFrames calls stopped inodes runs observe _ effective (effect literal)
-    (fun _ selected => stagedManifestOffSelected current.current.ready.state selected)
+    (fun _ selected => NativeReadyState.crashPath_ne_stagedManifest current.current.ready.state selected)
   exact stable.frame (consume.trans frame.2)
 
 private theorem preparedGeneration {old next : Installed} {manifest : ByteArray}

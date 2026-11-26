@@ -435,6 +435,7 @@ import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeCheckpointStopContinuation
 import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
+import Alvoki.Storage.Disk.NativeCheckpointFinalManifest
 import Alvoki.Storage.Disk.NativeFreshCheckpointReplay
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
@@ -2477,6 +2478,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.returnedRunsStoreBytes
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestDirectoryReturnedRunsBarrier
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.newRunsSettledBeforeManifest
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_ne_stagedManifest
+#check_axioms Alvoki.Storage.DiskSession.CheckpointPreflight.finalDirectoryPublication
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.stagedManifestPreservesFiles
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.selectsFinalManifest
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.ReturnedAt.allocation
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncUsesWrittenHandle
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncIssuesRawSync

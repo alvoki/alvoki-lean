@@ -54,7 +54,51 @@ structure CheckpointManifestDirectoryCut {directory : DiskDirectory} {before : S
       published.durable (SegmentedCheckpointReport.generation before) index
   priorRuns : SelectedRunsAgree before.wal.directory.active.manifest runs.guaranteed published.durable
 
-/-- Interpret the model at the returned rename and final directory effect. -/
+/-- Evaluate publication after the rename and at the final directory
+barrier. Preparation supplies the exact run plan and encoded manifest.
+Before the barrier's effect, the old binding can still be selected. -/
+theorem CheckpointPreflight.finalDirectoryPublication {directory : DiskDirectory} {before : SegmentedWriterState}
+    {writer : Nat} {next : Installed} {bytes : ByteArray}
+    (prepared : CheckpointPreflight (.ready before.installed) (.ok (next, bytes)))
+    (ready : before.RetainedReady directory writer) (effective : Bool) :
+    let plan := VersionedRunSet.integrity ⟨checkpointHeader next.table next.generation, next.table.runs.map (·.run.bytes)⟩
+    ∃ published,
+      before.published.executeVersioned plan ((runSteps next.table.runs.length).length + 4 + (if effective then 1 else 0)) =
+        some published ∧
+      published.manifest.active = some bytes ∧
+      published.manifest.crashImages = (if effective then [some bytes] else [some bytes, before.wal.directory.active.manifest]) ∧
+      (∀ index, published.durable next.generation index = plan.files[index]?) ∧
+      ∀ generation, generation ≠ next.generation → ∀ index,
+        published.durable generation index = before.published.durable generation index := by
+  intro plan
+  have planCount : plan.files.length = next.table.runs.length := by
+    simp [plan, VersionedRunSet.integrity]
+  have encoded : encodeCheckpointIntegrityManifest next.table next.generation = .ok bytes := by
+    cases prepared with
+    | prepared _ _ encoded => exact encoded
+  have manifestBytes : plan.manifest.encode = bytes := by
+    by_cases fits : (next.table.runs.map (·.run.bytes)).all (fun bytes => decide (bytes.size < UInt64.size)) = true
+    · exact Except.ok.inj ((encodeCheckpointIntegrityManifest_exact next.generation
+        (fun bytes member => of_decide_eq_true (List.all_eq_true.mp fits bytes member))).symm.trans encoded)
+    · simp [encodeCheckpointIntegrityManifest, fits, Bind.bind, Except.bind] at encoded
+  have prior : before.published.manifest.crashImages = [before.wal.directory.active.manifest] := by
+    rw [ready.manifestFiles, ready.directoryFiles]
+    simp [DirectoryPublication.Image.project, DirectoryPublication.Bindings.get, ready.walDirectorySettled]
+  cases effective
+  · obtain ⟨written, ran, same, durable, older⟩ := checkpoint_runs_complete before.published plan.runSet
+    let manifest : Publication.Image :=
+      ⟨some bytes, some bytes :: before.published.manifest.crashImages, none⟩
+    refine ⟨{ written with manifest }, ?_, rfl,
+      by simpa [manifest] using congrArg (List.cons (some bytes)) prior, durable, older⟩
+    exact before.published.executeVersioned_atManifestRename plan written ran same planCount manifestBytes true
+  · obtain ⟨published, ran, manifest, durable, older⟩ := checkpointVersioned_complete before.published plan
+    have exactLength : (runSteps next.table.runs.length).length + 4 + 1 = (steps plan.files.length).length := by
+      rw [planCount]
+      simp [steps, Publication.steps]
+    exact ⟨published, exactLength.symm ▸ ran, by simp [manifest, manifestBytes, Publication.Image.settled],
+      by simp [manifest, manifestBytes, Publication.Image.settled], durable, older⟩
+
+/-- Interpret the reported cut using the same prepared publication. -/
 theorem CheckpointPowerCut.finalDirectoryPublication {directory : DiskDirectory} {before : SegmentedWriterState}
     {writer : Nat} (cut : CheckpointPowerCut directory before) (ready : before.RetainedReady directory writer)
     (completed : cut.completed = runSteps cut.checkpoint.table.runs.length ++
@@ -67,29 +111,12 @@ theorem CheckpointPowerCut.finalDirectoryPublication {directory : DiskDirectory}
       (∀ index, published.durable (SegmentedCheckpointReport.generation before) index = cut.checkpoint.plan.files[index]?) ∧
       ∀ generation, generation ≠ SegmentedCheckpointReport.generation before → ∀ index,
         published.durable generation index = before.published.durable generation index := by
-  let count := cut.checkpoint.table.runs.length
-  have planCount : cut.checkpoint.plan.files.length = count := by
-    simp [SegmentedCheckpointReport.plan, VersionedRunSet.integrity, count]
-  have prior : before.published.manifest.crashImages = [before.wal.directory.active.manifest] := by
-    rw [ready.manifestFiles, ready.directoryFiles]
-    simp [DirectoryPublication.Image.project, DirectoryPublication.Bindings.get, ready.walDirectorySettled]
-  have cutLength : cut.checkpoint.cut = (runSteps count).length + 4 + (if cut.tookEffect then 1 else 0) := by
+  have cutLength : cut.checkpoint.cut = (runSteps cut.checkpoint.table.runs.length).length + 4 +
+      (if cut.tookEffect then 1 else 0) := by
     rw [cut.reachedCount.1, completed, List.length_append]
     rfl
-  cases effective : cut.tookEffect
-  · obtain ⟨written, ran, same, durable, older⟩ := checkpoint_runs_complete before.published cut.checkpoint.plan.runSet
-    let manifest : Publication.Image :=
-      ⟨some cut.checkpoint.manifest, some cut.checkpoint.manifest :: before.published.manifest.crashImages, none⟩
-    refine ⟨{ written with manifest }, ?_, rfl,
-      by simpa [manifest] using congrArg (List.cons (some cut.checkpoint.manifest)) prior, durable, older⟩
-    rw [cutLength, effective]
-    exact before.published.executeVersioned_atManifestRename cut.checkpoint.plan written ran same planCount cut.plannedManifestBytes true
-  · obtain ⟨published, ran, manifest, durable, older⟩ := checkpointVersioned_complete before.published cut.checkpoint.plan
-    have exactLength : cut.checkpoint.cut = (steps cut.checkpoint.plan.files.length).length := by
-      rw [cutLength, effective, planCount]
-      simp [steps, Publication.steps]
-    exact ⟨published, exactLength.symm ▸ ran, by simp [manifest, cut.plannedManifestBytes, Publication.Image.settled],
-      by simp [manifest, cut.plannedManifestBytes, Publication.Image.settled], durable, older⟩
+  rw [cutLength]
+  exact cut.preflight.finalDirectoryPublication ready cut.tookEffect
 
 /-- Reach the final directory barrier through the returned rename. The
 same retained directory description issues both directory syncs. A crash

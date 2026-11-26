@@ -1,12 +1,22 @@
 # Current handoff
 
+At the final directory-fsync stop, one admitted crash map now supplies
+the manifest sample to the versioned publication model. The new binding
+uses the exact staged inode and its synced bytes. A before-effect stop
+can also sample the previous settled binding, including an absent
+manifest. The same correlated map supplies the bytes for each scoped
+file already settled at the first directory barrier. The filesystem
+effects and the old settled storage at that barrier are explicit.
+The final cut still needs the concrete reopen and ledger proof.
+[Final manifest selection](../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
+
 At a final manifest-directory stop, the source prefix now identifies each
 new run write and the returned file fsync on its remembered handle. Local
 write and fsync effects give the exact durable run bytes. The preceding
 successful runs-directory barrier settles their names in each admitted map.
 The staged MANIFEST write uses the same handle-selection argument for its
-own returned fsync. The next proof must carry the settled bytes and names
-through staging, rename and the final barrier's selected map.
+own returned fsync. The final selector consumes files settled at that
+barrier on the same reached prefix.
 [New run durability](../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean)
 
 The aligned returned table now retains its actual phase and token allocations,
@@ -18,8 +28,8 @@ A stop during the final manifest-directory fsync determines the exact
 successful MANIFEST rename that preceded it. The source prefix exposes the
 rename entry and return heaps, the unchanged cache, and the directory
 descriptor used by the stopped fsync. A returned rename error stays in the
-ordinary I/O result. The old and new manifest choices still need the
-matching run bindings and bytes through the final directory barrier.
+ordinary I/O result. The final selector uses this receipt for the joint
+sample of the manifest and other settled paths.
 [Final manifest-directory stop](../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
 
 One theorem starts with the exact fresh open and a confirmed nonempty write.

@@ -473,21 +473,32 @@ returned table and heap. The chosen reboot and each call's primitive
 effects are explicit.
 [Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
 
+At the final directory-fsync stop, the staged write and returned file sync
+give the new manifest bytes on their actual inode. Scoped rename and
+directory-fsync effects link the chosen crash map to a joint predecessor.
+An effective final barrier selects the new manifest. A before-effect stop
+can select the new manifest or the prior settled value, including absence.
+The same map samples each scoped file settled at the earlier directory
+barrier. Preflight supplies the exact published run plan and manifest set.
+The filesystem observations and prior settled storage are explicit, and
+the final-cut reader and replay still need to consume this selection.
+[Final manifest selection](../../lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean)
+
 The late source prefix identifies each new run write and its returned
 file fsync on the same remembered descriptor. The file effects give
 singleton durable bytes at the written inodes. At the returned first
 directory barrier, the scoped child-name effect settles the new run
 bindings. The actual staged MANIFEST fsync also uses the descriptor
-remembered by its own write. Carrying both run generations through the
-remaining publication stages is still required.
+remembered by its own write. These settled files can be sampled by the
+final manifest selection on the same source prefix.
 [New run durability](../../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean)
 
 At the final manifest-directory stop, the source order determines the
 preceding successful replacement of MANIFEST. The returned prefix exposes
 its entry and return heaps and the cache used to resolve the directory of the
 stopped fsync. A returned rename error follows the ordinary error channel.
-The selection proof still needs the correlated manifest and run bindings
-with their physical bytes at the later stop.
+The final selection proof uses this receipt for the correlated manifest
+and protected file bindings.
 [Manifest-directory source order](../../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
 
 At the first run fsync, the completed prefix contains the run write. The
