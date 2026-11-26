@@ -434,6 +434,7 @@ import Alvoki.Storage.Disk.NativeOpenedEarlyCheckpointReport
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeCheckpointStopContinuation
 import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
+import Alvoki.Storage.Disk.NativeFreshCheckpointReplay
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
@@ -2493,6 +2494,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.observesReboot
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.ReturnedAt.returnsFixedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensQuietAfterManifestRejection
+#check_axioms Alvoki.Storage.DiskSession.FirstRunStopObservations.storageAtStop
+#check_axioms Alvoki.Storage.DiskSession.QuietCheckpointRetryObservations.readsLatest
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.replaysAfterFirstRunStop
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedEarlyCheckpointReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedUncertainWriteReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationStop.stopsOnOpenedPhase

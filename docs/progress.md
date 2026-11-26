@@ -1,5 +1,16 @@
 # Current handoff
 
+The first run-fsync pilot now composes the exact fresh open and one confirmed
+nonempty write with the interrupted checkpoint, the selected reboot, a finalized
+MANIFEST failure, an aligned reopen and a snapshot read. The checkpoint runs at
+the write's returned heap using its original cache references. One derived stop
+and one storage observation supply both the terminal ledger and the retry. The
+snapshot belongs to the table and heap returned by the fixed opener. The theorem
+takes the fresh bootstrap and settled initial storage evidence and the scoped
+callback and reboot observations. The runs-directory cut still needs the same
+composition, and later publication must cover both manifest choices.
+[Integrated first run-fsync pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
+
 At the first runs-directory fsync, the checkpoint schedule now supplies
 the ordered prefix of actual returned run writes and file fsyncs.
 The same receipt inversion also supplies the cached directory proof.
@@ -15,8 +26,8 @@ marked opener. Both calls use their own cache allocations. The first
 returns its exact diagnostic and cleanup heap. The next starts at that
 heap and returns the exact table and replay position. Equal keeper extents
 match the two aligned recovery workers at the held entry, so longer-keeper
-staging is outside the comparison. The final snapshot and the fresh write
-still need to be composed with this stop in one execution.
+staging is outside the comparison. The same opener supplies the table
+used in the integrated pilot above.
 [Fixed interpreter after a checkpoint stop](../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
 
 Before the first stopped run fsync, the schedule has returned exactly one

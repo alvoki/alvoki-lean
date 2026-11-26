@@ -397,10 +397,12 @@ ledger from those raw acknowledgements. The same reached source stop and its
 protected storage also yield the chosen reboot observation. One bounded aligned
 interpreter follows a finalized MANIFEST stat rejection and opens at its actual
 cleanup heap with the same selected checkpoint and WAL bytes. This still takes
-the local reboot projection and aligned callback receipts. The first write,
-checkpoint and recovered snapshot remain to be joined in one source execution.
+the local reboot projection and aligned callback receipts. The first run-fsync
+pilot joins these steps through the recovered snapshot. Other checkpoint cuts
+still need the same composition.
 [Fresh acknowledgement](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 · [Source checkpoint reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+· [First run-fsync pilot](../../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
 
 Ordinary `IO.Error` and interruption must remain distinct even when they involve the same fsync.
 The first and final directory sync can also use the same path and descriptor with different
@@ -448,6 +450,16 @@ stop uses the cached root descriptor. Its scoped crash-map contract
 distinguishes durable child names from the root name in the parent.
 The physical result can feed a stopped ledger or an admitted reboot.
 [Runs-directory stop](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
+The integrated first run-fsync pilot starts with the justified fresh returned
+table and its settled storage. One confirmed nonempty write provides the exact
+heap and cache for the interpreted checkpoint call. The derived stop supplies
+both a terminal ledger and the physical bytes from which a single admitted
+reboot is chosen. One fixed opener returns the MANIFEST lookup diagnostic and
+then the aligned table. The acquired token and snapshot on that exact table
+extend the original writer's ledger and agree with WAL replay. The theorem uses
+local primitive observations, a selected reboot and a successful aligned repair.
+[Fresh checkpoint replay](../../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
 
 The quiet checkpoint continuation uses one fixed marked interpreter for
 the MANIFEST lookup rejection and the subsequent aligned open. The error
