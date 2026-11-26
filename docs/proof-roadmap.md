@@ -123,10 +123,11 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   aligned opener supplies the exact replayed table, its keeper sync and any
   suffix pruning. Given durable protected files and marker at the prepared
   heap, the settled root binding and agreement of later names with the
-  complete scan, a consumer of installation and repair witnesses establishes
-  write-ready storage and a finite ready-call sequence with empty pins.
-  The end-to-end theorem must obtain both witnesses from that opener and
-  supply the ledger of its actual predecessor.
+  complete scan, this opener supplies both the installation and the exact
+  repair to the finite ready-call proof. The reinstalled handle starts
+  with empty pins and carries its actual predecessor’s incoming ledger.
+  Deriving the prepared durable state across the intervening operations
+  remains open.
   [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean) ·
   [Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 

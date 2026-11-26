@@ -42,188 +42,45 @@ theorem NativeReadyState.crashPath_forSelectedCheckpoint
   simp only [NativeReadyState.crashPath, checkpointSurvivorPath, checkpointWalPath,
     sameDirectory, sameKeeper, sameSeals, sameManifest]
 
-/-- Read the selected old or new checkpoint after the literal successful
-open acquires the sampled directory and LOCK. The same sample fixes the
-manifest, runs and WAL bytes. The live catalog also fixes which canonical
-WAL names are absent through the cutoff. The actual aligned repair and
-reference allocations can then supply the retained writer of that table. -/
-theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
-    (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
-    (names : FilePath → Option Nat) (contents : Nat → ByteArray)
-    (selectedSample : prior.SampledReplay names contents)
-    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
-    (rootObject : namespaceView.modelObject root =
-      current.current.ready.state.census.inode current.current.ready.state.directorySlot.description)
-    {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
-    (resetFiles : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
-      (fun path => path = (dbDir).path ∨ path = (dbDir).file .lock ∨
-        checkpointSurvivorPath dbDir current.current.ready.state.writer
-          ((names ((dbDir).file .manifest)).map contents) path)
-      ⟨(observe rebooted).files.names, fun inode => [visible rebooted inode]⟩)
-    (sampledWindow : current.current.ready.state.writer.wal.NamespaceWindow dbDir 0
-      current.current.ready.state.writer.history.length names)
-    (resetWindow : ∀ start ≤ current.current.ready.state.writer.history.length,
-      ((observe rebooted).files.names ((dbDir).file (.walSegment start))).isSome =
-        (names ((dbDir).file (.walSegment start))).isSome)
-    (failureEffects : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
-      source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(path, cause)]) errors →
-      source.openTable path before = .error cause after →
-      (⟨(observe before).files.names, fun inode => [visible before inode]⟩ : CheckpointSurvivingFiles).Frames
-        (fun path => path = (dbDir).path ∨ path = (dbDir).file .lock ∨
-          checkpointSurvivorPath dbDir current.current.ready.state.writer
-            ((names ((dbDir).file .manifest)).map contents) path)
-        ⟨(observe after).files.names, fun inode => [visible after inode]⟩ ∧
-      ∀ start ≤ current.current.ready.state.writer.history.length,
-        ((observe after).files.names ((dbDir).file (.walSegment start))).isSome =
-          ((observe before).files.names ((dbDir).file (.walSegment start))).isSome)
-    (admission : source.ObservedAdmissionEffects view dbDir
-      (checkpointSurvivorPath dbDir current.current.ready.state.writer ((names ((dbDir).file .manifest)).map contents))
-      input entry observe visible)
-    (effects : ∀ cache : HeldOpenCache heap, LiteralOpenAuthority view dbDir cache cache.ready →
-      namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
-      source.AlignedReadEffects view dbDir cache.pendingRef (fun atHeap => (observe atHeap).files.names) visible
-        namespaceView root (managedPath dbDir)
-        (observedOpenReadFrame view dbDir
-          (checkpointSurvivorPath dbDir current.current.ready.state.writer
-            ((names ((dbDir).file .manifest)).map contents)) cache observe))
-    (child : ∀ start ≤ current.current.ready.state.writer.history.length,
-      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        (observe entry).files.names ((dbDir).file (.walSegment start)))
-    {table : DiskTable} {returnedAt : heap}
-    (returned : source.openTable input entry = .ok table returnedAt) :
-    let dir := dbDir
-    let writer := current.current.ready.state.writer
-    let pair : DirectoryPublication.Bindings :=
-      ⟨(names (dir.file .manifest)).map contents, (names (dir.file .walBoundary)).map contents⟩
-    let wal : WalSegmentImage := { writer.wal with directory := .settled pair }
-    let actual : RunFiles := fun generation index => (names (dir.file (.run generation index))).map contents
-    let retry := wal.checkpointReopenFiles wal.directory none
-    let selectedPath := checkpointSurvivorPath dir writer pair.manifest
-    ∃ (cache : HeldOpenCache heap) (published : CheckpointPublication.Image)
-      (layout : CanonicalKeeperLayout retry writer.history)
-      (checkpoint : Option (PackedTable × UInt64)),
-      LiteralOpenAuthority view dir cache cache.ready ∧
-      names dir.path = some (cache.captured.inode cache.rootSlot.description) ∧
-      names (dir.file .lock) = some (cache.captured.inode cache.owner.description) ∧
-      view.active cache.ready cache.activeRef = none ∧ view.pending cache.ready cache.pendingRef = [] ∧
-      layout.keeper = wal.active ∧ layout.tail = .empty ∧
-      SelectedIntegrityCheckpoint actual pair.manifest checkpoint ∧
-      wal.NamespaceWindow dir 0 layout.range.through (observe entry).files.names ∧
-      layout.VisibleWal dir (observe entry).files.names (visible entry) ∧
-      source.LiteralMarkedReturn dir layout checkpoint cache.lock cache.directoryRef cache.activeRef cache.pendingRef
-        cache.ready view (fun atHeap => (observe atHeap).files.names) visible namespaceView root (managedPath dir)
-        (observedOpenReadFrame view dir selectedPath cache observe) entry returnedAt table ∧
-      (source.LiteralAlignedFinishEffects (view := view) cache dir layout entry observe →
-        source.LiteralAllocationEffects view dir cache observe visible →
-        ∀ (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat),
-        (view.files entry).image.directory.active = pair →
-        (view.files entry).image.keeper.active = some wal.active.bytes →
-        (view.files entry).image.kept = retry.kept →
-        (∀ ordinal ∈ (view.files entry).image.later.visible, writer.history.length < ordinal ∧
-          ∃ object, namespaceView.child root (renderWalSegmentName ordinal) = some object) →
-        ∃ (repaired : heap) (reopened : SegmentedWriterState)
-          (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase reopened.installed repaired),
-          source.LiteralAlignedReturn dir layout { published with durable := actual } checkpoint wal cache view
-            phaseIdentity tokenIdentity reopened allocation returnedAt table ∧
-          Nonempty (source.LiteralAlignedSyncs dir layout cache view observe visible namespaceView root entry repaired)) := by
-  intro dir writer pair wal actual retry selectedPath
-  let live := fun atHeap => (observe atHeap).files.names
-  let filesAt : heap → CheckpointSurvivingFiles := fun atHeap => ⟨live atHeap, fun inode => [visible atHeap inode]⟩
-  let footprint := fun path => path = dir.path ∨ path = dir.file .lock ∨ selectedPath path
-  obtain ⟨afterFiles, afterWindow⟩ := attempts.framesAfter .empty
-    (fun before after => (filesAt before).Frames footprint (filesAt after) ∧
-      ∀ start ≤ writer.history.length,
-        (live after (dir.file (.walSegment start))).isSome = (live before (dir.file (.walSegment start))).isSome)
-    (fun atHeap => ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl⟩)
-    (fun before after => ⟨before.1.trans after.1, fun start bound =>
-      (after.2 start bound).trans (before.2 start bound)⟩)
-    (fun preceding inside failed => failureEffects preceding (by simpa only [List.nil_append] using inside) failed)
-  have sampled := resetFiles.trans afterFiles
-  have window := sampledWindow.frame (fun start _ bound => (afterWindow start bound).trans (resetWindow start bound))
-  obtain ⟨sampledAuthority, marker, segments, published, layout, _, walLayout, walValid, keeper, aligned, descriptors, offsets,
-    _, _, accepted, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ := selectedSample
-  have liveRoot := (sampled _ (.inl rfl)).1.trans sampledAuthority.directory
-  have liveLock := (sampled _ (.inr (.inl rfl))).1.trans sampledAuthority.lock
-  obtain ⟨cache, admitted, authority, rootNamed, lockNamed, emptyActive, emptyPending, worker⟩ :=
-    source.reachesAlignedCache admission liveLock returned
-  have heldRoot := (sampled _ (.inl rfl)).1.symm.trans rootNamed
-  have heldLock := (sampled _ (.inr (.inl rfl))).1.symm.trans lockNamed
-  have rootMatches := (congrArg some rootObject).trans (liveRoot.symm.trans rootNamed)
-  have readEffects := effects cache authority (Option.some.inj rootMatches)
-  have sampledFiles : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
-      selectedPath (filesAt entry) := fun path selected => sampled path (.inr (.inr selected))
-  let files : CheckpointSurvivingFiles := ⟨(observe entry).files.names, fun inode => [visible entry inode]⟩
-  have manifest : files.StoresManifest dir pair.manifest := by
-    cases named : names (dir.file .manifest) with
-    | none => exact (by
-        simpa [CheckpointSurvivingFiles.StoresManifest, pair, named] using
-          (sampledFiles _ (.inl rfl)).1.trans named)
-    | some inode =>
-      have fromSample : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Stored
-          (dir.file .manifest) (contents inode) := ⟨inode, named, rfl⟩
-      simpa [CheckpointSurvivingFiles.StoresManifest, pair, named] using sampledFiles.stored (.inl rfl) fromSample
-  have runs (bytes metadata) (named : pair.manifest = some bytes)
-      (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata)
-      (index : Nat) (within : index < metadata.header.runCount.toNat) (payload : ByteArray)
-      (stored : actual metadata.header.generation index = some payload) :
-      files.Stored (dir.file (.run metadata.header.generation index)) payload := by
-    obtain ⟨inode, bound, value⟩ := Option.map_eq_some_iff.mp stored
-    exact sampledFiles.stored (.inr (.inr ⟨bytes, metadata, index, named, decoded, within, rfl⟩))
-      ⟨inode, bound, congrArg List.singleton value⟩
-  have markerBytes (bytes) (bound : pair.walBoundary = some bytes) :
-      files.Stored (dir.file .walBoundary) bytes := by
-    have sampledMarker := sampledFiles.stored (.inr (.inl (.inl rfl))) marker
-    obtain ⟨inode, named, contentsAt⟩ := marker
-    have value : pair.walBoundary = some (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64) := by
-      change names (dir.file .walBoundary) = some inode at named
-      change [contents inode] = _ at contentsAt
-      change (names (dir.file .walBoundary)).map contents = _
-      rw [named, Option.map_some, (List.cons.inj contentsAt).1]
-    exact (Option.some.inj (value.symm.trans bound)) ▸ sampledMarker
-  have segmentBytes (segment : WalSegment) (member : segment ∈ writer.wal.segments) :
-      ((observe entry).files.names (dir.file (.walSegment segment.first))).map (visible entry) = some segment.bytes := by
-    have scope : checkpointWalPath dir writer (dir.file (.walSegment segment.first)) := by
-      rcases List.mem_append.mp member with sealed | current
-      · exact .inr (.inr ⟨segment, sealed, rfl⟩)
-      · obtain rfl := List.mem_singleton.mp current
-        exact .inr (.inl rfl)
-    obtain ⟨inode, named, payload⟩ := sampledFiles.stored (.inr (.inl scope)) (segments segment member)
-    change (observe entry).files.names (dir.file (.walSegment segment.first)) = some inode at named
-    change [visible entry inode] = [segment.bytes] at payload
-    rw [named, Option.map_some, (List.cons.inj payload).1]
-  have selectedOffsets : selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
-      some (layout.first, (layout.sealed ++ [layout.keeper]).map WalSegment.first) := by
-    rw [descriptors]
-    exact offsets
-  have modeled := layout.modeledWindow (wal.segments.map WalSegment.first) selectedOffsets
-  have physical : layout.VisibleWal dir ((observe entry).files.names) (visible entry) := by
-    refine ⟨fun start lower upper =>
-      (window start (Nat.zero_le start) (layout.through ▸ upper)).trans (modeled.1 start lower), ?_, ?_⟩
-    · intro segment member
-      have read : segment ∈ layout.sealed ++ [layout.keeper] := List.mem_append_left _ member
-      rw [descriptors, WalSegmentImage.readDescriptors] at read
-      split at read
-      · exact segmentBytes segment (List.mem_filter.mp read).1
-      · exact segmentBytes segment (List.mem_append_right _ read)
-    · simpa [aligned, keeper] using segmentBytes writer.wal.active (by simp [WalSegmentImage.segments])
-  have literal := source.readsLiteralMarkedOpen dir layout selected cache.lock cache.directoryRef cache.activeRef cache.pendingRef
-    cache.ready (fun atHeap => (observe atHeap).files.names) visible namespaceView root (managedPath dir)
-    observedOpenReadFrame.refl observedOpenReadFrame.trans (admitted.entersReader authority) readEffects
-    manifest runs markerBytes (.inr ⟨.manifest, rfl⟩)
-    (fun _ metadata _ _ index _ => .inr ⟨.run metadata.header.generation index, rfl⟩)
-    (.inr ⟨.walBoundary, rfl⟩) modeled.2 (fun start _ _ => .inr ⟨.walSegment start, rfl⟩)
-    (fun start _ bound => child start (layout.through ▸ bound)) physical worker
-  refine ⟨cache, published, layout, checkpoint, authority, heldRoot, heldLock, emptyActive, emptyPending,
-    keeper, aligned, selected, (fun start lower upper => window start lower (layout.through ▸ upper)), physical, literal, ?_⟩
-  intro repair allocate phaseId tokenId selectedPair selectedKeeper sealed suffix
-  have retained := current.current.ready.readPrefix.refines.1.retained
-  exact source.retainsLiteralAlignedReturn dir layout (published := { published with durable := actual })
-    selected accepted retained.resumed.ordered walLayout walValid retained.spans rfl (congrArg WalSegment.first keeper)
-    aligned cache authority observe visible namespaceView root selectedPath literal selectedPair
-    (by simpa only [CanonicalKeeperLayout.target, keeper] using selectedKeeper) sealed
-    (fun ordinal member => (suffix ordinal member).imp_left (fun after => layout.through.symm ▸ after))
-    repair allocate phaseId tokenId
+/-- The postcondition of an actual aligned reopen followed by supported
+ready calls on its returned table. -/
+abbrev RawMarkedOpenInterpreter.AlignedReadyCalls
+    (source : RawMarkedOpenInterpreter heap stream) (input : FilePath) (entry returnedAt : heap) (table : DiskTable)
+    (directory : DiskDirectory) (cache : HeldOpenCache heap) (view : OpenCloseHeapView heap FileImage)
+    {repaired : heap} (writer : SegmentedWriterState)
+    (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired)
+    (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
+    (origin : NativeExecutionPosition) (earlier : List NativeExecutionEvent)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation) (lower : Nat) : Prop :=
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (refs : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
+      source.openTable input entry = .ok handle.table start.reached ∧ handle.table = table ∧ start.reached = returnedAt ∧
+      (handle.phase, handle.token) = (allocation.phase, allocation.token) ∧ start.pins = [] ∧
+      (refs.directory, refs.active, refs.pending) = (cache.directoryRef, cache.activeRef, cache.pendingRef) ∧
+      start.current.ready.state = allocation.readyState writer directory cache.owner cache.rootSlot
+        cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity ∧
+      origin.LedgerSuffix earlier start.current ∧
+      start.WriteStorageEntry view refs (observe returnedAt) (inodes returnedAt).visible ∧
+      (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow start.current.ready.state.session.directory
+        lower through (observe returnedAt)) ∧
+      ∀ (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+        (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+        (rename : FilePath → FilePath → EStateM IO.Error heap Unit),
+        let writes := start.readyWriteCalls refs appender stager syncer lookup rename
+        ∀ (issuer : handle.LatestIssuer) (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+          (_reported : writes.ReturnEffects view inodes runs observe inode buffered)
+          {calls : List (NativeReturnedCall handle)} {reached : heap},
+          NativeReturnedCalls writes issuer returnedAt [] calls reached →
+          NativeReturnedCalls.ReadyFrom writes issuer returnedAt [] calls →
+          ∃ (last : NativeOpenedPosition handle) (events : List NativeExecutionEvent),
+            last.reached = reached ∧
+            last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins call => call.pinsAfter pins) [] ∧
+            writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) last ∧
+            events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
+            origin.LedgerSuffix (earlier ++ events) last.current ∧
+            InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
+              last.current.ready.state.writer.installed last.current.ready.state.session
 
 /-- Start the common ready-call induction on the exact table returned by
 an aligned open. The previous client ledger survives the reopen, while
@@ -264,34 +121,9 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
         (observe entry).files.names (directory.file (.walSegment start)))
     (effects : OpenPhaseCellEffects view.phase get set) (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
-      (refs : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
-      source.openTable input entry = .ok handle.table start.reached ∧ handle.table = table ∧ start.reached = returnedAt ∧
-      (handle.phase, handle.token) = (allocation.phase, allocation.token) ∧ start.pins = [] ∧
-      (refs.directory, refs.active, refs.pending) = (cache.directoryRef, cache.activeRef, cache.pendingRef) ∧
-      start.current.ready.state = allocation.readyState writer directory cache.owner cache.rootSlot
-        cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity ∧
-      origin.LedgerSuffix earlier start.current ∧
-      start.WriteStorageEntry view refs (observe returnedAt) (inodes returnedAt).visible ∧
-      (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow start.current.ready.state.session.directory
-        lower through (observe returnedAt)) ∧
-      ∀ (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
-        (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
-        (rename : FilePath → FilePath → EStateM IO.Error heap Unit),
-        let writes := start.readyWriteCalls refs appender stager syncer lookup rename
-        ∀ (issuer : handle.LatestIssuer) (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
-          (_reported : writes.ReturnEffects view inodes runs observe inode buffered)
-          {calls : List (NativeReturnedCall handle)} {reached : heap},
-          NativeReturnedCalls writes issuer returnedAt [] calls reached →
-          NativeReturnedCalls.ReadyFrom writes issuer returnedAt [] calls →
-          ∃ (last : NativeOpenedPosition handle) (events : List NativeExecutionEvent),
-            last.reached = reached ∧
-            last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins call => call.pinsAfter pins) [] ∧
-            writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) last ∧
-            events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
-            origin.LedgerSuffix (earlier ++ events) last.current ∧
-            InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
-              last.current.ready.state.writer.installed last.current.ready.state.session := by
+    source.AlignedReadyCalls input entry returnedAt table directory cache view writer allocation phaseIdentity tokenIdentity
+      origin earlier inodes runs observe lower := by
+  unfold RawMarkedOpenInterpreter.AlignedReadyCalls
   let files := RawMarkedOpenInterpreter.makeCache directory cache.directoryRef cache.activeRef cache.pendingRef
   let state := allocation.readyState writer directory cache.owner cache.rootSlot
     cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity
@@ -361,6 +193,228 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
       executed.refinesReady covered view inodes runs observe inode buffered reported start sameHeap
         (by rw [emptyPins]; rfl) initial
     exact ⟨last, events, heap, pins, physical, length, records, across.append ledger, last.current.ready.readPrefix.guardedReplay⟩
+
+section
+
+variable (inodes : heap → WalInodeImage)
+
+local notation "readBytes" => (fun atHeap => WalInodeImage.visible (inodes atHeap))
+
+/-- Read the selected old or new checkpoint after the literal successful
+open acquires the sampled directory and LOCK. The same sample fixes the
+manifest, runs and WAL bytes. The live catalog also fixes which canonical
+WAL names are absent through the cutoff. The actual aligned repair and
+reference allocations can then supply the retained writer of that table. -/
+theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
+    (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
+    (names : FilePath → Option Nat) (contents : Nat → ByteArray)
+    (selectedSample : prior.SampledReplay names contents)
+    (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (rootObject : namespaceView.modelObject root =
+      current.current.ready.state.census.inode current.current.ready.state.directorySlot.description)
+    {errors : List (FilePath × IO.Error)} (attempts : source.FailedCalls rebooted errors entry)
+    (resetFiles : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
+      (fun path => path = (dbDir).path ∨ path = (dbDir).file .lock ∨
+        checkpointSurvivorPath dbDir current.current.ready.state.writer
+          ((names ((dbDir).file .manifest)).map contents) path)
+      ⟨(observe rebooted).files.names, fun inode => [readBytes rebooted inode]⟩)
+    (sampledWindow : current.current.ready.state.writer.wal.NamespaceWindow dbDir 0
+      current.current.ready.state.writer.history.length names)
+    (resetWindow : ∀ start ≤ current.current.ready.state.writer.history.length,
+      ((observe rebooted).files.names ((dbDir).file (.walSegment start))).isSome =
+        (names ((dbDir).file (.walSegment start))).isSome)
+    (failureEffects : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
+      source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(path, cause)]) errors →
+      source.openTable path before = .error cause after →
+      (⟨(observe before).files.names, fun inode => [readBytes before inode]⟩ : CheckpointSurvivingFiles).Frames
+        (fun path => path = (dbDir).path ∨ path = (dbDir).file .lock ∨
+          checkpointSurvivorPath dbDir current.current.ready.state.writer
+            ((names ((dbDir).file .manifest)).map contents) path)
+        ⟨(observe after).files.names, fun inode => [readBytes after inode]⟩ ∧
+      ∀ start ≤ current.current.ready.state.writer.history.length,
+        ((observe after).files.names ((dbDir).file (.walSegment start))).isSome =
+          ((observe before).files.names ((dbDir).file (.walSegment start))).isSome)
+    (admission : source.ObservedAdmissionEffects view dbDir
+      (checkpointSurvivorPath dbDir current.current.ready.state.writer ((names ((dbDir).file .manifest)).map contents))
+      input entry observe readBytes)
+    (effects : ∀ cache : HeldOpenCache heap, LiteralOpenAuthority view dbDir cache cache.ready →
+      namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+      source.AlignedReadEffects view dbDir cache.pendingRef (fun atHeap => (observe atHeap).files.names) readBytes
+        namespaceView root (managedPath dbDir)
+        (observedOpenReadFrame view dbDir
+          (checkpointSurvivorPath dbDir current.current.ready.state.writer
+            ((names ((dbDir).file .manifest)).map contents)) cache observe))
+    (child : ∀ start ≤ current.current.ready.state.writer.history.length,
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        (observe entry).files.names ((dbDir).file (.walSegment start)))
+    {table : DiskTable} {returnedAt : heap}
+    (returned : source.openTable input entry = .ok table returnedAt) :
+    let dir := dbDir
+    let writer := current.current.ready.state.writer
+    let pair : DirectoryPublication.Bindings :=
+      ⟨(names (dir.file .manifest)).map contents, (names (dir.file .walBoundary)).map contents⟩
+    let wal : WalSegmentImage := { writer.wal with directory := .settled pair }
+    let actual : RunFiles := fun generation index => (names (dir.file (.run generation index))).map contents
+    let retry := wal.checkpointReopenFiles wal.directory none
+    let selectedPath := checkpointSurvivorPath dir writer pair.manifest
+    ∃ (cache : HeldOpenCache heap) (published : CheckpointPublication.Image)
+      (layout : CanonicalKeeperLayout retry writer.history)
+      (checkpoint : Option (PackedTable × UInt64)),
+      LiteralOpenAuthority view dir cache cache.ready ∧
+      names dir.path = some (cache.captured.inode cache.rootSlot.description) ∧
+      names (dir.file .lock) = some (cache.captured.inode cache.owner.description) ∧
+      view.active cache.ready cache.activeRef = none ∧ view.pending cache.ready cache.pendingRef = [] ∧
+      layout.keeper = wal.active ∧ layout.tail = .empty ∧
+      SelectedIntegrityCheckpoint actual pair.manifest checkpoint ∧
+      wal.NamespaceWindow dir 0 layout.range.through (observe entry).files.names ∧
+      layout.VisibleWal dir (observe entry).files.names (readBytes entry) ∧
+      source.LiteralMarkedReturn dir layout checkpoint cache.lock cache.directoryRef cache.activeRef cache.pendingRef
+        cache.ready view (fun atHeap => (observe atHeap).files.names) readBytes namespaceView root (managedPath dir)
+        (observedOpenReadFrame view dir selectedPath cache observe) entry returnedAt table ∧
+      (source.LiteralAlignedFinishEffects (view := view) cache dir layout entry observe →
+        source.LiteralAllocationEffects view dir cache observe readBytes →
+        ∀ (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat),
+        (view.files entry).image.directory.active = pair →
+        (view.files entry).image.keeper.active = some wal.active.bytes →
+        (view.files entry).image.kept = retry.kept →
+        (∀ ordinal ∈ (view.files entry).image.later.visible, writer.history.length < ordinal ∧
+          ∃ object, namespaceView.child root (renderWalSegmentName ordinal) = some object) →
+        ∃ (repaired : heap) (reopened : SegmentedWriterState)
+          (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase reopened.installed repaired),
+          ∃ seen : source.LiteralAlignedSyncs dir layout cache view observe readBytes namespaceView root entry repaired,
+            source.LiteralAlignedReturn dir layout { published with durable := actual } checkpoint wal cache view
+              phaseIdentity tokenIdentity reopened allocation returnedAt table ∧
+            (source.ObservedAlignedRepairEffects (view := view) cache dir layout entry observe readBytes →
+              NativeReadyProtectedStorage
+                (allocation.readyState reopened dir cache.owner cache.rootSlot cache.directoryRef cache.activeRef cache.pendingRef
+                  phaseIdentity tokenIdentity) (observe seen.prepared).files →
+              (observe seen.prepared).files.Stored (dir.file .walBoundary)
+                (WAL.Boundary.encode (WAL.encode reopened.history).size.toUInt64) →
+              (∀ names ∈ (observe seen.prepared).crashNames,
+                names dir.path = (observe seen.prepared).files.names dir.path) →
+              (∀ start, layout.range.through < start →
+                (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+                  (observe entry).files.names (dir.file (.walSegment start))) →
+              ∀ (origin : NativeExecutionPosition) (earlier : List NativeExecutionEvent),
+                origin.LedgerSuffix earlier current.current → OpenPhaseCellEffects view.phase get set →
+                ∀ _ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool,
+                  source.AlignedReadyCalls input entry returnedAt table dir cache view reopened allocation
+                    phaseIdentity tokenIdentity origin earlier inodes runs observe 0)) := by
+  intro dir writer pair wal actual retry selectedPath
+  let live := fun atHeap => (observe atHeap).files.names
+  let filesAt : heap → CheckpointSurvivingFiles := fun atHeap => ⟨live atHeap, fun inode => [readBytes atHeap inode]⟩
+  let footprint := fun path => path = dir.path ∨ path = dir.file .lock ∨ selectedPath path
+  obtain ⟨afterFiles, afterWindow⟩ := attempts.framesAfter .empty
+    (fun before after => (filesAt before).Frames footprint (filesAt after) ∧
+      ∀ start ≤ writer.history.length,
+        (live after (dir.file (.walSegment start))).isSome = (live before (dir.file (.walSegment start))).isSome)
+    (fun atHeap => ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl⟩)
+    (fun before after => ⟨before.1.trans after.1, fun start bound =>
+      (after.2 start bound).trans (before.2 start bound)⟩)
+    (fun preceding inside failed => failureEffects preceding (by simpa only [List.nil_append] using inside) failed)
+  have sampled := resetFiles.trans afterFiles
+  have window := sampledWindow.frame (fun start _ bound => (afterWindow start bound).trans (resetWindow start bound))
+  obtain ⟨sampledAuthority, marker, segments, published, layout, _, walLayout, walValid, keeper, aligned, descriptors, offsets,
+    _, _, accepted, _, _, _, checkpoint, _, _, selected, _, _, _, _, _⟩ := selectedSample
+  have liveRoot := (sampled _ (.inl rfl)).1.trans sampledAuthority.directory
+  have liveLock := (sampled _ (.inr (.inl rfl))).1.trans sampledAuthority.lock
+  obtain ⟨cache, admitted, authority, rootNamed, lockNamed, emptyActive, emptyPending, worker⟩ :=
+    source.reachesAlignedCache admission liveLock returned
+  have heldRoot := (sampled _ (.inl rfl)).1.symm.trans rootNamed
+  have heldLock := (sampled _ (.inr (.inl rfl))).1.symm.trans lockNamed
+  have rootMatches := (congrArg some rootObject).trans (liveRoot.symm.trans rootNamed)
+  have readEffects := effects cache authority (Option.some.inj rootMatches)
+  have sampledFiles : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
+      selectedPath (filesAt entry) := fun path selected => sampled path (.inr (.inr selected))
+  let files : CheckpointSurvivingFiles := ⟨(observe entry).files.names, fun inode => [readBytes entry inode]⟩
+  have manifest : files.StoresManifest dir pair.manifest := by
+    cases named : names (dir.file .manifest) with
+    | none => exact (by
+        simpa [CheckpointSurvivingFiles.StoresManifest, pair, named] using
+          (sampledFiles _ (.inl rfl)).1.trans named)
+    | some inode =>
+      have fromSample : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Stored
+          (dir.file .manifest) (contents inode) := ⟨inode, named, rfl⟩
+      simpa [CheckpointSurvivingFiles.StoresManifest, pair, named] using sampledFiles.stored (.inl rfl) fromSample
+  have selectedRuns (bytes metadata) (named : pair.manifest = some bytes)
+      (decoded : Manifest.IntegrityCheckpoint.decode bytes = .ok metadata)
+      (index : Nat) (within : index < metadata.header.runCount.toNat) (payload : ByteArray)
+      (stored : actual metadata.header.generation index = some payload) :
+      files.Stored (dir.file (.run metadata.header.generation index)) payload := by
+    obtain ⟨inode, bound, value⟩ := Option.map_eq_some_iff.mp stored
+    exact sampledFiles.stored (.inr (.inr ⟨bytes, metadata, index, named, decoded, within, rfl⟩))
+      ⟨inode, bound, congrArg List.singleton value⟩
+  have markerBytes (bytes) (bound : pair.walBoundary = some bytes) :
+      files.Stored (dir.file .walBoundary) bytes := by
+    have sampledMarker := sampledFiles.stored (.inr (.inl (.inl rfl))) marker
+    obtain ⟨inode, named, contentsAt⟩ := marker
+    have value : pair.walBoundary = some (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64) := by
+      change names (dir.file .walBoundary) = some inode at named
+      change [contents inode] = _ at contentsAt
+      change (names (dir.file .walBoundary)).map contents = _
+      rw [named, Option.map_some, (List.cons.inj contentsAt).1]
+    exact (Option.some.inj (value.symm.trans bound)) ▸ sampledMarker
+  have segmentBytes (segment : WalSegment) (member : segment ∈ writer.wal.segments) :
+      ((observe entry).files.names (dir.file (.walSegment segment.first))).map (readBytes entry) = some segment.bytes := by
+    have scope : checkpointWalPath dir writer (dir.file (.walSegment segment.first)) := by
+      rcases List.mem_append.mp member with sealed | current
+      · exact .inr (.inr ⟨segment, sealed, rfl⟩)
+      · obtain rfl := List.mem_singleton.mp current
+        exact .inr (.inl rfl)
+    obtain ⟨inode, named, payload⟩ := sampledFiles.stored (.inr (.inl scope)) (segments segment member)
+    change (observe entry).files.names (dir.file (.walSegment segment.first)) = some inode at named
+    change [readBytes entry inode] = [segment.bytes] at payload
+    rw [named, Option.map_some, (List.cons.inj payload).1]
+  have selectedOffsets : selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
+      some (layout.first, (layout.sealed ++ [layout.keeper]).map WalSegment.first) := by
+    rw [descriptors]
+    exact offsets
+  have modeled := layout.modeledWindow (wal.segments.map WalSegment.first) selectedOffsets
+  have physical : layout.VisibleWal dir ((observe entry).files.names) (readBytes entry) := by
+    refine ⟨fun start lower upper =>
+      (window start (Nat.zero_le start) (layout.through ▸ upper)).trans (modeled.1 start lower), ?_, ?_⟩
+    · intro segment member
+      have read : segment ∈ layout.sealed ++ [layout.keeper] := List.mem_append_left _ member
+      rw [descriptors, WalSegmentImage.readDescriptors] at read
+      split at read
+      · exact segmentBytes segment (List.mem_filter.mp read).1
+      · exact segmentBytes segment (List.mem_append_right _ read)
+    · simpa [aligned, keeper] using segmentBytes writer.wal.active (by simp [WalSegmentImage.segments])
+  have literal := source.readsLiteralMarkedOpen dir layout selected cache.lock cache.directoryRef cache.activeRef cache.pendingRef
+    cache.ready (fun atHeap => (observe atHeap).files.names) readBytes namespaceView root (managedPath dir)
+    observedOpenReadFrame.refl observedOpenReadFrame.trans (admitted.entersReader authority) readEffects
+    manifest selectedRuns markerBytes (.inr ⟨.manifest, rfl⟩)
+    (fun _ metadata _ _ index _ => .inr ⟨.run metadata.header.generation index, rfl⟩)
+    (.inr ⟨.walBoundary, rfl⟩) modeled.2 (fun start _ _ => .inr ⟨.walSegment start, rfl⟩)
+    (fun start _ bound => child start (layout.through ▸ bound)) physical worker
+  refine ⟨cache, published, layout, checkpoint, authority, heldRoot, heldLock, emptyActive, emptyPending,
+    keeper, aligned, selected, (fun start lower upper => window start lower (layout.through ▸ upper)), physical, literal, ?_⟩
+  intro repair allocate phaseId tokenId selectedPair selectedKeeper sealed suffix
+  have retained := current.current.ready.readPrefix.refines.1.retained
+  obtain ⟨repaired, reopened, allocation, installed, ⟨seen⟩⟩ :=
+    source.retainsLiteralAlignedReturn dir layout (published := { published with durable := actual })
+    selected accepted retained.resumed.ordered walLayout walValid retained.spans rfl (congrArg WalSegment.first keeper)
+    aligned cache authority observe readBytes namespaceView root selectedPath literal selectedPair
+    (by simpa only [CanonicalKeeperLayout.target, keeper] using selectedKeeper) sealed
+    (fun ordinal member => (suffix ordinal member).imp_left (fun after => layout.through.symm ▸ after))
+    repair allocate phaseId tokenId
+  refine ⟨repaired, reopened, allocation, seen, installed, ?_⟩
+  intro observed protectedFiles durableMarker rootSettled laterChild origin earlier carried phaseEffects ptrEq
+  have boundedStarts : ∀ start ∈ wal.segments.map WalSegment.first, start ≤ layout.range.through := by
+    intro start member
+    obtain ⟨segment, occurs, rfl⟩ := List.mem_map.mp member
+    have activeFirst : wal.active.first ≤ layout.range.through := keeper ▸ layout.target.firstCovered
+    rcases List.mem_append.mp occurs with sealed | active
+    · exact Nat.le_trans
+        (Nat.le_of_lt ((List.pairwise_append.mp walLayout.ordered).2.2 _ sealed _ (List.mem_singleton_self _)).1) activeFirst
+    · simpa only [List.mem_singleton.mp active] using activeFirst
+  exact installed.refinesReadyCalls returned current.current.ready.readPrefix.refines.2.1 carried inodes runs observe
+    namespaceView root seen observed allocate protectedFiles durableMarker rootSettled aligned keeper physical.keeper
+    (fun start lower upper => window start lower (layout.through ▸ upper)) boundedStarts laterChild phaseEffects ptrEq
+
+end
 
 /-- A physical checkpoint selection and its subsequent calls share one
 client ledger across restart. The prefix can belong to a fresh caller or

@@ -142,14 +142,15 @@ refer to the same prepared and repaired heaps. The actual directory scan,
 together with name agreement at the successful attempt's entry, accounts
 for every later WAL name. The proof applies when either manifest survives.
 
-A separate consumer takes the installation and the observed repair at the same
-repaired heap. Given the selected durable files and marker at the prepared
-heap, a settled root binding and local callback effects, it establishes the
-physical write entry and starts a finite ready-call sequence with empty pins.
-It transports a supplied client ledger. The remaining composition must take
-both witnesses directly from the checkpoint opener and connect the ledger
-to its actual predecessor. Heap equality alone cannot identify which repair
-produced it.
+The sampled checkpoint reader passes the installation and repair observations
+from that open directly to the ready-call proof. It derives the keeper bytes
+and WAL range from the selected sample. The resulting session uses the same
+table and references, starts with empty snapshot pins and extends the incoming
+ledger of the checkpoint's actual predecessor. This requires the selected
+durable files and marker at the prepared heap, the settled root binding,
+agreement of later names with the complete scan, and local callback effects.
+The next obligation is to carry those durable facts through reboot, failed
+opens and the successful reader's preparation.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and
