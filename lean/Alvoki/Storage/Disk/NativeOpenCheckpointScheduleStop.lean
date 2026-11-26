@@ -278,7 +278,8 @@ theorem NativeCheckpointSourceStop.runFileIssue {index : Nat}
   have stage := prefixBeforeRunSync stop.ordered
   exact ⟨stage.1, stage.2, primitives.issuedFsync stop.stoppedStep⟩
 
-private theorem checkpointRunWriteReturned
+/-- The returned run write supplies the actual payload, handle and pending cache. -/
+theorem CheckpointPrimitiveCalls.runWriteReturned
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (directory : DiskDirectory)
     (fsync : CheckpointFsync heap) (next : Installed) (manifest : ByteArray) (index : Nat)
     {before after : CheckpointWorld heap}
@@ -345,7 +346,7 @@ theorem NativeCheckpointSourceStop.runFileUsesWrittenHandle {index : Nat}
   rw [stage.2.1] at completed
   obtain ⟨beforeWrite, earlier, lastWrite⟩ := returnedLastStep perform (runSteps index) (.writeRun index) completed
   obtain ⟨run, handle, selectedRun, wrote, staged⟩ :=
-    checkpointRunWriteReturned primitives directory fsync stop.next stop.manifest index lastWrite
+    primitives.runWriteReturned directory fsync stop.next stop.manifest index lastWrite
   obtain ⟨consumed, stopped⟩ := checkpointStoppedRememberedFile primitives fsync
     (file_ne_directory _ _) staged stop.stoppedStep
   exact ⟨beforeWrite, run, handle, earlier, selectedRun, wrote, staged, consumed, stopped⟩
@@ -424,13 +425,15 @@ private theorem resolveKeepsDirectory (cache : CensusDirectoryCache) (dir path :
         · simp [Cache.resolve, isDirectory, pending, active, same, reachedState]
         · simpa only [Cache.resolve, isDirectory, beq_iff_eq, ↓reduceIte, pending, active, same] using reopened
 
-private theorem checkpointSyncKeepsDirectory
+/-- Invert a returned singleton group to recover the actual handle selection
+and successful fsync, with their own issue and return heaps. -/
+theorem CheckpointPrimitiveCalls.returnedFsync
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
     (dir path : FilePath) {before after : CheckpointWorld heap}
     (returned : (primitives.syncUntilStop dir fsync #[path]).run before = .ok (.ok ()) after) :
-    after.1.directory = before.1.directory := by
+    ∃ handle issued, before.1.resolve dir path primitives.openRead before.2 = .ok handle (after.1, issued) ∧
+      fsync handle issued = .ok (.ok ()) after.2 := by
   obtain ⟨cache, raw⟩ := before
-  have frame := resolveKeepsDirectory cache dir path primitives.openRead raw
   have success : ∃ atSync, checkpointSyncUntilStop dir primitives.openRead fsync path (cache, raw) = .ok (.ok ()) atSync ∧
       after = atSync := by
     let sync := checkpointSyncUntilStop dir primitives.openRead fsync
@@ -461,13 +464,21 @@ private theorem checkpointSyncKeepsDirectory
   | error cause reached => simp [checkpointSyncUntilStop, resolved] at sync
   | ok handle atEffect =>
     obtain ⟨selectedCache, heapAtEffect⟩ := atEffect
-    simp only [resolved, reachedState] at frame
     cases ran : fsync handle heapAtEffect with
     | error reason reached => simp [checkpointSyncUntilStop, resolved, ran] at sync
     | ok result reached =>
       simp only [checkpointSyncUntilStop, resolved, ran] at sync
       cases result <;> cases sync
-      exact frame
+      exact ⟨handle, heapAtEffect, rfl, ran⟩
+
+private theorem checkpointSyncKeepsDirectory
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    (dir path : FilePath) {before after : CheckpointWorld heap}
+    (returned : (primitives.syncUntilStop dir fsync #[path]).run before = .ok (.ok ()) after) :
+    after.1.directory = before.1.directory := by
+  obtain ⟨_, _, resolved, _⟩ := primitives.returnedFsync fsync dir path returned
+  simpa only [resolved, reachedState] using
+    resolveKeepsDirectory before.1 dir path primitives.openRead before.2
 
 /-- All preceding run pairs leave the original directory descriptor in
 its cache slot. The next barrier issues on that exact descriptor. -/
@@ -486,8 +497,7 @@ theorem NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
     simp only [runSteps, List.mem_flatMap, List.mem_range, List.mem_cons, List.not_mem_nil, or_false] at member
     obtain ⟨index, within, write | sync⟩ := member
     · subst step
-      obtain ⟨_, _, _, _, staged⟩ := checkpointRunWriteReturned
-        primitives directory fsync stop.next stop.manifest index returned
+      obtain ⟨_, _, _, _, staged⟩ := primitives.runWriteReturned directory fsync stop.next stop.manifest index returned
       rw [staged]; rfl
     · subst step
       exact checkpointSyncKeepsDirectory primitives fsync directory.path

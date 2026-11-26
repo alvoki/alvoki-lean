@@ -1,5 +1,14 @@
 # Current handoff
 
+At the first runs-directory fsync, the checkpoint schedule now supplies
+the ordered prefix of actual returned run writes and file fsyncs.
+The same receipt inversion also supplies the cached directory proof.
+The local frames preserve the old selected files across the prefix and
+the stopped directory syscall. An effective directory fsync settles
+selected children, and the root name comes from an admitted prior parent
+binding. The full durability of the new runs remains a later obligation.
+[Runs-directory stop](../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
 After a stopped checkpoint and one chosen reboot, the failed MANIFEST
 lookup and the successful aligned retry now run through the same fixed
 marked opener. Both calls use their own cache allocations. The first

@@ -441,6 +441,14 @@ comparison. These lemmas supply the individual transitions for a combined execut
 · [Aligned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 · [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
+At the first runs-directory fsync, each successful run write and file
+sync has its own reached heap and inode effect. Folding these frames over
+the source-derived prefix preserves the previous selection. The directory
+stop uses the cached root descriptor. Its scoped crash-map contract
+distinguishes durable child names from the root name in the parent.
+The physical result can feed a stopped ledger or an admitted reboot.
+[Runs-directory stop](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
 The quiet checkpoint continuation uses one fixed marked interpreter for
 the MANIFEST lookup rejection and the subsequent aligned open. The error
 comes from that interpreter's cache-disposal and lock finalizers. The retry

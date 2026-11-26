@@ -262,6 +262,106 @@ theorem NativeCheckpointSourceStop.firstRunWriteFrames
   exact effect.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding
     (fun _ selected => newRunOffSelected valid stop.prepared 0 selected)
 
+/-- Fold the prior checkpoint and WAL frame over the actual returned run
+prefix. The write, handle selection and successful file sync each retain
+their own reached heap. -/
+theorem NativeCheckpointSourceStop.returnedRunFrames
+    (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
+    {count : Nat} (completedRuns : stop.completed = runSteps count)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
+    (writeEffect : ∀ index < count, ∀ before after payload handle,
+      let path := current.current.ready.state.session.directory.file (.run stop.next.generation index)
+      primitives.cached.writeRun path payload before = .ok handle after →
+      let inode := handle.1.inode handle.2.1.description
+      RunWriteInodeFrame path inode (inodes after) (observe before) (observe after) ∧
+        ∀ other, (observe before).visible other = some inode → other = path)
+    (syncEffect : ∀ index < count, ∀ (before after : CheckpointWorld heap) handle issued,
+      let state := current.current.ready.state
+      let path := state.session.directory.file (.run stop.next.generation index)
+      before.1.resolve state.session.directory.path path primitives.openRead before.2 = .ok handle (after.1, issued) →
+      fsync handle issued = .ok (.ok ()) after.2 →
+      let inode := handle.1.inode handle.2.1.description
+      (observe before.2).storageObservation.Frames state.crashPath (observe issued).storageObservation ∧
+      (observe issued).visible path = some inode ∧
+      (∀ other, (observe issued).visible other = some inode → other = path) ∧
+      inodes after.2 = (inodes issued).completeFileSync inode ∧
+      (observe after.2).visible = (observe issued).visible ∧
+      (observe after.2).crashBindings = (observe issued).crashBindings) :
+    (observe stop.poisoned).storageObservation.Frames current.current.ready.state.crashPath
+      (observe stop.atIssue.2).storageObservation := by
+  let state := current.current.ready.state
+  let directory := state.session.directory
+  let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+  have valid := current.current.ready.readPrefix.refines.1
+  refine successfulCheckpointStepsPreserve perform (fun world => (observe world.2).storageObservation)
+    (CheckpointStorageObservation.Frames state.crashPath) (CheckpointStorageObservation.Frames.refl _)
+    CheckpointStorageObservation.Frames.trans stop.completed ?_ stop.returnedPrefix
+  intro step member before after returned
+  rw [completedRuns] at member
+  simp only [runSteps, List.mem_flatMap, List.mem_range, List.mem_cons, List.not_mem_nil, or_false] at member
+  obtain ⟨index, within, write | sync⟩ := member
+  · subst step
+    obtain ⟨run, handle, _, wrote, _⟩ := primitives.runWriteReturned directory fsync stop.next stop.manifest index returned
+    obtain ⟨effect, privateBinding⟩ := writeEffect index within before.2 after.2 run.run.bytes handle wrote
+    exact effect.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding
+      (fun _ selected => newRunOffSelected valid stop.prepared index selected)
+  · subst step
+    have completed : (primitives.syncUntilStop directory.path fsync
+        #[directory.file (.run stop.next.generation index)]).run before = .ok (.ok ()) after := returned
+    obtain ⟨handle, issued, resolved, synced⟩ := primitives.returnedFsync fsync directory.path _ completed
+    obtain ⟨selection, _, privateBinding, bytes, visible, surviving⟩ := syncEffect index within before after handle issued
+      resolved synced
+    have effect := (observe issued).fileSyncEffect (observe after.2) bytes visible surviving
+    refine selection.trans (effect.frames ?_)
+    intro path selected inode bound same
+    exact newRunOffSelected valid stop.prepared index selected (privateBinding path (same ▸ bound))
+
+/-- The stopped run-directory barrier preserves the already selected
+checkpoint. Effective fsync settles the selected child names. The
+directory's own binding remains subject to the independent parent frame. -/
+theorem NativeCheckpointSourceStop.runsDirectoryPreservesSelected
+    (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached)
+    (calls : CheckpointRawSyncCalls heap)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
+    (load : calls.readDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2)
+    (primitive : ∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
+      fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal stop.atIssue.2 ∧
+        RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
+    (stable : NativeReadyStorage current.current.ready.state (observe stop.atIssue.2).storageObservation)
+    (effective : Bool)
+    (effect : ∀ literal, calls.fsync literal stop.atIssue.2 = .error reason reached.2 →
+      let state := current.current.ready.state
+      let root := state.session.directory.path
+      (observe stop.atIssue.2).visible root =
+        some ((view.descriptors stop.atIssue.2).inode (view.handle stop.atIssue.2 literal).2.1.description) ∧
+      inodes reached.2 = inodes stop.atIssue.2 ∧
+      (observe reached.2).visible = (observe stop.atIssue.2).visible ∧
+      ∀ names ∈ (observe reached.2).crashBindings,
+        if effective then
+          ∃ prior ∈ (observe stop.atIssue.2).crashBindings, names root = prior root ∧
+            ∀ child, state.crashPath child → child ≠ root → names child = (observe stop.atIssue.2).visible child
+        else names ∈ (observe stop.atIssue.2).crashBindings) :
+    NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
+  obtain ⟨literal, _, _, _, stopped, _⟩ := stop.runsDirectoryIssuesRawSync calls cache projected load primitive
+  obtain ⟨_, bytes, visible, survives⟩ := effect literal stopped
+  apply stable.frame
+  constructor
+  · intro path _
+    exact ⟨congrFun visible path, fun inode _ => congrArg (fun state : WalInodeImage => state.crashBytes inode) bytes⟩
+  · intro names allowed
+    have chosen := survives names allowed
+    cases effective
+    · exact ⟨names, chosen, fun _ _ => rfl⟩
+    · obtain ⟨prior, earlier, root, children⟩ := chosen
+      refine ⟨prior, earlier, fun path selected => ?_⟩
+      by_cases same : path = current.current.ready.state.session.directory.path
+      · simpa only [same] using root
+      · exact (children path selected same).trans (stable.settled prior earlier path selected).symm
+
 /-- The optional reboot starts at the source stop's exact heap. It chooses
 one joint survivor of the reached protected files. The original census,
 selected names and bytes are observed on that heap and at the reboot.
