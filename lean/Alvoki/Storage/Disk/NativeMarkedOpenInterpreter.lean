@@ -206,6 +206,60 @@ theorem RawOpenAdmissionReport.reachesMarkedInstallation
         simp only [tokenReturn, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at worker
         exact ⟨opened, repaired, phase, afterPhase, token, prepared, phaseReturn, worker.2 ▸ tokenReturn, worker.1.symm⟩
 
+/-- The actual marked success fixes the checkpoint, marker and WAL
+returns at adjoining heaps. Replay determines the plan passed to the
+repair, and the resulting table uses the references allocated after
+that same repair. -/
+theorem RawOpenAdmissionReport.reachesMarkedReadsAndRepair
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    {checked marked reached : heap} {metadata : IO.FS.Metadata} {table : DiskTable}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      seed.afterPending = .ok () checked)
+    (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked = .ok (some metadata) marked)
+    (returned : source.openTable input entry = .ok table reached) :
+    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
+    let keeper := source.keeperCallbacks.withFileReads source.fileCalls
+    let readOptional := source.fileCalls.readOptional directory
+    let readCheckpoint := readIntegrityCheckpointSized directory (readOptional (directory.file .manifest))
+      source.fileCalls.runSize source.fileCalls.runPrefix
+    let readWal := fun watermark length => readSelectedWithCachedExtents directory watermark length
+      source.directoryCalls.run (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
+      (source.fileCalls.readKeeperWithRelease
+        (fun path handle => keeper.modifyPending seed.pendingRef (SyncHandleRouting.pushPending path handle)))
+    let writeStage := source.stage.stage seed.pendingRef keeper.modifyPending
+    let syncPaths := keeper.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
+    ∃ (selected : Option (PackedTable × UInt64)) (afterCheckpoint : heap) (markerBytes : ByteArray)
+      (afterMarker : heap) (length : UInt64) (reads : WalSegmentMarkerReads) (extent : Nat)
+      (prepared repaired : heap) (patched : ByteArray) (logical : PackedTable) (first : Nat) (bytes : ByteArray)
+      (phase : IO.Ref (Phase Installed)) (afterPhase : heap) (token : IO.Ref Unit),
+      readCheckpoint marked = .ok selected afterCheckpoint ∧
+      readOptional (directory.file .walBoundary) afterCheckpoint = .ok (some markerBytes) afterMarker ∧
+      WAL.Boundary.decode markerBytes = .ok length ∧
+      readWal ((selected.getD (.empty, 0)).1.committed.toNat) length afterMarker = .ok (reads, extent) prepared ∧
+      recoverMarkedWalSegments (selected.getD (.empty, 0)).1 length reads.files = .ok (patched, logical) ∧
+      reads.files.getLast? = some (first, bytes) ∧
+      finishBoundedMarkedOpen directory ⟨length.toNat / WAL.frameSize, first, reads.newer, bytes⟩ extent
+        source.remove writeStage syncPaths source.rename prepared = .ok () repaired ∧
+      source.allocatePhase (.ready (Reopened.installed ⟨logical, (selected.getD (.empty, 0)).2, length, first⟩))
+        repaired = .ok phase afterPhase ∧
+      source.allocateToken () afterPhase = .ok token reached ∧
+      table = RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token := by
+  intro cache keeper readOptional readCheckpoint readWal writeStage syncPaths
+  obtain ⟨opened, repaired, phase, afterPhase, token, recovered, allocated, tokenAllocated, exactTable⟩ :=
+    raw.reachesMarkedInstallation source seed returned
+  obtain ⟨plan, extent, prepared, preparedReads, repairedWal⟩ :=
+    reachedMarkedPreparation source.fileCalls source.directoryCalls source.keeperCallbacks
+      seed.directoryRef seed.activeRef seed.pendingRef source.remove source.stage source.rename source.calls.lookup
+      directory _ flat marker recovered
+  obtain ⟨selected, afterCheckpoint, markerBytes, afterMarker, length, reads, patched, logical, first, bytes,
+    checkpointReturned, markerReturned, decoded, walReturned, replayed, lastKeeper, exactPlan, exactOpened⟩ :=
+    reachedMarkedReaders directory readCheckpoint readOptional readWal preparedReads
+  exact ⟨selected, afterCheckpoint, markerBytes, afterMarker, length, reads, extent, prepared, repaired, patched,
+    logical, first, bytes, phase, afterPhase, token, checkpointReturned, markerReturned, decoded, walReturned,
+    replayed, lastKeeper, exactPlan ▸ repairedWal, exactOpened ▸ allocated, tokenAllocated, exactTable⟩
+
 variable {admission : CensusOpenAdmissionReports input directory inventory retry}
 
 /-- A returned worker error follows the same fixed interpreter up to

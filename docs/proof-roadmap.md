@@ -171,9 +171,11 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
 
   A literal successful fixed open, with its reached admission and
   cache observations, yields the exact raw recovery return and the two
-  reference allocations that build its table. The selected read and
-  repair witness still needs to come from that recovery callback and
-  its primitive observations.
+  reference allocations that build its table. On the reached marked
+  route that same return determines the actual checkpoint, marker and
+  WAL callbacks, their replay, and the measured repair on the prepared
+  heap. The selected inode and durable-byte witness still needs to
+  follow from these exact reads and local primitive effects.
   [Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 
   The actual marker rename and final directory sync errors now supply

@@ -295,4 +295,130 @@ theorem MarkedOpenSuccessReports.opensHealthyFromAdmission
     installed.opensFromAdmission recovery assemble constructs returned normalized
   exact ⟨guard, installed, cacheOpen, makeCache, action, source, useCache, native⟩
 
+section MarkedPreparation
+
+variable {heap stream : Type}
+  (fileCalls : MarkedTemporaryReadCalls heap) (directoryCalls : MarkedDirectoryReadCalls heap stream)
+  (callbacks : AlignedKeeperCacheCallbacks heap)
+  (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+  (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+  (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+  (stage : LongKeeperStageCallbacks heap) (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+  (stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+  (directory : DiskDirectory)
+
+local notation "keeper" => AlignedKeeperCacheCallbacks.withFileReads callbacks fileCalls
+local notation "readKeeper" => MarkedTemporaryReadCalls.readKeeperWithRelease fileCalls
+  (fun path handle => AlignedKeeperCacheCallbacks.modifyPending keeper pending (pushPending path handle))
+local notation "writeStage" => LongKeeperStageCallbacks.stage stage pending (AlignedKeeperCacheCallbacks.modifyPending keeper)
+local notation "syncPaths" => AlignedKeeperCacheCallbacks.syncPaths keeper (DiskDirectory.path directory) cached active pending
+
+/-- Follow the marked branch of the successful source recovery. The
+read-only preparation gives this repair its exact plan and measured
+keeper extent at the heap where it starts. -/
+theorem reachedMarkedPreparation
+    (bootstrap : EStateM IO.Error heap Reopened) {entry checked marked repaired : heap}
+    {metadata : IO.FS.Metadata} {reopened : Reopened}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (stat (directory.file .wal))) entry = .ok () checked)
+    (marker : optionalMetadataWith (stat (directory.file .walBoundary)) checked = .ok (some metadata) marked)
+    (returned : recoverHealthyMarkedWithRefs fileCalls directoryCalls callbacks cached active pending remove stage
+      rename stat directory bootstrap entry = .ok reopened repaired) :
+    ∃ (plan : Plan) (extent : Nat) (prepared : heap),
+      prepareBoundedMarkedFromReaders directory
+        (readIntegrityCheckpointSized directory ((fileCalls.readOptional directory) (directory.file .manifest))
+          fileCalls.runSize fileCalls.runPrefix)
+        (fileCalls.readOptional directory)
+        (fun watermark length => readSelectedWithCachedExtents directory watermark length directoryCalls.run
+          (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal readKeeper) marked = .ok (plan, reopened, extent) prepared ∧
+      finishBoundedMarkedOpen directory plan extent remove writeStage syncPaths rename prepared = .ok () repaired := by
+  have markedReturn : reopenMarkedBoundedWithCachedExtents directory (fileCalls.readOptional directory)
+      fileCalls.runSize fileCalls.runPrefix directoryCalls.run (MarkedWalExtentReports.inspect fileCalls)
+      fileCalls.seal readKeeper remove writeStage syncPaths rename marked = .ok reopened repaired := by
+    simpa only [recoverHealthyMarkedWithRefs, recoverSegmentedWalWith, Bind.bind, EStateM.bind, flat, marker, Option.isSome, ↓reduceIte] using returned
+  let prepare := prepareBoundedMarkedFromReaders directory
+    (readIntegrityCheckpointSized directory ((fileCalls.readOptional directory) (directory.file .manifest))
+      fileCalls.runSize fileCalls.runPrefix)
+    (fileCalls.readOptional directory)
+    (fun watermark length => readSelectedWithCachedExtents directory watermark length directoryCalls.run
+      (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal readKeeper)
+  change ((do
+    let (plan, loaded, extent) ← prepare
+    finishBoundedMarkedOpen directory plan extent remove writeStage syncPaths rename
+    pure loaded) marked) = _ at markedReturn
+  simp only [Bind.bind, EStateM.bind] at markedReturn
+  cases prepared : prepare marked with
+  | error cause reached => simp [prepared] at markedReturn
+  | ok result reached =>
+    obtain ⟨plan, loaded, extent⟩ := result
+    simp only [prepared] at markedReturn
+    cases finished : finishBoundedMarkedOpen directory plan extent remove writeStage syncPaths rename reached with
+    | error cause failed => simp [finished] at markedReturn
+    | ok value complete =>
+      cases value
+      simp only [finished, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at markedReturn
+      exact ⟨plan, extent, reached, markedReturn.1 ▸ prepared, markedReturn.2 ▸ finished⟩
+
+end MarkedPreparation
+
+section Readers
+
+variable {heap : Type}
+
+/-- A successful bounded preparation determines its exact successful
+checkpoint, marker and WAL callbacks. The pure replay preserves the
+last callback heap and supplies the returned plan and table. -/
+theorem reachedMarkedReaders (directory : DiskDirectory)
+    (checkpoint : EStateM IO.Error heap (Option (PackedTable × UInt64)))
+    (optional : FilePath → EStateM IO.Error heap (Option ByteArray))
+    (wal : Nat → UInt64 → EStateM IO.Error heap (WalSegmentMarkerReads × Nat))
+    {entry prepared : heap} {plan : Plan} {opened : Reopened} {extent : Nat}
+    (returned : prepareBoundedMarkedFromReaders directory checkpoint optional wal entry =
+      .ok (plan, opened, extent) prepared) :
+    ∃ selected afterCheckpoint marker afterMarker length reads writes table keeperStart keeperBytes,
+      checkpoint entry = .ok selected afterCheckpoint ∧
+      optional (directory.file .walBoundary) afterCheckpoint = .ok (some marker) afterMarker ∧
+      WAL.Boundary.decode marker = .ok length ∧
+      wal ((selected.getD (.empty, 0)).1.committed.toNat) length afterMarker = .ok (reads, extent) prepared ∧
+      recoverMarkedWalSegments (selected.getD (.empty, 0)).1 length reads.files = .ok (writes, table) ∧
+      reads.files.getLast? = some (keeperStart, keeperBytes) ∧
+      plan = ⟨length.toNat / WAL.frameSize, keeperStart, reads.newer, keeperBytes⟩ ∧
+      opened = ⟨table, (selected.getD (.empty, 0)).2, length, keeperStart⟩ := by
+  simp only [prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind] at returned
+  cases gotCheckpoint : checkpoint entry with
+  | error cause reached => simp [gotCheckpoint] at returned
+  | ok selected afterCheckpoint =>
+    simp only [gotCheckpoint] at returned
+    cases gotMarker : optional (directory.file .walBoundary) afterCheckpoint with
+    | error cause reached => simp [gotMarker] at returned
+    | ok marker afterMarker =>
+      cases marker with
+      | none => simp [gotMarker, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+      | some marker =>
+        simp only [gotMarker] at returned
+        cases decoded : WAL.Boundary.decode marker with
+        | error cause => simp [decoded, Except.mapError, liftExcept, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+        | ok length =>
+          simp only [decoded, Except.mapError, liftExcept, EStateM.bind, Pure.pure, EStateM.pure] at returned
+          cases gotWal : wal (selected.getD (.empty, 0)).1.committed.toNat length afterMarker with
+          | error cause reached => simp [gotWal] at returned
+          | ok payload reached =>
+            obtain ⟨reads, physical⟩ := payload
+            simp only [gotWal] at returned
+            cases replayed : recoverMarkedWalSegments (selected.getD (.empty, 0)).1 length reads.files with
+            | error cause => simp [replayed, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+            | ok value =>
+              obtain ⟨writes, table⟩ := value
+              simp only [replayed, EStateM.pure] at returned
+              cases lastKeeper : reads.files.getLast? with
+              | none => simp [lastKeeper, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+              | some entry =>
+                obtain ⟨keeperStart, bytes⟩ := entry
+                simp only [lastKeeper, EStateM.pure, EStateM.Result.ok.injEq, Prod.mk.injEq] at returned
+                obtain ⟨⟨rfl, rfl, rfl⟩, rfl⟩ := returned
+                exact ⟨selected, afterCheckpoint, marker, afterMarker, length, reads, writes, table, keeperStart, bytes,
+                  rfl, by simp only [gotMarker], by simp only [decoded],
+                  by simp only [gotWal], by simp only [replayed], by simp only [lastKeeper], rfl, rfl⟩
+
+end Readers
+
 end Alvoki.Storage.DiskSession

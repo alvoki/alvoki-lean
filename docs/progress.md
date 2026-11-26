@@ -1,5 +1,13 @@
 # Current handoff
 
+The literal successful marked open now determines the exact checkpoint,
+marker and WAL reader returns in order. Their replay supplies the
+actual repair plan and measured keeper extent, and the repaired heap
+starts the allocations of the returned table. The proof takes the
+reached admission, cache and marked guard observations. It leaves
+per-file identity and durable payloads to the local read contracts.
+[Reached marked reads and repair](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+
 With reached admission and cache observations, a literal successful
 return of the fixed opener now determines its successful worker
 return and both allocation receipts. The second allocation starts
