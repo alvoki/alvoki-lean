@@ -246,6 +246,10 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedOpenError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedLateGuardError
 lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+lake env leanchecker Alvoki.Storage.Disk.NativeMutatingOpenRetries
+lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
+lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
+lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
 lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedListingRetry

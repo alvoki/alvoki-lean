@@ -418,6 +418,14 @@ listing has no bearing on the selected bytes. The current bridge uses the existi
 inventory and raw effects for the healthy attempt. Recovery that has already changed the
 keeper and admission with surviving ownership still need the general execution argument.
 
+A marked repair that fails after changing files supplies its reached image through the same
+worker and finalizers as the read-only error path. The local stage-sync and final-directory
+errors share the ordered successful prefix they actually executed. A repair may leave the
+original keeper with a durable scratch file or replace it with the trimmed keeper before EIO.
+The retry fold retains the selected target and unchanged file footprint while the next reader
+plan uses the last returned keeper and later names. The kernel argument tracks reported
+Linux effects and distinguishes a returned error from whether its syscall took effect.
+
 ## Migration test
 
 Keep the codecs, ordered replay, snapshot and retention proofs, publication laws, bounded reads,

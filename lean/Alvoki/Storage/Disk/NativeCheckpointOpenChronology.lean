@@ -192,15 +192,20 @@ private theorem RawOpenCacheDisposal.ScopeFileFrames.reachesWorker
     |>.trans frames.activeRef
     |>.trans frames.pendingRef
 
+/-- Preserve the worker's reached bindings through both runtime drops
+and the intervening unlock. These bindings can include a new keeper
+that was published before the worker returned an error. -/
+theorem RawOpenCacheDisposal.ScopeFileFrames.afterWorker
+    (frames : disposal.ScopeFileFrames finalized files selectedPath) :
+    (files workerReached).Frames selectedPath (files finalized.reached) :=
+  frames.dispose.trans frames.unlock |>.trans frames.releaseLock
+
 /-- Read-only rejectors share the surrounding admission and drops. -/
 theorem RawOpenCacheDisposal.ScopeFileFrames.preserves
     (frames : disposal.ScopeFileFrames finalized files selectedPath)
     (worker : (files seed.afterPending).Frames selectedPath (files workerReached)) :
     (files entry).Frames selectedPath (files finalized.reached) :=
-  frames.reachesWorker.trans worker
-    |>.trans frames.dispose
-    |>.trans frames.unlock
-    |>.trans frames.releaseLock
+  frames.reachesWorker.trans (worker.trans frames.afterWorker)
 
 variable (seen : RawManifestStatError (admitted := admitted) seed fileCalls)
     (disposal : RawOpenCacheDisposal (admitted := admitted) seed seen.reached)

@@ -1,5 +1,35 @@
 # Current handoff
 
+The marked worker now uses the same chronological reads and measured repair dispatch for a
+returned error and for a success. On error, the actual worker heap supplies the file image to
+the shared cache and lock finalizers. The original read-only proof specializes that argument to
+an unchanged image. A separate post-worker frame carries the actual named files through those
+finalizers, including a keeper already replaced by the failed repair. The first diagnostic still follows the existing unlock precedence rules.
+The retry chronology can interleave read-only failures and repairs that return an error after
+changing files. One invariant relates each actual repair effect to the selected target, frames
+the untouched paths and derives the selected WAL reader plan at the last heap with the prior
+snapshot ledger. [Worker result](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedWorker.lean)
+· [Reached retry image](../lean/Alvoki/Storage/Disk/NativeMutatingOpenRetries.lean)
+
+Long-keeper repair has local proofs at the stage-fsync and final directory-fsync errors using
+one production prefix. A staged-file error leaves the scratch inode and the old selected keeper.
+After the rename, the final error leaves the replacement inode visible with the exact trimmed
+bytes. If the directory sync took effect, the replacement is the only admitted crash binding and
+the reached logical image is ready for reopening. The proofs use measured extent, actual cache
+routing, descriptor identity and reported filesystem effects. Deriving the next actual selected
+reader across the whole mutating retry trace remains open. [Stage error](../lean/Alvoki/Storage/Disk/NativeLongKeeperStageSyncError.lean)
+· [Final repair error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncError.lean)
+
+The final WAL write directory-fsync error also derives its payloads from the actual successful
+group and staged marker rename. The literal final group result identifies the original cached
+root's syscall and preserves the diagnostic. Its reported effect controls the joint marker
+survivor. Live inode payload observations remain separate. [Final WAL error](../lean/Alvoki/Storage/Disk/NativeWalGroupedTail.lean)
+
+Linux reproduced two mutating failed repairs on the same selected checkpoint. The first synced
+`WAL.next` then errored, retaining the old 192-byte keeper. The second replaced the keeper and
+settled the empty trimmed inode before returning EIO. A later aligned open kept that inode,
+replayed the same snapshots and appended the next write.
+
 The existing batch retry proof now shares one selected-layout argument with the raw write
 recovery path. The chosen manifest, marker and keeper bytes give the exact target, retained WAL
 layout and repair plan. The original read ledger admits the selected old history or the complete
@@ -11,8 +41,8 @@ the selected boundary. [Layout and repair](../lean/Alvoki/Storage/Disk/WalBatchC
 
 The healthy marked-open proof now carries its exact selected paths and bytes across a finite
 sequence of actual read-only open failures. It reuses the measured aligned or longer-keeper
-repair and returns the actual table on the reached heap with the same selected target, cache,
-phase and token distinct from the old session, and prior read ledger. Its existing admission index requires the failed
+repair and returns the actual table on the reached heap with the same selected target, its reached
+cache, fresh phase and token, and prior read ledger. Its existing admission index requires the failed
 attempts to release their resources back to the reboot inventory. The proof uses raw admission,
 reader, repair and allocation effects for the final healthy attempt. The common execution still
 needs to derive those effects and join the selected layout and this reader to all operation cuts,
