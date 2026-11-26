@@ -131,6 +131,10 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
           current.current.LedgerSuffix [.uncertainWriteCrashRecovered request input cause batch []] start.current ∧
           start.WriteStorageEntry view nextCache (storage start.reached) (visible start.reached) ∧
           (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
+          (∀ {inode}, names reached ((dir).file (.walSegment (state).writer.target.first)) = some inode →
+            visible reached inode = (state).writer.target.trimmed →
+            names start.reached ((dir).file (.walSegment (state).writer.target.first)) = some inode ∧
+              visible start.reached inode = (state).writer.target.trimmed) ∧
           ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow directory firstOffset through
             (storage start.reached)) := by
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, fits, guard, assigned, classified⟩ :=
@@ -144,7 +148,8 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
     have window := reboot.walNamespace nameFrame initialWindow.2
     have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
       simp only [List.length_append, (prepareBatch_spec prepared).1]
-    obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, sameDirectory, coversNext, nextWindow⟩ :=
+    obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, sameDirectory, coversNext,
+      retainedKeeper, nextWindow⟩ :=
       (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
         initialWindow.1 selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
         (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects)
@@ -157,7 +162,7 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
     have omitted : retained = [] := List.append_cancel_left (by
       simpa only [List.append_nil] using appended.symm.trans old)
     rw [omitted] at recoveredLedger
-    exact ⟨handle, start, nextCache, opened, sameDirectory, old, recoveredLedger, physical, coversNext, nextWindow⟩
+    exact ⟨handle, start, nextCache, opened, sameDirectory, old, recoveredLedger, physical, coversNext, retainedKeeper, nextWindow⟩
   · exact .inl elsewhere
 
 end
@@ -256,6 +261,10 @@ theorem NativeOpenedPosition.groupedRetryAndReads
               source.openTable input reached = .ok handle.table reopened.reached ∧
               reopened.WriteStorageEntry view refs (storage reopened.reached) (visible reopened.reached) ∧
               (∀ offset ∈ reopened.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
+              (∀ {inode}, names reached (dir.file (.walSegment state.writer.target.first)) = some inode →
+                visible reached inode = state.writer.target.trimmed →
+                names reopened.reached (dir.file (.walSegment state.writer.target.first)) = some inode ∧
+                  visible reopened.reached inode = state.writer.target.trimmed) ∧
               (∀ through, reopened.current.ready.state.writer.wal.SettledNamespaceWindow directory firstOffset through
                 (storage reopened.reached)) ∧
               handle.table.UsesOpenWriteSchedules directory handle.files handle.phase ∧
@@ -296,7 +305,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
       openEffects alignedEffects replacementEffects phase ptrEq attempts retryEffects
   refine ⟨schedules, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with elsewhere |
-    ⟨group, handle, reopened, refs, opened, _, old, recoveredLedger, physical, coversNext, nextWindow⟩
+    ⟨group, handle, reopened, refs, opened, _, old, recoveredLedger, physical, coversNext, retainedKeeper, nextWindow⟩
   · exact .inl elsewhere
   · refine .inr ⟨group, ?_⟩
     obtain ⟨write, token⟩ := nextCall handle reopened refs opened old physical
@@ -304,7 +313,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
       wrote, replay, agrees, sourceCalls⟩ :=
       reopened.acknowledgesAndReadsLatest writes.appender writes.stager writes.syncer view refs inodes runs storage
         inode buffered nextRequest writes.lookup writes.rename nextNonempty physical write read token
-    exact ⟨handle, reopened, written, last, refs, nextBatch, afterEvents, reference, opened, physical, coversNext,
+    exact ⟨handle, reopened, written, last, refs, nextBatch, afterEvents, reference, opened, physical, coversNext, retainedKeeper,
       nextWindow, schedules, writeReturn, reachedWrite, snapshots, through.append (recoveredLedger.append wrote),
       old ▸ replay, agrees, sourceCalls⟩
 

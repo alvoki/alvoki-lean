@@ -20,11 +20,14 @@ A failed prune may already have removed later WAL segments. Even if all removes
 return and the following directory fsync reports EIO, the retry starts from the
 actual changed namespace. The live keeper stays in place through this barrier.
 A later repair can replace it with a new inode. At the public final-sync error,
-the replacement is live with exactly the trimmed bytes.
+the replacement is live with exactly the trimmed bytes. If those bytes and the
+same binding reach the next successful open, the returned writer retains that
+inode. An error before flock supplies the frame for this handoff.
 
-**Next obligation.** Carry the replaced keeper's new binding and bytes through
-later failed and interrupted open attempts. A successful scan still needs the
+**Next obligation.** Carry accepted durable keeper bytes through cleanup and failed opens
+for each namespace that could survive a second power loss. A surviving directory
+can still name the old inode after a final directory fsync error. A successful scan still needs the
 local enumeration law covering every physically present later WAL name. The
 remaining mixed sessions and maintenance cases are listed in the roadmap.
 
-**Verification baseline.** See commit `bf302706` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Verification baseline.** See commit `28399f89` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

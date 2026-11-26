@@ -293,7 +293,8 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     current.selectsDurableAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication visible reboot reset
       nameEffects initialWindow
-  obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext, nextWindow⟩ :=
+  obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext,
+    _, nextWindow⟩ :=
     (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
       initialWindow.1 selected window durable suffix (retryEffects target admitted active)
       admission namespaceView root rootBinding (openEffects target admitted active)
