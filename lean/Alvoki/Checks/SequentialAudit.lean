@@ -2468,6 +2468,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncUsesWrittenHandle
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncIssuesRawSync
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncPreservesSelected
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runSyncPreservesSelected
 #check_axioms Alvoki.Storage.DiskSession.readSelectedWithCachedExtents_ignoresStagedManifest
 #check_axioms Alvoki.Storage.DiskSession.readSelectedWithCachedExtents_projectsWalNames
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.powerLossFiles_stagedMetadata
@@ -2513,6 +2514,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesTrace
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.stopsAfterWrites
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readyStorage
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.writeStorageEntry
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.kept
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.survivingRun
@@ -3886,6 +3889,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.acknowledgesAndReadsAfterOldTarget
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.groupedRetryAndReads
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.finalizesWithFrames
+#check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.selectedRetry
 #check_axioms Alvoki.Storage.DiskSession.checkActiveSegmentWith_rawResult
 #check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofRawChecked
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_afterPreparation

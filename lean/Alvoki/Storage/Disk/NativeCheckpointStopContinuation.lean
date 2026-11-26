@@ -157,6 +157,98 @@ theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
     (fun _ selected => stagedManifestOffSelected current.current.ready.state selected)
   exact stable.frame (consume.trans frame.2)
 
+private theorem preparedGeneration {old next : Installed} {manifest : ByteArray}
+    (prepared : CheckpointPreflight (.ready old) (.ok (next, manifest))) :
+    next.generation.toNat = old.generation.toNat + 1 := by
+  cases prepared with
+  | prepared _ fits _ => exact UInt64.toNat_ofNat_of_lt' fits.1
+
+/-- A prepared run belongs to the next generation, disjoint from all
+canonical files selected by the installed manifest and WAL. -/
+private theorem newRunOffSelected {state : NativeReadyState} (valid : state.Valid)
+    {next : Installed} {manifest : ByteArray}
+    (prepared : CheckpointPreflight state.session.phase (.ok (next, manifest))) (index : Nat)
+    {path : FilePath} (selected : state.crashPath path) :
+    path ≠ state.session.directory.file (.run next.generation index) := by
+  let directory := state.session.directory
+  have reserved (file : DiskFile) (name : String)
+      (shape : directory.file file = ⟨directory.path.toString ++ "/" ++ name⟩)
+      (distinct : name.toList.take 4 ≠ "run-".toList) :
+      directory.file file ≠ directory.file (.run next.generation index) := by
+    intro equal
+    rw [shape] at equal
+    have names := (String.append_right_inj (directory.path.toString ++ "/")).mp
+      (congrArg FilePath.toString equal)
+    change name = renderRunFileName next.generation index at names
+    apply distinct
+    rw [names]
+    change ("run-" ++ next.generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 = "run-".toList
+    simp [String.toList_append]
+  have noSegment (first : Nat) :
+      directory.file (.walSegment first) ≠ directory.file (.run next.generation index) := by
+    intro equal
+    obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive equal.symm
+    cases impossible
+  rcases selected with rfl | rfl | rfl | wal | ⟨_, metadata, run, binding, decoded, _, rfl⟩
+  · exact (file_ne_directory _ _).symm
+  · exact reserved .lock "LOCK" rfl (by decide)
+  · exact reserved .manifest "MANIFEST" rfl (by decide)
+  · rcases wal with rfl | rfl | ⟨segment, _, rfl⟩
+    · exact reserved .walBoundary "WAL.commit" rfl (by decide)
+    · exact noSegment _
+    · exact noSegment segment.first
+  · have prior := CheckpointPowerCut.selectedGeneration valid.retained.resumed.selected
+    rw [← valid.retained.resumed.generation, binding, Option.mapM, decoded] at prior
+    have generation := preparedGeneration (valid.phase ▸ prepared)
+    apply runPath_ne directory
+    intro same
+    have old : metadata.header.generation = state.writer.installed.generation := Except.ok.inj prior
+    have new : metadata.header.generation = next.generation := congrArg Prod.fst same
+    have conflict := congrArg UInt64.toNat (old.symm.trans new)
+    omega
+
+/-- The exact stopped run fsync carries the protected checkpoint and WAL
+to the reached heap. Before this effect the source-derived returned prefix
+and the literal pending-cell removal preserve the same files. The new run
+may become durable independently of the installed generation. -/
+theorem NativeCheckpointSourceStop.runSyncPreservesSelected {index : Nat}
+    (stop : NativeCheckpointSourceStop current primitives fsync (.syncRun index) reason reached)
+    (calls : CheckpointRawSyncCalls heap)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
+    {atFsync : heap}
+    (pending : CheckpointPendingSyncAt calls view cache.pending fsync
+      (current.current.ready.state.session.directory.file (.run stop.next.generation index)) stop.atIssue.2 atFsync)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
+    (phaseFrame : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
+      (observe stop.poisoned).storageObservation)
+    (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
+      (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+        fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
+      (observe before.2).storageObservation.Frames current.current.ready.state.crashPath
+        (observe after.2).storageObservation)
+    (consume : (observe stop.atIssue.2).storageObservation.Frames current.current.ready.state.crashPath
+      (observe atFsync).storageObservation)
+    (effective : Bool)
+    (effect : ∀ literal, calls.fsync literal atFsync = .error reason reached.2 →
+      let inode := (view.descriptors atFsync).inode (view.handle atFsync literal).2.1.description
+      let path := current.current.ready.state.session.directory.file (.run stop.next.generation index)
+      (observe atFsync).visible path = some inode ∧
+      (∀ other, (observe atFsync).visible other = some inode → other = path) ∧
+      inodes reached.2 = (if effective then (inodes atFsync).completeFileSync inode else inodes atFsync) ∧
+      (observe reached.2).visible = (observe atFsync).visible ∧
+      (observe reached.2).crashBindings = (observe atFsync).crashBindings) :
+    NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
+  have stable := stop.storageAtIssue (fun heap => (observe heap).storageObservation) initial phaseFrame returnedKeeps
+  obtain ⟨literal, _, _, target, _, stopped, _⟩ := stop.runFileIssuesRawSync calls cache projected
+    pending.loaded pending.stored pending.consumed pending.primitive
+  have valid := current.current.ready.readPrefix.refines.1
+  have frame := target.stoppedRunFrames calls stopped inodes runs observe _ effective (effect literal)
+    (fun _ selected => newRunOffSelected valid stop.prepared index selected)
+  exact stop.reachedStorage (fun heap => (observe heap).storageObservation) stable (consume.trans frame.2)
+
 /-- The optional reboot starts at the source stop's exact heap. It chooses
 one joint survivor of the reached protected files. The original census,
 selected names and bytes are observed on that heap and at the reboot.

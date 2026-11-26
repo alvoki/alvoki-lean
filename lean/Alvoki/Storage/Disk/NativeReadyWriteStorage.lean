@@ -201,29 +201,31 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (request : WriteRequest)
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {batch : List WAL.Write} {table : PackedTable} {sequence : UInt64} {reached : heap}
+    {sequence : UInt64} {reached : heap}
     (nonempty : request.rows ≠ [])
-    (prepared : prepareBatch (oldInstalled).table request.rows = some (batch, table))
-    (fits : (oldInstalled).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
     (returned : request.runOnRawOpenPhase dir lookup append stage sync rename
       opened.phase opened.get opened.set current.reached = .ok sequence reached)
     (entry : current.WriteStorageEntry view cache (storage current.reached) (inodes current.reached).visible)
-    (effects : current.PublishedWriteEffects appender stager syncer view cache inodes runs observe
-      inode buffered request lookup rename batch) :
-    opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧ sequence = table.committed ∧
-    ∃ (next : NativeOpenedPosition opened)
+    (effects : ∀ {batch table}, prepareBatch (oldInstalled).table request.rows = some (batch, table) →
+      current.PublishedWriteEffects appender stager syncer view cache inodes runs observe
+        inode buffered request lookup rename batch) :
+    opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
+    ∃ (batch : List WAL.Write) (table : PackedTable) (next : NativeOpenedPosition opened)
       (sameDirectory : next.current.ready.state.session.directory = dir),
-      next.reached = reached ∧ next.pins = current.pins ∧
+      prepareBatch (oldInstalled).table request.rows = some (batch, table) ∧
+      sequence = table.committed ∧ next.reached = reached ∧ next.pins = current.pins ∧
       current.current.LedgerSuffix [.acknowledged request batch] next.current ∧
       next.WriteStorageEntry view
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (storage next.reached) (inodes next.reached).visible := by
-  obtain ⟨guardEffect, phaseEffect, appendFrame, stageFrame, groupFrame, renameFrame, rootFrame,
-    appendEffects, stageEffects, barrierEffects, renameEffect, stagedPrivate, renameFiles, loadEffect, syncEffect⟩ := effects
   obtain ⟨entryCensus, entryCache, old, entryKeeper, root⟩ := entry
   obtain ⟨valid, history, _⟩ := current.current.ready.readPrefix.refines
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
+  obtain ⟨batch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared dir lookup append stage sync rename
+    opened.phase opened.get opened.set loaded nonempty (by rw [returned]; trivial)
+  obtain ⟨guardEffect, phaseEffect, appendFrame, stageFrame, groupFrame, renameFrame, rootFrame,
+    appendEffects, stageEffects, barrierEffects, renameEffect, stagedPrivate, renameFiles, loadEffect, syncEffect⟩ := effects prepared
   obtain ⟨guarded, poisoned, settled, guard, excluded, committed, installed, number, _, _⟩ :=
     request.runOnRawOpenPhase_acknowledges dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits returned
@@ -328,7 +330,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     · intro event member
       obtain rfl := List.mem_singleton.mp member
       trivial
-  refine ⟨current.uses.writeSchedules, number, next, rfl, rfl, rfl, ledger, rfl, rfl, afterStorage, ?_, ?_⟩
+  refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, ledger, rfl, rfl, afterStorage, ?_, ?_⟩
   · intro namedInode named
     change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
     rw [← selectedKeeper] at named

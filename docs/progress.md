@@ -1,5 +1,17 @@
 # Current handoff
 
+The fresh open exposes the literal cache references and proves the first write's
+physical entry at the returned heap. Acknowledged raw writes derive preparation and
+the byte-count check from the actual successful return. Their ledger can compose with
+the empty initial ledger. The held MANIFEST rejection now supplies a singleton of actual
+failed calls, with live keeper, protected-file and parent crash-map frames derived from
+local callbacks. A stopped run fsync preserves the selected checkpoint and WAL at the
+heap reached by the issued fsync. The same storage fact is available to the terminal
+prefix and the observed-reboot proof.
+[Fresh write entry](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+· [MANIFEST retry](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean)
+· [Run fsync stop](../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
 One source-level pilot joins a nonempty write's grouped error, the selected durable
 reboot, at least one actual failed open, the aligned returned writer, and the next
 observed acknowledged write and snapshot. The same storage and inode observations

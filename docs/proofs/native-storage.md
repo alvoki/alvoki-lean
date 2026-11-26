@@ -430,6 +430,16 @@ comparison. These lemmas supply the individual transitions for a combined execut
 · [Aligned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 · [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
+A held MANIFEST lookup error and its actual cleanup supply a singleton failed-call
+trace and the precise frames required by the grouped retry pilot. A later admission
+still needs its own lock-vacancy observation. The fresh installer exposes the cache
+references and builds the first write entry from the reached descriptor census and
+settled empty files. A successful write supplies the prepared batch and byte bound
+directly from its source result. These transitions provide the inputs for a proof
+that composes the initial open, writes and subsequent recovery.
+[Exact MANIFEST retry](../../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean)
+· [Fresh writer](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+
 The grouped retry pilot composes these steps at their exact reached heaps. It requires
 a nonempty sequence of literal failed opens and derives the next batch and byte bound
 from the fixed successful write. It uses the same physical observation throughout.

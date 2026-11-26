@@ -21,38 +21,37 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
     (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {batch : List WAL.Write} {table : PackedTable} {sequence : UInt64} {reached : heap}
+    {sequence : UInt64} {reached : heap}
     (nonempty : request.rows ≠ [])
-    (prepared : prepareBatch current.current.ready.state.writer.installed.table request.rows = some (batch, table))
-    (fits : current.current.ready.state.writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
     (returned : request.runOnRawOpenPhase current.current.ready.state.session.directory lookup
       (appender.run cache.active) (stager.run cache.pending)
       (syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending)
       rename opened.phase opened.get opened.set current.reached = .ok sequence reached)
     (entry : current.WriteStorageEntry view cache (observe current.reached).storageObservation (inodes current.reached).visible)
-    (effects : current.PublishedWriteEffects appender stager syncer view cache inodes runs observe
-      inode buffered request lookup rename batch)
+    (effects : ∀ {batch table}, prepareBatch current.current.ready.state.writer.installed.table request.rows = some (batch, table) →
+      current.PublishedWriteEffects appender stager syncer view cache inodes runs observe
+        inode buffered request lookup rename batch)
     (read : SnapshotReadRequest α)
     (token : ∀ (written : NativeOpenedPosition opened), written.reached = reached →
       ∀ {event after}, (NativeOpenedReport.acquire (start := written)).Reached event after →
         opened.ptrEq opened.token opened.token after.reached = .ok true after.reached) :
     opened.table.UsesOpenWriteSchedules current.current.ready.state.session.directory opened.files opened.phase ∧
-    sequence = table.committed ∧
-    ∃ (written last : NativeOpenedPosition opened) (reference : SnapshotTable UInt64)
+    ∃ (batch : List WAL.Write) (table : PackedTable) (written last : NativeOpenedPosition opened) (reference : SnapshotTable UInt64)
       (events : List NativeExecutionEvent),
-      written.reached = reached ∧
+      prepareBatch current.current.ready.state.writer.installed.table request.rows = some (batch, table) ∧
+      sequence = table.committed ∧ written.reached = reached ∧
       NativeOpenedTrace written [.acquire, .readAt written.pins.length read] events last ∧
       current.current.LedgerSuffix (.acknowledged request batch :: events) last.current ∧
       SnapshotWalReplay .empty (current.current.history ++ batch) reference ∧
       (∀ observation ∈ last.current.ready.reads, observation.agrees reference) := by
-  obtain ⟨schedule, number, written, _, reachedWrite, _, wrote, _⟩ :=
+  obtain ⟨schedule, batch, table, written, _, prepared, number, reachedWrite, _, wrote, _⟩ :=
     current.acknowledgesPublishedWrite appender stager syncer view cache inodes runs observe inode buffered
-      request lookup rename nonempty prepared fits returned entry effects
+      request lookup rename nonempty returned entry effects
   obtain ⟨pin, acquired, last, reference, issued, compared, acquireReturned, readReturned, calls, _, replay, agrees⟩ :=
     written.acquiresAndReadsLatest read (token written reachedWrite)
   have history : written.current.history = current.current.history ++ batch := by
     simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using wrote.history
-  exact ⟨schedule, number, written, last, reference, _, reachedWrite, calls,
+  exact ⟨schedule, batch, table, written, last, reference, _, prepared, number, reachedWrite, calls,
     wrote.append calls.common.ledgerSuffix, history ▸ replay, agrees⟩
 
 /-- A particular observed success and the local laws of its callbacks.
@@ -139,21 +138,13 @@ theorem NativeReadPosition.SelectedWritePlan.acknowledgesAndReadsAfterOldTarget
   have omitted : retained = [] := List.append_cancel_left (by
     simpa only [List.append_nil] using appended.symm.trans old)
   obtain ⟨files, sameStorage, writeReturn, effects, token⟩ := nextCall handle start cache returned old physical
-  have valid := start.current.ready.readPrefix.refines.1
-  have loaded := handle.phaseEffects.reads start.reached handle.phase _
-    (start.stored.trans (congrArg some valid.phase))
-  let directory := start.current.ready.state.session.directory
-  obtain ⟨writtenBatch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared directory lookup
-    (appender.run cache.active) (stager.run cache.pending)
-    (syncer.group directory.path cache.directory cache.active cache.pending)
-    rename handle.phase handle.get handle.set loaded nonempty (by rw [writeReturn]; trivial)
   have atWrite : start.WriteStorageEntry view cache
       (files start.reached).storageObservation (inodes start.reached).visible := by
     rw [sameStorage start.reached]
     exact physical
-  obtain ⟨schedules, _, written, last, reference, events, reachedWrite, snapshots, wrote, replay, agrees⟩ :=
+  obtain ⟨schedules, writtenBatch, _, written, last, reference, events, _, _, reachedWrite, snapshots, wrote, replay, agrees⟩ :=
     start.acknowledgesAndReadsLatest appender stager syncer view cache inodes runs files inode buffered
-      request lookup rename nonempty prepared fits writeReturn atWrite (effects prepared) read token
+      request lookup rename nonempty writeReturn atWrite effects read token
   have ledger := recovered.append wrote
   rw [omitted] at ledger
   exact ⟨handle, start, written, last, cache, writtenBatch, events, reference, returned, schedules,

@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
+import Alvoki.Storage.Disk.NativeReadyWriteStorage
 
 namespace Alvoki.Storage.DiskSession
 
@@ -50,16 +51,26 @@ namespace FreshBootstrapOpenHeap.Returned
 variable {heap : Type} {call : EStateM IO.Error heap DiskTable} {entry : heap}
   (opened : FreshBootstrapOpenHeap.Returned call entry)
 
-/-- The common execution consumes the empty ledgers derived by the
-fresh installer. This applies to both same-handle and later sessions. -/
-theorem refinesTrace (trace : NativeExecutionTrace opened.start.current events last) :
+/-- Source transitions and modeled traces share the empty ledgers
+established by the fresh installer. -/
+theorem refinesLedger (ledger : opened.start.current.LedgerSuffix events last) :
     last.history = events.flatMap NativeExecutionEvent.writes ∧
     last.submissions = events.flatMap NativeExecutionEvent.submissions ∧
     last.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
     InstalledClientReplay last.submissions last.ready.reads last.history
       last.ready.state.writer.installed last.ready.state.session := by
-  simpa only [opened.emptyHistory, opened.emptySubmissions, opened.emptyReads, List.nil_append]
-    using trace.keyValueRefinement
+  exact ⟨by simpa only [opened.emptyHistory, List.nil_append] using ledger.history,
+    by simpa only [opened.emptySubmissions, List.nil_append] using ledger.submissions,
+    by simpa only [opened.emptyReads, List.nil_append] using ledger.reads,
+    last.ready.readPrefix.guardedReplay⟩
+
+theorem refinesTrace (trace : NativeExecutionTrace opened.start.current events last) :
+    last.history = events.flatMap NativeExecutionEvent.writes ∧
+    last.submissions = events.flatMap NativeExecutionEvent.submissions ∧
+    last.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
+    InstalledClientReplay last.submissions last.ready.reads last.history
+      last.ready.state.writer.installed last.ready.state.session :=
+  opened.refinesLedger trace.ledgerSuffix
 
 private theorem freshEmptyWAL {state : NativeReadyState} (valid : state.Valid)
     (empty : state.writer.history = []) :
@@ -232,6 +243,40 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
         exact False.elim (List.not_mem_nil member)
       · rw [manifest] at present
         contradiction
+
+/-- The first write uses the returned table's phase and the same three
+cache references that the bootstrap initialized. The storage evidence
+and the live directory handle refer to that same returned heap. -/
+theorem writeStorageEntry {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
+    {image : Type} (view : OpenCloseHeapView heap image)
+    {directoryRef : IO.Ref (Option IO.FS.Handle)}
+    {activeRef : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pendingRef : IO.Ref (List (FilePath × IO.FS.Handle))}
+    (resolved : opened.handle.directory = directory)
+    (references : opened.handle.files.UsesCacheReferences activeRef pendingRef directoryRef)
+    (atDirectory : opened.handle.files.AtDirectory directory.path)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached directoryRef activeRef pendingRef = opened.start.current.ready.state.cache)
+    {storage : CheckpointStorageObservation} {visible : Nat → ByteArray}
+    (settled : let state := opened.start.current.ready.state
+      NativeReadyStorage state storage ∧
+      ∀ inode, storage.files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+        visible inode = state.writer.wal.active.bytes) :
+    ∃ cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path,
+      cache.directory = directoryRef ∧ cache.active = activeRef ∧ cache.pending = pendingRef ∧
+      opened.start.WriteStorageEntry view cache storage visible := by
+  have directoryEq := opened.start.directory.trans resolved
+  let cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path :=
+    ⟨directoryRef, activeRef, pendingRef, references, by rw [directoryEq]; exact atDirectory⟩
+  obtain ⟨_, reachedCensus, _, _, captured, _, slot, _⟩ := used
+  have sameObjects : report.captured.reached.inode = opened.start.current.ready.state.census.inode := by
+    rw [reachedCensus]
+    rfl
+  refine ⟨cache, rfl, rfl, rfl, census, cacheAt, settled.1, settled.2, ?_⟩
+  intro literal found
+  exact settled.1.bindsOpenCacheDirectory view cacheAt (by rw [captured, slot]; rfl) sameObjects found
 
 /-- End at the checkpoint issued on the heap of the preceding returned
 call. Both the prior replay and the stop use the same opened position. -/

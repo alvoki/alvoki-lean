@@ -233,7 +233,9 @@ theorem returns (seen : FreshBootstrapCacheChronology seed calls) :
         .ok ⟨.empty, 0, 0, 0⟩ seen.markerDirectory.reached ∧
       view.directory seen.markerDirectory.reached seed.directoryRef = some seed.handle ∧
       view.active seen.markerDirectory.reached seed.activeRef = none ∧
-      view.pending seen.markerDirectory.reached seed.pendingRef = [] := by
+      view.pending seen.markerDirectory.reached seed.pendingRef = [] ∧
+      cache.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧
+      cache.AtDirectory directory.path := by
   obtain ⟨action, assemble, cache, native, source, allocated, references, path, loaded, activeEmpty,
     _, _, _, _, _, _, _, _⟩ := seed.installs
   obtain ⟨published, markerFrame, pending⟩ := seen.markerPublication.returns
@@ -241,7 +243,7 @@ theorem returns (seen : FreshBootstrapCacheChronology seed calls) :
   have keeperFrame := (guardsFrame.trans seen.keeperFrames.preserves).trans seen.keeperDirectory.frame
   have final := keeperFrame.trans markerFrame
   refine ⟨action, assemble, cache, native, source, allocated, cache.bootstrapCacheSchedules references path, ?_, final.directory.trans loaded,
-    final.activeUnchanged.trans activeEmpty, pending⟩
+    final.activeUnchanged.trans activeEmpty, pending, references, path⟩
   have rawPublication : calls.publishZeroMarker directory seed.directoryRef seed.activeRef seed.pendingRef
       seen.keeperDirectory.reached = .ok ⟨.empty, 0, 0, 0⟩ seen.markerDirectory.reached := published
   simp only [FreshBootstrapCacheCalls.run, bootstrapSegmentedWith, bootstrapEmptyWith,

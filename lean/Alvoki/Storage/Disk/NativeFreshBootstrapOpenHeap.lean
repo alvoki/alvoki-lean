@@ -96,7 +96,7 @@ private theorem reachesFiles (seen : FreshBootstrapOpenHeap report raw) :
   have files : view.files raw.markerDirectory.reached = after := by
     change LockedFileState.mk _ _ = LockedFileState.mk _ _
     exact (LockedFileState.mk.injEq _ _ _ _).mpr ⟨image.trans published.symm, owner.trans owned.symm⟩
-  obtain ⟨_, _, _, _, _, _, _, _, directoryValue, activeValue, pendingValue⟩ := raw.returns
+  obtain ⟨_, _, _, _, _, _, _, _, directoryValue, activeValue, pendingValue, _, _⟩ := raw.returns
   have cache : view.cacheAt raw.markerDirectory.reached seed.directoryRef seed.activeRef seed.pendingRef = state.cache := by
     rw [reached.2.2.2.2.1]
     simp only [OpenCloseHeapView.cacheAt, directoryValue, activeValue, pendingValue, Option.map_some,
@@ -156,7 +156,7 @@ theorem installs (seen : FreshBootstrapOpenHeap report raw)
       (seen.keeperPhysical.inodes allocation.afterToken).crashBytes
         (BootstrapZeroKeeperRoute.settledImage (.fresh seen.keeper)).active = [ByteArray.empty] ∧
       (seen.keeperPhysical.inodes allocation.afterToken).crashBytes report.marker.inodeState.active = [WAL.Boundary.encode 0] ∧
-      ∀ (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+      (∀ (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
         (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit),
         OpenPhaseCellEffects view.phase get set →
         ∀ (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
@@ -165,9 +165,12 @@ theorem installs (seen : FreshBootstrapOpenHeap report raw)
           handle.phase = allocation.phase ∧ handle.token = allocation.token ∧ handle.contents = view.phase ∧
           handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
           start.reached = allocation.afterToken ∧ start.current.ready.state = state ∧
-          start.current.history = [] ∧ start.current.submissions = [] ∧ start.current.ready.reads = [] ∧ start.pins = [] := by
+          start.current.history = [] ∧ start.current.submissions = [] ∧ start.current.ready.reads = [] ∧ start.pins = []) ∧
+      files.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧
+      files.AtDirectory directory.path := by
   obtain ⟨state, after, returned, session, physical, reachedFiles, reachedCensus, reachedCache, ready⟩ := seen.reachesFiles
-  obtain ⟨cacheOpen, makeCache, files, starts, cacheSource, initialized, schedules, worker, _, _, _⟩ := raw.returns
+  obtain ⟨cacheOpen, makeCache, files, starts, cacheSource, initialized, schedules, worker, _, _, _, cacheRefs,
+    atDirectory⟩ := raw.returns
   have constructor := DiskTable.openReferenceAssembly directory lock files
   obtain ⟨allocated, references, stored⟩ := allocation.installs constructor
   have readyStored : view.phase allocation.afterToken allocation.phase = some state.session.phase := by
@@ -180,7 +183,7 @@ theorem installs (seen : FreshBootstrapOpenHeap report raw)
   refine ⟨state, after, files, _, _, ⟨cacheOpen, makeCache, starts, cacheSource, initialized⟩, schedules,
     listed, constructor, ?_, references, readyStored, tokenFrame.files.trans (phaseFrame.files.trans reachedFiles),
     tokenFrame.census.trans (phaseFrame.census.trans reachedCensus), tokenFrame.cache.trans (phaseFrame.cache.trans reachedCache),
-    ?_, ?_, ?_, returned, physical, inodesKept.symm ▸ keeperBytes, inodesKept.symm ▸ markerBytes, ?_⟩
+    ?_, ?_, ?_, returned, physical, inodesKept.symm ▸ keeperBytes, inodesKept.symm ▸ markerBytes, ?_, cacheRefs, atDirectory⟩
   · intro marked
     simp [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
       seen.flatAbsent, seen.markerAbsent, worker]

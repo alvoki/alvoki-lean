@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
 import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
+import Alvoki.Storage.Disk.NativeMutatingOpenRetries
 
 namespace Alvoki.Storage.DiskSession
 
@@ -155,6 +156,24 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   {raw : RawOpenAdmissionReport admission view source.calls entry}
   {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
 
+/-- Scoped laws at the actual primitive callbacks of a rejected MANIFEST lookup. -/
+structure RawManifestStatError.CallbackFrames
+    (seen : RawManifestStatError (admitted := raw) allocation source.fileCalls)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation seen.reached)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    (frame : heap → heap → Prop) : Prop where
+  admission : raw.CacheFrames allocation frame
+  stat : source.calls.lookup (directory.file .manifest) allocation.afterPending = .ok (.error seen.cause) seen.reached →
+    frame allocation.afterPending seen.reached
+  dispose : let cache :=
+      RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef
+    source.dispose cache seen.reached = .ok () disposal.afterDisposal → frame seen.reached disposal.afterDisposal
+  unlock : source.calls.unlock raw.lock disposal.afterDisposal = (match disposal.unlockResult with
+      | .ok () => .ok () disposal.reached
+      | .error cause => .error cause disposal.reached) →
+    frame disposal.afterDisposal disposal.reached
+  release : source.release raw.lock disposal.reached = finalized.reached → frame disposal.reached finalized.reached
+
 /-- Compose the same held lookup and cleanup receipts for any scoped
 observation, including the live files and the parent crash maps. -/
 theorem RawManifestStatError.finalizesWithFrames
@@ -164,17 +183,7 @@ theorem RawManifestStatError.finalizesWithFrames
     (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
     {frame : heap → heap → Prop}
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
-    (admitFrames : raw.CacheFrames allocation frame)
-    (stat : source.calls.lookup (directory.file .manifest) allocation.afterPending = .ok (.error seen.cause) seen.reached →
-      frame allocation.afterPending seen.reached)
-    (dispose : let cache :=
-        RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef
-      source.dispose cache seen.reached = .ok () disposal.afterDisposal → frame seen.reached disposal.afterDisposal)
-    (unlock : source.calls.unlock raw.lock disposal.afterDisposal = (match disposal.unlockResult with
-        | .ok () => .ok () disposal.reached
-        | .error cause => .error cause disposal.reached) →
-      frame disposal.afterDisposal disposal.reached)
-    (release : source.release raw.lock disposal.reached = finalized.reached → frame disposal.reached finalized.reached) :
+    (frames : seen.CallbackFrames disposal finalized frame) :
     ∃ failed : RawFinalizedOpenAttempt view directory source.calls source.init source.release input entry,
       source.openTable input entry = .error failed.diagnostic failed.reached ∧
       failed.diagnostic = disposal.diagnostic seen.cause ∧ failed.reached = finalized.reached ∧
@@ -182,11 +191,89 @@ theorem RawManifestStatError.finalizesWithFrames
   obtain ⟨failed, returned, cause, reached⟩ := seen.finalizesWithInterpreter source disposal sameDisposal finalized
   have uses := (RawMarkedOpenInterpreter.cacheReferences directory allocation.directoryRef allocation.activeRef
     allocation.pendingRef).1
-  have dropped := dispose (sameDisposal.symm ▸ disposal.disposed _ uses)
-  exact ⟨failed, returned, cause, reached, trans (raw.framesThroughCache allocation trans admitFrames)
-    (trans (stat seen.stat) (trans dropped (trans (unlock disposal.unlocked) (release finalized.finalized))))⟩
+  have dropped := frames.dispose (sameDisposal.symm ▸ disposal.disposed _ uses)
+  exact ⟨failed, returned, cause, reached, trans (raw.framesThroughCache allocation trans frames.admission)
+    (trans (frames.stat seen.stat) (trans dropped (trans (frames.unlock disposal.unlocked)
+      (frames.release finalized.finalized))))⟩
+
+private theorem singletonFrame
+    {atReturn : heap} {diagnostic : IO.Error} {frame : heap → heap → Prop}
+    (returned : source.openTable input entry = .error diagnostic atReturn) (framed : frame entry atReturn)
+    {earlier : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {error : IO.Error}
+    (prior : source.FailedCalls entry earlier before)
+    (inside : List.IsPrefix (earlier ++ [(path, error)]) [(input, diagnostic)])
+    (ran : source.openTable path before = .error error after) :
+    frame before after := by
+  have earlierEmpty : earlier = [] := by
+    apply List.eq_nil_of_length_eq_zero
+    have bound := inside.length_le
+    simp only [List.length_append, List.length_cons, List.length_nil] at bound
+    omega
+  have first : before = entry := by
+    cases prior with
+    | empty => rfl
+    | next _ _ _ => simp at earlierEmpty
+  subst earlier
+  subst before
+  have same : (path, error) = (input, diagnostic) := by
+    simpa using inside.eq_of_length rfl
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj same
+  obtain rfl := (EStateM.Result.error.inj (returned.symm.trans ran)).2
+  exact framed
 
 end FinalizedManifestLookup
+
+section ManifestRetry
+
+variable {heap stream : Type} {input : FilePath} {state : NativeReadyState} {target : Target}
+  {view : OpenCloseHeapView heap FileImage} {entry : heap}
+  {admission : CensusOpenAdmissionReports input state.session.directory (view.descriptors entry) (view.files entry)}
+  {source : RawMarkedOpenInterpreter heap stream}
+  {raw : RawOpenAdmissionReport admission view source.calls entry}
+  {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+  {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
+  {visible : heap → Nat → ByteArray}
+
+local notation "dir" => state.session.directory
+local notation "scope" => fun path =>
+  state.selectedRetryPath path ∨ path = DiskDirectory.file dir (DiskFile.walSegment target.first)
+local notation "durableFrames" => fun before after =>
+  CheckpointSurvivingFiles.Frames state.selectedRetryPath (CheckpointStorageObservation.files (storage before))
+    (CheckpointStorageObservation.files (storage after)) ∧
+  CheckpointStorageObservation.Frames (· = DiskDirectory.path dir) (storage before) (storage after)
+
+/-- A rejected held lookup supplies one actual failed retry. Live keeper
+bytes and durable file and parent observations follow the same cleanup. -/
+theorem RawManifestStatError.selectedRetry
+    (seen : RawManifestStatError (admitted := raw) allocation source.fileCalls)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation seen.reached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view dir source.release raw.lock admission.owner disposal.reached)
+    (vacant : TryLockObserves (view.files entry).owners dir (.ok true))
+    (frames : seen.CallbackFrames disposal finalized (fun before after =>
+      (observedFiles names visible before).Frames scope (observedFiles names visible after) ∧ durableFrames before after)) :
+    let calls := [(input, disposal.diagnostic seen.cause)]
+    ∃ attempts : source.FailedCalls entry calls finalized.reached,
+      calls ≠ [] ∧
+      RawOpenRetryTrace.SelectedEffects view source entry target
+        (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) state.selectedRetryPath
+        (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts ∧
+      ∀ {earlier : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {error : IO.Error},
+        source.FailedCalls entry earlier before → List.IsPrefix (earlier ++ [(path, error)]) calls →
+        source.openTable path before = .error error after → durableFrames before after := by
+  obtain ⟨failed, returned, diagnostic, reached, live, durable⟩ := seen.finalizesWithFrames disposal sameDisposal finalized
+    (fun left right => ⟨left.1.trans right.1, left.2.1.trans right.2.1, left.2.2.trans right.2.2⟩) frames
+  let block : RawFinalizedOpenAttempts view dir source.calls source.init source.release entry
+      [(input, failed.diagnostic)] failed.reached := .attempt .empty vacant input failed
+  let calls : source.FailedCalls entry [(input, failed.diagnostic)] failed.reached := .next .empty input returned
+  rw [← reached] at live durable
+  dsimp
+  rw [← diagnostic, ← reached]
+  exact ⟨calls, List.cons_ne_nil _ _, RawOpenRetryTrace.SelectedEffects.empty.readOnly block
+    (fun path keeps => live path (.inl keeps)) (block.keepsVisibleKeeper (fun path keeper => live path (.inr keeper))) calls,
+    fun prior inside ran => singletonFrame (frame := durableFrames) returned durable prior inside ran⟩
+
+end ManifestRetry
 
 section
 

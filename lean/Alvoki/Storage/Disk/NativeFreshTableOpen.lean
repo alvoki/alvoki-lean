@@ -95,7 +95,9 @@ theorem FreshBootstrapOpenHeap.opensFromAdmission
       (NativeOpenSuccessReports.empty report).UsesReachedState start.current.ready.state after ∧
       (observed.keeperPhysical.inodes start.reached).crashBytes
         (BootstrapZeroKeeperRoute.settledImage (.fresh observed.keeper)).active = [ByteArray.empty] ∧
-      (observed.keeperPhysical.inodes start.reached).crashBytes report.marker.inodeState.active = [WAL.Boundary.encode 0] := by
+      (observed.keeperPhysical.inodes start.reached).crashBytes report.marker.inodeState.active = [WAL.Boundary.encode 0] ∧
+      handle.files.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef ∧
+      handle.files.AtDirectory directory.path := by
   intro recover
   let lockIdentity := fun handle => (view.handle admitted.afterFlock handle).2.1.description
   have initial := (admitted.lockedCensus.trans admitted.appendCensus).symm.trans seed.entrySlots
@@ -105,7 +107,7 @@ theorem FreshBootstrapOpenHeap.opensFromAdmission
     congrArg (fun handle => handle.2.1.description) capturedLock
   obtain ⟨state, after, files, db, installer, ⟨cacheOpen, makeCache, action, source, initialized⟩,
     schedules, _, constructor, held, _, _, reachedFiles, reachedCensus, cached, lockRef, phaseRef, tokenRef,
-    normalized, alignedState, keeperBytes, markerBytes, position⟩ :=
+    normalized, alignedState, keeperBytes, markerBytes, position, cacheRefs, atDirectory⟩ :=
     observed.installs admitted.lock lockIdentity locked phaseIdentity tokenIdentity allocatePhase allocateToken allocation
       phaseID tokenID phaseFrame tokenFrame phaseInodes tokenInodes
   let worker := fun resolved lock cache => do
@@ -127,7 +129,7 @@ theorem FreshBootstrapOpenHeap.opensFromAdmission
     exact exactOpen
   let fresh := FreshBootstrapOpenHeap.Returned.mk handle start opened history submissions reads pins
   refine ⟨cacheOpen, makeCache, fresh, after, action, source, ?_, path, lock, ?_, phase, token,
-    contents, getter, setter, compared, reached, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    contents, getter, setter, compared, reached, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · exact initialized.trans (congrArg (fun opened => EStateM.Result.ok opened seed.afterPending) cache.symm)
   · rw [cache]
     exact schedules
@@ -153,5 +155,9 @@ theorem FreshBootstrapOpenHeap.opensFromAdmission
     exact keeperBytes
   · rw [reached]
     exact markerBytes
+  · rw [cache]
+    exact cacheRefs
+  · rw [cache]
+    exact atDirectory
 
 end Alvoki.Storage.DiskSession
