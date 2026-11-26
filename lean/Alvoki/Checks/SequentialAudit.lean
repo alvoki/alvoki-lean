@@ -506,6 +506,7 @@ import Alvoki.Storage.Disk.NativeAlignedMarkedReady
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
 import Alvoki.Storage.Disk.NativeGroupedWriteSnapshot
+import Alvoki.Storage.Disk.NativeFailedOpenTerminal
 import Alvoki.Storage.Disk.NativeLongMarkedReady
 import Alvoki.Storage.Disk.NativePrunedMarkedReady
 import Alvoki.Storage.Disk.NativeRawWriteCustody
@@ -3999,6 +4000,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reopensAfterGroupedError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.groupedRetryAndReads
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.lastError
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.refinesFailedOpenTerminalLedger
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAfterGroupedWriteRetries
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointStopsAtReachedCache
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.finalizesWithFrames
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.selectedRetry
 #check_axioms Alvoki.Storage.DiskSession.checkActiveSegmentWith_rawResult

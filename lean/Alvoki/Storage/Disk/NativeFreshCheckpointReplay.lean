@@ -348,12 +348,7 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterEarlyCheckpointStop
   have cacheAtNext := physical.cacheAt
   change view.cacheAt next.reached cache.directory cache.active cache.pending = _ at cacheAtNext
   rw [atNext, sameDirectory, sameActive, samePending] at cacheAtNext
-  have exactStop : (runCheckpointOnOpenPhaseUntilSyncStop next.current.ready.state.session.directory
-      opened.handle.phase opened.handle.get opened.handle.set primitives fsync).run
-      (next.current.ready.state.cache, next.reached) = .error (cutStage.step, reason) stoppedAt := by
-    rw [directoryAtNext, atNext, ← cacheAtNext]
-    exact stopped
-  obtain ⟨stop⟩ := next.checkpointStopsFromWhole primitives fsync exactStop
+  obtain ⟨stop⟩ := next.checkpointStopsAtReachedCache primitives fsync directoryAtNext cacheAtNext atNext stopped
   obtain ⟨cut⟩ := cutEffects next directoryAtNext atNext openedCache sameDirectory sameActive samePending stop
   have initial : NativeReadyStorage next.current.ready.state
       ((directoryAtNext.symm ▸ filesObserved next.reached :

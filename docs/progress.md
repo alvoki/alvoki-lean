@@ -45,6 +45,21 @@ fsync. Both paths sync the original keeper and carry the storage guarantee
 through the phase and token allocations of the actual returned table.
 Grouped-sync and late-publication recovery share this proof.
 
+A write history can end at the last unsuccessful `open`. For a
+nonempty sequence of failed attempts, the proof identifies the input,
+diagnostic and heap of the last returned error. The selected WAL bounds
+the pending replay and keeps prior reads consistent with the earlier
+ledger. In the grouped-error case, the selected old marker omits the
+failed batch. This terminal conclusion requires no later successful open.
+
+A final checkpoint stop also accepts an incoming ledger and the actual
+current handle in the original managed directory, including a handle
+obtained by reopening. The same observed stop is sufficient for the
+terminal ledger. Given the reboot and read observations, it also supplies
+the recovered position for continuing execution.
+[Failed-open endpoint](../lean/Alvoki/Storage/Disk/NativeFailedOpenTerminal.lean) ·
+[Final checkpoint recovery](../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
+
 An acknowledged write also carries the live and durable WAL namespace
 to its returned writer. The actual append preserves the segment starts.
 Given the incoming catalog and the name effects of the reached callbacks,

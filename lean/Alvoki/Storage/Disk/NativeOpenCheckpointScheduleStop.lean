@@ -166,6 +166,22 @@ theorem NativeOpenedPosition.checkpointStopsFromWhole (current : NativeOpenedPos
         rw [phaseAction_run] at stopped
         cases installed : opened.set opened.phase (.ready next) files <;> rw [installed] at stopped <;> cases stopped
 
+/-- Use the same source-stop witness when the call starts on the
+literal opened table's directory and cache. The three equalities
+identify its actual entry with the current ready position. -/
+theorem NativeOpenedPosition.checkpointStopsAtReachedCache (current : NativeOpenedPosition opened)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {directory : DiskDirectory} {cache : CensusDirectoryCache} {entry : heap}
+    {step : Step} {reason : FilePath} {reached : CheckpointWorld heap}
+    (sameDirectory : current.current.ready.state.session.directory = directory)
+    (sameCache : cache = current.current.ready.state.cache)
+    (sameHeap : current.reached = entry)
+    (stopped : (runCheckpointOnOpenPhaseUntilSyncStop directory
+      opened.phase opened.get opened.set primitives fsync).run (cache, entry) = .error (step, reason) reached) :
+    Nonempty (NativeCheckpointSourceStop current primitives fsync step reason reached) :=
+  current.checkpointStopsFromWhole primitives fsync (by
+    rwa [sameDirectory, sameHeap, ← sameCache])
+
 theorem successfulCheckpointStepsPreserve {value : Type}
     (perform : Step → ExceptT IO.Error (EStateM FilePath (CheckpointWorld heap)) Unit)
     (observe : CheckpointWorld heap → value) (related : value → value → Prop)
