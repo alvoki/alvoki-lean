@@ -76,7 +76,7 @@ theorem NativeOpenedPosition.recoversGroupedWriteError
     (ready).SelectedWriteRecovery (returns := returns) (input := input) (view := view) (batch := batch)
       (target := (state).writer.target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
       source names visible rebooted vacant get set ptrEq ∧
-    (ready).ReopenedOldLedger batch request input cause (source.openTable input reached) := by
+    (ready).ReopenedLedger current.current.history batch [] request input cause (source.openTable input reached) := by
   have valid := (ready).readPrefix.refines.1
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
   obtain ⟨committed, admitted, selected, rebootVacant, slots⟩ :=

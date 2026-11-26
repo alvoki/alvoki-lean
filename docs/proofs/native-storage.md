@@ -414,8 +414,9 @@ binding remains admissible on reboot. Once the directory effect settles the rena
 reported fsync error is compatible with a definite new marker. These results derive a
 bounded repair target from one chosen map and its selected manifest, marker and keeper
 bytes. The post-group payload observations and native effect laws remain explicit. The
-grouped file-sync error now supplies its target directly to the recovery worker. The other
-publication cuts still need adapters to the common recovery fold.
+grouped file-sync error now supplies its target directly to the recovery worker. The marker
+rename and final directory sync errors use the same joint sampling and repair fold. Each
+local late-publication proof supplies its exact commit return and reached payloads.
 
 The selected batch target supplies the same repair plan after a reported reboot or live retry.
 The reboot bridge uses one joint map and the bytes sampled at its actual heap. In the grouped
@@ -440,6 +441,16 @@ submission with zero retained writes. The proof assumes the reported native call
 the joint Linux crash choice and the observations of the individual open attempts.
 [Grouped write and recovery](../../lean/Alvoki/Storage/Disk/NativeGroupedWriteRecovery.lean)
 · [Replay ledger](../../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
+
+The late-publication composition requires retry observations only for the target admitted
+by the rebooted manifest and marker. That pair fixes the repair target uniquely among admitted
+batch targets. The shared ledger derives the old-or-whole history for the exact source return.
+A successful marked installer exposes its own phase and token allocations. The same frame
+used by bootstrap preserves the repair output through those allocations, including the
+visible keeper bytes needed by the next append. Establishing the durable files and bindings
+at the marked repair output remains a separate obligation of the keeper and directory barriers.
+[Late publication recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+· [Ready allocations](../../lean/Alvoki/Storage/Disk/NativeOpenReadyStorage.lean)
 
 A marked repair that fails after changing files supplies its reached image through the same
 worker and finalizers as the read-only error path. The local stage-sync and final-directory

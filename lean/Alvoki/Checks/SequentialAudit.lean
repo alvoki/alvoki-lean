@@ -483,6 +483,8 @@ import Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
 import Alvoki.Storage.Disk.NativeGroupedWriteReboot
 import Alvoki.Storage.Disk.NativeSourceLedger
 import Alvoki.Storage.Disk.NativeGroupedWriteRecovery
+import Alvoki.Storage.Disk.NativeLateWriteRecovery
+import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeRawWriteCustody
 import Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
@@ -3914,6 +3916,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.ledgerSuffix
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.ledgerAfterReopen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.replaysOldTarget
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.samplesWal
+#check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selections.retryTargetAtReboot
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversAfterPublicationError
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.replaysSelectedLedger
+#check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.framesReadyStorage
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.selectedFilePath
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.reopenPath
 #check_axioms Alvoki.Storage.DiskSession.NativeWriteCrashReads.reopensAfterReadOnlyAttempts

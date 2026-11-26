@@ -27,6 +27,43 @@ variable {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap
   {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
   {visible : heap → Nat → ByteArray} {entry failed rebooted : heap}
 
+/-- The manifest, marker and keeper are sampled through the same map.
+Recovery may also sample runs and seals without requiring byte choices
+for the lock or directory. -/
+theorem RawWriteRebootEntry.samplesWal
+    (seen : RawWriteRebootEntry state view storage names visible failed rebooted) :
+    ∀ path inode,
+      (path = state.session.directory.file .manifest ∨ path = state.session.directory.file .walBoundary ∨
+        path = state.session.directory.file (.walSegment state.writer.wal.active.first)) →
+      names rebooted path = some inode → visible rebooted inode ∈ (storage failed).files.bytes inode := by
+  intro path inode selected bound
+  exact seen.sampled path (selected.elim Or.inl (fun wal => .inr (.inl (wal.imp_right Or.inl)))) inode bound
+
+/-- Interpret the exact joint survivor of a late publication error.
+The rename and directory-sync proofs both supply the same selections.
+Their live bindings are independent of the map sampled at reboot. -/
+theorem WalPublicationPayloads.Selections.retryTargetAtReboot
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (valid : state.Valid)
+    (prepared : prepareBatch state.writer.installed.table rows = some (batch, table))
+    (fits : state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    (old : NativeReadyStorage state (storage entry))
+    (frame : (storage entry).Frames state.writeFramePath (storage failed))
+    {payloads : WalPublicationPayloads} {liveNew : Bool} {allows : Bool → Prop}
+    (selected : payloads.Selections state.session.directory state.writer.wal.active.first (storage failed) liveNew allows)
+    (sameKeeper : payloads.keeperBytes = state.writer.wal.active.bytes ++ WAL.encodeBatch batch)
+    (oldMarker : payloads.oldMarkerBytes = WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64)
+    (newMarker : payloads.newMarkerBytes =
+      WAL.Boundary.encode (state.writer.installed.walBytes + WAL.frameSize * rows.length).toUInt64)
+    (seen : RawWriteRebootEntry state view storage names visible failed rebooted) :
+    ∃ target, BatchRetryTarget state.writer.history batch state.writer.wal.active.first target ∧
+      target.pair = ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
+        (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)⟩ ∧
+      target.Accepts ((names rebooted (state.session.directory.file (.walSegment state.writer.wal.active.first))).map
+        (visible rebooted)) :=
+  selected.retryTargets valid prepared fits old frame sameKeeper oldMarker newMarker
+    (names rebooted) seen.chosen (visible rebooted) seen.samplesWal
+
 /-- The same sampled manifest and protected inodes initialize the live
 retry state. The marker can select either earlier history or the entire
 uncertain batch, and a retained keeper may be longer than that marker. -/
@@ -36,23 +73,14 @@ theorem RawWriteRebootEntry.selectsRetry
     (frame : (storage entry).Frames state.writeFramePath (storage failed))
     {batch : List WAL.Write} {target : Target}
     (admitted : BatchRetryTarget state.writer.history batch state.writer.wal.active.first target)
-    (select : names rebooted ∈ (storage failed).crashNames →
-      (∀ path inode, (path = state.session.directory.file .manifest ∨ path = state.session.directory.file .walBoundary ∨
-        path = state.session.directory.file (.walSegment state.writer.wal.active.first)) →
-        names rebooted path = some inode → visible rebooted inode ∈ (storage failed).files.bytes inode) →
-      target.pair = ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
-        (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)⟩ ∧
-      target.Accepts ((names rebooted (state.session.directory.file (.walSegment state.writer.wal.active.first))).map
-        (visible rebooted)))
+    (pair : target.pair = ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
+      (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)⟩)
+    (keeper : target.Accepts ((names rebooted (state.session.directory.file (.walSegment state.writer.wal.active.first))).map
+      (visible rebooted)))
     (later : ∀ first ∈ (view.files rebooted).image.later.visible, target.range.through < first) :
     RawOpenRetryTrace.SelectedEntry view state target names visible rebooted ∧
     TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
     (view.descriptors rebooted).slots = [] := by
-  have sampled path
-      (walPath : path = state.session.directory.file .manifest ∨ path = state.session.directory.file .walBoundary ∨
-        path = state.session.directory.file (.walSegment state.writer.wal.active.first)) :=
-    seen.sampled path (walPath.elim Or.inl (fun wal => .inr (.inl (wal.imp_right Or.inl))))
-  obtain ⟨pair, keeper⟩ := select seen.chosen (fun path inode scope => sampled path scope inode)
   have start : target.first = state.writer.wal.active.first := admitted.1
   have manifest := old.selectedWriteManifest frame _ seen.chosen _ (seen.sampled _ (.inl rfl))
   have sameManifest := (congrArg DirectoryPublication.Bindings.manifest pair).trans manifest

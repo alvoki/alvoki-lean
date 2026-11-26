@@ -106,9 +106,9 @@ theorem RawWriteRebootEntry.selectsGroupErrorRetry
       effects.appendFile effects.stageFile effects.fileBarriers
   have sameFirst : state.writer.installed.activeFirst = state.writer.wal.active.first :=
     valid.retained.resumed.keeper.trans valid.retained.active
-  refine ⟨returned, admitted, seen.selectsRetry old protectedFrame admitted (fun chosen sample => ?_) later⟩
-  exact selected (names rebooted) chosen (visible rebooted)
-    (fun path inode scope named => sample path inode (by simpa only [sameFirst] using scope) named)
+  obtain ⟨pair, keeper⟩ := selected (names rebooted) seen.chosen (visible rebooted)
+    (fun path inode scope named => seen.samplesWal path inode (by simpa only [sameFirst] using scope) named)
+  exact ⟨returned, admitted, seen.selectsRetry old protectedFrame admitted pair keeper later⟩
 
 end
 end Alvoki.Storage.DiskSession

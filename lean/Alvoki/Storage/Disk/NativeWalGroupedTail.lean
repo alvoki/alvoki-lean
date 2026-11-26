@@ -39,6 +39,17 @@ structure RawSyncCalls.WalGroupEffects {heap image : Type} (calls : RawSyncCalls
     ∃ consumed, calls.GroupedFileEffects cache view inodes observe first appended staged consumed grouped
       keeperHandle markerHandle keeper (inode markerHandle)
 
+/-- Exact file payloads and namespace choices at a reached late write
+error. The live marker and the admitted crash choices remain independent. -/
+def WalPublicationPayloads.ReachedWrite (state : NativeReadyState) (batch : List WAL.Write)
+    (rows : List (UInt64 × Option UInt64)) (atHeap : CheckpointStorageObservation)
+    (liveNew : Bool) (allows : Bool → Prop) : Prop :=
+  ∃ payloads : WalPublicationPayloads,
+    payloads.keeperBytes = state.writer.wal.active.bytes ++ WAL.encodeBatch batch ∧
+    payloads.oldMarkerBytes = WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64 ∧
+    payloads.newMarkerBytes = WAL.Boundary.encode (state.writer.installed.walBytes + WAL.frameSize * rows.length).toUInt64 ∧
+    payloads.Selections state.session.directory state.writer.wal.active.first atHeap liveNew allows
+
 section
 
 variable {heap image : Type} {state : NativeReadyState}
@@ -116,12 +127,8 @@ theorem RawSyncCalls.failedMarkerRenameSelects (valid : state.Valid)
     (effect : ∀ inode, (observe grouped).visible stagedPath = some inode →
       WalMarkerRenameEffect dir inode effective (observe grouped).storageObservation (observe reached).storageObservation) :
     commitBytesAt dir first bytes count append stage sync rename entry = .error cause reached ∧
-    ∃ payloads : WalPublicationPayloads,
-      payloads.keeperBytes = priorBytes ++ bytes ∧
-      payloads.oldMarkerBytes = WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64 ∧
-      payloads.newMarkerBytes = mark ∧
-      payloads.Selections dir state.writer.wal.active.first (observe reached).storageObservation effective
-        (fun published => published = true → effective = true) := by
+    WalPublicationPayloads.ReachedWrite state batch rows (observe reached).storageObservation effective
+      (fun published => published = true → effective = true) := by
   obtain ⟨payloads, selected, keeper, oldMarker, newMarker⟩ :=
     calls.groupedWalPayloadsFromPublication cache view appender stager inodes observe inode buffered
       (rows := rows) valid old wrote remembered synced effects
@@ -158,12 +165,8 @@ theorem RawSyncCalls.failedRootSyncFromPublication (valid : state.Valid)
         some ((view.descriptors issued).inode (view.handle issued rootHandle).2.1.description) →
       WalRootSyncEffect dir effective (observe issued).storageObservation (observe reached).storageObservation) :
     commitBytesAt dir first bytes count append stage sync rename entry = .error cause reached ∧
-    ∃ payloads : WalPublicationPayloads,
-      payloads.keeperBytes = priorBytes ++ bytes ∧
-      payloads.oldMarkerBytes = WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64 ∧
-      payloads.newMarkerBytes = mark ∧
-      payloads.Selections dir state.writer.wal.active.first (observe reached).storageObservation true
-        (fun published => effective = true → published = true) := by
+    WalPublicationPayloads.ReachedWrite state batch rows (observe reached).storageObservation true
+      (fun published => effective = true → published = true) := by
   have actualSync := (calls.rootBarrier cache loaded).2.symm.trans failedGroup
   obtain ⟨syncCause, failed, diagnostic⟩ : ∃ syncCause,
       calls.fsync rootHandle issued = .error syncCause reached ∧

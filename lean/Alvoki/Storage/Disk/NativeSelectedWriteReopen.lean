@@ -80,7 +80,9 @@ def RawHealthyMarkedOpenEffects.SelectedReturn
       phaseIdentity handle.phase ≠ state.session.phaseRef ∧ tokenIdentity handle.token ≠ state.session.sessionRef ∧
       start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
-      view.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef = next.state.cache
+      view.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef = next.state.cache ∧
+      ∃ allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase next.state.writer.installed raw.repaired,
+        (handle.phase, handle.token, start.reached) = (allocation.phase, allocation.token, allocation.afterToken)
 
 /-- Install the marked replay from the files and descriptor inventory used
 by the actual healthy admission. The earlier write, crash and failed
@@ -145,7 +147,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
   obtain ⟨measured, installed, cacheOpen, makeCache, action, source, cacheUses, ran⟩ :=
     marked.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
       raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
-  obtain ⟨handle, start, table, _, sameLock, sameCache, _, _, contents, sameGet, sameSet, sameCompare,
+  obtain ⟨handle, start, table, _, sameLock, sameCache, samePhase, sameToken, contents, sameGet, sameSet, sameCompare,
     positionEq, reached, pins, sameFiles, sameCensus, cached, _, _, _, phaseId, tokenId⟩ :=
     installed.startsAtReportedPosition position rfl seeded.frames.1 cache owner slot phase ptrEq
   have freshPhase : phaseIdentity handle.phase ≠ state.session.phaseRef :=
@@ -155,9 +157,18 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
   refine ⟨measured, position, makeCache, handle, start, ⟨cacheOpen, action, source⟩, cacheUses, ?_, positionEq, rfl, rfl, target,
     target ▸ seeded.refines.1.retained.resumed.ready, checkpoint, durable, sameLock,
     sameCache.symm ▸ installed.cacheReferences, sameCache.symm ▸ installed.cacheDirectory,
-    contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached⟩
-  rw [table, reached]
-  exact ran
+    contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached, ?_⟩
+  · rw [table, reached]
+    exact ran
+  · have session := (EStateM.Result.ok.inj (installed.nativeReturned.symm.trans seeded.frames.1)).1
+    have payload := Phase.ready.inj (installed.ready.refines.1.phase.symm.trans
+      ((congrArg SegmentedSession.phase session).trans seeded.refines.1.phase))
+    have value := installed.installed.trans payload
+    let Allocated (payload : Installed) : Prop :=
+      ∃ allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase payload raw.repaired,
+        (handle.phase, handle.token, start.reached) = (allocation.phase, allocation.token, allocation.afterToken)
+    have allocated : Allocated installed.opened.installed := ⟨installed.allocation, by rw [samePhase, sameToken, reached]⟩
+    exact Eq.mp (congrArg Allocated value) allocated
 
 /-- A selected crash image supplies the same canonical inodes and
 bytes after the actual failed opens. The next measured keeper repair

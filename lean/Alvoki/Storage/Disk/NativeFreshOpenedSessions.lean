@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
+import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 
 namespace Alvoki.Storage.DiskSession
@@ -184,19 +185,17 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
     rw [visible]
     simpa only [report.handoff.markerSettlement name, List.map_singleton, List.mem_singleton] using surviving names allowed
   have reached : opened.start.reached = allocation.afterToken := congrArg (fun result => result.2.2) returnedAt
-  have keeperSelected : state.crashPath (state.session.directory.file (.walSegment state.writer.wal.active.first)) :=
-    NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
-  have visibleAtReturn (inode) (bound : (observe allocation.afterToken).files.names
+  have visibleBeforeAllocation (inode) (bound : stored.files.names
       (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode) :
-      (seen.keeperPhysical.inodes allocation.afterToken).visible inode = state.writer.wal.active.bytes := by
-    have sameName := ((phaseFrame.trans tokenFrame).visible _ keeperSelected).1
-    have beforeName := sameName.symm.trans bound
-    rw [directoryEq, first, keeperBound] at beforeName
-    rw [tokenInodes, phaseInodes, finalInodes, emptyKeeper, ← Option.some.inj beforeName]
+      (seen.keeperPhysical.inodes raw.markerDirectory.reached).visible inode = state.writer.wal.active.bytes := by
+    rw [directoryEq, first, keeperBound] at bound
+    rw [finalInodes, emptyKeeper, ← Option.some.inj bound]
     exact visibleKeeper
   rw [reached]
-  refine ⟨?_, visibleAtReturn⟩
-  apply NativeReadyStorage.frame _ (phaseFrame.trans tokenFrame)
+  refine allocation.framesReadyStorage observe (fun h inode => (seen.keeperPhysical.inodes h).visible inode)
+    ?_ visibleBeforeAllocation phaseFrame tokenFrame
+    (fun inode _ => congrArg (fun inodes => inodes.visible inode) phaseInodes)
+    (fun inode _ => congrArg (fun inodes => inodes.visible inode) tokenInodes)
   refine ⟨⟨?_, ?_, ?_, ?_, ?_⟩, ?_, ?_, ?_⟩
   · rw [directoryEq]
     exact directoryBound

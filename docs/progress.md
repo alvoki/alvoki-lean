@@ -1,5 +1,20 @@
 # Current handoff
 
+A failed marker rename and a failed final directory fsync now supply the same recovery
+interface. The actual commit return identifies the error heap. The proof samples the selected
+manifest, marker and keeper from one joint reboot and derives the target and its accepted WAL
+prefix. Only the target identified by those bytes requires repair observations. The common open
+and ledger proofs authenticate the returned table at either the old history or the full batch,
+with earlier snapshots preserved. The model keeps the live and crash marker choices separate.
+[Late write and recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+
+A successful marked open now exposes the allocations of the exact ready phase and session token.
+The same frame proof used by bootstrap carries durable storage and visible keeper bytes
+through those allocations to the returned heap. The remaining local proof must establish
+these facts at the actual repair heap from the keeper and directory barriers and the
+protected namespace.
+[Ready allocations](../lean/Alvoki/Storage/Disk/NativeOpenReadyStorage.lean)
+
 A returned error in the WAL file-fsync group now composes with one observed joint reboot,
 any finite sequence of admitted marked open failures, and the exact successful return of the
 same open interpreter. The returned table keeps the old history and existing snapshot reads
