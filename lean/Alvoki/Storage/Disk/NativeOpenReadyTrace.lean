@@ -301,7 +301,8 @@ def Returns (report : NativeOpenedReport start instruction) (event : NativeExecu
       returned.raw.sequence = before.writer.installed.table.committed ∧ returned.localPin ∈ table.pins.active ∧
       event = .snapshotControl .acquire (.ok (before.session.sessionRef, returned.localPin)) ∧
       next.pins = start.pins ++ [returned] ∧ next.current.history = start.current.history ∧
-      next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads
+      next.current.submissions = start.current.submissions ∧ next.current.ready.reads = start.current.ready.reads ∧
+      (∀ pin, (issue pin).UsesOpenToken opened.token pin)
   | .planWalCollection observed =>
     opened.table.UsesOpenWalPlanningSchedule start.current.ready.state.session.directory opened.phase ∧
     observed.calls.runOnOpenPhase opened start.reached = (match observed.extents.result with
@@ -548,7 +549,7 @@ theorem reaches (report : NativeOpenedReport start instruction) :
         by rw [state]; exact kept, start.pins ++ [actualPin]⟩
     have pinSpec := PackedTable.acquireAt_spec acquired
     refine ⟨_, position, step, issue, actualPin, table, source, atEntry, inner, raw, ?_, acquired, state, rfl,
-      (issued pin).2.2.trans pinSpec.sequence, pinSpec.active, rfl, rfl, rfl, rfl, transition.reads⟩
+      (issued pin).2.2.trans pinSpec.sequence, pinSpec.active, rfl, rfl, rfl, rfl, transition.reads, issued⟩
     change opened.set opened.phase next.state.session.phase start.reached = .ok () reached
     rw [state]
     exact wrote

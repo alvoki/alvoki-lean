@@ -33,6 +33,35 @@ theorem CheckpointPrimitiveCalls.returnedRunPair
     primitives.returnedRememberedFile fsync (file_ne_directory _ _) remembered issued
   exact ⟨run, handle, selected, wrote, remembered, completed, consumed⟩
 
+/-- Carry an invariant across actual adjacent run writes and file syncs. -/
+private theorem returnedRunPairsPreserve {image : Type}
+    (perform : Step → ExceptT IO.Error (EStateM FilePath image) Unit)
+    (count : Nat) (invariant : Nat → image → Prop) {entry reached : image}
+    (initial : invariant 0 entry)
+    (preserves : ∀ index < count, ∀ before written after,
+      (perform (.writeRun index)).run before = .ok (.ok ()) written →
+      (perform (.syncRun index)).run written = .ok (.ok ()) after →
+      invariant index before → invariant (index + 1) after)
+    (returned : ((runSteps count).forM perform).run entry = .ok (.ok ()) reached) :
+    invariant count reached := by
+  have prefixKeeps (finished : Nat) (within : finished ≤ count) (after : image)
+      (returned : ((runSteps finished).forM perform).run entry = .ok (.ok ()) after) :
+      invariant finished after := by
+    induction finished generalizing after with
+    | zero =>
+      simp only [runSteps, List.range_zero, List.flatMap_nil] at returned
+      have same : entry = after := (EStateM.Result.ok.inj returned).2
+      exact same ▸ initial
+    | succ index earlier =>
+      have ordered : runSteps (index + 1) = (runSteps index ++ [.writeRun index]) ++ [.syncRun index] := by
+        simp [runSteps, List.range_succ, List.append_assoc]
+      rw [ordered] at returned
+      obtain ⟨written, beforeSync, synced⟩ :=
+        returnedLastStep perform (runSteps index ++ [.writeRun index]) (.syncRun index) returned
+      obtain ⟨before, prior, wrote⟩ := returnedLastStep perform (runSteps index) (.writeRun index) beforeSync
+      exact preserves index (by omega) before written after wrote synced (earlier (by omega) before prior)
+  exact prefixKeeps count (Nat.le_refl _) reached returned
+
 section RunDurability
 
 variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
@@ -61,49 +90,37 @@ theorem NativeCheckpointSourcePrefix.returnedRunsStoreBytes
   let directory := current.current.ready.state.session.directory
   let path (index : Nat) := directory.file (.run stop.next.generation index)
   let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
-  let initial : CheckpointWorld heap := (current.current.ready.state.cache, stop.poisoned)
-  have aux (n : Nat) (within : n ≤ count) (after : CheckpointWorld heap)
-      (returned : ((runSteps n).forM perform).run initial = .ok (.ok ()) after) :
-      ∀ index < n, ∀ run : Compaction.CheckedRun, stop.next.table.runs.toArray[index]? = some run →
-        (observe after.2).storageObservation.files.Stored (path index) run.run.bytes := by
-    induction n generalizing after with
-    | zero => simp
-    | succ n ih =>
-      have order : runSteps (n + 1) = (runSteps n ++ [.writeRun n]) ++ [.syncRun n] := by
-        simp [runSteps, List.range_succ, List.append_assoc]
-      rw [order] at returned
-      obtain ⟨atSync, beforeSync, ranSync⟩ :=
-        returnedLastStep perform (runSteps n ++ [.writeRun n]) (.syncRun n) returned
-      obtain ⟨before, previous, ranWrite⟩ := returnedLastStep perform (runSteps n) (.writeRun n) beforeSync
-      obtain ⟨selectedRun, handle, selected, wrote, remembered, synced, consumed⟩ :=
-        primitives.returnedRunPair directory fsync stop.next stop.manifest n ranWrite ranSync
-      have resolved : atSync.1.resolve directory.path (path n) primitives.openRead atSync.2 =
-          .ok handle (after.1, atSync.2) := by
-        rw [remembered, Cache.resolveRemembered (file_ne_directory _ _) handle primitives.openRead, consumed]
-      have bound : n < count := by omega
-      obtain ⟨writeFrames, privateBinding⟩ :=
-        effects.write n bound before.2 atSync.2 selectedRun.run.bytes handle wrote
-      obtain ⟨_, binding, syncPrivate, inodeSync, names, survives⟩ :=
-        effects.sync n bound atSync after handle atSync.2 resolved synced
-      have payload := writtenPayload n bound before.2 atSync.2 selectedRun.run.bytes handle wrote
-      have inodeEffect := (observe atSync.2).fileSyncEffect (observe after.2) inodeSync names survives
-      have previousRuns := ih (by omega) before previous
-      intro index smaller run expected
-      by_cases same : index = n
-      · subst index
-        have sameRun := Option.some.inj (selected.symm.trans expected)
-        subst run
-        exact RegularFileSyncEffect.stored (payload ▸ inodeEffect) binding
-      · have earlier : index < n := by omega
-        have separate : path index ≠ path n := runPath_ne directory (fun equal => same (congrArg Prod.snd equal))
-        have frames := writeFrames.preservesCheckpointFootprint (fun _ _ => rfl)
-          privateBinding (footprint := (· = path index)) (fun _ equal => equal.symm ▸ separate)
-        have afterWrite := frames.visible.stored rfl (previousRuns index earlier run expected)
-        have afterSync := inodeEffect.frames (footprint := (· = path index)) (by
-          intro held kept other bound alias
-          exact separate (kept.symm.trans (syncPrivate held (alias ▸ bound))))
-        exact afterSync.visible.stored rfl afterWrite
-  exact aux count (Nat.le_refl _) afterRuns returned
+  let stored (finished : Nat) (world : CheckpointWorld heap) : Prop :=
+    ∀ index < finished, ∀ run : Compaction.CheckedRun, stop.next.table.runs.toArray[index]? = some run →
+      (observe world.2).storageObservation.files.Stored (path index) run.run.bytes
+  refine returnedRunPairsPreserve perform count stored (by simp [stored]) ?_ returned
+  intro n bound before atSync after ranWrite ranSync previousRuns
+  obtain ⟨selectedRun, handle, selected, wrote, remembered, synced, consumed⟩ :=
+    primitives.returnedRunPair directory fsync stop.next stop.manifest n ranWrite ranSync
+  have resolved : atSync.1.resolve directory.path (path n) primitives.openRead atSync.2 =
+      .ok handle (after.1, atSync.2) := by
+    rw [remembered, Cache.resolveRemembered (file_ne_directory _ _) handle primitives.openRead, consumed]
+  obtain ⟨writeFrames, privateBinding⟩ :=
+    effects.write n bound before.2 atSync.2 selectedRun.run.bytes handle wrote
+  obtain ⟨_, binding, syncPrivate, inodeSync, names, survives⟩ :=
+    effects.sync n bound atSync after handle atSync.2 resolved synced
+  have payload := writtenPayload n bound before.2 atSync.2 selectedRun.run.bytes handle wrote
+  have inodeEffect := (observe atSync.2).fileSyncEffect (observe after.2) inodeSync names survives
+  intro index smaller run expected
+  by_cases same : index = n
+  · subst index
+    have sameRun := Option.some.inj (selected.symm.trans expected)
+    subst run
+    exact RegularFileSyncEffect.stored (payload ▸ inodeEffect) binding
+  · have earlier : index < n := by omega
+    have separate : path index ≠ path n := runPath_ne directory (fun equal => same (congrArg Prod.snd equal))
+    have frames := writeFrames.preservesCheckpointFootprint (fun _ _ => rfl)
+      privateBinding (footprint := (· = path index)) (fun _ equal => equal.symm ▸ separate)
+    have afterWrite := frames.visible.stored rfl (previousRuns index earlier run expected)
+    have afterSync := inodeEffect.frames (footprint := (· = path index)) (by
+      intro held kept other bound alias
+      exact separate (kept.symm.trans (syncPrivate held (alias ▸ bound))))
+    exact afterSync.visible.stored rfl afterWrite
 
 /-- Split the returned run prefix at its directory barrier. The
 resolver and fsync receipt use the heaps reached by that prefix. -/
@@ -251,7 +268,7 @@ staged-MANIFEST fsync stop. Carry the entry storage through the actual
 run prefix, directory barrier, stage write and stopped file sync.
 The scratch inode's surviving bytes are independent of this guarantee. -/
 theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
-    {view : OpenCloseHeapView heap FileImage}
+    {view : OpenCloseHeapView heap WalSegmentRepair.FileImage}
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncStaged) reason stoppedAt)
     (calls : CheckpointRawSyncCalls heap)
     (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
@@ -300,6 +317,151 @@ theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
   have frame := target.fileEffectFrames (observe atFsync).storageObservation (observe stoppedAt.2).storageObservation
     (state.session.directory.file .stagedManifest) named outside syncEffect
   exact stable.frame (staging.trans (consume.trans frame.2))
+
+/-- Observe the fresh description returned by a temporary write and
+the drop of that same descriptor on the successful file-sync path.
+Ownership is scoped to the managed directory's lock. -/
+structure CheckpointTemporaryFileCustody
+    (view : OpenCloseHeapView heap WalSegmentRepair.FileImage) (directory : DiskDirectory)
+    (write : FilePath → ByteArray → EStateM IO.Error heap CheckpointOpenHandle)
+    (fsync : CheckpointFsync heap) (path : FilePath) (payload : ByteArray) : Prop where
+  allocated : ∀ {before flushed handle}, write path payload before = .ok handle flushed →
+    ∃ free : ∀ old ∈ (view.descriptors before).slots, old.address ≠ handle.2.1.address,
+      (view.descriptors before).references handle.2.1.description = [] ∧
+      handle.1 = (view.descriptors before).insert handle.2.1 free ∧
+      view.descriptors flushed = handle.1 ∧
+      (view.files flushed).owners (directory.file .lock) = (view.files before).owners (directory.file .lock)
+  dropped : ∀ {before flushed after handle},
+    write path payload before = .ok handle flushed → fsync handle flushed = .ok (.ok ()) after →
+    view.descriptors after = (view.descriptors flushed).afterDrops [handle.2.1.closeEvent] ∧
+    (view.files after).owners (directory.file .lock) = (view.files flushed).owners (directory.file .lock)
+
+private theorem CheckpointTemporaryFileCustody.restores
+    {view : OpenCloseHeapView heap WalSegmentRepair.FileImage} {directory : DiskDirectory}
+    {write : FilePath → ByteArray → EStateM IO.Error heap CheckpointOpenHandle}
+    {fsync : CheckpointFsync heap} {path : FilePath} {payload : ByteArray} {before flushed after : heap}
+    {handle : CheckpointOpenHandle}
+    (effects : CheckpointTemporaryFileCustody view directory write fsync path payload)
+    (written : write path payload before = .ok handle flushed)
+    (synced : fsync handle flushed = .ok (.ok ()) after) :
+    view.descriptors after = view.descriptors before ∧
+    (view.files after).owners (directory.file .lock) = (view.files before).owners (directory.file .lock) ∧
+    handle.2.1 ∈ (view.descriptors flushed).slots ∧
+    (∀ old ∈ (view.descriptors before).slots, old ∈ (view.descriptors flushed).slots) ∧
+    (view.descriptors after).references handle.2.1.description = [] := by
+  obtain ⟨free, fresh, captured, allocated, writeKeeps⟩ := effects.allocated written
+  obtain ⟨dropped, syncKeeps⟩ := effects.dropped written synced
+  have restored := dropped.trans (by rw [allocated, captured, checkpointTemporaryClose])
+  have live : handle.2.1 ∈ (view.descriptors flushed).slots := by
+    rw [allocated, captured]
+    exact List.mem_cons_self
+  refine ⟨restored, syncKeeps.trans writeKeeps, live, ?_, restored.symm ▸ fresh⟩
+  intro old owned
+  rw [allocated, captured]
+  exact List.mem_cons_of_mem _ owned
+
+private theorem consumeEmptyPending (cache : CensusDirectoryCache) (path : FilePath)
+    (empty : cache.pending = []) : cache.consume path = cache := by
+  cases cache
+  simp_all [Cache.consume]
+
+/-- The ordinary MANIFEST rename error keeps the original census and lock.
+Each temporary file is released by its own returned sync. The directory
+sync uses the existing cache, and the rename keeps the poisoned cell. -/
+theorem NativeCheckpointSourceError.manifestRenameRetainsCustody
+    {cause : IO.Error} {view : OpenCloseHeapView heap WalSegmentRepair.FileImage}
+    (failed : NativeCheckpointSourceError current primitives fsync (.manifest .renameStaged) cause stoppedAt)
+    (entryCensus : view.descriptors current.reached = current.current.ready.state.census)
+    (entryOwner : (view.files current.reached).owners.Owns current.current.ready.state.session.directory
+      current.current.ready.state.session.descriptor)
+    (phaseWrites : ∀ after, opened.set opened.phase .poisoned current.reached = .ok () after →
+      view.descriptors after = view.descriptors current.reached ∧
+      (view.files after).owners (current.current.ready.state.session.directory.file .lock) =
+        (view.files current.reached).owners (current.current.ready.state.session.directory.file .lock))
+    (runFiles : ∀ index < failed.next.table.runs.length, ∀ run : Compaction.CheckedRun,
+      failed.next.table.runs.toArray[index]? = some run →
+      let dir := current.current.ready.state.session.directory
+      CheckpointTemporaryFileCustody view dir primitives.cached.writeRun fsync
+        (dir.file (.run failed.next.generation index)) run.run.bytes)
+    (manifestFile : let dir := current.current.ready.state.session.directory
+      CheckpointTemporaryFileCustody view dir primitives.cached.writeStaged fsync
+        (dir.file .stagedManifest) failed.manifest)
+    (directorySync : ∀ handle (before after : CheckpointWorld heap), before.1.directory = some handle →
+      fsync handle before.2 = .ok (.ok ()) after.2 →
+      view.descriptors after.2 = view.descriptors before.2 ∧
+      (view.files after.2).owners (current.current.ready.state.session.directory.file .lock) =
+        (view.files before.2).owners (current.current.ready.state.session.directory.file .lock))
+    (prefixKeepsPhase : failed.toNativeCheckpointSourcePrefix.KeepsPhase)
+    (renameFrames : let dir := current.current.ready.state.session.directory
+      primitives.rename (dir.file .stagedManifest) (dir.file .manifest) failed.atIssue.2 = .error cause stoppedAt.2 →
+      view.descriptors stoppedAt.2 = view.descriptors failed.atIssue.2 ∧
+      (view.files stoppedAt.2).owners (dir.file .lock) = (view.files failed.atIssue.2).owners (dir.file .lock) ∧
+      opened.contents stoppedAt.2 opened.phase = opened.contents failed.atIssue.2 opened.phase) :
+    let state := current.current.ready.state
+    let dir := state.session.directory
+    opened.table.UsesOpenCheckpointSchedule dir opened.files opened.phase ∧
+    (runCheckpointOnOpenPhaseUntilSyncStop dir opened.phase opened.get opened.set primitives fsync).run
+      (state.cache, current.reached) = .ok (.error cause) stoppedAt ∧
+    opened.contents failed.atIssue.2 opened.phase = some .poisoned ∧
+    opened.contents stoppedAt.2 opened.phase = some .poisoned ∧
+    stoppedAt.1.directory = state.cache.directory ∧
+    (state.cache.pending = [] → stoppedAt.1 = state.cache) ∧
+    view.descriptors stoppedAt.2 = state.census ∧
+    state.owner ∈ (view.descriptors stoppedAt.2).slots ∧ state.directorySlot ∈ (view.descriptors stoppedAt.2).slots ∧
+    (view.files stoppedAt.2).owners.Owns dir state.session.descriptor ∧
+    ∃ (beforeStage afterWrite : heap) (handle : CheckpointOpenHandle),
+      primitives.cached.writeStaged (dir.file .stagedManifest) failed.manifest beforeStage = .ok handle afterWrite ∧
+      fsync handle afterWrite = .ok (.ok ()) failed.atIssue.2 ∧
+      handle.2.1 ∈ (view.descriptors afterWrite).slots ∧
+      state.directorySlot ∈ (view.descriptors afterWrite).slots ∧
+      (view.descriptors stoppedAt.2).references handle.2.1.description = [] := by
+  intro state dir
+  let prior := failed.toNativeCheckpointSourcePrefix
+  let lock := dir.file .lock
+  let invariant (_ : Nat) (world : CheckpointWorld heap) : Prop :=
+    view.descriptors world.2 = state.census ∧
+    (view.files world.2).owners lock = (view.files current.reached).owners lock ∧
+    world.1.directory = state.cache.directory ∧
+    (state.cache.pending = [] → world.1 = state.cache)
+  obtain ⟨failedRename, renameCache, beforeStage, afterWrite, stagedHandle, through, wroteStage, _, syncedStage, consumedStage⟩ :=
+    failed.manifestRenameFailed
+  obtain ⟨afterRuns, directoryHandle, atSync, returnedRuns, resolved, syncedRunsDirectory⟩ :=
+    prior.returnedRunsBarrier through
+  obtain ⟨cached, sameWorld⟩ := resolveDirectoryReceipt resolved
+  obtain ⟨poisonCensus, poisonOwner⟩ := phaseWrites failed.poisoned failed.setsPoisoned
+  have runsKeep : invariant failed.next.table.runs.length afterRuns := by
+    refine returnedRunPairsPreserve _ _ invariant ⟨poisonCensus.trans entryCensus, poisonOwner, rfl, fun _ => rfl⟩ ?_
+      returnedRuns
+    intro index within before flushed after wrote synced earlier
+    obtain ⟨run, handle, found, wroteFile, _, syncedFile, consumed⟩ :=
+      primitives.returnedRunPair dir fsync failed.next failed.manifest index wrote synced
+    obtain ⟨census, owner, _, _⟩ := (runFiles index within run found).restores wroteFile syncedFile
+    refine ⟨census.trans earlier.1, owner.trans earlier.2.1, ?_, ?_⟩
+    · rw [consumed]
+      exact earlier.2.2.1
+    · intro empty
+      rw [consumed, earlier.2.2.2 empty, consumeEmptyPending _ _ empty]
+  have sameCache := congrArg Prod.fst sameWorld
+  have sameHeap := congrArg Prod.snd sameWorld
+  obtain ⟨directoryCensus, directoryOwner⟩ := directorySync directoryHandle afterRuns beforeStage cached
+    (sameHeap ▸ syncedRunsDirectory)
+  obtain ⟨stageCensus, stageOwner, stagedLive, othersLive, stagedClosed⟩ := manifestFile.restores wroteStage syncedStage
+  obtain ⟨renamedCensus, renamedOwner, renamePhase⟩ := renameFrames failedRename
+  have reachedCensus : view.descriptors stoppedAt.2 = state.census :=
+    renamedCensus.trans (stageCensus.trans (directoryCensus.trans runsKeep.1))
+  have reachedOwner := renamedOwner.trans (stageOwner.trans (directoryOwner.trans runsKeep.2.1))
+  have valid := current.current.ready.readPrefix.refines.1
+  have cachedThroughStage : state.directorySlot ∈ (view.descriptors afterWrite.2).slots :=
+    othersLive _ ((directoryCensus.trans runsKeep.1).symm ▸ valid.directoryLive)
+  refine ⟨failed.source, failed.failedCall, prior.phaseAtIssue prefixKeepsPhase, failed.phaseAtError prefixKeepsPhase renamePhase,
+    ?_, ?_, reachedCensus, reachedCensus.symm ▸ valid.ownerLive, reachedCensus.symm ▸ valid.directoryLive,
+    ?_, beforeStage.2, afterWrite.2, stagedHandle, wroteStage, syncedStage, stagedLive, cachedThroughStage,
+    renamedCensus.symm ▸ stagedClosed⟩
+  · rw [renameCache, consumedStage, sameCache]
+    exact runsKeep.2.2.1
+  · intro empty
+    rw [renameCache, consumedStage, sameCache, runsKeep.2.2.2 empty, consumeEmptyPending _ _ empty]
+  · exact reachedOwner.trans entryOwner
 
 end RunDurability
 

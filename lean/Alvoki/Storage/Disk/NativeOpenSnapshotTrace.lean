@@ -144,7 +144,7 @@ theorem NativeOpenedPosition.acquiresAndReadsLatest
       (∀ read ∈ last.current.ready.reads, read.agrees reference) := by
   obtain ⟨acquireEvent, acquired, atAcquired⟩ := (NativeOpenedReport.acquire (start := start)).reaches
   obtain ⟨issue, pin, table, source, _, _, acquiredRaw, _, registered, pinState, _, _, active, event, pins,
-    priorHistory, _, priorReads⟩ := atAcquired.returned
+    priorHistory, _, priorReads, _⟩ := atAcquired.returned
   have compared := compareIssuedToken issue source acquiredRaw
   subst acquireEvent
   have issued : acquired.pins[start.pins.length]? = some pin := by simp [pins]

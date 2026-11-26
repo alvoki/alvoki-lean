@@ -211,9 +211,9 @@ theorem NativeOpenedPosition.groupedRetryAndReads
             last.current ∧
           SnapshotWalReplay .empty (current.current.history ++ nextBatch) reference ∧
           (∀ observation ∈ last.current.ready.reads, observation.agrees reference) ∧
-          handle.ReturnsLatestAfter
-            [.writeOnPhase handle directory nextCache appender stager syncer nextRequest lookup rename (.ok nextSequence)]
-            read nextSequence (some (read.replay reference nextSequence)) start.reached last.reached) := by
+          handle.ReturnsLatestAfter (start.readyWriteCalls nextCache appender stager syncer lookup rename)
+            [.write nextRequest (.ok nextSequence)] read nextSequence (some (read.replay reference nextSequence))
+            start.reached last.reached) := by
   obtain ⟨attempts, retried, retryEffects⟩ := retry
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, guard, assigned, classified⟩ :=
     current.reopensAfterGroupedError view cache appender stager syncer inodes runs observe inode buffered request lookup rename

@@ -67,7 +67,10 @@ After grouped recovery the returned table supplies the exact phase and
 cache for the next confirmed write. The following acquisition returns a
 pin at that write's sequence. A point or range read uses that pin and
 returns the replay result. The three calls share their intermediate heaps.
-The general proof still needs to select each call from the public requests.
+A fixed dispatcher selects the write, acquire or read schedule from the request.
+A failed acquire adds no pin. Reads use a pin supplied at entry or returned by
+an earlier acquire. The general execution proof still needs local refinement
+for the dispatched returns and for interruptions.
 [Source calls on the returned table](../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
 For a successful point or range read on an active snapshot, the returned
@@ -90,6 +93,12 @@ version can survive before the directory barrier. The returned writer, next
 confirmed write and snapshot share the same replay as the final barrier path.
 The older session-trace constructor still requires its rename report.
 [Returned checkpoint errors](../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
+
+At a returned manifest-rename error the actual run writes and staged
+manifest sync preserve the original directory descriptor and lock owner.
+The same run-pair induction carries both file bytes and descriptor custody.
+The temporary descriptor drops at the end of its handle scope, under an
+explicit lifetime assumption. The source return leaves the phase poisoned.
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and
 first directory barrier establish storage for the previous checkpoint.

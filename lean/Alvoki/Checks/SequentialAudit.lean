@@ -2528,6 +2528,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointStopsFromWhole
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointErrorsFromWhole
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceError.phaseAtError
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceError.manifestRenameRetainsCustody
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceError.manifestRenameFailed
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourcePrefix.returnedRunsBarrier
 #check_axioms Alvoki.Storage.CheckpointPublication.prefixBeforeManifestSync
