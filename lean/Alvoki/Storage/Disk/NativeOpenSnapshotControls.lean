@@ -23,15 +23,14 @@ variable {heap : Type}
 
 /-- Both public schedules act on the returned phase and token, with the
 lookup consuming the pin at the heap reached by acquisition. -/
-def _root_.Alvoki.Storage.DiskTable.LatestWalLookup
+def _root_.Alvoki.Storage.DiskTable.ReadsLatest
     (db : DiskTable) (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit)
     (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
-    (entry : heap) (history : List WAL.Write) (key : UInt64) : Prop :=
-  ∃ (issue : SnapshotPin → DiskSnapshotPin) (pin : SnapshotPin) (after : heap) (reference : SnapshotTable UInt64),
-    SnapshotWalReplay .empty history reference ∧ (issue pin).UsesOpenToken token pin ∧
-    (issue pin).sequence = reference.committed ∧ (issue pin).sequence.toNat = history.length ∧
+    (entry : heap) (key sequence : UInt64) (value : Option UInt64) : Prop :=
+  ∃ (issue : SnapshotPin → DiskSnapshotPin) (pin : SnapshotPin) (after : heap),
+    (issue pin).UsesOpenToken token pin ∧ (issue pin).sequence = sequence ∧
     db.acquire = acquireLatestWith (m := IO) (do (← phase.get).installed)
       (acquireSnapshotWith (do (← phase.get).installed) phase.set issue) ∧
     acquireLatestWith (m := EStateM IO.Error heap) (do (← get phase).installed)
@@ -39,7 +38,39 @@ def _root_.Alvoki.Storage.DiskTable.LatestWalLookup
     db.lookup (issue pin).handle key = readSnapshotWith (m := IO) (do (← phase.get).installed)
       (token.ptrEq token) (fun table => table.lookup pin.handle key) ∧
     readSnapshotWith (m := EStateM IO.Error heap) (do (← get phase).installed) (ptrEq token token)
-      (fun table => table.lookup pin.handle key) after = .ok (some (reference.table.lookup key reference.committed)) after
+      (fun table => table.lookup pin.handle key) after = .ok (some value) after
+
+/-- One replay supplies the sequence and value of the observed latest read. -/
+def _root_.Alvoki.Storage.DiskTable.LatestWalLookup
+    (db : DiskTable) (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit)
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (entry : heap) (history : List WAL.Write) (key : UInt64) : Prop :=
+  ∃ reference : SnapshotTable UInt64, SnapshotWalReplay .empty history reference ∧
+    reference.committed.toNat = history.length ∧
+    db.ReadsLatest phase token get set ptrEq entry key reference.committed
+      (reference.table.lookup key reference.committed)
+
+/-- Record the actual response alongside all earlier reads explained by
+the same retained history. Deterministic replay identifies both models. -/
+theorem _root_.Alvoki.Storage.DiskTable.LatestWalLookup.recordsRead
+    {db : DiskTable} {phase token get set ptrEq} {entry : heap} {history key log reads}
+    (lookup : db.LatestWalLookup phase token get set ptrEq entry history key)
+    (pending : PendingClientReplay log reads history) :
+    ∃ sequence value, db.ReadsLatest phase token get set ptrEq entry key sequence value ∧
+      sequence.toNat = history.length ∧
+      PendingClientReplay log (reads ++ [.lookup sequence key value]) history := by
+  obtain ⟨model, played, count, observed⟩ := lookup
+  obtain ⟨prior, earlier, retained, acknowledged, submitted, agrees⟩ := pending
+  have same := earlier.deterministic played
+  subst prior
+  refine ⟨_, _, observed, count, model, played, retained, acknowledged, submitted, ?_⟩
+  intro read member
+  rcases List.mem_append.mp member with old | latest
+  · exact agrees read old
+  · obtain rfl := List.mem_singleton.mp latest
+    rfl
 
 /-- Acquire the latest pin from a reopened phase containing the complete
 WAL replay, then look up a key through that pin on the same table. The
@@ -85,8 +116,9 @@ theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalR
   have sequence := (owns pin).2.2.trans (PackedTable.acquireAt_spec acquired).sequence
   have count : installed.table.committed.toNat = history.length := by
     simpa only [show PackedTable.empty.committed.toNat = 0 from rfl, Nat.zero_add] using replay_committed_count history played
-  refine ⟨issue, pin, after, reference, replayed, owns pin, sequence.trans refined.committed,
-    (congrArg UInt64.toNat sequence).trans count, acquireSource, ?_, uses.lookupPin (owns pin) key, ?_⟩
+  refine ⟨reference, replayed, (congrArg UInt64.toNat refined.committed).symm.trans count,
+    issue, pin, after, owns pin, sequence.trans refined.committed,
+    acquireSource, ?_, uses.lookupPin (owns pin) key, ?_⟩
   · simp only [acquireLatestWith, acquireSnapshotWith, Bind.bind, EStateM.bind, loaded, Phase.installed,
       Pure.pure, EStateM.pure, acquired, wrote]
   · simp only [readSnapshotWith, withLocalHandle, Bind.bind, EStateM.bind, loadedPin, Phase.installed,

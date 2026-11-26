@@ -2155,6 +2155,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.advanceFloor
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.snapshotAcquisitions
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalReplay
+#check_axioms Alvoki.Storage.DiskTable.LatestWalLookup.recordsRead
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnOpenPhase_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.runCheckpointOnOpenPhase_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedHandle.rejectsInactiveWrite
