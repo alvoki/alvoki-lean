@@ -167,10 +167,14 @@ variable {heap : Type} {directory : DiskDirectory} {view : OpenCloseHeapView hea
   {scope : FilePath → Prop} {through : Nat} {storage : heap → CheckpointStorageObservation}
   {visible : heap → Nat → ByteArray}
 
-private theorem NativeReadyState.pruneRecoveryScope_excludesLater {state : NativeReadyState} {target : Target}
+private theorem NativeReadyState.pruneRecoveryScope_excludesUnlinks {state : NativeReadyState} {target : Target}
+    {plan : Plan} (sameDirectory : state.session.directory = directory)
     (valid : state.Valid) (first : target.first = state.writer.wal.active.first)
-    {ordinal : Nat} (later : target.range.through < ordinal) :
-    ¬ state.pruneRecoveryScope target.range.through (state.session.directory.file (.walSegment ordinal)) := by
+    (checked : plan.valid = true) (cutoff : target.range.through ≤ plan.through)
+    (ordinal : Nat) (listed : ordinal ∈ plan.newer) :
+    ¬ state.pruneRecoveryScope target.range.through (directory.file (.walSegment ordinal)) := by
+  have later := Nat.lt_of_le_of_lt cutoff (((Plan.valid_iff plan).mp checked).2.2 ordinal listed)
+  rw [← sameDirectory]
   rintro (⟨selected, _⟩ | ⟨start, within, same⟩)
   · have afterKeeper := first ▸ Nat.le_trans target.firstCovered (Nat.le_of_lt later)
     exact state.protectedPathNeWalFromActive valid selected afterKeeper rfl
@@ -674,11 +678,8 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
   have managed (path : FilePath) (inside : selectedScope path) : ∃ file, path = directory.file file := by
     obtain ⟨file, named⟩ := NativeReadyState.pruneRecoveryScope_child inside
     exact ⟨file, named.trans (congrArg (fun current => current.file file) sameDirectory)⟩
-  have offTarget (ordinal : Nat) (member : ordinal ∈ layout.boundedPlan.newer) :
-      ¬ selectedScope (directory.file (.walSegment ordinal)) := by
-    have later := (Plan.valid_iff layout.boundedPlan).mp checked |>.2.2 ordinal member
-    rw [← sameDirectory]
-    exact state.pruneRecoveryScope_excludesLater ready targetFirst later
+  have offTarget := NativeReadyState.pruneRecoveryScope_excludesUnlinks
+    sameDirectory ready targetFirst checked (Nat.le_refl layout.target.range.through)
   have throughUnlinks := CheckpointStorageObservation.CrashFileFrame.afterReturnedWalUnlinks offTarget unlinkCrash unlinks
   have returnedBarrier := failedPruneDirectoryOfReturnedUnlinks unlinks stopped
   obtain ⟨issued, handle, effective, loaded, target, bound, load, managedForRead, physical⟩ := barrier unlinks returnedBarrier
@@ -687,6 +688,41 @@ theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPruneBlock
   have throughIssue := throughUnlinks.trans (loadCrash loaded)
   exact (rootEffect.keepsSettledCrashFiles managed throughIssue settled).frame
     (cleanupCrash.afterWorker (fun earlier later => earlier.trans later))
+
+omit extents seals selected following accepted ordered sameStat flat marked keeperRead in
+/-- If the unlink loop itself returns an error, the selected crash
+frame includes the failing call's reached effects and the actual cleanup.
+This is the same authorization-to-return input to the sampled retry as
+for an error at the root barrier. -/
+theorem RawOpenCacheDisposal.settledCrashFilesAfterFailedWalUnlink
+    {state : NativeReadyState} {authorized : heap} {cause : IO.Error}
+    (dispose : RawOpenCacheDisposal (admitted := raw) seed reached)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner dispose.reached)
+    (sameDirectory : state.session.directory = directory)
+    (ready : state.Valid)
+    (targetFirst : layout.target.first = state.writer.wal.active.first)
+    (stopped : ((layout.boundedPlan.newer.map Step.unlink).forM
+      (performPaths directory layout.boundedPlan source.remove throw stageWrite groupSync source.rename))
+      authorized = .error cause reached)
+    (unlink : ∀ ordinal ∈ layout.boundedPlan.newer, ∀ issued,
+      ¬ state.pruneRecoveryScope layout.target.range.through (directory.file (.walSegment ordinal)) →
+      (observe issued).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through)
+        (observe (NativeFileEffectProjection.reached (source.remove (directory.file (.walSegment ordinal)) issued))))
+    (cleanup : dispose.ScopeFrames finalized (fun before after =>
+      (observe before).CrashFileFrame (state.pruneRecoveryScope layout.target.range.through) (observe after)))
+    (settled : (observe authorized).SettledCrashFiles (state.pruneRecoveryScope layout.target.range.through)
+      (observe authorized)) :
+    (observe authorized).SettledCrashFiles (state.pruneRecoveryScope layout.target.range.through)
+      (observe finalized.reached) := by
+  let selectedScope := state.pruneRecoveryScope layout.target.range.through
+  have checked := layout.boundedPlan_valid ((Plan.valid_iff layout.plan).mp valid.valid).2.2
+  have outside := NativeReadyState.pruneRecoveryScope_excludesUnlinks
+    sameDirectory ready targetFirst checked (Nat.le_refl layout.target.range.through)
+  have throughUnlinks := CheckpointStorageObservation.CrashFileFrame.afterWalUnlinks
+    (write := stageWrite) (sync := groupSync) (rename := source.rename) outside unlink authorized
+  have toError : (observe authorized).CrashFileFrame selectedScope (observe reached) := by
+    simpa only [stopped, NativeFileEffectProjection.reached] using throughUnlinks
+  exact settled.frame (toError.trans (cleanup.afterWorker (fun before after => before.trans after)))
 
 end FailedMarkedRepair
 

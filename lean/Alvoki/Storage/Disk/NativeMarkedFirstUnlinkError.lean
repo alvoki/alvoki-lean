@@ -170,6 +170,27 @@ section SuffixRetryFrame
 variable {heap : Type} {directory : DiskDirectory} {scope : FilePath → Prop} {through : Nat}
   {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
 
+/-- The physical frame follows each reached unlink, including an outer
+error or an inner result that the owned unlink rejects. It stops at the
+same heap as the actual loop. Only the off-target scope is protected. -/
+theorem CheckpointStorageObservation.CrashFileFrame.afterWalUnlinks
+    {plan : Plan}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    (outside : ∀ ordinal ∈ plan.newer, ¬ scope (directory.file (.walSegment ordinal)))
+    (unlink : ∀ ordinal ∈ plan.newer, ∀ issued, ¬ scope (directory.file (.walSegment ordinal)) →
+      (observe issued).CrashFileFrame scope
+        (observe (NativeFileEffectProjection.reached (remove (directory.file (.walSegment ordinal)) issued))))
+    (authorized : heap) :
+    (observe authorized).CrashFileFrame scope
+      (observe (NativeFileEffectProjection.reached (((plan.newer.map Step.unlink).forM
+        (performPaths directory plan remove throw write sync rename)) authorized))) :=
+  framesWalUnlinks (fun before after => (observe before).CrashFileFrame scope (observe after))
+    (fun atHeap => .refl scope (observe atHeap)) (fun before after => before.trans after)
+    (fun ordinal member issued => unlink ordinal member issued (outside ordinal member)) authorized
+
 variable (directory scope through observe readBytes) in
 /-- The remove's reached state preserves the selected files, the
 bounded catalog, and the root's name in its parent. -/

@@ -1239,14 +1239,22 @@ private def checkProductionWalRotation (root : FilePath) (failDirectory : Bool) 
   finally final.close
   expectFiles finalFrame 3
 
-private def checkPublicSparsePruneRetry (root : FilePath) : IO Unit := do
+private inductive SparsePruneCut where
+  | directory
+  | unlinkBefore
+  | unlinkAfter
+
+private def checkPublicSparsePruneRetry (root : FilePath) (cut : SparsePruneCut) : IO Unit := do
   let bin ← syncFixtureBin root
   let dir := root / "db"
   IO.FS.createDir dir
   let dir := (← DiskDirectory.open dir).path
   let sealed := dir / firstWalSegment
   let keeper := dir / "WAL-segment-1"
-  let later := [dir / "WAL-segment-3", dir / "WAL-segment-5"]
+  let firstLater := dir / "WAL-segment-3"
+  let secondLater := dir / "WAL-segment-5"
+  let thirdLater := dir / "WAL-segment-9"
+  let later := [firstLater, secondLater, thirdLater]
   let marker := dir / "WAL.commit"
   let staged := dir / "WAL.next"
   let first : WAL.Write := ⟨1, 4, some 40⟩
@@ -1270,19 +1278,37 @@ private def checkPublicSparsePruneRetry (root : FilePath) : IO Unit := do
     check (decide ((← fixedPaths.mapM IO.FS.readBinFile) = fixedBytes) &&
       (← IO.FS.readBinFile keeper) == activeBytes && (← IO.FS.readBinFile marker) == boundary &&
       !(← staged.pathExists)) "sparse prune retry changed a selected file or staging binding"
+  let expectLater := fun (remaining : List FilePath) => do
     for path in later do
-      check (!(← path.pathExists)) s!"sparse prune kept the later name {path}"
+      let present := remaining.contains path
+      check ((← path.pathExists) == present) s!"sparse prune changed the wrong later name {path}"
+      if present then
+        check ((← IO.FS.readBinFile path) == path.toString.toUTF8) s!"sparse prune changed the payload of {path}"
   IO.FS.writeBinFile keeper excess
-  for path in later do
+  for path in later.reverse do
     -- Discardable files need valid names and regular bindings, with unchecked payloads.
-    IO.FS.writeBinFile path (ByteArray.mk #[255])
-  let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 1)
-  check (!opened && syncs == [dir.toString, dir.toString])
-    "public reopen did not stop at the directory sync after pruning the sparse suffix"
+    IO.FS.writeBinFile path path.toString.toUTF8
+  match cut with
+  | .directory =>
+    let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 1)
+    check (!opened && syncs == [dir.toString, dir.toString])
+      "public reopen did not stop at the directory sync after pruning the sparse suffix"
+    expectLater []
+  | .unlinkBefore | .unlinkAfter =>
+    let afterEffect := cut matches .unlinkAfter
+    let mode := if afterEffect then "after" else "before"
+    let (reported, calls) ← probeDisk bin dir none "--check-open-eio"
+      (extraEnv := #[("ALVOKI_CHECK_UNLINK_FAIL", some secondLater.toString),
+        ("ALVOKI_CHECK_UNLINK_FAIL_MODE", some mode)])
+    let expected := [dir.toString, s!"unlink {firstLater}", s!"unlink {secondLater}"] ++
+      (if afterEffect then [s!"unlinked before error: {secondLater}"] else [])
+    check (reported && calls == expected) s!"public reopen did not stop at the second unlink ({mode} effect)"
+    expectLater (if afterEffect then [thirdLater] else [secondLater, thirdLater])
   expectFiles excess oldMarker
   let recovered ← DiskTable.open dir
   try
     expectFiles acknowledged oldMarker
+    expectLater []
     let some historical ← recovered.acquireAt 1 | throw (IO.userError "sparse prune lost the checkpoint snapshot")
     let latest ← recovered.acquire
     let rows := (← recovered.range latest.handle 0 8).map (List.map fun row => (row.key, row.payload))
@@ -2290,6 +2316,13 @@ private def checkRecoveredBatchProbe (path : FilePath) (sequence outcome : Strin
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
+  | ["--check-open-eio", dir] =>
+    match ← (DiskTable.open ⟨dir⟩).toBaseIO with
+    | .error (.hardwareFault 5 _) => pure ()
+    | .error error => throw error
+    | .ok db =>
+      db.close
+      throw (IO.userError "open accepted the injected EIO")
   | ["--check-seal-size-before-payload", dir, mode] =>
     match ← (DiskTable.open ⟨dir⟩).toBaseIO with
     | .error error@(.userError _) =>
@@ -2471,7 +2504,8 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkWalSegmentRepair
     for failDirectory in [false, true] do
       IO.FS.withTempDir (checkProductionWalRotation · failDirectory)
-    IO.FS.withTempDir checkPublicSparsePruneRetry
+    for cut in [SparsePruneCut.directory, .unlinkBefore, .unlinkAfter] do
+      IO.FS.withTempDir (checkPublicSparsePruneRetry · cut)
     IO.FS.withTempDir checkFirstBoundedCheckpointOpen
     IO.FS.withTempDir checkRetrySync
     IO.FS.withTempDir checkWriteBatch

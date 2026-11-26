@@ -300,6 +300,23 @@ static bool is_wal_sibling(const char *path, const char *marker) {
         strncmp(name + 1, "WAL-segment-", strlen("WAL-segment-")) == 0;
 }
 
+int unlink(const char *path) {
+    int (*real_unlink)(const char *) = dlsym(RTLD_NEXT, "unlink");
+    if (real_unlink == NULL) return fail_sync();
+
+    const char *failure = getenv("ALVOKI_CHECK_UNLINK_FAIL");
+    if (failure == NULL || !is_wal_sibling(path, failure)) return real_unlink(path);
+
+    const char *log = getenv("ALVOKI_CHECK_SYNC_LOG");
+    log_sync(log, "unlink ", path);
+    if (!same(path, failure)) return real_unlink(path);
+    if (same(getenv("ALVOKI_CHECK_UNLINK_FAIL_MODE"), "after")) {
+        if (real_unlink(path) < 0) return -1;
+        log_sync(log, "unlinked before error: ", path);
+    }
+    return fail_sync();
+}
+
 int fsync(int fd) {
     SyncFn real_sync = (SyncFn)dlsym(RTLD_NEXT, "fsync");
     if (real_sync == NULL) return fail_sync();

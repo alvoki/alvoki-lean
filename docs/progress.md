@@ -15,38 +15,25 @@ prefix. A failed keeper/marker sync group joins this ledger to a sampled reboot
 and either a final failed reopen or a successful reopen followed by an acknowledged
 write and a snapshot read on the returned handle, under local storage effects.
 
-**Retries.** Under their local effect laws, admission, read and cleanup preserve the selected files.
-A failed prune may already have removed later WAL segments. Even if all removes
-return and the following directory fsync reports EIO, the retry starts from the
-actual changed namespace. The live keeper stays in place through this barrier.
-A later repair can replace it with a new inode. At the public final-sync error,
-the replacement is live with exactly the trimmed bytes. If those bytes and the
-same binding reach the next successful open, the returned writer retains that
-inode. An error before flock supplies the frame for this handoff.
+**Retries.** The first reboot selects the committed prefix and keeper. Given the
+bounded WAL catalog at that sample, the actual admission, listing and read frames
+carry them to prune authorization. Its fsync settles the protected names.
+A failed attempt can remove some later WAL files, and a failed root fsync can
+take effect before reporting its error. Under the scoped file effects, the same
+second-reboot proof covers an error during removal or at the following barrier.
+It uses one surviving directory map for the selected files, gaps through the
+marker, and the later names to enumerate on retry.
 
-After a failed write or an interrupted recovery followed by power loss, the same
-rule constructs the retry entry from the files sampled in one namespace.
+A later repair can replace the keeper. If the rename or final directory fsync
+fails, either the old or the replacement inode can satisfy the committed target
+at the next reboot. Both paths use the same successful post-prune fsync and
+staged-file sync. A subsequent successful open that observes the repaired
+binding and exact trimmed bytes retains that inode.
 
-After a failed keeper rename or final directory fsync, the old or replacement inode
-can satisfy the same committed target at a second reboot. Under the local effects,
-the earlier successful root fsync after pruning settles the bounded WAL inventory,
-including gaps. The same sampled files now supply the observations used by both the
-successful and terminal open proofs.
+**Next obligation.** Join the second reboot to a successful literal open, the
+next acknowledged write and its snapshot, carrying the pending write’s original
+history through both reboots. Each reboot still requires its physical sample and
+reset laws. Mixed sessions, maintenance and the remaining interruption points are
+in the roadmap.
 
-The first reboot also supplies the old keeper’s accepted bytes at repair entry,
-under a frame on that file through earlier failed attempts and the current reads.
-
-If all unlinks return and the following directory fsync reports an error before
-taking effect, the next reboot may restore a later WAL name. The retry uses one
-surviving directory map for both the bounded replay window and the later names.
-
-The authorization fsync settles the protected names. Under the local file effects,
-the first sample supplies the keeper and selected window through the actual reads.
-The failed return supplies the frame used to carry checkpoint durability into the retry.
-
-**Next obligation.** When pruning stops at an unlink after some earlier removals,
-derive the same scoped crash frame through the failed unlink and cleanup. Both
-effect timings of the post-prune barrier already feed the same sampled retry.
-Mixed sessions and maintenance remain on the roadmap.
-
-**Verification baseline.** See commit `f5bb038a` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Verification baseline.** See commit `52dcba0a` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

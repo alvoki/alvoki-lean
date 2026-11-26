@@ -372,7 +372,9 @@ taking effect. Before the effect, a surviving map keeps the protected bindings o
 predecessor. After the effect, it reflects the live directory at fsync. In either case,
 `SettledCrashFiles` relates each sampled name and payload through the marker to the
 protected files at prune authorization.
-The reboot reader uses that map for the later suffix as well. The successful authorization
+An unlink error uses the same relation. The unlink loop carries it over each actual
+result, including the reached heap of the failed removal, then cleanup carries it to
+the public error return. The reboot reader uses the sampled map for the later suffix as well. The successful authorization
 fsync on the held directory settles the protected names. The first reboot selects the keeper. Given the bounded catalog at that sample,
 the failed-attempt and read frames carry both to authorization. The frame
 through the public error carries checkpoint durability to the next sample.
