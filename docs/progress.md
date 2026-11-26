@@ -12,17 +12,19 @@ would have poisoned the handle. At the final directory barrier the proof
 identifies the cached root descriptor. Its durability effect remains an explicit
 filesystem premise. A later confirmed or uncertain write also establishes its ready
 prefix. A failed keeper/marker sync group joins this ledger to a sampled reboot
-and the final failed reopen under the local storage effects.
+and either a final failed reopen or a successful reopen followed by an acknowledged
+write and a snapshot read on the returned handle, under local storage effects.
 
-**Retries.** Admission, read and cleanup callbacks preserve the selected files.
+**Retries.** Under their local effect laws, admission, read and cleanup preserve the selected files.
 A failed prune may already have removed later WAL segments. Even if all removes
 return and the following directory fsync reports EIO, the retry starts from the
 actual changed namespace. The live keeper stays in place through this barrier.
-A later repair can replace it with a new inode.
+A later repair can replace it with a new inode. At the public final-sync error,
+the replacement is live with exactly the trimmed bytes.
 
 **Next obligation.** Carry the replaced keeper's new binding and bytes through
 later failed and interrupted open attempts. A successful scan still needs the
 local enumeration law covering every physically present later WAL name. The
 remaining mixed sessions and maintenance cases are listed in the roadmap.
 
-**Verification baseline.** See commit `43bb5c19` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Verification baseline.** See commit `bf302706` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

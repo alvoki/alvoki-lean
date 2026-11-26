@@ -366,9 +366,12 @@ old inode can still survive a subsequent power loss. At the next open, `Recovery
 WAL interval to the names on disk, the live keeper binding to its bytes, the selected
 immutable files to their durable contents, and later WAL names to the physical suffix.
 An independent failure before flock also exposes its local file frame, including the keeper
-binding in place when the call began. Another crash requires a fresh correlated survivor observation.
-The installation still
-uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
+binding in place when the call began. For a second power loss after a replacement, one surviving
+directory map can still name the old inode. Its live bytes before the rename and the synced
+bytes of the replacement leave the old inode's durable contents undetermined. The first reboot
+supplies an accepted durable payload. The missing retry frame must carry accepted bytes for
+each keeper inode named by a surviving map through cleanup and resampling.
+The installation still uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
 [Recovery observations](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 · [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 

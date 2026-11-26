@@ -727,6 +727,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       retryNames finalized.reached ((dir).file (.walSegment layout.keeper.first)) =
         some (staged.inventory.inode staged.slot.description) ∧
       (storage finalized.reached).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed] ∧
+      visible finalized.reached (staged.inventory.inode staged.slot.description) = target.trimmed ∧
       (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
       (view.files finalized.reached).image.later.DurablyEmpty := by
   have prunedFrame := framesReturnedPrune dir layout.boundedPlan source.remove stageWrite groupSync source.rename
@@ -769,7 +770,12 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
         laterBound listed unlinkNames initial.1 gone
       exact ⟨nextWindow, finalKeeper, finalDurability, nextSuffix⟩)
   obtain ⟨sameName, sameBytes⟩ := keeperStorage _ rfl
-  refine ⟨returned, selectedEffects, sameName.trans named, (sameBytes _ named).trans durable, ?_⟩
+  have afterCleanup := (keeperCleanup _ (congrArg (fun start => (dir).file (.walSegment start))
+    (congrArg Target.first sameTarget))).2 _ named
+  have liveAtSync := (effect failed liveRoot rootBinding issuedFiles).2.2.2
+  have live := (List.cons.inj afterCleanup).1.trans
+    ((congrFun liveAtSync _).trans (keeperBytes.trans (congrArg Target.trimmed sameTarget)))
+  refine ⟨returned, selectedEffects, sameName.trans named, (sameBytes _ named).trans durable, live, ?_⟩
   rw [finalImage, workerImage, ← sameTarget]
   exact issue.visibleAfterRename effective
 
