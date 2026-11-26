@@ -2146,10 +2146,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returns
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsAfterLockFinalization
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsAt
-#check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.ScopeFileFrames.afterWorker
+#check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.ScopeFrames.afterWorker
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsAfterLockFinalizationAt
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.fromWorkerError
-#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.finalizesFailedRepair
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.workerReturnsFailedRepair
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnly
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.repair
@@ -2213,7 +2214,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.readsAfterManifestRejection
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointRunPrefix.preservesSelectedFiles
 #check_axioms Alvoki.Storage.DiskSession.RawCheckpointChunkReadError.preservesSelectedFiles
-#check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.ScopeFileFrames.preserves
+#check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.ScopeFrames.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.readsAfterOpenFrame
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.childAfterOpenFrame
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.reopensAfterReadOnlyAttempts
@@ -3235,6 +3236,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.readSelected
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.completes
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_preservesCheckpointBytes
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_frames
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_preservesSelectedCheckpoint
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_preservesDurableCheckpoint
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedRetryReadReports.prepares

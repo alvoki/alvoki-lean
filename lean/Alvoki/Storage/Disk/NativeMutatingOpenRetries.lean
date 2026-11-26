@@ -12,80 +12,52 @@ variable {heap : Type} {view : OpenCloseHeapView heap FileImage} {directory : Di
   {calls : RawOpenAdmissionCallbacks heap} {init : OpenSyncCacheCallbacks heap}
   {release : IO.FS.Handle → heap → heap} {start : heap}
 
-/-- Put an actual bounded repair error through the same marked reader
-and the same cache and lock finalizers used by the raw opener. The
-success continuation is not reached when repair returns that error. -/
-theorem MarkedWalExtentReports.finalizesFailedRepair
-    {source : heap} {input : FilePath} {history : List WAL.Write}
-    {layout : CanonicalKeeperLayout (view.files source).image history} {published : CheckpointPublication.Image}
-    {admission : CensusOpenAdmissionReports input directory (view.descriptors source) (view.files source)}
-    {raw : RawOpenAdmissionReport admission view calls source}
-    {seed : OpenSyncCacheAllocations admission.opened view init raw.afterFlock}
+/-- A bounded repair error is the return of the fixed marked worker at
+the cache that read that exact checkpoint and selected WAL. -/
+theorem MarkedWalExtentReports.workerReturnsFailedRepair
+    {entry : heap} {input : FilePath} {history : List WAL.Write}
+    {layout : CanonicalKeeperLayout (view.files entry).image history} {published : CheckpointPublication.Image}
+    {admission : CensusOpenAdmissionReports input directory (view.descriptors entry) (view.files entry)}
+    {stream : Type} (source : RawMarkedOpenInterpreter heap stream)
+    {raw : RawOpenAdmissionReport admission view source.calls entry}
+    {seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
     {reads : CapturedMarkedReadReports admission layout published} {keeper : CapturedKeeperOpenReports reads}
     {chronology : CapturedMarkedReadCensus reads keeper} {checkpoint : Option (PackedTable × UInt64)}
-    {stream : Type} {fileCalls : MarkedTemporaryReadCalls heap} {directoryCalls : MarkedDirectoryReadCalls heap stream}
-    {prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls}
-    {slotOf : heap → stream → DescriptorSlot} {listing : MarkedDirectoryReadReport prepared directoryCalls slotOf}
+    {prepared : NativeMarkedCheckpointReadHeap seed chronology source.fileCalls}
+    {slotOf : heap → stream → DescriptorSlot} {listing : MarkedDirectoryReadReport prepared source.directoryCalls slotOf}
     (extents : MarkedWalExtentReports prepared listing)
     {beforeKeeper afterKeeper failedHeap : heap}
-    (seals : MarkedSealReadChain seed fileCalls chronology.seals listing.reached beforeKeeper)
-    (selected : SelectedIntegrityCheckpoint published.durable (view.files source).image.directory.active.manifest checkpoint)
-    (valid : Prepared (view.files source).image layout.target layout.plan)
+    (seals : MarkedSealReadChain seed source.fileCalls chronology.seals listing.reached beforeKeeper)
+    (selected : SelectedIntegrityCheckpoint published.durable (view.files entry).image.directory.active.manifest checkpoint)
+    (valid : Prepared (view.files entry).image layout.target layout.plan)
     (following : ∀ first ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < first)
     (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
-      (view.files source).image.directory.active.manifest)
+      (view.files entry).image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history)
-    (sameStat : fileCalls.stat = calls.lookup)
-    (flat : optionalMetadataWith (fileCalls.stat (directory.file .wal)) seed.afterPending = .ok none seed.afterPending)
+    (sameStat : source.fileCalls.stat = source.calls.lookup)
+    (flat : optionalMetadataWith (source.fileCalls.stat (directory.file .wal)) seed.afterPending = .ok none seed.afterPending)
     {markedMeta : IO.FS.Metadata}
-    (marked : optionalMetadataWith (fileCalls.stat (directory.file .walBoundary)) seed.afterPending =
+    (marked : optionalMetadataWith (source.fileCalls.stat (directory.file .walBoundary)) seed.afterPending =
       .ok (some markedMeta) seed.afterPending)
-    (callbacks : AlignedKeeperCacheCallbacks heap)
-    (keeperRead : fileCalls.readKeeperWithRelease
-      (fun path handle => (callbacks.withFileReads fileCalls).modifyPending seed.pendingRef (pushPending path handle))
+    (keeperRead : source.fileCalls.readKeeperWithRelease
+      (fun path handle => (source.keeperCallbacks.withFileReads source.fileCalls).modifyPending seed.pendingRef (pushPending path handle))
       (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
       reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper)
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)) (stage : LongKeeperStageCallbacks heap)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {cause : IO.Error}
-    (repair : let sync := callbacks.withFileReads fileCalls
+    {cause : IO.Error}
+    (repair : let sync := source.keeperCallbacks.withFileReads source.fileCalls
       finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
-        remove (stage.stage seed.pendingRef sync.modifyPending)
-        (sync.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef) rename afterKeeper =
-      .error cause failedHeap)
-    (dispose : RawOpenCacheDisposal (admitted := raw) seed failedHeap)
-    (owner : (view.files failedHeap).owners = admission.held.owners)
-    (inodes : (view.descriptors failedHeap).inode = (view.descriptors source).inode)
-    (finalized : RawOpenErrorLockFinalization view directory release raw.lock admission.owner dispose.reached)
-    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (install : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → Reopened → EStateM IO.Error heap DiskTable) :
-    let recover := fun (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
-        (pending : IO.Ref (List (FilePath × IO.FS.Handle))) resolved lock cache => do
-      let opened ← recoverHealthyMarkedWithRefs fileCalls directoryCalls callbacks cached active pending
-        remove stage rename calls.lookup resolved (bootstrap resolved cache)
-      install resolved lock cache opened
-    ∃ failed : RawFinalizedOpenAttempt view directory calls init release input source (view.files failedHeap).image,
-      failed.recover = recover failed.seed.directoryRef failed.seed.activeRef failed.seed.pendingRef ∧
-      (failed.seed.directoryRef, failed.seed.activeRef, failed.seed.pendingRef) =
-        (seed.directoryRef, seed.activeRef, seed.pendingRef) ∧
-      failed.disposed.dispose = dispose.dispose ∧
-      failed.beforeCleanup = failedHeap ∧ failed.cause = cause ∧ failed.reached = finalized.reached ∧
-      ∀ cache, failed.recover directory failed.admitted.lock cache failed.seed.afterPending =
-        .error failed.cause failed.beforeCleanup := by
-  intro recover
-  let run := recover seed.directoryRef seed.activeRef seed.pendingRef
-  have failed : ∀ cache, run directory raw.lock cache seed.afterPending = .error cause failedHeap := by
-    intro cache
-    obtain ⟨_, returned, _⟩ := extents.recoversFromOpenedCacheWith seals selected valid following accepted ordered
-      flat marked _ keeperRead remove _ _ rename repair (bootstrap directory cache)
-    have physical : recoverHealthyMarkedWithRefs fileCalls directoryCalls callbacks seed.directoryRef seed.activeRef
-        seed.pendingRef remove stage rename calls.lookup directory (bootstrap directory cache) seed.afterPending =
+        source.remove (source.stage.stage seed.pendingRef sync.modifyPending)
+        (sync.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef) source.rename afterKeeper =
+      .error cause failedHeap) :
+    ∀ cache, source.worker seed.directoryRef seed.activeRef seed.pendingRef directory raw.lock cache seed.afterPending =
       .error cause failedHeap := by
-      unfold recoverHealthyMarkedWithRefs
-      rw [← sameStat]
-      exact returned
-    simp only [run, recover, Bind.bind, EStateM.bind, physical]
-  exact ⟨.fromWorkerError raw seed dispose run cause failed owner inodes finalized, rfl, rfl, rfl, rfl, rfl, rfl, failed⟩
+  intro cache
+  obtain ⟨_, returned, _⟩ := extents.recoversFromOpenedCacheWith seals selected valid following accepted ordered
+    flat marked _ keeperRead source.remove _ _ source.rename repair (source.bootstrap directory cache)
+  unfold RawMarkedOpenInterpreter.worker recoverHealthyMarkedWithRefs
+  rw [← sameStat]
+  simp only [Bind.bind, EStateM.bind, returned]
 
 /-- Identify a reported failed worker and its finalizers with one fixed
 opener. The worker is applied to the cache from this admission. -/

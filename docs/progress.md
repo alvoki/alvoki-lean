@@ -1,5 +1,16 @@
 # Current handoff
 
+A failed marked open can extend the same retry prefix after changing its
+keeper. The bounded finisher carries the selected files through its
+callbacks. The fixed worker and its cache disposal, unlock and lock
+release supply the exact returned heap and diagnostic. The next attempt
+inherits the live replacement keeper and the protected files. The durable
+binding of the root in its parent has its own frame. The repair lemma
+uses the selected target and local callback effects. Deriving those
+effects for every guarded stage and composing the raw mixed execution
+remain open.
+[Failed repair and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
 The fresh bootstrap return supplies the empty origin of the client ledger
 for the final checkpoint pilot. The opened-session trace starts the
 checkpoint on that table's phase and cache, and the source schedule

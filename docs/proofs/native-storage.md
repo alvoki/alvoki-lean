@@ -418,6 +418,15 @@ that narrow them. The runtime, FFI and filesystem assumptions remain explicit at
 boundary. The traces and invariants
 can be verification-only. [Append and retry selections](../../lean/Alvoki/Storage/Disk/AppendRetrySession.lean)
 
+One failed bounded repair can now extend the actual failed-call prefix on
+the fixed marked opener. The bounded schedule composes local frames
+through its callbacks, and shared admission and finalizers
+carry the frame to the exact error heap. The keeper has its own live
+binding and payload after replacement. The protected live and durable
+files and the root's binding in its parent survive separately. The same
+lemma accepts a target selected after different preceding operations.
+[Failed marked repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached
 publication outcome. The grouped failure producer follows both literal fsyncs and preserves
 the old marker and keeper prefix. After a successful file group, the local rename and

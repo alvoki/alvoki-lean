@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.WalSegmentBoundedOpen
 import Alvoki.Storage.Disk.CheckpointRunChunkReports
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
+import Alvoki.Storage.Disk.NativeFileEffectProjection
 
 namespace Alvoki.Storage.WalSegmentRepair
 
@@ -28,17 +29,14 @@ private theorem walSegment_ne_checkpoint (directory : DiskDirectory) {file : Dis
   obtain ⟨_, role⟩ := DiskDirectory.walSegment_exclusive same.symm
   rcases checkpoint with rfl | rfl | ⟨_, _, rfl⟩ <;> cases role
 
-private def reachedState {state output : Type} : EStateM.Result IO.Error state output → state
-  | .ok _ after | .error _ after => after
-
 /-- The reached state retains the projected bytes, including on error. -/
 def keepsBytes {state output : Type} (bytes : state → Option ByteArray)
     (action : EStateM IO.Error state output) : Prop :=
-  ∀ before, bytes (reachedState (action before)) = bytes before
+  ∀ before, bytes (NativeFileEffectProjection.reached (action before)) = bytes before
 
 private def preserves {state output : Type} (property : state → Prop)
     (action : EStateM IO.Error state output) : Prop :=
-  ∀ before, property before → property (reachedState (action before))
+  ∀ before, property before → property (NativeFileEffectProjection.reached (action before))
 
 private theorem preserves_bind {state input output : Type} {property : state → Prop}
     {action : EStateM IO.Error state input} {next : input → EStateM IO.Error state output}
@@ -47,7 +45,7 @@ private theorem preserves_bind {state input output : Type} {property : state →
   intro before known
   have firstKeeps := first before known
   cases reached : action before with
-  | error cause after => simpa [Bind.bind, EStateM.bind, reached, reachedState] using firstKeeps
+  | error cause after => simpa [Bind.bind, EStateM.bind, reached, NativeFileEffectProjection.reached] using firstKeeps
   | ok result after =>
     rw [reached] at firstKeeps
     simpa only [Bind.bind, EStateM.bind, reached] using remaining result after firstKeeps
@@ -58,45 +56,95 @@ private theorem finisher_preserves {state : Type} (directory : DiskDirectory) (p
     (write : FilePath → ByteArray → EStateM IO.Error state Unit)
     (sync : Array FilePath → EStateM IO.Error state Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error state Unit)
-    (unlink : ∀ first, preserves property (removeFile (directory.file (.walSegment first))))
-    (stage : ∀ bytes, preserves property (write (directory.file .stagedWal) bytes))
-    (syncs : ∀ paths, preserves property (sync paths))
-    (rename : ∀ first, preserves property (renameFile (directory.file .stagedWal) (directory.file (.walSegment first)))) :
+    (unlink : ∀ first ∈ plan.newer, preserves property (removeFile (directory.file (.walSegment first))))
+    (stage : preserves property (write (directory.file .stagedWal) (plan.keeperBytes.extract 0 plan.keeperSize)))
+    (syncRoot : preserves property (sync #[directory.path]))
+    (syncStage : preserves property (sync #[directory.file .stagedWal]))
+    (syncKeeper : preserves property (sync #[directory.file (.walSegment plan.keeper)]))
+    (rename : preserves property (renameFile (directory.file .stagedWal) (directory.file (.walSegment plan.keeper)))) :
     preserves property (finishBoundedMarkedOpen directory plan keeperFileSize removeFile write sync renameFile) := by
-  have stepKeeps (step : Step) :
+  have stepKeeps (step : Step) (allowed : ∀ first, step = .unlink first → first ∈ plan.newer) :
       preserves property (performPaths directory plan removeFile throw write sync renameFile step) := by
     cases step with
     | unlink first =>
       unfold performPaths RunCollection.performPaths
-      apply preserves_bind (unlink first)
+      apply preserves_bind (unlink first (allowed first rfl))
       intro removed
       cases result : RunCollection.ownedUnlinkResult removed <;> exact fun _ known => known
-    | syncPruned | syncKeeper => exact syncs _
+    | syncPruned => exact syncRoot
+    | syncKeeper => exact syncKeeper
     | replace callback =>
       cases callback with
-      | writeStaged => exact stage _
-      | syncStaged | syncDirectory => exact syncs _
-      | renameStaged => exact rename _
-  have stepsKeep (steps : List Step) :
+      | writeStaged => exact stage
+      | syncStaged => exact syncStage
+      | syncDirectory => exact syncRoot
+      | renameStaged => exact rename
+  have stepsKeep (steps : List Step) (allowed : ∀ first, .unlink first ∈ steps → first ∈ plan.newer) :
       preserves property (steps.forM (performPaths directory plan removeFile throw write sync renameFile)) := by
     induction steps with
     | nil => exact fun _ known => known
     | cons step rest ih =>
       change preserves property (performPaths directory plan removeFile throw write sync renameFile step >>= fun _ =>
         rest.forM (performPaths directory plan removeFile throw write sync renameFile))
-      exact preserves_bind (stepKeeps step) (fun _ => ih)
+      exact preserves_bind
+        (stepKeeps step (fun first same => allowed first (same ▸ List.mem_cons_self)))
+        (fun _ => ih (fun first member => allowed first (List.mem_cons_of_mem _ member)))
   have repair (replaceKeeper : Bool) : preserves property
       (runRepairPlan directory plan replaceKeeper removeFile write sync renameFile) :=
-    preserves_bind (syncs #[directory.path])
-      (fun _ => stepsKeep (steps plan.newer replaceKeeper))
+    preserves_bind syncRoot fun _ => by
+      apply stepsKeep
+      intro first member
+      cases replaceKeeper <;> simpa [steps, Publication.steps] using member
   unfold finishBoundedMarkedOpen
   split
   · split
-    · exact preserves_bind (syncs #[directory.path]) (fun _ => syncs #[directory.file (.walSegment plan.keeper)])
+    · exact preserves_bind syncRoot (fun _ => syncKeeper)
     · exact fun _ known => known
   · split
     · exact repair _
     · exact fun _ known => known
+
+/-- Scoped effects of the callbacks a bounded repair can actually issue.
+The unlink law concerns only the listed suffix. The caller can leave the
+staging name and replacement keeper outside the frame. -/
+structure FinisherFrames {state : Type} (directory : DiskDirectory) (plan : Plan)
+    (frame : state → state → Prop)
+    (removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error state Unit)
+    (sync : Array FilePath → EStateM IO.Error state Unit)
+    (renameFile : FilePath → FilePath → EStateM IO.Error state Unit) : Prop where
+  unlink : ∀ first ∈ plan.newer, ∀ before,
+    frame before (NativeFileEffectProjection.reached (removeFile (directory.file (.walSegment first)) before))
+  stage : ∀ before, frame before (NativeFileEffectProjection.reached
+    (write (directory.file .stagedWal) (plan.keeperBytes.extract 0 plan.keeperSize) before))
+  syncRoot : ∀ before, frame before (NativeFileEffectProjection.reached (sync #[directory.path] before))
+  syncStage : ∀ before, frame before (NativeFileEffectProjection.reached (sync #[directory.file .stagedWal] before))
+  syncKeeper : ∀ before, frame before (NativeFileEffectProjection.reached
+    (sync #[directory.file (.walSegment plan.keeper)] before))
+  rename : ∀ before, frame before (NativeFileEffectProjection.reached
+    (renameFile (directory.file .stagedWal) (directory.file (.walSegment plan.keeper)) before))
+
+/-- The actual bounded finisher carries the frame, including when a
+callback returns an error after changing its own files. -/
+theorem finishBoundedMarkedOpen_frames {state : Type} {directory : DiskDirectory} {plan : Plan}
+    {keeperFileSize : Nat} {frame : state → state → Prop}
+    (refl : ∀ atState, frame atState atState)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    {removeFile : FilePath → EStateM IO.Error state (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error state Unit}
+    {sync : Array FilePath → EStateM IO.Error state Unit}
+    {renameFile : FilePath → FilePath → EStateM IO.Error state Unit}
+    (laws : FinisherFrames directory plan frame removeFile write sync renameFile)
+    (initial : state) :
+    frame initial (NativeFileEffectProjection.reached
+      (finishBoundedMarkedOpen directory plan keeperFileSize removeFile write sync renameFile initial)) :=
+  finisher_preserves directory plan keeperFileSize (frame initial) removeFile write sync renameFile
+    (fun first member before known => trans known (laws.unlink first member before))
+    (fun before known => trans known (laws.stage before))
+    (fun before known => trans known (laws.syncRoot before))
+    (fun before known => trans known (laws.syncStage before))
+    (fun before known => trans known (laws.syncKeeper before))
+    (fun before known => trans known (laws.rename before)) initial (refl initial)
 
 /-- WAL repair preserves the observed bytes at the checkpoint manifest,
 WAL marker and each run path, including after a returned error. The
@@ -125,14 +173,16 @@ theorem finishBoundedMarkedOpen_preservesCheckpointBytes {state : Type} (directo
   have keeperAway first := walSegment_ne_checkpoint directory checkpoint first
   have unchanged := finisher_preserves directory plan keeperFileSize
     (fun state => visible state path = visible initial path) removeFile write sync renameFile
-    (fun first before known => (removeOther _ path (keeperAway first) before).trans known)
-    (fun bytes before known => (writeOther _ bytes path stageAway before).trans known)
-    (fun paths before known => (syncVisible paths path before).trans known)
-    (fun first before known => (renameOther _ _ path stageAway (keeperAway first) before).trans known)
+    (fun first _ before known => (removeOther _ path (keeperAway first) before).trans known)
+    (fun before known => (writeOther _ _ path stageAway before).trans known)
+    (fun before known => (syncVisible _ path before).trans known)
+    (fun before known => (syncVisible _ path before).trans known)
+    (fun before known => (syncVisible _ path before).trans known)
+    (fun before known => (renameOther _ _ path stageAway (keeperAway plan.keeper) before).trans known)
     initial rfl
   cases report : finishBoundedMarkedOpen directory plan keeperFileSize removeFile write sync renameFile initial with
-  | ok result after => cases result; simpa [report, reachedState] using unchanged
-  | error cause after => simpa [report, reachedState] using unchanged
+  | ok result after => cases result; simpa [report, NativeFileEffectProjection.reached] using unchanged
+  | error cause after => simpa [report, NativeFileEffectProjection.reached] using unchanged
 
 private theorem mapM_preservesRunBytes {indices : List Nat} {known visible : Nat → Option ByteArray}
     {files : List ByteArray} (stored : indices.mapM known = some files)
@@ -232,12 +282,12 @@ theorem finishBoundedMarkedOpen_preservesDurableCheckpoint {state : Type}
     (write : FilePath → ByteArray → EStateM IO.Error state Unit)
     (sync : Array FilePath → EStateM IO.Error state Unit)
     (renameFile : FilePath → FilePath → EStateM IO.Error state Unit)
-    (unlink : ∀ first before, runs (reachedState (removeFile (directory.file (.walSegment first)) before)) = runs before)
-    (stage : ∀ bytes before, runs (reachedState (write (directory.file .stagedWal) bytes before)) = runs before)
-    (rename : ∀ first before, runs (reachedState
+    (unlink : ∀ first before, runs (NativeFileEffectProjection.reached (removeFile (directory.file (.walSegment first)) before)) = runs before)
+    (stage : ∀ bytes before, runs (NativeFileEffectProjection.reached (write (directory.file .stagedWal) bytes before)) = runs before)
+    (rename : ∀ first before, runs (NativeFileEffectProjection.reached
       (renameFile (directory.file .stagedWal) (directory.file (.walSegment first)) before)) = runs before)
-    (syncs : ∀ paths before, runs (reachedState (sync paths before)) = runs before ∨
-      directory.path ∈ paths.toList ∧ runs (reachedState (sync paths before)) = (runs before).syncDirectory)
+    (syncs : ∀ paths before, runs (NativeFileEffectProjection.reached (sync paths before)) = runs before ∨
+      directory.path ∈ paths.toList ∧ runs (NativeFileEffectProjection.reached (sync paths before)) = (runs before).syncDirectory)
     (initial after : state)
     (reached : finishBoundedMarkedOpen directory plan keeperFileSize removeFile write sync renameFile initial =
       .ok () after ∨ ∃ cause, finishBoundedMarkedOpen directory plan keeperFileSize removeFile write sync renameFile
@@ -249,7 +299,7 @@ theorem finishBoundedMarkedOpen_preservesDurableCheckpoint {state : Type}
   let property (state : state) := SelectedIntegrityCheckpoint (runs state).guaranteed binding checkpoint
   have syncKeeps (paths) : preserves property (sync paths) := by
     intro before known
-    change SelectedIntegrityCheckpoint (runs (reachedState (sync paths before))).guaranteed binding checkpoint
+    change SelectedIntegrityCheckpoint (runs (NativeFileEffectProjection.reached (sync paths before))).guaranteed binding checkpoint
     rcases syncs paths before with same | ⟨_, settled⟩
     · rw [same]
       exact known
@@ -258,10 +308,10 @@ theorem finishBoundedMarkedOpen_preservesDurableCheckpoint {state : Type}
         (RunUnlinkRetry.sync (approved := []) (.start (runs before))).keepsKnown
           (name := (manifest.header.generation, index)) stored (by simp))
   have preserved := finisher_preserves directory plan keeperFileSize property removeFile write sync renameFile
-    (fun first before known => by simpa only [property, unlink first before] using known)
-    (fun bytes before known => by simpa only [property, stage bytes before] using known)
-    syncKeeps
-    (fun first before known => by simpa only [property, rename first before] using known)
+    (fun first _ before known => by simpa only [property, unlink first before] using known)
+    (fun before known => by simpa only [property, stage _ before] using known)
+    (syncKeeps _) (syncKeeps _) (syncKeeps _)
+    (fun before known => by simpa only [property, rename plan.keeper before] using known)
     initial selected
   have current : SelectedIntegrityCheckpoint (runs after).guaranteed binding checkpoint := by
     dsimp only [property] at preserved
@@ -286,16 +336,16 @@ structure CachedCheckpointRepairEffects (state : Type) (directory : DiskDirector
   sync : Array FilePath → EStateM IO.Error state Unit
   renameFile : FilePath → FilePath → EStateM IO.Error state Unit
   unlink : ∀ first before,
-    let after := reachedState (removeFile (directory.file (.walSegment first)) before)
+    let after := NativeFileEffectProjection.reached (removeFile (directory.file (.walSegment first)) before)
     metadata after = metadata before ∧ runs after = runs before
   stage : ∀ bytes before,
-    let after := reachedState (write (directory.file .stagedWal) bytes before)
+    let after := NativeFileEffectProjection.reached (write (directory.file .stagedWal) bytes before)
     metadata after = metadata before ∧ runs after = runs before
   rename : ∀ first before,
-    let after := reachedState (renameFile (directory.file .stagedWal) (directory.file (.walSegment first)) before)
+    let after := NativeFileEffectProjection.reached (renameFile (directory.file .stagedWal) (directory.file (.walSegment first)) before)
     metadata after = metadata before ∧ runs after = runs before
   syncs : ∀ paths before,
-    let after := reachedState (sync paths before)
+    let after := NativeFileEffectProjection.reached (sync paths before)
     (metadata after = metadata before ∨
       directory.path ∈ paths.toList ∧ metadata after = (metadata before).syncDirectory) ∧
     (runs after = runs before ∨ directory.path ∈ paths.toList ∧ runs after = (runs before).syncDirectory)
@@ -325,7 +375,7 @@ theorem CachedRetryReadReports.checkpointSurvivesRepair {state : Type} {director
       (effects.runs initial).guaranteed)
     (manifestRead : reported.inventory.reports.readOptional (directory.file .manifest) = .ok image.directory.active.manifest)
     (markerRead : reported.inventory.reports.readOptional (directory.file .walBoundary) = .ok image.directory.active.walBoundary)
-    (reached : reachedState (effects.reopen reported sizes.readPrefix initial) = after) :
+    (reached : NativeFileEffectProjection.reached (effects.reopen reported sizes.readPrefix initial) = after) :
     ∃ opened checkpoint,
       (effects.reopen reported sizes.readPrefix initial = .ok opened after ∨
         ∃ cause, effects.reopen reported sizes.readPrefix initial = .error cause after) ∧
@@ -379,18 +429,18 @@ theorem CachedRetryReadReports.checkpointSurvivesRepair {state : Type} {director
     intro before same
     rcases (effects.syncs paths before).1 with unchanged | ⟨_, settled⟩
     · exact unchanged.trans same
-    · change effects.metadata (reachedState (effects.sync paths before)) = image.directory
+    · change effects.metadata (NativeFileEffectProjection.reached (effects.sync paths before)) = image.directory
       change effects.metadata before = image.directory at same
       rw [settled, same, directoryFixed]
   have preserved := finisher_preserves directory layout.boundedPlan layout.plan.keeperBytes.size property
     effects.removeFile effects.write effects.sync effects.renameFile
-    (fun first before same => (effects.unlink first before).1.trans same)
-    (fun bytes before same => (effects.stage bytes before).1.trans same)
-    syncKeeps
-    (fun first before same => (effects.rename first before).1.trans same)
+    (fun first _ before same => (effects.unlink first before).1.trans same)
+    (fun before same => (effects.stage _ before).1.trans same)
+    (syncKeeps _) (syncKeeps _) (syncKeeps _)
+    (fun before same => (effects.rename layout.boundedPlan.keeper before).1.trans same)
     initial observedDirectory
   have sameDirectory : effects.metadata after = image.directory := by
-    change property (reachedState (finish initial)) at preserved
+    change property (NativeFileEffectProjection.reached (finish initial)) at preserved
     rcases result.2 with returned | ⟨_, returned⟩ <;> rw [returned] at preserved <;> exact preserved
   have durable := finishBoundedMarkedOpen_preservesDurableCheckpoint
     directory layout.boundedPlan layout.plan.keeperBytes.size effects.runs

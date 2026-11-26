@@ -89,44 +89,33 @@ variable {heap : Type} {input : FilePath} {directory : DiskDirectory}
 variable {workerReached : heap}
 variable (disposal : RawOpenCacheDisposal (admitted := admitted) seed workerReached)
     (finalized : RawOpenErrorLockFinalization view directory release admitted.lock admission.owner disposal.reached)
-    (files : heap → CheckpointSurvivingFiles) (selectedPath : FilePath → Prop)
 
-/-- Keep the same protected observation through each reached open,
-cache allocation and cleanup operation around a read-only worker. -/
-structure RawOpenCacheDisposal.ScopeFileFrames : Prop where
-  lockOpen : (files entry).Frames selectedPath (files admitted.afterAppend)
-  flock : (files admitted.afterAppend).Frames selectedPath (files admitted.afterFlock)
-  openDirectory : (files admitted.afterFlock).Frames selectedPath (files seed.afterOpen)
-  directoryRef : (files seed.afterOpen).Frames selectedPath (files seed.afterDirectory)
-  activeRef : (files seed.afterDirectory).Frames selectedPath (files seed.afterActive)
-  pendingRef : (files seed.afterActive).Frames selectedPath (files seed.afterPending)
-  dispose : (files workerReached).Frames selectedPath (files disposal.afterDisposal)
-  unlock : (files disposal.afterDisposal).Frames selectedPath (files disposal.reached)
-  releaseLock : (files disposal.reached).Frames selectedPath (files finalized.reached)
+/-- Admission and cleanup frame any observation retained around the
+held worker. The worker has its own effect law. -/
+structure RawOpenCacheDisposal.ScopeFrames (frame : heap → heap → Prop) : Prop where
+  admission : admitted.CacheFrames seed frame
+  dispose : frame workerReached disposal.afterDisposal
+  unlock : frame disposal.afterDisposal disposal.reached
+  releaseLock : frame disposal.reached finalized.reached
 
-variable {disposal finalized files selectedPath}
-
-private theorem RawOpenCacheDisposal.ScopeFileFrames.reachesWorker
-    (frames : disposal.ScopeFileFrames finalized files selectedPath) :
-    (files entry).Frames selectedPath (files seed.afterPending) :=
-  admitted.framesThroughCache seed (frame := fun before after => (files before).Frames selectedPath (files after))
-    (fun first last => first.trans last) ⟨fun _ => frames.lockOpen, fun _ => frames.flock,
-      fun _ => frames.openDirectory, fun _ => frames.directoryRef, fun _ => frames.activeRef, fun _ => frames.pendingRef⟩
+variable {disposal finalized} {frame : heap → heap → Prop}
 
 /-- Preserve the worker's reached bindings through both runtime drops
 and the intervening unlock. These bindings can include a new keeper
 that was published before the worker returned an error. -/
-theorem RawOpenCacheDisposal.ScopeFileFrames.afterWorker
-    (frames : disposal.ScopeFileFrames finalized files selectedPath) :
-    (files workerReached).Frames selectedPath (files finalized.reached) :=
-  frames.dispose.trans frames.unlock |>.trans frames.releaseLock
+theorem RawOpenCacheDisposal.ScopeFrames.afterWorker
+    (frames : disposal.ScopeFrames finalized frame)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after) :
+    frame workerReached finalized.reached :=
+  trans (trans frames.dispose frames.unlock) frames.releaseLock
 
-/-- Read-only rejectors share the surrounding admission and drops. -/
-theorem RawOpenCacheDisposal.ScopeFileFrames.preserves
-    (frames : disposal.ScopeFileFrames finalized files selectedPath)
-    (worker : (files seed.afterPending).Frames selectedPath (files workerReached)) :
-    (files entry).Frames selectedPath (files finalized.reached) :=
-  frames.reachesWorker.trans (worker.trans frames.afterWorker)
+/-- Read-only and repair failures share admission and cleanup. -/
+theorem RawOpenCacheDisposal.ScopeFrames.preserves
+    (frames : disposal.ScopeFrames finalized frame)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (worker : frame seed.afterPending workerReached) :
+    frame entry finalized.reached :=
+  trans (admitted.framesThroughCache seed trans frames.admission) (trans worker (frames.afterWorker trans))
 
 variable (seen : RawManifestStatError (admitted := admitted) seed fileCalls)
     (disposal : RawOpenCacheDisposal (admitted := admitted) seed seen.reached)
@@ -134,7 +123,8 @@ variable (seen : RawManifestStatError (admitted := admitted) seed fileCalls)
     (files : heap → CheckpointSurvivingFiles) (selectedPath : FilePath → Prop)
 
 /-- The failed manifest stat lies between the same admission and drops. -/
-structure RawManifestStatError.FileFrames extends disposal.ScopeFileFrames finalized files selectedPath where
+structure RawManifestStatError.FileFrames extends
+    disposal.ScopeFrames finalized (fun before after => (files before).Frames selectedPath (files after)) where
   stat : (files seed.afterPending).Frames selectedPath (files seen.reached)
 
 variable {seen disposal finalized files selectedPath}
@@ -143,7 +133,7 @@ variable {seen disposal finalized files selectedPath}
 theorem RawManifestStatError.FileFrames.preserves
     (frames : seen.FileFrames disposal finalized files selectedPath) :
     (files entry).Frames selectedPath (files finalized.reached) :=
-  frames.toScopeFileFrames.preserves frames.stat
+  frames.toScopeFrames.preserves CheckpointSurvivingFiles.Frames.trans frames.stat
 
 end
 
@@ -192,9 +182,9 @@ theorem RawManifestStatError.finalizesWithFrames
   have uses := (RawMarkedOpenInterpreter.cacheReferences directory allocation.directoryRef allocation.activeRef
     allocation.pendingRef).1
   have dropped := frames.dispose (sameDisposal.symm ▸ disposal.disposed _ uses)
-  exact ⟨failed, returned, cause, reached, trans (raw.framesThroughCache allocation trans frames.admission)
-    (trans (frames.stat seen.stat) (trans dropped (trans (frames.unlock disposal.unlocked)
-      (frames.release finalized.finalized))))⟩
+  have scope : disposal.ScopeFrames finalized frame :=
+    ⟨frames.admission, dropped, frames.unlock disposal.unlocked, frames.release finalized.finalized⟩
+  exact ⟨failed, returned, cause, reached, scope.preserves trans (frames.stat seen.stat)⟩
 
 private theorem singletonFrame
     {atReturn : heap} {diagnostic : IO.Error} {frame : heap → heap → Prop}
@@ -544,8 +534,10 @@ theorem RawQuietRebootEntry.reopensAfterRunChunkRejection
     (finalized : RawOpenErrorLockFinalization view current.state.session.directory release admitted.lock
       admission.owner disposal.reached)
     (sameHeap : retryHeap = finalized.reached)
-    (frames : disposal.ScopeFileFrames finalized (observedFiles names bytes)
-      (checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest))
+    (frames : disposal.ScopeFrames finalized (fun before after =>
+      (observedFiles names bytes before).Frames
+        (checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest)
+        (observedFiles names bytes after)))
     (readLaws : raw.fileCalls.FileFrames (observedFiles names bytes)
       (checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest))
     (child : CheckpointCrashChild (names seed.afterPending) admission
@@ -574,7 +566,11 @@ theorem RawQuietRebootEntry.reopensAfterRunChunkRejection
       reader.ReachedSession next.state history log current.reads ∧
       Nonempty (raw.ReturnedAt next remove write rename bootstrap assemble get set ptrEq)) := by
   intro install failed inode path
-  have frame := frames.preserves (seen.preservesSelectedFiles readLaws)
+  have admissionFrame := admitted.framesThroughCache seed
+    (frame := fun before after => (observedFiles names bytes before).Frames
+      (checkpointSurvivorPath current.state.session.directory current.state.writer current.state.writer.target.pair.manifest)
+      (observedFiles names bytes after)) CheckpointSurvivingFiles.Frames.trans frames.admission
+  have frame := frames.preserves CheckpointSurvivingFiles.Frames.trans (seen.preservesSelectedFiles readLaws)
   have selectedManifest : current.state.writer.target.pair.manifest = some run.reads.bytes := by
     have bound := run.reads.bound
     have sameFileState : view.files rebooted = crash.retry := congrArg Prod.snd booted
@@ -585,13 +581,13 @@ theorem RawQuietRebootEntry.reopensAfterRunChunkRejection
   have parentBinding := run.child.binds
   rw [run.child.atRoot, run.child.atName] at parentBinding
   have binding : crash.names path = some inode := by
-    have sameChild := entry.childAfterOpenFrame frames.reachesWorker selectedPath child
+    have sameChild := entry.childAfterOpenFrame admissionFrame selectedPath child
     unfold CheckpointCrashChild at sameChild
     rw [parentBinding, Option.map_some] at sameChild
     exact sameChild.symm.trans (congrArg some seen.releasesSelected.inode.symm)
   have survived : names rebooted path = some inode :=
     (entry.survivorNames path (.inr (.inr selectedPath))).trans binding
-  have earlier := frames.reachesWorker.trans (run.reads.preservesSelectedFiles readLaws (Nat.le_refl run.index))
+  have earlier := admissionFrame.trans (run.reads.preservesSelectedFiles readLaws (Nat.le_refl run.index))
   have opened := readLaws.openRead path (run.reads.atRun run.index)
   have actualOpen : raw.fileCalls.openRead path (run.reads.atRun run.index) = .ok seen.handle seen.opened := seen.openRaw
   rw [actualOpen] at opened

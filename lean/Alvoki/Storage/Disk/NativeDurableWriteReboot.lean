@@ -28,6 +28,28 @@ theorem NativeReadyState.SelectedRetryDurability.frame {state : NativeReadyState
     exact same.symm ▸ retained.rootSettled names allowed)
   exact fun names allowed => settled names allowed _ rfl
 
+/-- A retry can change the keeper and later WAL names. The protected
+files retain their live and durable bytes, and each surviving binding
+of the database directory still comes from the earlier parent map. -/
+structure NativeReadyState.SelectedRetryFrame (state : NativeReadyState)
+    (before after : CheckpointStorageObservation) (beforeBytes afterBytes : Nat → ByteArray) : Prop where
+  live : (⟨before.files.names, fun inode => [beforeBytes inode]⟩ : CheckpointSurvivingFiles).Frames
+    state.selectedRetryPath ⟨after.files.names, fun inode => [afterBytes inode]⟩
+  durable : before.files.Frames state.selectedRetryPath after.files
+  parent : before.Frames (· = state.session.directory.path) after
+
+theorem NativeReadyState.SelectedRetryFrame.refl (state : NativeReadyState)
+    (atState : CheckpointStorageObservation) (bytes : Nat → ByteArray) :
+    state.SelectedRetryFrame atState atState bytes bytes :=
+  ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => ⟨rfl, fun _ _ => rfl⟩, .refl _ _⟩
+
+theorem NativeReadyState.SelectedRetryFrame.trans {state : NativeReadyState}
+    {first middle last : CheckpointStorageObservation} {firstBytes middleBytes lastBytes : Nat → ByteArray}
+    (before : state.SelectedRetryFrame first middle firstBytes middleBytes)
+    (after : state.SelectedRetryFrame middle last middleBytes lastBytes) :
+    state.SelectedRetryFrame first last firstBytes lastBytes :=
+  ⟨before.live.trans after.live, before.durable.trans after.durable, before.parent.trans after.parent⟩
+
 variable {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap FileImage}
   {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
   {visible : heap → Nat → ByteArray} {failed rebooted : heap}
