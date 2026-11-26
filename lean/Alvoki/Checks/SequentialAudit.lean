@@ -4004,6 +4004,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.retainsWriteRebootFiles
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.selectedWriteManifest
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesSelectedWrite
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.activePair
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.laterNames
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsRetry
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.retainsSeal
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.entryAuthority

@@ -103,7 +103,6 @@ theorem NativeOpenedPosition.recoversEarlyWriteError
       (state).BeforeMarkerWriteFrame keeper (storage appended) (storage failed))
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
-    (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
     {keep : heap → Prop} {attempts : source.FailedCalls rebooted returns reached}
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
@@ -147,7 +146,7 @@ theorem NativeOpenedPosition.recoversEarlyWriteError
   obtain ⟨admitted, pair, accepts⟩ := NativeReadyState.priorWriteTargetOfSample valid batch initial protectedFrame
     markerFrame (fun selected bound => (Option.some.inj (named.symm.trans bound)) ▸ keeperFrame)
     (names rebooted) reboot.chosen (visible rebooted) reboot.samplesWal
-  obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial protectedFrame admitted pair accepts later
+  obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial protectedFrame admitted pair accepts
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
   refine ⟨current.uses.writeSchedules, ?_, rebootVacant, slots, ?_⟩
   · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set

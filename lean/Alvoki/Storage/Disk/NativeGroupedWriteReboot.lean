@@ -89,8 +89,7 @@ theorem RawWriteRebootEntry.selectsGroupErrorRetry
     (effects : calls.GroupFailureEffects cache view appender stager inodes observe inode buffered rows batch
       initial poisoned appended staged)
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
-    (seen : RawWriteRebootEntry state view storage names visible reached rebooted)
-    (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, state.writer.target.range.through < ordinal) :
+    (seen : RawWriteRebootEntry state view storage names visible reached rebooted) :
     commitBytesAt dir first (WAL.encodeBatch batch) (state.writer.installed.walBytes + WAL.frameSize * rows.length)
       append stage sync rename poisoned = .error cause reached ∧
     BatchRetryTarget state.writer.history batch state.writer.wal.active.first state.writer.target ∧
@@ -106,7 +105,7 @@ theorem RawWriteRebootEntry.selectsGroupErrorRetry
     valid.retained.resumed.keeper.trans valid.retained.active
   obtain ⟨pair, keeper⟩ := selected (names rebooted) seen.chosen (visible rebooted)
     (fun path inode scope named => seen.samplesWal path inode (by simpa only [sameFirst] using scope) named)
-  exact ⟨returned, admitted, seen.selectsRetry old protectedFrame admitted pair keeper later⟩
+  exact ⟨returned, admitted, seen.selectsRetry old protectedFrame admitted pair keeper⟩
 
 end
 end Alvoki.Storage.DiskSession

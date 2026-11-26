@@ -42,7 +42,6 @@ theorem NativeOpenedPosition.groupedRetryAndReads
       request lookup failed cause)
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (reset : reboot.DurableReset)
-    (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
     {firstOffset : Nat} (covers : ∀ offset ∈ (state).writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename storage firstOffset
@@ -123,7 +122,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   obtain ⟨attempts, retried, retryEffects⟩ := retry
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, fits, guard, assigned, classified⟩ :=
     current.selectsAfterGroupedError view cache appender stager syncer inodes observe inode buffered request lookup rename
-      nonempty returned initial groupEffects reboot later
+      nonempty returned initial groupEffects reboot
   refine ⟨schedules, attempts, retried, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with ⟨group, admitted, selected, _, _⟩ | elsewhere
   · refine .inr ⟨group, ?_⟩

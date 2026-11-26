@@ -1,5 +1,12 @@
 # Current handoff
 
+At a write reboot, the file-image projection now uses the complete child census
+of the root bound in the chosen survivor map. A valid manifest and marker from
+that same map determine the cutoff. Parsing the canonical WAL basenames derives
+exactly which later starts are present. Early, grouped and late write recovery
+use this projection to obtain the marker bound. An intervening failed repair can
+change these names before the next successful open.
+
 The selected marked reader now derives the measured keeper extent and the exact
 set of later starts in the observed directory for every successful bounded repair.
 The common finisher exposes the ordered unlink pass and the final keeper sync

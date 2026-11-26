@@ -65,9 +65,7 @@ theorem NativeOpenedPosition.selectsAfterGroupedError
     (groupEffects : current.GroupedErrorEffects view cache appender stager syncer inodes observe inode buffered
       request lookup failed cause)
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
-    (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
-    (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
- :
+    (reboot : RawWriteRebootEntry state view storage names visible failed rebooted) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     ∃ batch table guarded poisoned,
       prepareBatch (installed).table request.rows = some (batch, table) ∧
@@ -114,7 +112,7 @@ theorem NativeOpenedPosition.selectsAfterGroupedError
     have protectedFrame := prefixFrame.trans (appendFrame.trans (stageFrame.trans syncFrame))
     obtain ⟨_, admitted, selected, rebootVacant, slots⟩ :=
       RawWriteRebootEntry.selectsGroupErrorRetry cache view appender stager syncer inodes observe inode buffered rename
-        valid initial protectedFrame wrote remembered failedGroup effects reboot later
+        valid initial protectedFrame wrote remembered failedGroup effects reboot
     exact .inl ⟨⟨_, _, wrote, remembered, failedGroup⟩, admitted, selected, rebootVacant, slots⟩
   | renameError wrote remembered synced _ => exact .inr (passedGroup wrote remembered synced)
   | directory wrote remembered synced _ _ => exact .inr (passedGroup wrote remembered synced)
@@ -134,7 +132,6 @@ theorem NativeOpenedPosition.recoversGroupedWriteError
       request lookup failed cause)
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
-    (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
     {keep : heap → Prop} {attempts : source.FailedCalls rebooted returns reached}
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
@@ -171,7 +168,7 @@ theorem NativeOpenedPosition.recoversGroupedWriteError
       ¬ groupFailed := by
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, fits, guard, assigned, classified⟩ :=
     current.selectsAfterGroupedError view cache appender stager syncer inodes observe inode buffered
-      request lookup rename nonempty returned initial groupEffects reboot later
+      request lookup rename nonempty returned initial groupEffects reboot
   refine ⟨schedules, batch, table, guarded, poisoned, prepared, fits, guard, assigned, ?_⟩
   rcases classified with ⟨group, admitted, selected, rebootVacant, slots⟩ | elsewhere
   · obtain ⟨carried, recovered⟩ :=

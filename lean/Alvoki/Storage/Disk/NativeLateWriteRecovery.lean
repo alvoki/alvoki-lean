@@ -50,10 +50,7 @@ theorem NativeOpenedPosition.selectsAfterPublicationError
         .error cause failed ∧
       WalPublicationPayloads.ReachedWrite state batch request.rows (storage failed) liveNew allows)
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
-    (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
-    (later : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
-      target.pair = (view.files rebooted).image.directory.active →
-      ∀ ordinal ∈ (view.files rebooted).image.later.visible, target.range.through < ordinal) :
+    (reboot : RawWriteRebootEntry state view storage names visible failed rebooted) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
       .error (.commitUnknown cause) failed ∧
@@ -69,10 +66,8 @@ theorem NativeOpenedPosition.selectsAfterPublicationError
   obtain ⟨failedCommit, payloads, sameKeeper, oldMarker, newMarker, selections⟩ := publication (initial.frame prefixFrame)
   obtain ⟨target, admitted, pair, keeper⟩ :=
     selections.retryTargetAtReboot valid prepared fits initial frame sameKeeper oldMarker newMarker reboot
-  have active : target.pair = (view.files rebooted).image.directory.active := by
-    rw [reboot.image]
-    exact pair
-  obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial frame admitted pair keeper (later target admitted active)
+  have active : target.pair = (view.files rebooted).image.directory.active := pair.trans reboot.activePair.symm
+  obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial frame admitted pair keeper
   refine ⟨current.uses.writeSchedules, ?_, rebootVacant, slots, target, admitted, active, selected⟩
   · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits]
@@ -111,7 +106,6 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
     (observes : ∀ target : Target,
       BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
-      (∀ ordinal ∈ (view.files rebooted).image.later.visible, target.range.through < ordinal) ∧
       RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) (state).selectedRetryPath
         (keep target) attempts ∧
@@ -139,8 +133,7 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
   obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected⟩ :=
     current.selectsAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot
-      (fun target admitted pair => (observes target admitted pair).1)
-  obtain ⟨_, retries, starts, liveKeeper, healthy⟩ := observes target admitted active
+  obtain ⟨retries, starts, liveKeeper, healthy⟩ := observes target admitted active
   obtain ⟨carried, recovered⟩ :=
     (ready).opensAfterWriteRetries source prepared fits admitted names visible retries selected
       (starts selected) liveKeeper vacant healthy phase ptrEq
@@ -191,9 +184,6 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     {returnedAt : heap} {reopened : DiskTable}
     (openedTable : source.openTable input reached = .ok reopened returnedAt)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
-    (later : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
-      target.pair = (view.files rebooted).image.directory.active →
-      ∀ ordinal ∈ (view.files rebooted).image.later.visible, target.range.through < ordinal)
     (retryEffects : ∀ target : Target,
       BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
@@ -256,7 +246,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
           (∀ observed ∈ last.current.ready.reads, observed.agrees reference) := by
   obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected⟩ :=
     current.selectsAfterPublicationError view cache appender stager syncer storage request lookup rename
-      nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot later
+      nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot
   have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
     nonempty returned nameEffects
   have window := reboot.walNamespace nameFrame initialWindow settledWindow
