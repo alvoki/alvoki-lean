@@ -196,9 +196,14 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
 - [ ] **Complete open and repair dispatch.** Extend the exact admission, read, repair and cleanup proofs to the remaining reached failures and stops, including other survivors of a stopped initial marker directory barrier, other selected read failures and later keeper repair steps. Cover the guarded collision route for longer-keeper staging in the raw installer. Carry finite rejected attempts into the exact next raw open, with the same canonical directory, surviving file bytes and reached census. [Healthy raw marked dispatch](../lean/Alvoki/Storage/Disk/NativeHealthyMarkedTableOpen.lean) · [Initial marker flush error and retry](../lean/Alvoki/Storage/Disk/NativeInitialMarkerFlushSessions.lean)
   A later failure can leave an aligned keeper in the pending cache. At a
   failed root-directory sync, the directory sync has not consumed that keeper.
-  Derive the actual keeper, directory and lock drops from the reached cache
-  before carrying the descriptor census into another admission. The decoder
-  error path already distinguishes these drops. [Pending keeper cleanup](../lean/Alvoki/Storage/Disk/NativeFinalizedWalDecodeError.lean)
+  The fixed worker now returns the wrapped fsync error. Given the actual cache
+  close events, cleanup derives the final census from the inventory at the
+  worker’s return. Aliased cache references can share a descriptor.
+  Carry this census and the fsync’s physical outcome into the next admission. The decoder
+  error path already distinguishes these drops. An accepted write plan fixes
+  the keeper prefix to the encoding of its ordered history suffix. Reading
+  those exact bytes at that offset rules out a checksum error. A root fsync
+  error is reachable with the same valid bytes. [WAL decoding](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean#L215) · [Keeper prefix](../lean/Alvoki/Storage/Disk/WalSegmentFirstReplay.lean#L34) · [Decoder cleanup](../lean/Alvoki/Storage/Disk/NativeFinalizedWalDecodeError.lean) · [Root fsync and populated cache](../lean/Alvoki/Storage/Disk/NativePopulatedOpenCleanup.lean)
 
   A literal successful fixed open, with its reached admission and
   cache observations, yields the exact raw recovery return and the two

@@ -746,6 +746,36 @@ theorem RawMarkedOpenInterpreter.worker_reachesMarkedReadsAndRepair
 
 variable {admission : CensusOpenAdmissionReports input directory inventory retry}
 
+/-- The fixed error handler disposes the cache returned by initialization,
+then unlocks and releases the acquired lock. Its diagnostic follows the
+unlock result. Cache contents do not affect this control-flow proof. -/
+theorem RawOpenAdmissionReport.returnsFailedMarkedInterpreter
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    {cause : IO.Error} {before afterDisposal afterUnlock reached : heap}
+    (worker : source.worker seed.directoryRef seed.activeRef seed.pendingRef directory raw.lock
+      (RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef)
+      seed.afterPending = .error cause before)
+    (disposed : source.dispose (RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef)
+      before = .ok () afterDisposal)
+    (unlockResult : Except IO.Error Unit)
+    (unlocked : source.calls.unlock raw.lock afterDisposal = match unlockResult with
+      | .ok () => .ok () afterUnlock
+      | .error diagnostic => .error diagnostic afterUnlock)
+    (released : source.release raw.lock afterUnlock = reached) :
+    source.openTable input entry = .error (RawOpenCacheDisposal.diagnosticAfterUnlock cause unlockResult) reached := by
+  rw [raw.markedInterpreterStarts source seed]
+  cases unlockResult with
+  | error diagnostic => simp [finishFailedOpen, worker, disposed, unlocked, released, tryCatchThe,
+      MonadExceptOf.tryCatch, EStateM.tryCatch, EStateM.Backtrackable.restore, EStateM.dummyRestore, Bind.bind,
+      EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, RawOpenCacheDisposal.diagnosticAfterUnlock]
+  | ok value =>
+    cases value
+    simp [finishFailedOpen, worker, disposed, unlocked, released, tryCatchThe, MonadExceptOf.tryCatch,
+      EStateM.tryCatch, EStateM.Backtrackable.restore, EStateM.dummyRestore, Bind.bind, EStateM.bind, throw,
+      throwThe, MonadExceptOf.throw, EStateM.throw, RawOpenCacheDisposal.diagnosticAfterUnlock]
+
 /-- A returned worker error follows the same fixed interpreter up to
 the worker, then uses its cache drop, unlock and lock drop in order. -/
 theorem RawOpenCacheDisposal.returnsMarkedInterpreter
@@ -762,15 +792,8 @@ theorem RawOpenCacheDisposal.returnsMarkedInterpreter
     (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner seen.reached) :
     source.openTable input entry = .error (seen.diagnostic cause) finalized.reached := by
   have uses := (RawMarkedOpenInterpreter.cacheReferences directory seed.directoryRef seed.activeRef seed.pendingRef).1
-  rw [raw.markedInterpreterStarts source seed]
-  simp only [finishFailedOpen, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, worker,
-    EStateM.Backtrackable.restore, EStateM.dummyRestore, Bind.bind, EStateM.bind, sameDisposal, seen.disposed _ uses,
-    throw, throwThe, MonadExceptOf.throw, EStateM.throw, seen.unlocked]
-  cases reported : seen.unlockResult with
-  | error diagnostic => simp only [reported, RawOpenCacheDisposal.diagnostic, finalized.finalized]
-  | ok value =>
-    cases value
-    simp only [reported, RawOpenCacheDisposal.diagnostic, finalized.finalized]
+  exact raw.returnsFailedMarkedInterpreter source seed worker (sameDisposal.symm ▸ seen.disposed _ uses)
+    seen.unlockResult seen.unlocked finalized.finalized
 
 /-- The canonical path and three allocated references identify the cache. -/
 private theorem sameCacheAtReferences {left right : DiskTable.OpenSyncFiles}

@@ -43,10 +43,12 @@ namespace RawOpenCacheDisposal
 
 variable {before : heap}
 
-def diagnostic (seen : RawOpenCacheDisposal (admitted := admitted) seed before) (workerError : IO.Error) : IO.Error :=
-  match seen.unlockResult with
+def diagnosticAfterUnlock (workerError : IO.Error) : Except IO.Error Unit → IO.Error
   | .ok () => workerError
   | .error cause => cause
+
+def diagnostic (seen : RawOpenCacheDisposal (admitted := admitted) seed before) (workerError : IO.Error) : IO.Error :=
+  diagnosticAfterUnlock workerError seen.unlockResult
 
 /-- Interpret the native release of the cache record on error. This
 interpreter accounts for the scoped runtime drop before outer unlock. -/
@@ -106,10 +108,10 @@ theorem returnsAt (seen : RawOpenCacheDisposal (admitted := admitted) seed befor
       EStateM.dummyRestore, Bind.bind, EStateM.bind, seen.disposed cache uses, throw, throwThe, MonadExceptOf.throw,
       EStateM.throw, seen.unlocked]
     cases reported : seen.unlockResult with
-    | error exception => simp only [reported, diagnostic]
+    | error exception => simp only [reported, diagnostic, diagnosticAfterUnlock]
     | ok value =>
       cases value
-      simp only [reported, diagnostic]
+      simp only [reported, diagnostic, diagnosticAfterUnlock]
   · rw [seen.returnedFiles]
     cases seen.unlockResult <;> simp [filesAfterUnlock, seen.files, image]
   · rw [seen.returnedFiles]

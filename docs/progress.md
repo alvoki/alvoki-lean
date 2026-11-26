@@ -66,9 +66,15 @@ WAL names outside the protected files and keeper, retry only needs presence.
 If cache initialization itself fails, the same public open runs unlock and
 releases its lock handle. A failed unlock supplies the public diagnostic.
 
-**Next obligation.** Carry a held failure with an aligned keeper still cached
-through its actual descriptor drops and into the next open. Successful repair
-and installation still require local file and allocation effects.
+A failed first root fsync now yields the worker’s exact error and heap. The
+common cleanup carries the observed descriptor closes at that heap through
+unlock and final lock release to derive the public diagnostic and inventory.
+Several cache references may share a handle. The fsync may already have taken effect.
+
+**Next obligation.** Carry the surviving namespace from that failed barrier,
+together with the cleanup inventory, into the next admission on the same
+execution. Successful installation still requires local file and allocation
+effects.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

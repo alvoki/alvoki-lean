@@ -367,6 +367,7 @@ import Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
 import Alvoki.Storage.Disk.NativeRawAlignedWalDecodeError
 import Alvoki.Storage.Disk.NativeFinalizedWalDecodeError
+import Alvoki.Storage.Disk.NativePopulatedOpenCleanup
 import Alvoki.Storage.Disk.NativeRawMarkerChunkError
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
 import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
@@ -4168,6 +4169,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readSelectedManifest
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readSelectedMarker
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsMarkedInterpreter
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsFailedMarkedInterpreter
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.finalizesFailedWorker
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.workerRejectsRootAuthorization
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.append
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsFixedAfterWorkerAgreement
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.returnsFixedInterpreterOfRun
