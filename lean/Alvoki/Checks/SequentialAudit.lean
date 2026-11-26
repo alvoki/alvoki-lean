@@ -2194,6 +2194,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.fromWorkerError
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.workerReturnsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.finalizesFailedRepairWithFrame
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPrune
+#check_axioms Alvoki.Storage.DiskSession.SampledCheckpointRetryFrame.refl
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFinalSyncError
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsLongRenameError
 #check_axioms Alvoki.Storage.DiskSession.foldReturnedWalUnlinks

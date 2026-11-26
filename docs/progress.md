@@ -167,8 +167,11 @@ During a held repair, a suffix unlink can fail after earlier removals
 succeeded. One fold now follows the reached removes up to an outer I/O error
 or a rejected unlink result. Given the effects on paths other than the
 victim, this yields the selected files, root binding and bounded WAL names
-at the repair error heap. Later names may have changed. Connecting that
-heap through the worker's cleanup to the public retry remains open.
+at the repair error heap. Later names may have changed. The fixed marked
+worker now carries this frame through cache disposal, unlock and release
+to the exact public error heap. That return extends the existing retry
+sequence, including the diagnostic supplied by cleanup. This uses local
+reader, removal and cleanup effects and the selected repair plan.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and

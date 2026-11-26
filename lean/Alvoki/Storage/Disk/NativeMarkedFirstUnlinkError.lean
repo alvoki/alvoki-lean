@@ -13,6 +13,26 @@ section SuffixRetryFrame
 variable {heap : Type} {directory : DiskDirectory} {scope : FilePath → Prop} {through : Nat}
   {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
 
+theorem SampledCheckpointRetryFrame.refl (atHeap : heap) :
+    SampledCheckpointRetryFrame directory scope through observe readBytes atHeap atHeap :=
+  ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl,
+    fun _ _ => ⟨rfl, fun _ _ => rfl⟩, .refl _ _⟩
+
+variable (directory scope through observe readBytes) in
+/-- The remove's reached state preserves the selected files, the
+bounded catalog, and the root's name in its parent. -/
+def SampledCheckpointRetryFrame.WalUnlinkEffects (plan : Plan)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)) : Prop :=
+  ∀ ordinal ∈ plan.newer, ∀ issued,
+    let victim := directory.file (.walSegment ordinal)
+    let after := NativeFileEffectProjection.reached (remove victim issued)
+    (observe issued).files.Frames
+      (fun path => (scope path ∨ ∃ start ≤ through, path = directory.file (.walSegment start)) ∧ path ≠ victim)
+      (observe after).files ∧
+    (observe issued).Frames (· = directory.path) (observe after) ∧
+    ∀ path, scope path → path ≠ victim → ∀ inode,
+      (observe issued).files.names path = some inode → readBytes after inode = readBytes issued inode
+
 /-- The checked suffix starts beyond the selected WAL cutoff. A local
 remove can change the victim's live or durable binding on either result.
 The selected files and the root's parent binding survive at the heap
@@ -29,15 +49,7 @@ theorem SampledCheckpointRetryFrame.afterFailedWalPrune
     {entry authorized reached : heap} {cause : IO.Error}
     (authorization : sync #[directory.path] entry = .ok () authorized)
     (rootFrame : SampledCheckpointRetryFrame directory scope through observe readBytes entry authorized)
-    (unlink : ∀ ordinal ∈ plan.newer, ∀ issued,
-      let victim := directory.file (.walSegment ordinal)
-      let after := NativeFileEffectProjection.reached (remove victim issued)
-      (observe issued).files.Frames
-        (fun path => (scope path ∨ ∃ start ≤ through, path = directory.file (.walSegment start)) ∧ path ≠ victim)
-        (observe after).files ∧
-      (observe issued).Frames (· = directory.path) (observe after) ∧
-      ∀ path, scope path → path ≠ victim → ∀ inode,
-        (observe issued).files.names path = some inode → readBytes after inode = readBytes issued inode)
+    (unlink : SampledCheckpointRetryFrame.WalUnlinkEffects directory scope through observe readBytes plan remove)
     (stopped : ((plan.newer.map Step.unlink).forM
       (performPaths directory plan remove throw write sync rename)) authorized = .error cause reached) :
     finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .error cause reached ∧
@@ -64,11 +76,9 @@ theorem SampledCheckpointRetryFrame.afterFailedWalPrune
         have upper : ordinal ≤ plan.through := ordinals ▸ Nat.le_trans within cutoff
         exact (Nat.not_lt_of_ge upper) later
       exact congrArg Option.isSome (physical _ ⟨.inr ⟨start, within, rfl⟩, apart⟩).1
-  have refl atHeap : frame atHeap atHeap :=
-    ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl,
-      fun _ _ => ⟨rfl, fun _ _ => rfl⟩, .refl _ _⟩
   exact ⟨finishBoundedMarkedOpen_errorDuringUnlinks valid bytes bounded authorization stopped,
-    rootFrame.trans (framesFailedWalUnlinks frame refl SampledCheckpointRetryFrame.trans each stopped)⟩
+    rootFrame.trans (framesFailedWalUnlinks frame SampledCheckpointRetryFrame.refl
+      SampledCheckpointRetryFrame.trans each stopped)⟩
 
 end SuffixRetryFrame
 

@@ -5,6 +5,7 @@ import Alvoki.Storage.Disk.NativeLongKeeperStorage
 import Alvoki.Storage.Disk.NativeLongKeeperPending
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
+import Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 import Alvoki.Storage.Disk.NativeWalPublicationTail
 
@@ -249,6 +250,133 @@ theorem longKeeperSyncPrefix {heap : Type} (files : heap → FileImage) (directo
 
 end ReplacementPrefix
 
+section FailedMarkedRepair
+
+variable {heap stream : Type} {view : OpenCloseHeapView heap FileImage} {directory : DiskDirectory}
+  {source : RawMarkedOpenInterpreter heap stream} {entry : heap} {input : FilePath}
+  {history : List WAL.Write} {layout : CanonicalKeeperLayout (view.files entry).image history}
+  {published : CheckpointPublication.Image}
+  {admission : CensusOpenAdmissionReports input directory (view.descriptors entry) (view.files entry)}
+  {raw : RawOpenAdmissionReport admission view source.calls entry}
+  {seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+  {reads : CapturedMarkedReadReports admission layout published} {keeper : CapturedKeeperOpenReports reads}
+  {chronology : CapturedMarkedReadCensus reads keeper}
+  {prepared : NativeMarkedCheckpointReadHeap seed chronology source.fileCalls}
+  {slotOf : heap → stream → DescriptorSlot} {listing : MarkedDirectoryReadReport prepared source.directoryCalls slotOf}
+  (extents : MarkedWalExtentReports prepared listing)
+  {checkpoint : Option (PackedTable × UInt64)} {beforeKeeper afterKeeper reached : heap}
+  (seals : MarkedSealReadChain seed source.fileCalls chronology.seals listing.reached beforeKeeper)
+  (selected : SelectedIntegrityCheckpoint published.durable (view.files entry).image.directory.active.manifest checkpoint)
+  (valid : Prepared (view.files entry).image layout.target layout.plan)
+  (following : ∀ first ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+    layout.range.watermark < first)
+  (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+    (view.files entry).image.directory.active.manifest)
+  (ordered : WAL.OrdinalsFrom 1 history)
+
+local notation "callbacks" => source.keeperCallbacks.withFileReads source.fileCalls
+local notation "remember" => fun path handle =>
+  AlignedKeeperCacheCallbacks.modifyPending callbacks seed.pendingRef (pushPending path handle)
+local notation "stageWrite" => source.stage.stage seed.pendingRef (AlignedKeeperCacheCallbacks.modifyPending callbacks)
+local notation "groupSync" => AlignedKeeperCacheCallbacks.syncPaths callbacks directory.path
+  seed.directoryRef seed.activeRef seed.pendingRef
+
+variable (sameStat : source.fileCalls.stat = source.calls.lookup)
+  (flat : optionalMetadataWith (source.fileCalls.stat (directory.file .wal)) seed.afterPending = .ok none seed.afterPending)
+  {markedMeta : IO.FS.Metadata}
+  (marked : optionalMetadataWith (source.fileCalls.stat (directory.file .walBoundary)) seed.afterPending =
+    .ok (some markedMeta) seed.afterPending)
+  (keeperRead : source.fileCalls.readKeeperWithRelease
+    (fun path handle => (source.keeperCallbacks.withFileReads source.fileCalls).modifyPending seed.pendingRef
+      (pushPending path handle))
+    (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
+    reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper)
+
+include extents seals selected valid following accepted ordered sameStat flat marked keeperRead
+
+/-- Carry a scoped frame from the checked reader through the actual
+failed repair, cache disposal, unlock and lock release. The unlock can
+replace the worker's error in the public diagnostic. -/
+theorem MarkedWalExtentReports.finalizesFailedRepairWithFrame
+    {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (readerFrames : source.fileCalls.ScopeFrames frame)
+    (listingFrames : source.directoryCalls.ScopeFrames directory frame)
+    (keeperFrame : frame beforeKeeper afterKeeper)
+    {cause : IO.Error}
+    (repair : finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
+      source.remove stageWrite groupSync source.rename afterKeeper = .error cause reached)
+    (repairFrame : frame afterKeeper reached)
+    (dispose : RawOpenCacheDisposal (admitted := raw) seed reached)
+    (sameDisposal : source.dispose = dispose.dispose)
+    (owner : (view.files reached).owners = admission.held.owners)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner dispose.reached)
+    (scope : dispose.ScopeFrames finalized frame) :
+    source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached ∧
+      frame entry finalized.reached ∧ (view.files finalized.reached).image = (view.files reached).image := by
+  let worker := source.worker seed.directoryRef seed.activeRef seed.pendingRef
+  have rejected := extents.workerReturnsFailedRepair source (raw := raw) seals selected valid following accepted ordered
+    sameStat flat marked keeperRead repair
+  have disposed := dispose.returnsAt worker cause rejected rfl owner
+  obtain ⟨_, _, _, _, _, _, _, _, _, image, _⟩ := dispose.returnsAfterLockFinalizationAt worker cause disposed finalized
+  obtain ⟨toListing, toKeeper⟩ := listing.framesThroughSeals selected seals frame refl trans readerFrames listingFrames
+  exact ⟨dispose.returnsMarkedInterpreter source sameDisposal (rejected _) finalized,
+    scope.preserves trans (trans (trans toListing toKeeper) (trans keeperFrame repairFrame)), image⟩
+
+variable {scope : FilePath → Prop} {through : Nat}
+  {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
+
+local notation "sampledFrame" => SampledCheckpointRetryFrame directory scope through observe readBytes
+
+/-- An error during the ordered WAL prune extends the same public
+failed-open chronology. The callback that failed determines the
+worker's reached state. Admission, reads, and cleanup retain the
+sampled checkpoint around that state. -/
+theorem MarkedWalExtentReports.extendsCheckpointRetryAfterFailedWalPrune
+    {first : heap} {earlier : List (FilePath × IO.Error)} (prior : source.FailedCalls first earlier entry)
+    (readerFrames : source.fileCalls.ScopeFrames sampledFrame)
+    (listingFrames : source.directoryCalls.ScopeFrames directory sampledFrame)
+    (remembered : ∀ {path file before after}, remember path file before = .ok () after → sampledFrame before after)
+    {authorized : heap} {cause : IO.Error}
+    (authorization : groupSync #[directory.path] afterKeeper = .ok () authorized)
+    (authorizedFrame : sampledFrame afterKeeper authorized)
+    (cutoff : through ≤ layout.boundedPlan.through)
+    (outside : ∀ ordinal ∈ layout.boundedPlan.newer, ¬ scope (directory.file (.walSegment ordinal)))
+    (unlink : SampledCheckpointRetryFrame.WalUnlinkEffects directory scope through observe readBytes
+      layout.boundedPlan source.remove)
+    (stopped : ((layout.boundedPlan.newer.map Step.unlink).forM
+      (performPaths directory layout.boundedPlan source.remove throw stageWrite groupSync source.rename)) authorized =
+      .error cause reached)
+    (dispose : RawOpenCacheDisposal (admitted := raw) seed reached)
+    (sameDisposal : source.dispose = dispose.dispose)
+    (owner : (view.files reached).owners = admission.held.owners)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner dispose.reached)
+    (cleanup : dispose.ScopeFrames finalized sampledFrame) :
+    source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached ∧
+      source.FailedCalls first (earlier ++ [(input, dispose.diagnostic cause)]) finalized.reached ∧
+      sampledFrame entry finalized.reached := by
+  obtain ⟨covered, _, later⟩ := (Plan.valid_iff layout.plan).mp valid.valid
+  have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have checked := (Plan.valid_iff layout.boundedPlan).mpr ⟨covered, Nat.le_of_eq bytes.symm, later⟩
+  have extent : reads.wal.keeper.calls.metadata.byteSize.toNat = (layout.keeper.bytes ++ layout.tail).size :=
+    reads.wal.keeper.observesFile.extent
+  have bounded : layout.boundedPlan.keeperSize ≤ reads.wal.keeper.calls.metadata.byteSize.toNat := by
+    rw [← bytes]
+    change layout.keeper.bytes.size ≤ reads.wal.keeper.calls.metadata.byteSize.toNat
+    rw [extent]
+    simp
+  obtain ⟨repair, repairFrame⟩ := SampledCheckpointRetryFrame.afterFailedWalPrune checked bytes bounded cutoff outside
+    authorization authorizedFrame unlink stopped
+  have keeperFrame := source.fileCalls.readKeeperKeepsFrame readerFrames SampledCheckpointRetryFrame.refl
+    SampledCheckpointRetryFrame.trans remember remembered _ _ _ keeperRead
+  obtain ⟨returned, framed, _⟩ := extents.finalizesFailedRepairWithFrame seals selected valid following accepted ordered
+    (frame := sampledFrame)
+    sameStat flat marked keeperRead SampledCheckpointRetryFrame.refl SampledCheckpointRetryFrame.trans readerFrames
+    listingFrames keeperFrame repair repairFrame dispose sameDisposal owner finalized cleanup
+  exact ⟨returned, .next prior input returned, framed⟩
+
+end FailedMarkedRepair
+
 section SelectedRetry
 
 private def keepsWalNames {heap : Type} (directory : DiskDirectory) (names : heap → FilePath → Option Nat)
@@ -337,19 +465,11 @@ theorem MarkedWalExtentReports.extendsFailedRepair
     ∃ returned : source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached,
       RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath keep
         (prior.next input returned) ∧ (view.files finalized.reached).image = (view.files reached).image := by
-  let worker := source.worker seed.directoryRef seed.activeRef seed.pendingRef
-  have rejected := extents.workerReturnsFailedRepair source (raw := raw) seals selected valid following accepted ordered sameStat
-    flat marked keeperRead repair
-  have disposed := dispose.returnsAt worker cause rejected rfl owner
-  obtain ⟨_, _, _, _, _, _, _, _, _, image, _⟩ :=
-    dispose.returnsAfterLockFinalizationAt worker cause disposed finalized
-  have refl atHeap := NativeReadyState.SelectedRetryFrame.refl state (storage atHeap) (visible atHeap)
-  have trans {first middle last : heap} (a : retryFrame first middle) (b : retryFrame middle last) :
-      retryFrame first last := a.trans b
-  obtain ⟨toListing, toKeeper⟩ := listing.framesThroughSeals selected seals retryFrame refl trans readerFrames listingFrames
-  have inWorker := trans (trans toListing toKeeper) (trans keeperFrame repairFrame)
-  have returned := dispose.returnsMarkedInterpreter source sameDisposal (rejected _) finalized
-  have kept := scope.preserves trans inWorker
+  obtain ⟨returned, kept, image⟩ := extents.finalizesFailedRepairWithFrame seals selected valid following accepted ordered
+    (frame := retryFrame)
+    sameStat flat marked keeperRead (fun atHeap => NativeReadyState.SelectedRetryFrame.refl state (storage atHeap) (visible atHeap))
+    NativeReadyState.SelectedRetryFrame.trans readerFrames listingFrames keeperFrame repair repairFrame dispose sameDisposal
+    owner finalized scope
   have keeperAt : RawOpenRetryTrace.KeeperAt view dir target retryNames visible finalized.reached := by
     unfold RawOpenRetryTrace.KeeperAt at keeperAtError ⊢
     rw [image, keeperAtError]
