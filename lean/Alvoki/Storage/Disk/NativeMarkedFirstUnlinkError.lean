@@ -1,10 +1,76 @@
 import Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
 import Alvoki.Storage.Disk.HeldLaterWalPrune
+import Alvoki.Storage.Disk.NativeAlignedKeeperCache
+import Alvoki.Storage.Disk.NativeDurableWriteReboot
 
 namespace Alvoki.Storage.DiskSession
 
 open System Manifest SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (CheckpointRepresentsPrefix)
+
+section SuffixRetryFrame
+
+variable {heap : Type} {directory : DiskDirectory} {scope : FilePath → Prop} {through : Nat}
+  {observe : heap → CheckpointStorageObservation} {readBytes : heap → Nat → ByteArray}
+
+/-- The checked suffix starts beyond the selected WAL cutoff. A local
+remove can change the victim's live or durable binding on either result.
+The selected files and the root's parent binding survive at the heap
+returned by the literal bounded repair. -/
+theorem SampledCheckpointRetryFrame.afterFailedWalPrune
+    {plan : Plan} {physicalSize : Nat}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    (valid : plan.valid = true) (bytes : plan.keeperBytes.size = plan.keeperSize)
+    (bounded : plan.keeperSize ≤ physicalSize) (cutoff : through ≤ plan.through)
+    (outside : ∀ ordinal ∈ plan.newer, ¬ scope (directory.file (.walSegment ordinal)))
+    {entry authorized reached : heap} {cause : IO.Error}
+    (authorization : sync #[directory.path] entry = .ok () authorized)
+    (rootFrame : SampledCheckpointRetryFrame directory scope through observe readBytes entry authorized)
+    (unlink : ∀ ordinal ∈ plan.newer, ∀ issued,
+      let victim := directory.file (.walSegment ordinal)
+      let after := NativeFileEffectProjection.reached (remove victim issued)
+      (observe issued).files.Frames
+        (fun path => (scope path ∨ ∃ start ≤ through, path = directory.file (.walSegment start)) ∧ path ≠ victim)
+        (observe after).files ∧
+      (observe issued).Frames (· = directory.path) (observe after) ∧
+      ∀ path, scope path → path ≠ victim → ∀ inode,
+        (observe issued).files.names path = some inode → readBytes after inode = readBytes issued inode)
+    (stopped : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .error cause reached) :
+    finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .error cause reached ∧
+      SampledCheckpointRetryFrame directory scope through observe readBytes entry reached := by
+  let frame := SampledCheckpointRetryFrame directory scope through observe readBytes
+  have each ordinal (listed : ordinal ∈ plan.newer) issued :
+      frame issued (NativeFileEffectProjection.reached (remove (directory.file (.walSegment ordinal)) issued)) := by
+    obtain ⟨physical, parent, visible⟩ := unlink ordinal listed issued
+    have offTarget path (keep : scope path) : path ≠ directory.file (.walSegment ordinal) := by
+      intro same
+      exact outside ordinal listed (same ▸ keep)
+    have durable : (observe issued).files.Frames scope
+        (observe (NativeFileEffectProjection.reached (remove (directory.file (.walSegment ordinal)) issued))).files :=
+      fun path keep => physical path ⟨.inl keep, offTarget path keep⟩
+    refine ⟨?_, ?_, durable, parent⟩
+    · intro path keep
+      exact ⟨(durable path keep).1, fun inode named => congrArg (fun data => [data])
+        (visible path keep (offTarget path keep) inode named)⟩
+    · intro start within
+      have later := (Plan.valid_iff plan).mp valid |>.2.2 ordinal listed
+      have apart : directory.file (.walSegment start) ≠ directory.file (.walSegment ordinal) := by
+        intro collision
+        have ordinals := directory.walSegment_path_injective collision
+        have upper : ordinal ≤ plan.through := ordinals ▸ Nat.le_trans within cutoff
+        exact (Nat.not_lt_of_ge upper) later
+      exact congrArg Option.isSome (physical _ ⟨.inr ⟨start, within, rfl⟩, apart⟩).1
+  have refl atHeap : frame atHeap atHeap :=
+    ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ _ => rfl,
+      fun _ _ => ⟨rfl, fun _ _ => rfl⟩, .refl _ _⟩
+  exact ⟨finishBoundedMarkedOpen_errorDuringUnlinks valid bytes bounded authorization stopped,
+    rootFrame.trans (framesFailedWalUnlinks frame refl SampledCheckpointRetryFrame.trans each stopped)⟩
+
+end SuffixRetryFrame
 
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
@@ -120,10 +186,12 @@ private theorem finishFirstUnlink {state : Type} (prepared : Prepared retry.imag
     (propagated : RunCollection.ownedUnlinkResult (.error cause) = .error cause) :
     finishBoundedMarkedOpen directory layout.boundedPlan layout.plan.keeperBytes.size removeFile write sync renameFile initial =
       .error cause reached := by
-  rw [layout.boundedPlan_eq_extract, finishBoundedMarkedOpen_eq_full _ _ prepared.valid]
-  have newer : layout.plan.newer = first :: rest := prepared.names.trans order
-  simp [finishMarkedOpen, Plan.alignedWithoutPrune, newer, runAt, prepared.valid, runRepairPlan, steps,
-    List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, good,
+  obtain ⟨covered, physical, later⟩ := (Plan.valid_iff layout.plan).mp prepared.valid
+  have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have valid := (Plan.valid_iff layout.boundedPlan).mpr ⟨covered, Nat.le_of_eq bytes.symm, later⟩
+  refine finishBoundedMarkedOpen_errorDuringUnlinks valid bytes physical good ?_
+  have newer : layout.boundedPlan.newer = first :: rest := prepared.names.trans order
+  simp only [newer, List.map_cons, List.forM_eq_forM, List.forM_cons, Bind.bind, EStateM.bind,
     performPaths, RunCollection.performPaths, bad, propagated, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
 
 /-- Authorization uses the cached directory. Only the first canonical

@@ -163,7 +163,12 @@ public error heap. A failed append-open needs its own local effect. If
 append succeeds and flock reports contention or an error, both routes
 release the returned handle. A shared rule carries the same scoped
 observations through that handle’s release to the public error heap.
-Failures in a worker that acquired the lock still need their own effects.
+During a held repair, a suffix unlink can fail after earlier removals
+succeeded. One fold now follows the reached removes up to an outer I/O error
+or a rejected unlink result. Given the effects on paths other than the
+victim, this yields the selected files, root binding and bounded WAL names
+at the repair error heap. Later names may have changed. Connecting that
+heap through the worker's cleanup to the public retry remains open.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and

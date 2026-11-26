@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeOpenCacheReferences
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
 import Alvoki.Storage.Disk.NativeRawSync
+import Alvoki.Storage.Disk.NativeFileEffectProjection
 
 namespace Alvoki.Storage.DiskSession
 
@@ -72,8 +73,56 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSu
             cases result
             simpa only [kept] using schedule
 
-/-- Fold only the accepted removes of the actual WAL unlink loop,
-in their original order and at the heap returned by each call. -/
+private theorem foldWalUnlinks {heap model : Type}
+    (directory : DiskDirectory) (plan : Plan)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (invariant : model → heap → Prop) (applyUnlink : model → Nat → model)
+    (failed : IO.Error → heap → Prop) {initial : model} {first : heap}
+    (entered : invariant initial first)
+    (unlink : ∀ {ordinal start finish result before}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) start = .ok result finish →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      invariant before start → invariant (applyUnlink before ordinal) finish)
+    (outerError : ∀ {ordinal start finish cause before}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) start = .error cause finish →
+      invariant before start → failed cause finish)
+    (innerError : ∀ {ordinal start finish result cause before}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) start = .ok result finish →
+      RunCollection.ownedUnlinkResult result = .error cause →
+      invariant before start → failed cause finish) :
+    match ((plan.newer.map Step.unlink).forM (performPaths directory plan remove throw write sync rename)) first with
+    | .ok () last => invariant (plan.newer.foldl applyUnlink initial) last
+    | .error cause last => failed cause last := by
+  let run := performPaths directory plan remove throw write sync rename
+  have preserve {ordinals : List Nat} (included : ∀ ordinal ∈ ordinals, ordinal ∈ plan.newer)
+      {start : heap} {before : model} (known : invariant before start) :
+      match ((ordinals.map Step.unlink).forM run) start with
+      | .ok () finish => invariant (ordinals.foldl applyUnlink before) finish
+      | .error cause finish => failed cause finish := by
+    induction ordinals generalizing start before with
+    | nil => exact known
+    | cons ordinal rest ih =>
+      simp only [List.map_cons, List.forM_eq_forM, List.forM_cons, run, performPaths,
+        RunCollection.performPaths, Bind.bind, EStateM.bind]
+      cases removed : remove (directory.file (.walSegment ordinal)) start with
+      | error cause reached =>
+        exact outerError (included _ List.mem_cons_self) removed known
+      | ok result reached =>
+        cases accepted : RunCollection.ownedUnlinkResult result with
+        | error cause =>
+          simpa only [accepted, throw, throwThe, MonadExceptOf.throw, EStateM.throw] using
+            innerError (included _ List.mem_cons_self) removed accepted known
+        | ok value =>
+          cases value
+          simp only [accepted, Pure.pure, EStateM.pure]
+          exact ih (fun other member => included other (List.mem_cons_of_mem _ member))
+            (unlink (included _ List.mem_cons_self) removed accepted known)
+  exact preserve (fun _ member => member) entered
+
+/-- Fold the accepted removes of the actual WAL unlink loop in call order. -/
 theorem foldReturnedWalUnlinks {heap model : Type}
     (directory : DiskDirectory) (plan : Plan)
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
@@ -89,31 +138,62 @@ theorem foldReturnedWalUnlinks {heap model : Type}
     (returned : ((plan.newer.map Step.unlink).forM
       (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
     invariant (plan.newer.foldl applyUnlink initial) last := by
-  let run := performPaths directory plan remove throw write sync rename
-  have preserve {ordinals : List Nat} (included : ∀ ordinal ∈ ordinals, ordinal ∈ plan.newer)
-      {start finish : heap} {before : model} (known : invariant before start)
-      (ran : ((ordinals.map Step.unlink).forM run) start = .ok () finish) :
-      invariant (ordinals.foldl applyUnlink before) finish := by
-    induction ordinals generalizing start before with
-    | nil =>
-      have same : start = finish := (EStateM.Result.ok.inj ran).2
-      exact same ▸ known
-    | cons ordinal rest ih =>
-      simp only [List.map_cons, List.forM_eq_forM, List.forM_cons, run, performPaths,
-        RunCollection.performPaths, Bind.bind, EStateM.bind] at ran
-      cases removed : remove (directory.file (.walSegment ordinal)) start with
-      | error cause reached => simp [removed] at ran
-      | ok result reached =>
-        rw [removed] at ran
-        cases accepted : RunCollection.ownedUnlinkResult result with
-        | error cause =>
-          simp [accepted, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at ran
-        | ok value =>
-          cases value
-          simp only [accepted, Pure.pure, EStateM.pure] at ran
-          exact ih (fun other member => included other (List.mem_cons_of_mem _ member))
-            (unlink (included _ List.mem_cons_self) removed accepted known) ran
-  exact preserve (fun _ member => member) entered returned
+  simpa only [returned] using foldWalUnlinks directory plan remove write sync rename invariant applyUnlink
+    (fun _ _ => True) entered unlink (fun _ _ _ => trivial) (fun _ _ _ _ => trivial)
+
+/-- Carry a frame across every reached remove, including the one whose
+outer failure or rejected unlink result ends the loop. -/
+theorem framesFailedWalUnlinks {heap : Type}
+    {directory : DiskDirectory} {plan : Plan}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    (frame : heap → heap → Prop) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
+    (unlink : ∀ ordinal ∈ plan.newer, ∀ before,
+      frame before (NativeFileEffectProjection.reached (remove (directory.file (.walSegment ordinal)) before)))
+    {first last : heap} {cause : IO.Error}
+    (returned : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) first = .error cause last) :
+    frame first last := by
+  have called {ordinal : Nat} {before after : heap} {result : EStateM.Result IO.Error heap (Except IO.Error Unit)}
+      (member : ordinal ∈ plan.newer)
+      (returns : remove (directory.file (.walSegment ordinal)) before = result)
+      (reached : NativeFileEffectProjection.reached result = after) :
+      frame before after := by simpa only [returns, reached] using unlink ordinal member before
+  have framed := foldWalUnlinks directory plan remove write sync rename (fun (_ : Unit) => frame first)
+    (fun _ _ => ()) (fun _ => frame first) (initial := ()) (refl first)
+    (fun member returns _ prior => trans prior (called member returns rfl))
+    (fun member returns prior => trans prior (called member returns rfl))
+    (fun member returns _ prior => trans prior (called member returns rfl))
+  simpa only [returned] using framed
+
+/-- A reported unlink error ends the literal bounded repair at the unlink's
+reached heap. Both keeper sizes share this authorization and unlink prefix. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_errorDuringUnlinks {heap : Type}
+    {directory : DiskDirectory} {plan : Plan} {physicalSize : Nat}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    (valid : plan.valid = true) (bytes : plan.keeperBytes.size = plan.keeperSize)
+    (bounded : plan.keeperSize ≤ physicalSize) {first authorized last : heap} {cause : IO.Error}
+    (authorization : sync #[directory.path] first = .ok () authorized)
+    (failed : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .error cause last) :
+    finishBoundedMarkedOpen directory plan physicalSize remove write sync rename first = .error cause last := by
+  have nonempty : plan.newer.isEmpty = false := by
+    cases names : plan.newer with
+    | nil => simp [names, List.forM_eq_forM, List.forM_nil, Pure.pure, EStateM.pure] at failed
+    | cons => rfl
+  have guarded : (plan.valid && plan.keeperBytes.size == plan.keeperSize &&
+      decide (plan.keeperSize ≤ physicalSize)) = true := by simp [valid, bytes, bounded]
+  simp only [finishBoundedMarkedOpen, guarded, ite_true, nonempty, Bool.false_and, Bool.false_eq_true, ite_false,
+    runRepairPlan, Bind.bind, EStateM.bind, authorization]
+  unfold steps
+  rw [List.append_assoc, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+  simp only [Bind.bind, EStateM.bind, failed]
 
 /-- An accepted unlink changes its logical suffix entry while preserving
 an independently chosen frame, such as held lock authority. -/
