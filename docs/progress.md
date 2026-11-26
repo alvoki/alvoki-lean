@@ -1,5 +1,14 @@
 # Current handoff
 
+The sized checkpoint reader's successful run receipt now yields the
+full visible bytes of the inode opened at the actual read, under local
+stat, open and chunk effects. One cursor proof handles short reads
+while the same open description remains live. It also expresses the
+exact prefix of a longer file for the WAL reader. The reboot boundary
+still has to identify the visible bytes with the selected durable
+image, and the listing must account for every relevant entry.
+[Reached run bytes](../lean/Alvoki/Storage/Disk/NativeMarkedCheckpointHeap.lean)
+
 The successful marked reader can now be inspected one file at a time.
 The checkpoint run read supplies the actual input and output heaps at
 its decoded index. The WAL selection supplies the ordered seal

@@ -178,9 +178,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   exact request and return heaps. Successful WAL reads identify the
   selected seal payloads and the keeper read after the seal releases.
   An optional file read that returns bytes identifies its reached stat,
-  opened descriptor and release. The remaining obligations are local
-  file identity at acquisition, exact bytes from the reached cursor,
-  and complete enumeration under the held directory.
+  opened descriptor and release. Given local open, stat and chunk
+  effects, the sized reader returns the full visible bytes of the
+  inode selected by that name. Its cursor lemma also covers exact
+  prefixes of longer files. Recovery still has to derive these effects
+  from the native adapter, connect the reads to the selected durable
+  image, and prove complete enumeration under the held directory.
   [Fixed open result](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
   [Checkpoint runs](../lean/Alvoki/Storage/Disk/NativeCheckpointReadReturn.lean) ·
   [Selected WAL](../lean/Alvoki/Storage/Disk/NativeWalSelectionReturn.lean)

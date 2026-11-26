@@ -96,6 +96,44 @@ theorem readExactPrefixWith_badChunk (mismatch : IO.Error)
   rfl
 
 /-- Every completed prefix contains the exact fragments of the one opened
+file, in cursor order, and preserves the local binding across chunks. -/
+theorem readExactPrefixWith_successAtCursor {state : Type} (mismatch : IO.Error)
+    {source : ByteArray} {read : USize → EStateM IO.Error state ByteArray}
+    (cursor : state → Nat) (bound : state → Prop)
+    (observes : ∀ requested before after chunk, bound before → read requested before = .ok chunk after →
+      bound after ∧ cursor after = cursor before + chunk.size ∧
+      chunk = source.extract (cursor before) (cursor after))
+    (remaining : Nat) {before after : state} {bytes out : ByteArray} (initial : bound before)
+    (reported : readExactPrefixWith mismatch read remaining bytes before = .ok out after) :
+    bound after ∧ cursor after = cursor before + remaining ∧
+      out = bytes ++ source.extract (cursor before) (cursor after) := by
+  rw [readExactPrefixWith] at reported
+  by_cases finished : remaining = 0
+  · subst remaining
+    have result : bytes = out ∧ before = after := by
+      simpa only [↓reduceIte, EStateM.pure, Pure.pure, EStateM.Result.ok.injEq] using reported
+    obtain ⟨rfl, rfl⟩ := result
+    simp [initial]
+  · rw [ite_eq_right finished] at reported
+    simp only [Bind.bind, EStateM.bind] at reported
+    cases reading : read remaining.toUSize before with
+    | error cause reached => rw [reading] at reported; contradiction
+    | ok chunk reached =>
+      rw [reading] at reported
+      by_cases valid : 0 < chunk.size ∧ chunk.size ≤ remaining
+      · simp only [valid] at reported
+        have ⟨kept, advanced, payload⟩ := observes remaining.toUSize before reached chunk initial reading
+        obtain ⟨finalBinding, endAt, output⟩ :=
+          readExactPrefixWith_successAtCursor mismatch cursor bound observes (remaining - chunk.size) kept reported
+        refine ⟨finalBinding, by omega, ?_⟩
+        rw [output, appendPrefixChunk, ByteArray.append_assoc, payload]
+        rw [← ByteArray.extract_eq_extract_append_extract (cursor reached) (by omega) (by omega)]
+      · simp only [valid, ↓reduceDIte] at reported
+        contradiction
+termination_by remaining
+decreasing_by omega
+
+/-- Every completed prefix contains the exact fragments of the one opened
 file, in cursor order, regardless of how the successful reads split it. -/
 theorem readExactPrefixWith_success (mismatch : IO.Error)
     {source : ByteArray} {read : USize → EStateM IO.Error Nat ByteArray}
@@ -103,31 +141,10 @@ theorem readExactPrefixWith_success (mismatch : IO.Error)
     {offset next : Nat} {bytes out : ByteArray}
     (reported : readExactPrefixWith mismatch read remaining bytes offset = .ok out next) :
     next = offset + remaining ∧ out = bytes ++ source.extract offset next := by
-  rw [readExactPrefixWith] at reported
-  by_cases finished : remaining = 0
-  · subst remaining
-    have result : bytes = out ∧ offset = next := by
-      simpa only [↓reduceIte, EStateM.pure, Pure.pure, EStateM.Result.ok.injEq] using reported
-    obtain ⟨rfl, rfl⟩ := result
-    simp
-  · rw [ite_eq_right finished] at reported
-    simp only [Bind.bind, EStateM.bind] at reported
-    cases reading : read remaining.toUSize offset with
-    | error cause reached => rw [reading] at reported; contradiction
-    | ok chunk reached =>
-      rw [reading] at reported
-      by_cases valid : 0 < chunk.size ∧ chunk.size ≤ remaining
-      · simp only [valid] at reported
-        have ⟨cursor, payload⟩ := observes remaining.toUSize offset reached chunk reading
-        obtain ⟨endAt, output⟩ :=
-          readExactPrefixWith_success mismatch observes (remaining - chunk.size) reported
-        refine ⟨by omega, ?_⟩
-        rw [output, appendPrefixChunk, ByteArray.append_assoc, payload]
-        rw [← ByteArray.extract_eq_extract_append_extract reached (by omega) (by omega)]
-      · simp only [valid, ↓reduceDIte] at reported
-        contradiction
-termination_by remaining
-decreasing_by omega
+  have projected := readExactPrefixWith_successAtCursor mismatch id (fun _ => True)
+    (fun requested before after chunk _ returned =>
+      ⟨True.intro, observes requested before after chunk returned⟩) remaining True.intro reported
+  exact projected.2
 
 /-- A healthy read can return any positive chunk within the pending request.
 The caller supplies successful primitive reads only for requests covered

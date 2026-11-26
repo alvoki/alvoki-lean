@@ -3985,6 +3985,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalPayloadReturn.successfulKeeper
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readWith_ok
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readOptionalPresent
+#check_axioms Alvoki.Storage.readExactPrefixWith_successAtCursor
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readExactSelectedFile
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readSelectedRun
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.append
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsFixedAfterWorkerAgreement
