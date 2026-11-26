@@ -88,6 +88,75 @@ theorem MarkedTemporaryReadCalls.readSelectedKeeper (calls : MarkedTemporaryRead
       count acquired payload
   exact ⟨file, slot, inode, opened, readHeap, covered, fits, acquired, name, openedSlot, readSlot, cursor, stable, bytes, finished⟩
 
+section WalPayloadFrames
+
+variable {heap : Type} {frame : heap → heap → Prop}
+
+/-- A seal's open, bounded chunk loop and release compose in the same
+frame relation as the other selected WAL reads. -/
+theorem MarkedTemporaryReadCalls.readSealKeepsFrame (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (path : FilePath) (count : Nat) {entry reached : heap} {bytes : ByteArray}
+    (returned : calls.seal path count entry = .ok bytes reached) : frame entry reached := by
+  have kept := calls.readWithFrames laws trans path
+    (fun file => readExactPrefixWith selectedWalSpanError (calls.readChunk file) count .empty)
+    (fun file => exactReadFrames refl trans selectedWalSpanError (calls.readChunk file)
+      (laws.readChunk file) count .empty) entry
+  change frame entry (reachedState (calls.seal path count entry)) at kept
+  simpa only [returned, reachedState] using kept
+
+/-- The keeper carries the frame through the same bounded chunk loop and
+then through the callback that was actually reached, remember or release. -/
+theorem MarkedTemporaryReadCalls.readKeeperKeepsFrame (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (remembers : ∀ {path file before after}, remember path file before = .ok () after → frame before after)
+    (path : FilePath) (count physical : Nat) {before reached : heap} {bytes : ByteArray}
+    (returned : calls.readKeeperWithRelease remember path count physical before = .ok bytes reached) :
+    frame before reached := by
+  obtain ⟨file, opened, readHeap, _, _, acquired, payload, finished⟩ :=
+    calls.readKeeperWithRelease_ok remember path count physical returned
+  have openFrame := laws.openRead path before
+  rw [acquired, reachedState] at openFrame
+  have readFrame := exactReadFrames refl trans (IO.userError "short or oversized WAL keeper read")
+    (calls.readChunk file) (laws.readChunk file) count .empty opened
+  rw [payload, reachedState] at readFrame
+  have finalFrame : frame readHeap reached := by
+    rcases finished with ⟨_, retained⟩ | ⟨_, released⟩
+    · exact remembers retained
+    · simpa only [dataErrorDropState, released] using laws.release file readHeap
+  exact trans openFrame (trans readFrame finalFrame)
+
+/-- The accepted payload traversal composes the frame through its actual
+seal releases and the final keeper callback, in observed heap order. -/
+theorem MarkedTemporaryReadCalls.walPayloadKeepsFrame (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (remembers : ∀ {path file before after}, remember path file before = .ok () after → frame before after)
+    {directory : DiskDirectory} {through : Nat} {required : List (Nat × IO.FS.Metadata)} {entry : heap}
+    {result : EStateM.Result IO.Error heap (List (Nat × ByteArray) × Nat)}
+    (observed : CachedWalPayloadReturn directory through calls.seal (calls.readKeeperWithRelease remember)
+      required entry result)
+    {payload : List (Nat × ByteArray) × Nat} {reached : heap}
+    (returned : result = .ok payload reached) : frame entry reached := by
+  induction observed generalizing payload reached with
+  | noKeeper _ | keeperError _ | invalidKeeper _ _ | invalidOrder _ | sealError _ _ | sealedThenError _ _ _ =>
+    cases returned
+  | kept read _ =>
+    obtain ⟨_, rfl⟩ := EStateM.Result.ok.inj returned
+    exact calls.readKeeperKeepsFrame laws refl trans remember remembers _ _ _ read
+  | sealed _ read _ ih =>
+    obtain ⟨_, rfl⟩ := EStateM.Result.ok.inj returned
+    cases read with
+    | accepted sized _ readSeal _ =>
+      obtain ⟨_, rfl⟩ := EStateM.Result.ok.inj sized
+      exact trans (calls.readSealKeepsFrame laws refl trans _ _ readSeal) (ih rfl)
+
+end WalPayloadFrames
+
 section VisibleWal
 
 variable {heap image : Type} {directory : DiskDirectory}
@@ -151,18 +220,10 @@ theorem MarkedTemporaryReadCalls.restoresSelectedWalBytes
     obtain ⟨sameName, beforeBytes⟩ := starts path selected
     have original := sameName.symm.trans named
     have visibleAtRead := sameBytes.trans (List.cons.inj (beforeBytes _ original)).1
-    have openFrame := scopedReads.openRead path entry
-    rw [acquired, reachedState] at openFrame
-    have readFrame := exactReadFrames (frame := (frames)) refl CheckpointSurvivingFiles.Frames.trans mismatch
-      (calls.readChunk file)
-      (scopedReads.readChunk file) count ByteArray.empty opened
-    rw [payloadRead, reachedState] at readFrame
-    have closeFrame : (frames) readHeap reachedRead := by
-      rcases closed with ⟨_, retained⟩ | ⟨_, released⟩
-      · exact remembers retained
-      · simpa only [dataErrorDropState, released] using scopedReads.release file readHeap
+    have keeperFrame := calls.readKeeperKeepsFrame scopedReads refl CheckpointSurvivingFiles.Frames.trans
+      remember remembers path count metadata.byteSize.toNat read
     refine ⟨keeper, metadata, [], keeperBytes, entry, opened, readHeap, file, slot, inode, rfl, rfl, rfl, rfl,
-      original, acquired, live, ?_, closed, starts, starts.trans (openFrame.trans (readFrame.trans closeFrame))⟩
+      original, acquired, live, ?_, closed, starts, starts.trans keeperFrame⟩
     rwa [visibleAtRead] at payload
   | @sealed first next metadata nextMetadata rest entry afterSeal reachedRead sealBytes restFiles fileSize forward read tail ih =>
     obtain ⟨payload, rfl⟩ := EStateM.Result.ok.inj returned
@@ -182,12 +243,8 @@ theorem MarkedTemporaryReadCalls.restoresSelectedWalBytes
       have exactPrefix : sealBytes = (visible initial inode).extract 0 metadata.byteSize.toNat := by
         rw [stable, (List.cons.inj (contents _ namedInitially)).1, ← extent] at bytes
         exact bytes
-      have sealedFrame := calls.readWithFrames scopedReads CheckpointSurvivingFiles.Frames.trans path
-        (fun file => readExactPrefixWith selectedWalSpanError (calls.readChunk file) count ByteArray.empty)
-        (fun file => exactReadFrames (frame := (frames)) refl CheckpointSurvivingFiles.Frames.trans
-          selectedWalSpanError (calls.readChunk file) (scopedReads.readChunk file) count ByteArray.empty) entry
-      change (frames) entry (reachedState (calls.seal path count entry)) at sealedFrame
-      rw [readSeal, reachedState] at sealedFrame
+      have sealedFrame := calls.readSealKeepsFrame scopedReads refl CheckpointSurvivingFiles.Frames.trans
+        path count readSeal
       obtain ⟨keeper, keeperMetadata, earlier, bytes, beforeKeeper, opened, readHeap, file, slot, inode, last, sealed,
         exactFiles, size, bound, acquired, live, keeperPrefix, closed, beforeFrame, frame⟩ :=
         ih (fun extent member => inScope extent (List.mem_cons_of_mem _ member)) (starts.trans sealedFrame) rfl

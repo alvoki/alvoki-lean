@@ -139,6 +139,11 @@ theorem NativeReadPosition.opensReadyAfterAlignedRetries
 
 section LiteralRead
 
+private def alignedReadFrame (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (scope : FilePath → Prop) (keeps : heap → heap → Prop) (before after : heap) : Prop :=
+  (CheckpointSurvivingFiles.mk (names before) fun inode => [visible before inode]).Frames scope
+    ⟨names after, fun inode => [visible after inode]⟩ ∧ keeps before after
+
 /-- Effects of the actual admission, read and cache callbacks on a
 protected footprint. The checked directory stream lists the held root. -/
 structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} {inventory : DescriptorInventory}
@@ -146,21 +151,16 @@ structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} 
     (raw : RawOpenAdmissionReport admission view source.calls reached)
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
     (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
-    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (scope : FilePath → Prop) where
-  admissionFrame : raw.CacheFrames seed fun before after =>
-    (CheckpointSurvivingFiles.mk (names before) fun inode => [visible before inode]).Frames scope
-      ⟨names after, fun inode => [visible after inode]⟩
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (scope : FilePath → Prop)
+    (keeps : heap → heap → Prop) where
+  admissionFrame : raw.CacheFrames seed (alignedReadFrame names visible scope keeps)
   guard : ∀ path before,
-    (CheckpointSurvivingFiles.mk (names before) fun inode => [visible before inode]).Frames scope
-      ⟨names (reachedState (source.calls.lookup path before)),
-        fun inode => [visible (reachedState (source.calls.lookup path before)) inode]⟩
+    alignedReadFrame names visible scope keeps before (reachedState (source.calls.lookup path before))
   opens : source.fileCalls.OpensReadSlot view names visible
   reads : source.fileCalls.ReadsAtCursor view visible
-  fileFrames : source.fileCalls.FileFrames (fun atHeap => ⟨names atHeap, fun inode => [visible atHeap inode]⟩) scope
+  fileFrames : source.fileCalls.ScopeFrames (alignedReadFrame names visible scope keeps)
   statFrame : ∀ path before,
-    (CheckpointSurvivingFiles.mk (names before) fun inode => [visible before inode]).Frames scope
-      ⟨names (reachedState (source.fileCalls.stat path before)),
-        fun inode => [visible (reachedState (source.fileCalls.stat path before)) inode]⟩
+    alignedReadFrame names visible scope keeps before (reachedState (source.fileCalls.stat path before))
   statObject : FilePath → heap → heap → Option Nat
   stat : ∀ {path before metadata after}, source.fileCalls.stat path before = .ok (.ok metadata) after →
     ∃ inode, statObject path before after = some inode ∧ names before path = some inode ∧
@@ -170,9 +170,7 @@ structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} 
   eof : ∀ file slot inode (request : USize) before after, attachedReadSlot view file slot inode before →
     0 < request.toNat → source.fileCalls.readChunk file request before = .ok .empty after →
     (visible before inode).size ≤ (view.handle before file).2.2
-  listingFrames : source.directoryCalls.ScopeFrames directory fun before after =>
-    (CheckpointSurvivingFiles.mk (names before) fun inode => [visible before inode]).Frames scope
-      ⟨names after, fun inode => [visible after inode]⟩
+  listingFrames : source.directoryCalls.ScopeFrames directory (alignedReadFrame names visible scope keeps)
   streamObject : heap → stream → DeviceInode
   streamRoot : ∀ {before descriptor opened},
     source.directoryCalls.openDir directory.path before = .ok descriptor opened → streamObject opened descriptor = root
@@ -186,9 +184,7 @@ structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} 
     MarkedWalExtentReports.TruthfulAbsence source.fileCalls directory namespaceView root (entries.toList.map (·.fileName)) after
   remember : ∀ {path file before after},
     (source.keeperCallbacks.withFileReads source.fileCalls).modifyPending seed.pendingRef
-      (pushPending path file) before = .ok () after →
-    (CheckpointSurvivingFiles.mk (names before) fun inode => [visible before inode]).Frames scope
-      ⟨names after, fun inode => [visible after inode]⟩
+      (pushPending path file) before = .ok () after → alignedReadFrame names visible scope keeps before after
 
 /-- Match the actual checkpoint, marker and selected WAL read of one
 open. The reader passes its exact handle to the pending callback.
@@ -200,7 +196,9 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
     (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (scope : FilePath → Prop)
-    (effects : raw.AlignedReadEffects seed names visible namespaceView root scope)
+    {keeps : heap → heap → Prop} (keepsRefl : ∀ atHeap, keeps atHeap atHeap)
+    (keepsTrans : ∀ {before middle after}, keeps before middle → keeps middle after → keeps before after)
+    (effects : raw.AlignedReadEffects seed names visible namespaceView root scope keeps)
     (protectedFiles : NativeReadyProtectedStorage current.state ⟨names reached, fun inode => [visible reached inode]⟩)
     (manifest : target.pair.manifest = current.state.writer.target.pair.manifest)
     (markerStored : ∀ marker, (view.files reached).image.directory.active.walBoundary = some marker →
@@ -237,6 +235,7 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
       keeperCalls.modifyPending seed.pendingRef (pushPending path keeper) readHeap = .ok () prepared ∧
       (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).Frames scope
         ⟨names prepared, fun inode => [visible prepared inode]⟩ ∧
+      keeps reached prepared ∧
       finishBoundedMarkedOpen dir ⟨plan.layout.range.through, segment.first, [], segment.bytes⟩ segment.bytes.size
         source.remove (source.stage.stage seed.pendingRef keeperCalls.modifyPending)
         (keeperCalls.syncPaths (dir).path seed.directoryRef seed.activeRef seed.pendingRef) source.rename prepared =
@@ -261,11 +260,24 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
       metadata.byteSize.toNat = (visible before inode).size := by
     obtain ⟨actual, _, boundAtStat, size⟩ := effects.stat call
     exact (Option.some.inj (boundAtStat.symm.trans bound)) ▸ size
+  let filesAt (atHeap : heap) : CheckpointSurvivingFiles := ⟨names atHeap, fun inode => [visible atHeap inode]⟩
+  let visibleFrame before after := (filesAt before).Frames scope (filesAt after)
+  have admissionVisible : raw.CacheFrames seed visibleFrame :=
+    ⟨fun ran => (effects.admissionFrame.lockOpen ran).1, fun ran => (effects.admissionFrame.flock ran).1,
+      fun ran => (effects.admissionFrame.openDirectory ran).1, fun ran => (effects.admissionFrame.directoryRef ran).1,
+      fun ran => (effects.admissionFrame.activeRef ran).1, fun ran => (effects.admissionFrame.pendingRef ran).1⟩
+  have readsVisible : source.fileCalls.ScopeFrames visibleFrame :=
+    ⟨fun path before => (effects.fileFrames.openRead path before).1,
+      fun file amount before => (effects.fileFrames.readChunk file amount before).1,
+      fun file before => (effects.fileFrames.release file before).1⟩
+  have listingVisible : source.directoryCalls.ScopeFrames dir visibleFrame :=
+    ⟨fun ran => (effects.listingFrames.openDir ran).1, fun handle before => (effects.listingFrames.readDir handle before).1,
+      fun ran => (effects.listingFrames.closeDir ran).1⟩
   obtain ⟨afterCheckpoint, afterMarker, length, payloads, extent, prepared, repaired, patched, logical, first,
-    bytes, phase, afterPhase, token, _, _, readMarker, wal, framed, replay, lastKeeper, finish, allocPhase, allocToken,
+    bytes, phase, afterPhase, token, checkpointRead, markerRead, readMarker, wal, framed, replay, lastKeeper, finish, allocPhase, allocToken,
     assembled⟩ := raw.selectsCheckpointAndMarkerFromActualOpen source seed names visible effects.opens effects.reads
-      selected protectedFiles (markerStored _ markerName) scope includes effects.admissionFrame effects.guard
-      effects.fileFrames effects.statFrame statExtent effects.statMissing effects.eof flat marker returned
+      selected protectedFiles (markerStored _ markerName) scope includes admissionVisible (fun path before => (effects.guard path before).1)
+      readsVisible (fun path before => (effects.statFrame path before).1) statExtent effects.statMissing effects.eof flat marker returned
   have countEq : length = count := Except.ok.inj (readMarker.symm.trans decoded)
   subst length
   rw [checkpointCount] at wal
@@ -275,13 +287,29 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     (child start lower upper).trans ((framed _ (scopedWindow start lower upper)).1).symm
   obtain ⟨payloadEq, extentEq, newer, file, slot, inode, _, _, readHeap, named, _, attached, route, preserved⟩ :=
     source.fileCalls.readsCanonicalWal source.directoryCalls dir view names visible plan.layout namespaceView root scope
-      effects.opens effects.reads effects.fileFrames effects.listingFrames
+      effects.opens effects.reads readsVisible listingVisible
       (fun path file => keeperCalls.modifyPending seed.pendingRef (pushPending path file))
-      effects.remember effects.statObject effects.stat effects.statFrame framed
+      (fun ran => (effects.remember ran).1) effects.statObject effects.stat
+      (fun path before => (effects.statFrame path before).1) framed
       (fun listed => source.directoryCalls.listedRootNames (dir).path namespaceView root effects.streamObject listed
         (fun _ _ ran => effects.streamRoot ran) (fun _ _ _ _ opened scan close => effects.complete opened scan close))
       effects.absent
       through plan.modeledWindow.2 physical scopedWindow childAtRead wal
+  let frame := alignedReadFrame names visible scope keeps
+  have refl (atHeap : heap) : frame atHeap atHeap := ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, keepsRefl atHeap⟩
+  have trans {before middle after : heap} (left : frame before middle) (right : frame middle after) : frame before after :=
+    ⟨left.1.trans right.1, keepsTrans left.2 right.2⟩
+  have throughAdmission := raw.framesThroughCache seed (frame := frame) trans effects.admissionFrame
+  have throughGuards := markedGuards_keepFrame (frame := frame) dir source.calls.lookup trans effects.guard flat marker
+  have throughCheckpoint := source.fileCalls.framesCheckpointSuccess dir refl trans effects.fileFrames effects.statFrame checkpointRead
+  have throughMarker := source.fileCalls.readOptionalFrames effects.fileFrames refl trans effects.statFrame
+    dir ((dir).file .walBoundary) afterCheckpoint
+  rw [markerRead, reachedState] at throughMarker
+  have throughWal := source.fileCalls.selectedWalKeepsFrame source.directoryCalls dir refl trans effects.fileFrames
+    effects.listingFrames effects.statFrame
+    (fun path file => keeperCalls.modifyPending seed.pendingRef (pushPending path file)) effects.remember wal
+  have throughReader : keeps reached prepared :=
+    (trans throughAdmission (trans throughGuards (trans throughCheckpoint (trans throughMarker throughWal)))).2
   have exact : (view.files reached).image.keeper.active = some segment.bytes :=
     exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm)
   have alignedBytes : segment.bytes ++ plan.layout.tail = segment.bytes :=
@@ -302,7 +330,7 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     · exact remembered.2
     · exact (Nat.lt_irrefl _ (size ▸ released.1)).elim
   refine ⟨count, markerBytes, patched, logical, file, slot, inode, readHeap, prepared, repaired, phase, afterPhase, token,
-    markerName, decoded, through, ?_, named, attached, remembered, preserved, ?_, allocPhase, allocToken, assembled⟩
+    markerName, decoded, through, ?_, named, attached, remembered, preserved, throughReader, ?_, allocPhase, allocToken, assembled⟩
   · simpa only [payloadEq, files, segment] using replay
   · simpa only [size, suffix, through] using finish
 

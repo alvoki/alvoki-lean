@@ -1,5 +1,16 @@
 # Current handoff
 
+The literal aligned reader now carries a caller-chosen frame from admission
+to the heap where the keeper is remembered. The same proof can track
+durable storage and the root and lock alongside the visible read bytes.
+The frame composes exact lookups, the checkpoint's manifest-ordered run
+traversal, the marker and the checked WAL traversal. The checkpoint shares
+its run induction with the byte proof. Both WAL proofs share the frame
+steps for the seal and keeper. At the remembered keeper, the repair still
+needs the instantiated root and lock frames and their projection into the
+phase and token allocations.
+[Literal reader and repair](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+
 The aligned finisher now supplies the two reached sync calls and the
 retained writer built from the exact decoded checkpoint and WAL replay.
 The file image is projected from those calls. A separate proof uses the

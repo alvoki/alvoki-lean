@@ -230,8 +230,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   yields the retained replay writer and the root and keeper sync calls.
   Those calls, under local descriptor and storage effects, can supply
   the next write entry and ledger on the returned phase and token.
-  Feed the literal reader's repair and allocation witnesses into this
-  proof and migrate the grouped and late write consumers.
+  The literal reader frames a caller-chosen projection over the same
+  admission, checkpoint, marker and WAL callbacks. The checkpoint byte
+  proof shares its run induction with this frame. Instantiate the frame
+  for durable bytes and the held root and lock. Feed the exact repair
+  and allocation witnesses into the next writer proof, then migrate the
+  grouped and late write consumers.
   [Literal aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
   [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)

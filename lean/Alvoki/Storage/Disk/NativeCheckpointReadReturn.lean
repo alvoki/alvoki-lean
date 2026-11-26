@@ -303,17 +303,21 @@ theorem readIntegrityRunBytesSized_returnedAt (directory : DiskDirectory)
     simpa only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM, shortenedNext] using afterRead
 
 private theorem mapM_refinesSuccess {α β : Type} (perform : α → EStateM IO.Error heap β)
-    (project : α → Option β) {invariant : heap → Prop} (items : List α)
+    {accepts : α → β → Prop} {outputsMatch : List α → List β → Prop}
+    (empty : outputsMatch [] [])
+    (cons : ∀ {item value rest outputs}, accepts item value → outputsMatch rest outputs →
+      outputsMatch (item :: rest) (value :: outputs))
+    {invariant : heap → Prop} (items : List α)
     (step : ∀ item ∈ items, ∀ {before after value}, invariant before →
-      perform item before = .ok value after → project item = some value ∧ invariant after)
+      perform item before = .ok value after → accepts item value ∧ invariant after)
     {entry reached : heap} {values : List β} (initial : invariant entry)
     (returned : (items.mapM perform) entry = .ok values reached) :
-    items.mapM project = some values ∧ invariant reached := by
+    outputsMatch items values ∧ invariant reached := by
   induction items generalizing entry values with
   | nil =>
     simp only [List.mapM_nil, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
     obtain ⟨rfl, rfl⟩ := returned
-    exact ⟨rfl, initial⟩
+    exact ⟨empty, initial⟩
   | cons item rest ih =>
     simp only [List.mapM_cons, Bind.bind, EStateM.bind] at returned
     cases head : perform item entry with
@@ -326,7 +330,44 @@ private theorem mapM_refinesSuccess {α β : Type} (perform : α → EStateM IO.
         obtain ⟨rfl, rfl⟩ := returned
         obtain ⟨valueEq, atMiddle⟩ := step item List.mem_cons_self initial head
         obtain ⟨restEq, atEnd⟩ := ih (fun next member => step next (List.mem_cons_of_mem _ member)) atMiddle tail
-        exact ⟨by simp [List.mapM_cons, valueEq, restEq, Bind.bind, Option.bind], atEnd⟩
+        exact ⟨cons valueEq restEq, atEnd⟩
+
+/-- Induct over the actual accepted run receipts in manifest order.
+The heap invariant and the relation on output bytes are independent. -/
+theorem readIntegrityRunBytesSized_inductSuccess (directory : DiskDirectory)
+    {manifest : IntegrityCheckpoint}
+    (readSize : FilePath → EStateM IO.Error heap Nat)
+    (readPrefix : FilePath → Nat → EStateM IO.Error heap ByteArray)
+    {accepts : Nat → ByteArray → Prop} {outputsMatch : List Nat → List ByteArray → Prop}
+    (empty : outputsMatch [] [])
+    (cons : ∀ {index payload rest outputs}, accepts index payload → outputsMatch rest outputs →
+      outputsMatch (index :: rest) (payload :: outputs))
+    {invariant : heap → Prop}
+    (step : ∀ index < manifest.header.runCount.toNat, ∀ stamp, manifest.runs[index]? = some stamp →
+      ∀ {before after bytes}, invariant before →
+      ExactRecoveryFileReturn (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
+        (IO.userError checkpointIntegrityMismatch) readSize readPrefix before (.ok bytes after) →
+      accepts index bytes ∧ invariant after)
+    {entry reached : heap} {files : List ByteArray} (initial : invariant entry)
+    (returned : readIntegrityRunBytesSized directory manifest readSize readPrefix entry = .ok files reached) :
+    outputsMatch (List.range manifest.header.runCount.toNat) files ∧ invariant reached := by
+  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM] at returned
+  refine mapM_refinesSuccess _ empty cons _ (fun index member before after bytes known observed => ?_) initial returned
+  change ((do
+    let some stamp := manifest.runs.toArray[index]? | throw (IO.userError checkpointIntegrityMismatch)
+    readExactRecoveryFileWith (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
+      (IO.userError checkpointIntegrityMismatch) readSize readPrefix) : EStateM IO.Error heap ByteArray) before =
+      .ok bytes after at observed
+  cases found : manifest.runs[index]? with
+  | none =>
+    simp [List.getElem?_toArray, found, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at observed
+  | some stamp =>
+    simp only [List.getElem?_toArray, found] at observed
+    have outcome := ExactRecoveryFileReturn.classifies
+      (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
+      (IO.userError checkpointIntegrityMismatch) readSize readPrefix before
+    rw [observed] at outcome
+    exact step index (List.mem_range.mp member) stamp found known outcome
 
 /-- Each successful reached run read supplies its matching stored bytes
 and preserves a caller-chosen frame. The actual restore inputs are
@@ -344,23 +385,11 @@ theorem readIntegrityRunBytesSized_refinesSuccess (directory : DiskDirectory)
     {entry reached : heap} {files : List ByteArray} (initial : invariant entry)
     (returned : readIntegrityRunBytesSized directory manifest readSize readPrefix entry = .ok files reached) :
     (List.range manifest.header.runCount.toNat).mapM stored = some files ∧ invariant reached := by
-  simp only [readIntegrityRunBytesSized, readCheckpointRunBytes_eq_mapM] at returned
-  refine mapM_refinesSuccess _ stored _ (fun index member before after bytes known observed => ?_) initial returned
-  change ((do
-    let some stamp := manifest.runs.toArray[index]? | throw (IO.userError checkpointIntegrityMismatch)
-    readExactRecoveryFileWith (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
-      (IO.userError checkpointIntegrityMismatch) readSize readPrefix) : EStateM IO.Error heap ByteArray) before =
-      .ok bytes after at observed
-  cases found : manifest.runs[index]? with
-  | none =>
-    simp [List.getElem?_toArray, found, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at observed
-  | some stamp =>
-    simp only [List.getElem?_toArray, found] at observed
-    have outcome := ExactRecoveryFileReturn.classifies
-      (directory.file (.run manifest.header.generation index)) stamp.byteCount.toNat
-      (IO.userError checkpointIntegrityMismatch) readSize readPrefix before
-    rw [observed] at outcome
-    exact step index (List.mem_range.mp member) stamp found known outcome
+  exact readIntegrityRunBytesSized_inductSuccess directory readSize readPrefix
+    (accepts := fun index bytes => stored index = some bytes)
+    (outputsMatch := fun indices outputs => indices.mapM stored = some outputs)
+    rfl (fun valueEq restEq => by simp [List.mapM_cons, valueEq, restEq, Bind.bind, Option.bind])
+    step initial returned
 
 /-- Invert a present return of the literal sized reader. The decoder and
 restore receive the bytes supplied by the original ordered callbacks. -/

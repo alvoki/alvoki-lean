@@ -91,16 +91,10 @@ theorem MarkedDirectoryReadReport.framesThroughSeals
     (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
     (readEffects : fileCalls.ScopeFrames frame) (listingEffects : directoryCalls.ScopeFrames directory frame) :
     frame seed.afterPending seen.reached ∧ frame seen.reached beforeKeeper := by
-  have sealFrame (first count : Nat) {start finish : heap} {bytes : ByteArray}
-      (returned : fileCalls.seal (directory.file (.walSegment first)) count start = .ok bytes finish) :
-      frame start finish := by
-    have read := fileCalls.readWithFrames readEffects trans (directory.file (.walSegment first)) _
-      (fun file => exactReadFrames refl trans selectedWalSpanError (fileCalls.readChunk file)
-        (readEffects.readChunk file) count ByteArray.empty) start
-    change frame start (reachedState (fileCalls.seal (directory.file (.walSegment first)) count start)) at read
-    simpa only [returned, reachedState] using read
   exact ⟨trans (prepared.framesScan selected readEffects refl trans)
-    (seen.framesScan frame trans listingEffects), seals.framesSeals frame refl trans sealFrame⟩
+    (seen.framesScan frame trans listingEffects),
+    seals.framesSeals frame refl trans (fun first count {_ _ _} returned =>
+      fileCalls.readSealKeepsFrame readEffects refl trans (directory.file (.walSegment first)) count returned)⟩
 
 end Listing
 
@@ -212,6 +206,30 @@ private theorem walExtentScan_success_frame (fileCalls : MarkedTemporaryReadCall
     simp only [scan, EStateM.Result.ok.injEq] at returned
     obtain ⟨_, rfl⟩ := returned
     exact filterMapM_success_frames _ names refl trans (walExtentProbe_success_frame fileCalls directory refl stat) scan
+
+/-- On a successful selected WAL read, carry one relation through the
+actual checked listing, guarded stat scan, seal traversal and keeper.
+The relation can track physical storage or live descriptor state. -/
+theorem MarkedTemporaryReadCalls.selectedWalKeepsFrame {stream : Type}
+    (fileCalls : MarkedTemporaryReadCalls heap) (directoryCalls : MarkedDirectoryReadCalls heap stream)
+    (directory : DiskDirectory) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (reads : fileCalls.ScopeFrames frame) (listing : directoryCalls.ScopeFrames directory frame)
+    (stat : ∀ path before, frame before (reachedState (fileCalls.stat path before)))
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (remembers : ∀ {path file before after}, remember path file before = .ok () after → frame before after)
+    {watermark : Nat} {length : UInt64} {entry reached : heap} {payload : WalSegmentMarkerReads × Nat}
+    (returned : readSelectedWithCachedExtents directory watermark length directoryCalls.run
+      (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal (fileCalls.readKeeperWithRelease remember) entry =
+        .ok payload reached) : frame entry reached := by
+  obtain ⟨files, size⟩ := payload
+  have actual := SelectedWalReadReturn.classifies directory watermark length directoryCalls.run
+    (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal (fileCalls.readKeeperWithRelease remember) entry
+  rw [returned] at actual
+  obtain ⟨_, _, _, _, _, _, listed, scanned, _, _, ordered⟩ := actual.successfulPayloads
+  exact trans (directoryCalls.successKeepsFrame directory listing trans listed)
+    (trans (walExtentScan_success_frame fileCalls directory _ refl trans stat scanned)
+      (fileCalls.walPayloadKeepsFrame reads refl trans remember remembers ordered rfl))
 
 private def visibleImage (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
     (atHeap : heap) : CheckpointSurvivingFiles :=

@@ -137,6 +137,47 @@ private theorem MarkedTemporaryReadCalls.runSize_stat (calls : MarkedTemporaryRe
         exact ⟨metadata, rfl, rfl⟩
       · simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw, EStateM.bind] at returned
 
+/-- Carry an independent local frame through the actual successful
+checkpoint read. The manifest selects the run traversal. Each measured
+extent and bounded prefix supplies the next heap in that traversal. -/
+theorem MarkedTemporaryReadCalls.framesCheckpointSuccess
+    (calls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
+    {frame : heap → heap → Prop} (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (reads : calls.ScopeFrames frame)
+    (stat : ∀ path before, frame before (reachedState (calls.stat path before)))
+    {entry reached : heap} {checkpoint : Option (PackedTable × UInt64)}
+    (returned : readIntegrityCheckpointSized directory (calls.readOptional directory (directory.file .manifest))
+      calls.runSize calls.runPrefix entry = .ok checkpoint reached) : frame entry reached := by
+  have outcome := SizedCheckpointReadReturn.classifies directory
+    (calls.readOptional directory (directory.file .manifest)) calls.runSize calls.runPrefix entry
+  rw [returned] at outcome
+  have manifestFrame := calls.readOptionalFrames reads refl trans stat directory (directory.file .manifest) entry
+  cases outcome with
+  | absent read =>
+    simpa only [read, reachedState] using manifestFrame
+  | @restored raw manifest files table afterManifest _ read decoded runs loaded =>
+    have first : frame entry afterManifest := by simpa only [read, reachedState] using manifestFrame
+    have step (index : Nat) (_ : index < manifest.header.runCount.toNat) (stamp : Manifest.RunIntegrity)
+        (_ : manifest.runs[index]? = some stamp) {before after : heap} {payload : ByteArray}
+        (held : frame entry before)
+        (receipt : ExactRecoveryFileReturn (directory.file (.run manifest.header.generation index))
+          stamp.byteCount.toNat (IO.userError checkpointIntegrityMismatch) calls.runSize calls.runPrefix before
+          (.ok payload after)) : True ∧ frame entry after := by
+      let path := directory.file (.run manifest.header.generation index)
+      cases receipt with
+      | @accepted afterSize _ _ measured _ prefixRead _ =>
+        obtain ⟨_, sized, _⟩ := calls.runSize_stat path measured
+        have sizeFrame : frame before afterSize := by
+          simpa only [sized, reachedState] using stat path before
+        change calls.runPrefix path stamp.byteCount.toNat afterSize = .ok payload after at prefixRead
+        have prefixFrame : frame afterSize after := by
+          simpa only [prefixRead, reachedState] using
+            calls.runPrefixFrames reads refl trans path stamp.byteCount.toNat afterSize
+        exact ⟨trivial, trans held (trans sizeFrame prefixFrame)⟩
+    exact (readIntegrityRunBytesSized_inductSuccess directory calls.runSize calls.runPrefix
+      (outputsMatch := fun _ _ => True) trivial (fun _ _ => trivial) step first runs).2
+
 /-- The current open restores the checkpoint from the protected files,
 using the actual optional metadata result and each reached run callback.
 The file frame includes the live manifest and runs at the selected
@@ -283,6 +324,19 @@ private theorem flatGuard_passed_frames (directory : DiskDirectory)
     | some _ =>
       simp [tested, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
 
+/-- The two marked-open guards compose only the frames of their reached
+lookup calls. An ordinary missing legacy WAL still follows its stat. -/
+theorem markedGuards_keepFrame (directory : DiskDirectory)
+    (lookup : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (trans : ∀ {before middle reached}, frame before middle → frame middle reached → frame before reached)
+    (keeps : ∀ path before, frame before (reachedState (lookup path before)))
+    {entry checked marked : heap} {metadata : IO.FS.Metadata}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (lookup (directory.file .wal))) entry = .ok () checked)
+    (marker : optionalMetadataWith (lookup (directory.file .walBoundary)) checked = .ok (some metadata) marked) :
+    frame entry marked :=
+  trans (flatGuard_passed_frames directory _ (keeps (directory.file .wal) entry) flat)
+    (optionalMetadata_success_frames _ (keeps (directory.file .walBoundary) checked) marker)
+
 /-- The accepted marker used by the bounded production reader belongs to
 the reached namespace of this retry. Framing the chosen live bytes to the
 marker read identifies the byte count for the subsequent WAL selector. -/
@@ -407,11 +461,9 @@ theorem RawOpenAdmissionReport.selectsCheckpointAndMarkerFromActualOpen
     (observedFiles names visible before).Frames scope (observedFiles names visible after)
   have admissionFrame : frame entry seed.afterPending :=
     raw.framesThroughCache seed (frame := frame) CheckpointSurvivingFiles.Frames.trans admissionEffects
-  have flatFrame : frame seed.afterPending checked :=
-    flatGuard_passed_frames directory _ (guardFrame (directory.file .wal) seed.afterPending) flat
-  have markerFrame : frame checked marked :=
-    optionalMetadata_success_frames _ (guardFrame (directory.file .walBoundary) checked) marker
-  have markedFrame := admissionFrame.trans (flatFrame.trans markerFrame)
+  have guardSteps := markedGuards_keepFrame (frame := frame) directory source.calls.lookup
+    CheckpointSurvivingFiles.Frames.trans guardFrame flat marker
+  have markedFrame := admissionFrame.trans guardSteps
   obtain ⟨actual, checkpointFrame⟩ := source.fileCalls.selectedCheckpointOfProtectedReturn state view names visible
     opens reads selection footprint scope (fun path member => includes path (.inr member)) markedFrame scopedReads statFrame statExtent statMissing selected
   obtain ⟨markerEq, finalFrame⟩ := source.fileCalls.acceptsMarkerFromProtectedFile view names visible opens reads
