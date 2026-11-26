@@ -165,33 +165,30 @@ theorem RawMarkedOpenInterpreter.FailedCalls.carriesCheckpointReset
 
 end CheckpointRetry
 
-/-- Add the durable file observation to an existing retry carrier.
-The same selected-effects proof still controls the keeper and logical
-image. The extra physical laws apply only to the actual failed calls. -/
-theorem RawOpenRetryTrace.SelectedEffects.withDurableFrames
+/-- A read-only failed block and a failed repair both extend the retry
+prefix. The read-only block frames the keeper that it entered with. -/
+theorem RawOpenRetryTrace.SelectedEffects.readOnlyWithDurability
     {stream : Type} {source : RawMarkedOpenInterpreter heap stream} {target : Target}
-    {first reached : heap} {returns : List (FilePath × IO.Error)}
-    {files : heap → CheckpointSurvivingFiles} {protectedPaths : FilePath → Prop} {keep : heap → Prop}
-    {attempts : source.FailedCalls first returns reached}
-    (effects : RawOpenRetryTrace.SelectedEffects view source first target files protectedPaths keep attempts)
-    (each : ∀ {earlier : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
-      source.FailedCalls first earlier before → List.IsPrefix (earlier ++ [(input, cause)]) returns →
-      source.openTable input before = .error cause after →
-      (storage before).files.Frames state.selectedRetryPath (storage after).files ∧
-      (storage before).Frames (· = state.session.directory.path) (storage after)) :
-    RawOpenRetryTrace.SelectedEffects view source first target files protectedPaths
-      (fun heap => keep heap ∧ state.SelectedRetryDurability target (storage heap)) attempts := by
-  induction effects with
-  | empty => exact .empty
-  | @append earlier more entry reached prior block before image kept inodes carries ih =>
-    have previous := ih (fun ran inside result => each ran (List.prefix_append_of_prefix inside) result)
-    let frame (entry reached : heap) :=
-      (storage entry).files.Frames state.selectedRetryPath (storage reached).files ∧
-      (storage entry).Frames (· = state.session.directory.path) (storage reached)
-    obtain ⟨footprint, parent⟩ := block.framesAfter prior frame
-      (fun heap => ⟨(CheckpointStorageObservation.Frames.refl _ (storage heap)).visible, .refl _ _⟩)
-      (fun first last => ⟨first.1.trans last.1, first.2.trans last.2⟩) each
-    exact .append (calls := block) previous image kept inodes (fun selected => ⟨carries selected.1, selected.2.frame footprint parent⟩)
+    {first entry reached : heap} {earlier more : List (FilePath × IO.Error)}
+    {prior : source.FailedCalls first earlier entry}
+    (before : RawOpenRetryTrace.SelectedEffects view source first target
+      (fun atHeap => ⟨(storage atHeap).files.names, fun inode => [visible atHeap inode]⟩) state.selectedRetryPath
+      (fun atHeap => RawOpenRetryTrace.KeeperAt view state.session.directory target
+          (fun atHeap => (storage atHeap).files.names) visible atHeap ∧
+        state.SelectedRetryDurability target (storage atHeap)) prior)
+    (block : RawFinalizedOpenAttempts view state.session.directory source.calls source.init source.release entry more reached)
+    (frame : state.SelectedRetryFrame (storage entry) (storage reached) (visible entry) (visible reached))
+    (keeper : (⟨(storage entry).files.names, fun inode => [visible entry inode]⟩ : CheckpointSurvivingFiles).Frames
+      (· = state.session.directory.file (.walSegment target.first))
+      ⟨(storage reached).files.names, fun inode => [visible reached inode]⟩)
+    (executed : source.FailedCalls entry more reached) :
+    RawOpenRetryTrace.SelectedEffects view source first target
+      (fun atHeap => ⟨(storage atHeap).files.names, fun inode => [visible atHeap inode]⟩) state.selectedRetryPath
+      (fun atHeap => RawOpenRetryTrace.KeeperAt view state.session.directory target
+          (fun atHeap => (storage atHeap).files.names) visible atHeap ∧
+        state.SelectedRetryDurability target (storage atHeap)) (prior.append executed) :=
+  before.readOnly block frame.live (fun carried =>
+    ⟨block.keepsVisibleKeeper (target := target) keeper carried.1, carried.2.frame frame.durable frame.parent⟩) executed
 
 /-- Carry the immutable footprint alongside the mutable live keeper
 through the same actual failed calls used for logical recovery. A read

@@ -17,6 +17,12 @@ specialization stays in that proof, where the surviving marker
 requires the uncertain batch to be omitted.
 [Grouped-write continuation](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
 
+Read-only and mutating failed opens now extend the same retry prefix
+with the keeper and durable files at each returned heap. The grouped
+recovery consumes that prefix directly. Its earlier second fold over
+the same failed calls has been removed.
+[Retry frames](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+
 The fresh bootstrap return supplies the empty origin of the client ledger
 for the final checkpoint pilot. The opened-session trace starts the
 checkpoint on that table's phase and cache, and the source schedule

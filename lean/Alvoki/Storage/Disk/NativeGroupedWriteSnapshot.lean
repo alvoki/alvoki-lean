@@ -48,12 +48,8 @@ theorem NativeOpenedPosition.groupedRetryAndReads
       returns ≠ [] ∧
       RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
         (fun atHeap => ⟨names atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
-        (RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible) attempts ∧
-      ∀ {earlier : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {error : IO.Error},
-        source.FailedCalls rebooted earlier before → List.IsPrefix (earlier ++ [(path, error)]) returns →
-        source.openTable path before = .error error after →
-        (storage before).files.Frames (state).selectedRetryPath (storage after).files ∧
-        (storage before).Frames (· = (dir).path) (storage after))
+        (fun atHeap => RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible atHeap ∧
+          (state).SelectedRetryDurability (state).writer.target (storage atHeap)) attempts)
     (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
     (healthy : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
@@ -111,11 +107,10 @@ theorem NativeOpenedPosition.groupedRetryAndReads
             last.current ∧
           SnapshotWalReplay .empty (current.current.history ++ nextBatch) reference ∧
           (∀ observation ∈ last.current.ready.reads, observation.agrees reference)) := by
-  obtain ⟨attempts, retried, retryEffects, retryFrames⟩ := retry
-  have carried := retryEffects.withDurableFrames («storage» := storage) retryFrames
+  obtain ⟨attempts, retried, retryEffects⟩ := retry
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, _, guard, assigned, classified⟩ :=
     current.recoversGroupedWriteError view cache appender stager syncer inodes observe inode buffered request lookup rename
-      nonempty returned initial groupEffects reboot later source carried (reboot.startsDurableRetry reset)
+      nonempty returned initial groupEffects reboot later source retryEffects (reboot.startsDurableRetry reset)
       And.left vacant healthy phase ptrEq
   refine ⟨schedules, attempts, retried, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with ⟨group, _, _, footprint, recovered, _⟩ | elsewhere

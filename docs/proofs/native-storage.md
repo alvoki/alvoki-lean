@@ -428,6 +428,12 @@ lemma accepts a WAL target selected after different operations, under
 the supplied writer's manifest and protected footprint.
 [Failed marked repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
+Read-only failures frame the keeper they enter with. A repair failure
+can supply a replacement to the same prefix. Both carry the protected
+files and parent settlement at each returned heap, so grouped recovery
+can consume one prefix through the fixed interpreter.
+[Retry frames](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached
 publication outcome. The grouped failure producer follows both literal fsyncs and preserves
 the old marker and keeper prefix. After a successful file group, the local rename and
