@@ -2561,6 +2561,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_forSelectedCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceError.reopensSampledRenameError
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.rebootDirectoryBindings
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.samplesWal
@@ -4208,7 +4209,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.openWithLock_reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.reachesHeldCache
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.readsLiteralMarkedOpen
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.readsLiteralMarkedOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.projectsHeldCache

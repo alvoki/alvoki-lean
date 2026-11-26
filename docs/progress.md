@@ -116,6 +116,15 @@ The latest snapshot acquisition likewise refines the raw return of the same
 issuer used in the public call sequence.
 [Session step composition](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
+The successful marked reader now uses the manifest and runs selected by
+the same crash sample for both checkpoint generations. Its returned reads,
+WAL replay, repair and table follow from the fixed worker's successful run
+and local observations. The name scan needs a complete bounded window:
+an extra canonical segment can change the replay start while leaving all
+listed checkpoint and WAL payloads intact. Carrying those absences through
+publication and failed opens remains a separate obligation.
+[Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
+
 At the earlier sync of `MANIFEST.next`, the returned run writes and
 first directory barrier establish storage for the previous checkpoint.
 The local file-sync contract allows arbitrary durable contents of the

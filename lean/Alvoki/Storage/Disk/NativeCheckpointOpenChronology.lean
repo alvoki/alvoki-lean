@@ -12,6 +12,14 @@ private def observedFiles {heap : Type} (names : heap → FilePath → Option Na
     (bytes : heap → Nat → ByteArray) (atHeap : heap) : CheckpointSurvivingFiles :=
   ⟨names atHeap, fun inode => [bytes atHeap inode]⟩
 
+/-- The selected manifest is either absent or present with these bytes
+on its named inode. -/
+def CheckpointSurvivingFiles.StoresManifest
+    (files : CheckpointSurvivingFiles) (directory : DiskDirectory) (binding : Option ByteArray) : Prop :=
+  match binding with
+  | none => files.names (directory.file .manifest) = none
+  | some bytes => files.Stored (directory.file .manifest) bytes
+
 section SelectedReadFiles
 
 variable {heap : Type} {files : heap → CheckpointSurvivingFiles} {selectedPath : FilePath → Prop}
@@ -183,15 +191,21 @@ using the actual optional metadata result and each reached run callback.
 The file frame includes the live manifest and runs at the selected
 retry entry, and permits independent changes to other paths. -/
 theorem MarkedTemporaryReadCalls.selectedCheckpointOfProtectedReturn
-    (calls : MarkedTemporaryReadCalls heap) (state : NativeReadyState)
+    (calls : MarkedTemporaryReadCalls heap) (directory : DiskDirectory)
     (view : OpenCloseHeapView heap image) (names : heap → FilePath → Option Nat)
     (visible : heap → Nat → ByteArray)
     (opens : calls.OpensReadSlot view names visible) (reads : calls.ReadsAtCursor view visible)
     {initial entry reached : heap} {expected actual : Option (PackedTable × UInt64)}
-    (selected : SelectedIntegrityCheckpoint state.writer.published.durable state.writer.target.pair.manifest expected)
-    (footprint : NativeReadyProtectedStorage state (observedFiles names visible initial))
+    {durable : CheckpointPublication.RunFiles} {binding : Option ByteArray}
+    (selected : SelectedIntegrityCheckpoint durable binding expected)
+    (manifestStored : (observedFiles names visible initial).StoresManifest directory binding)
+    (runsStored : ∀ bytes metadata, binding = some bytes → Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, ∀ payload, durable metadata.header.generation index = some payload →
+      (observedFiles names visible initial).Stored (directory.file (.run metadata.header.generation index)) payload)
     (scope : FilePath → Prop)
-    (includes : ∀ path, state.writeFramePath path → scope path)
+    (manifestInScope : scope (directory.file .manifest))
+    (runsInScope : ∀ bytes metadata, binding = some bytes → Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, scope (directory.file (.run metadata.header.generation index)))
     (starts : (observedFiles names visible initial).Frames scope (observedFiles names visible entry))
     (scopedReads : calls.FileFrames (observedFiles names visible) scope)
     (statFrame : ∀ path before, (observedFiles names visible before).Frames scope
@@ -201,14 +215,12 @@ theorem MarkedTemporaryReadCalls.selectedCheckpointOfProtectedReturn
     (statMissing : ∀ {path before name message after},
       calls.stat path before = .ok (.error (.noFileOrDirectory name 2 message)) after →
       names before path = none)
-    (returned : readIntegrityCheckpointSized state.session.directory
-      (calls.readOptional state.session.directory (state.session.directory.file .manifest))
+    (returned : readIntegrityCheckpointSized directory
+      (calls.readOptional directory (directory.file .manifest))
       calls.runSize calls.runPrefix entry = .ok actual reached) :
-    SelectedIntegrityCheckpoint state.writer.published.durable state.writer.target.pair.manifest actual ∧
+    SelectedIntegrityCheckpoint durable binding actual ∧
       (observedFiles names visible initial).Frames scope (observedFiles names visible reached) := by
-  let directory := state.session.directory
   let path := directory.file .manifest
-  have manifestPath : scope path := includes path (.inr (.inr (.inl rfl)))
   have manifestFrame {found : Option ByteArray} {after : heap}
       (seen : calls.readOptional directory path entry = .ok found after) :
       (observedFiles names visible initial).Frames scope (observedFiles names visible after) := by
@@ -225,25 +237,24 @@ theorem MarkedTemporaryReadCalls.selectedCheckpointOfProtectedReturn
     exact ⟨frame, fun inode named => extent.symm.trans (statExtent returnedStat named)⟩
   apply calls.selectedCheckpointOfReturn view names visible directory opens reads scope
     ?_ ?_ ?_ ?_ sized scopedReads returned
+  · exact runsInScope
   · intro raw manifest present decoded index within
-    exact includes _ (.inr (.inr (.inr (.inr ⟨raw, manifest, index, present, decoded, within, rfl⟩))))
-  · intro raw manifest present decoded index within
-    have visit : index < selectedRunCount state.writer.target.pair.manifest := by
+    have visit : index < selectedRunCount binding := by
       simpa [selectedRunCount, present, decoded, Except.toOption] using within
     obtain ⟨otherRaw, otherManifest, payload, rawEq, manifestEq, _, stored⟩ := selected.selectedRun visit
     cases Option.some.inj (rawEq.symm.trans present)
     cases Except.ok.inj (manifestEq.symm.trans decoded)
-    exact ⟨payload, stored, footprint.runs _ _ present decoded index within payload stored⟩
+    exact ⟨payload, stored, runsStored _ _ present decoded index within payload stored⟩
   · intro after seen
     obtain ⟨name, message, stat⟩ := calls.readOptional_none directory path seen
     have missing : names entry path = none := statMissing stat
-    have absent := (starts path manifestPath).1.symm.trans missing
+    have absent := (starts path manifestInScope).1.symm.trans missing
     refine ⟨?_, manifestFrame seen⟩
-    cases binding : state.writer.target.pair.manifest with
+    cases manifestName : binding with
     | none => rfl
     | some payload =>
-      have current := footprint.manifest
-      rw [binding] at current
+      have current := manifestStored
+      rw [manifestName, CheckpointSurvivingFiles.StoresManifest] at current
       obtain ⟨inode, named, _⟩ := current
       rw [absent] at named
       contradiction
@@ -255,23 +266,23 @@ theorem MarkedTemporaryReadCalls.selectedCheckpointOfProtectedReturn
           metadata.byteSize.toNat = (visible entry inode).size ∧ visible afterStat inode = visible entry inode := by
       have frame := statFrame path entry
       rw [measured, reachedState] at frame
-      obtain ⟨sameName, sameContents⟩ := frame path manifestPath
+      obtain ⟨sameName, sameContents⟩ := frame path manifestInScope
       exact ⟨sameName, fun inode named => ⟨statExtent measured named, (List.cons.inj (sameContents inode named)).1⟩⟩
     obtain ⟨_, _, inode, _, _, _, bound, _, _, exactBytes, _⟩ :=
       calls.readSelectedManifest view names visible opens reads directory preservesStat seen accepted
-    obtain ⟨nameEq, contents⟩ := starts path manifestPath
+    obtain ⟨nameEq, contents⟩ := starts path manifestInScope
     have origin : names initial path = some inode := nameEq.symm.trans bound
     refine ⟨?_, manifestFrame seen⟩
-    cases binding : state.writer.target.pair.manifest with
+    cases manifestName : binding with
     | none =>
-      have absent := footprint.manifest
-      rw [binding] at absent
+      have absent := manifestStored
+      rw [manifestName, CheckpointSurvivingFiles.StoresManifest] at absent
       change names initial path = none at absent
       rw [absent] at origin
       contradiction
     | some payload =>
-      have current := footprint.manifest
-      rw [binding] at current
+      have current := manifestStored
+      rw [manifestName, CheckpointSurvivingFiles.StoresManifest] at current
       obtain ⟨expectedInode, named, stored⟩ := current
       have sameInode : expectedInode = inode := Option.some.inj (named.symm.trans origin)
       subst expectedInode
@@ -363,7 +374,7 @@ theorem MarkedTemporaryReadCalls.acceptsMarkerFromProtectedFile
 before passing the resulting watermark and byte limit to the WAL reader.
 The entry-to-cache frame comes from the admission that reached this worker. -/
 theorem RawMarkedOpenInterpreter.worker_selectsCheckpointAndMarker
-    {stream : Type} {state : NativeReadyState}
+    {stream : Type} (directory : DiskDirectory)
     {view : OpenCloseHeapView heap FileImage} {entry : heap}
     (source : RawMarkedOpenInterpreter heap stream)
     (lock : IO.FS.Handle) (cached : IO.Ref (Option IO.FS.Handle))
@@ -373,11 +384,18 @@ theorem RawMarkedOpenInterpreter.worker_selectsCheckpointAndMarker
     (opens : source.fileCalls.OpensReadSlot view names visible)
     (reads : source.fileCalls.ReadsAtCursor view visible)
     {expected : Option (PackedTable × UInt64)} {chosenMarker : ByteArray}
-    (selection : SelectedIntegrityCheckpoint state.writer.published.durable state.writer.target.pair.manifest expected)
-    (footprint : NativeReadyProtectedStorage state (observedFiles names visible entry))
-    (storedMarker : (observedFiles names visible entry).Stored (state.session.directory.file .walBoundary) chosenMarker)
+    {durable : CheckpointPublication.RunFiles} {binding : Option ByteArray}
+    (selection : SelectedIntegrityCheckpoint durable binding expected)
+    (manifestStored : (observedFiles names visible entry).StoresManifest directory binding)
+    (runsStored : ∀ bytes metadata, binding = some bytes → Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, ∀ payload, durable metadata.header.generation index = some payload →
+      (observedFiles names visible entry).Stored (directory.file (.run metadata.header.generation index)) payload)
+    (storedMarker : (observedFiles names visible entry).Stored (directory.file .walBoundary) chosenMarker)
     (scope : FilePath → Prop)
-    (includes : ∀ path, state.selectedRetryPath path → scope path)
+    (manifestInScope : scope (directory.file .manifest))
+    (runsInScope : ∀ bytes metadata, binding = some bytes → Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, scope (directory.file (.run metadata.header.generation index)))
+    (markerInScope : scope (directory.file .walBoundary))
     (admissionFrame : (observedFiles names visible entry).Frames scope (observedFiles names visible cacheReady))
     (guardFrame : ∀ path before, (observedFiles names visible before).Frames scope
       (observedFiles names visible (reachedState (source.calls.lookup path before))))
@@ -394,13 +412,12 @@ theorem RawMarkedOpenInterpreter.worker_selectsCheckpointAndMarker
       source.fileCalls.readChunk file request before = .ok .empty after →
       (visible before inode).size ≤ (view.handle before file).2.2)
     {checked marked reached : heap} {metadata : IO.FS.Metadata} {table : DiskTable}
-    (flat : rejectFlatWalWith state.session.directory
-      (optionalMetadataWith (source.calls.lookup (state.session.directory.file .wal))) cacheReady = .ok () checked)
-    (marker : optionalMetadataWith (source.calls.lookup (state.session.directory.file .walBoundary)) checked =
+    (flat : rejectFlatWalWith directory
+      (optionalMetadataWith (source.calls.lookup (directory.file .wal))) cacheReady = .ok () checked)
+    (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
       .ok (some metadata) marked)
-    (returned : source.worker cached active pending state.session.directory lock
-      (RawMarkedOpenInterpreter.makeCache state.session.directory cached active pending) cacheReady = .ok table reached) :
-    let directory := state.session.directory
+    (returned : source.worker cached active pending directory lock
+      (RawMarkedOpenInterpreter.makeCache directory cached active pending) cacheReady = .ok table reached) :
     let keeper := source.keeperCallbacks.withFileReads source.fileCalls
     let readWal := fun watermark length => readSelectedWithCachedExtents directory watermark length
       source.directoryCalls.run (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
@@ -428,7 +445,7 @@ theorem RawMarkedOpenInterpreter.worker_selectsCheckpointAndMarker
         repaired = .ok phase afterPhase ∧
       source.allocateToken () afterPhase = .ok token reached ∧
       table = RawMarkedOpenInterpreter.assemble directory lock cache phase token := by
-  intro directory keeper readWal cache writeStage syncPaths
+  intro keeper readWal cache writeStage syncPaths
   obtain ⟨checkpoint, afterCheckpoint, markerBytes, afterMarker, length, payloads, extent, prepared, repaired,
     patched, logical, first, bytes, phase, afterPhase, token, selected, markerRead, decoded, walRead,
     replayed, lastKeeper, repairedWal, allocated, tokenAllocated, exactTable⟩ :=
@@ -438,10 +455,11 @@ theorem RawMarkedOpenInterpreter.worker_selectsCheckpointAndMarker
   have guardSteps := markedGuards_keepFrame (frame := frame) directory source.calls.lookup
     CheckpointSurvivingFiles.Frames.trans guardFrame flat marker
   have markedFrame := admissionFrame.trans guardSteps
-  obtain ⟨actual, checkpointFrame⟩ := source.fileCalls.selectedCheckpointOfProtectedReturn state view names visible
-    opens reads selection footprint scope (fun path member => includes path (.inr member)) markedFrame scopedReads statFrame statExtent statMissing selected
+  obtain ⟨actual, checkpointFrame⟩ := source.fileCalls.selectedCheckpointOfProtectedReturn directory view names visible
+    opens reads selection manifestStored runsStored scope manifestInScope runsInScope
+    markedFrame scopedReads statFrame statExtent statMissing selected
   obtain ⟨markerEq, finalFrame⟩ := source.fileCalls.acceptsMarkerFromProtectedFile view names visible opens reads
-    directory scope (includes _ (.inl rfl)) storedMarker checkpointFrame scopedReads statFrame eof markerRead decoded
+    directory scope markerInScope storedMarker checkpointFrame scopedReads statFrame eof markerRead decoded
   have checkpointEq := actual.uniqueResult selection
   exact ⟨afterCheckpoint, afterMarker, length, payloads, extent, prepared, repaired, patched, logical, first,
     bytes, phase, afterPhase, token, by simpa only [checkpointEq] using selected, by simpa only [markerEq] using markerRead,

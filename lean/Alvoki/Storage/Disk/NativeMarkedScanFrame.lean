@@ -425,6 +425,48 @@ private theorem chainStarts {history : List WAL.Write} {first : Nat} {segments :
   | endOfHistory => contradiction
   | cons => exact ⟨_, rfl⟩
 
+/-- The canonical layout and complete offset selection order the
+retained WAL payloads independently of the operation that selected them. -/
+theorem CanonicalKeeperLayout.modeledWindow
+    {image : FileImage} {history : List WAL.Write} (layout : CanonicalKeeperLayout image history)
+    (starts : List Nat)
+    (offsets : selectWalSegmentReads starts layout.range.watermark =
+      some (layout.first, (layout.sealed ++ [layout.keeper]).map WalSegment.first)) :
+    (∀ start, layout.first ≤ start →
+      (start ∈ starts ↔ start ∈ (layout.sealed ++ [layout.keeper]).map WalSegment.first)) ∧
+    (∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start) := by
+  unfold selectWalSegmentReads at offsets
+  let selected := (layout.sealed ++ [layout.keeper]).map WalSegment.first
+  cases best : ((starts).filter
+      (fun start => decide (start ≤ layout.range.watermark))).max? with
+  | none => simp [best, Bind.bind, Option.bind] at offsets
+  | some first =>
+    have details : first = layout.first ∧
+        (starts).filter (fun start => decide (first ≤ start)) = selected := by
+      simpa only [best, Bind.bind, Option.bind, Pure.pure, Option.some.injEq, Prod.mk.injEq] using offsets
+    obtain ⟨rfl, exactOffsets⟩ := details
+    have membership (start : Nat) (cover : layout.first ≤ start) :
+        start ∈ starts ↔ start ∈ selected := by
+      rw [← exactOffsets, List.mem_filter, decide_eq_true_eq, and_iff_left cover]
+    refine ⟨membership, ?_⟩
+    have shape : ∃ rest, selected = layout.first :: rest :=
+      chainStarts layout.chain (by simp)
+    obtain ⟨rest, shape⟩ := shape
+    have strict := List.pairwise_map.mpr layout.chain.startsStrict
+    change selected.Pairwise (· < ·) at strict
+    rw [shape] at strict
+    intro start inRest
+    change start ∈ selected.drop 1 at inRest
+    rw [shape, List.drop_succ_cons, List.drop_zero] at inRest
+    have after := (List.pairwise_cons.mp strict).1 start inRest
+    apply Nat.lt_of_not_ge
+    intro high
+    have stored := (membership start (Nat.le_of_lt after)).mpr (shape.symm ▸ List.mem_cons_of_mem _ inRest)
+    have below := (List.max?_eq_some_iff.mp best).2 start
+      (List.mem_filter.mpr ⟨stored, decide_eq_true high⟩)
+    exact (Nat.not_le_of_gt after) below
+
 /-- The abstract writer's successful selector already identifies the
 whole logical suffix from the covering start. This gives the exact cut
 where separately framed native name agreement is needed. -/
@@ -439,40 +481,9 @@ theorem NativeReadPosition.SelectedWritePlan.modeledWindow
     (∀ start ∈ ((plan.layout.sealed ++ [plan.layout.keeper]).map WalSegment.first).drop 1,
       plan.layout.range.watermark < start) := by
   intro wal
-  have offsets := plan.offsets
-  change selectWalSegmentReads (wal.segments.map WalSegment.first) plan.layout.range.watermark =
-    some (plan.layout.first, (wal.readDescriptors plan.layout.range.watermark).map WalSegment.first) at offsets
-  rw [← plan.descriptors] at offsets
-  unfold selectWalSegmentReads at offsets
-  let selected := (plan.layout.sealed ++ [plan.layout.keeper]).map WalSegment.first
-  cases best : ((wal.segments.map WalSegment.first).filter
-      (fun start => decide (start ≤ plan.layout.range.watermark))).max? with
-  | none => simp [best, Bind.bind, Option.bind] at offsets
-  | some first =>
-    have details : first = plan.layout.first ∧
-        (wal.segments.map WalSegment.first).filter (fun start => decide (first ≤ start)) = selected := by
-      simpa only [best, Bind.bind, Option.bind, Pure.pure, Option.some.injEq, Prod.mk.injEq] using offsets
-    obtain ⟨rfl, exactOffsets⟩ := details
-    have membership (start : Nat) (cover : plan.layout.first ≤ start) :
-        start ∈ wal.segments.map WalSegment.first ↔ start ∈ selected := by
-      rw [← exactOffsets, List.mem_filter, decide_eq_true_eq, and_iff_left cover]
-    refine ⟨membership, ?_⟩
-    have shape : ∃ rest, selected = plan.layout.first :: rest :=
-      chainStarts plan.layout.chain (by simp)
-    obtain ⟨rest, shape⟩ := shape
-    have strict := List.pairwise_map.mpr plan.layout.chain.startsStrict
-    change selected.Pairwise (· < ·) at strict
-    rw [shape] at strict
-    intro start inRest
-    change start ∈ selected.drop 1 at inRest
-    rw [shape, List.drop_succ_cons, List.drop_zero] at inRest
-    have after := (List.pairwise_cons.mp strict).1 start inRest
-    apply Nat.lt_of_not_ge
-    intro high
-    have stored := (membership start (Nat.le_of_lt after)).mpr (shape.symm ▸ List.mem_cons_of_mem _ inRest)
-    have below := (List.max?_eq_some_iff.mp best).2 start
-      (List.mem_filter.mpr ⟨stored, decide_eq_true high⟩)
-    exact (Nat.not_le_of_gt after) below
+  apply plan.layout.modeledWindow
+  rw [plan.descriptors]
+  exact plan.offsets
 
 /-- The actual marked scan identifies the later names independently of
 the retained catalog. Below the cutoff use the carried window, which

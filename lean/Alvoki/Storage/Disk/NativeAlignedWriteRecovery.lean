@@ -73,12 +73,72 @@ structure RawMarkedOpenInterpreter.AlignedReadEffects (source : RawMarkedOpenInt
     (source.keeperCallbacks.withFileReads source.fileCalls).modifyPending pending
       (pushPending path file) before = .ok () after → alignedReadFrame names visible scope keeps before after
 
+/-- The healthy worker's returned table and the reached callbacks that
+read its selected checkpoint and WAL, repair the keeper and allocate it. -/
+abbrev RawMarkedOpenInterpreter.LiteralMarkedReturn
+    (source : RawMarkedOpenInterpreter heap stream) (directory : DiskDirectory)
+    {image : FileImage} {history : List WAL.Write} (layout : CanonicalKeeperLayout image history)
+    (checkpoint : Option (PackedTable × UInt64))
+    (lock : IO.FS.Handle) (cached : IO.Ref (Option IO.FS.Handle))
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cacheReady : heap)
+    (view : OpenCloseHeapView heap FileImage)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (scope : FilePath → Prop)
+    (keeps : heap → heap → Prop) (entry returnedAt : heap) (table : DiskTable) : Prop :=
+    let keeperCalls := source.keeperCallbacks.withFileReads source.fileCalls
+    let segment := layout.keeper
+    let path := (directory).file (.walSegment segment.first)
+    let cache := RawMarkedOpenInterpreter.makeCache directory cached active pending
+    let files := (layout.sealed ++ [segment]).map fun item => (item.first, item.bytes)
+    ∃ (count : UInt64) (markerBytes patched : ByteArray) (logical : PackedTable)
+      (keeper : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat)
+      (readHeap prepared repaired : heap) (extent : Nat) (newer : List Nat)
+      (phase : IO.Ref (Phase Installed)) (afterPhase : heap) (token : IO.Ref Unit),
+      image.directory.active.walBoundary = some markerBytes ∧
+      WAL.Boundary.decode markerBytes = .ok count ∧
+      count.toNat / WAL.frameSize = layout.range.through ∧
+      recoverMarkedWalSegments (checkpoint.getD (.empty, 0)).1 count files = .ok (patched, logical) ∧
+      names entry path = some inode ∧ attachedReadSlot view keeper slot inode readHeap ∧
+      ((segment.bytes.size = extent ∧
+        keeperCalls.modifyPending pending (pushPending path keeper) readHeap = .ok () prepared) ∨
+       (segment.bytes.size < extent ∧ source.fileCalls.release keeper readHeap = .ok () prepared)) ∧
+      extent = (segment.bytes ++ layout.tail).size ∧
+      (∀ start, start ∈ newer ↔ layout.range.through < start ∧
+        ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ∧
+      (CheckpointSurvivingFiles.mk (names entry) fun inode => [visible entry inode]).Frames scope
+        ⟨names prepared, fun inode => [visible prepared inode]⟩ ∧
+      (∀ other, scope other → (other = (directory).path ∨ ∃ file, other = (directory).file file) →
+        names prepared other = some inode → other = path) ∧
+      keeps entry prepared ∧ keeps cacheReady prepared ∧
+      finishBoundedMarkedOpen directory ⟨layout.range.through, segment.first, newer, segment.bytes⟩ extent
+        source.remove (source.stage.stage pending keeperCalls.modifyPending)
+        (keeperCalls.syncPaths (directory).path cached active pending) source.rename prepared =
+        .ok () repaired ∧
+      source.allocatePhase (.ready (Reopened.installed
+        ⟨logical, (checkpoint.getD (.empty, 0)).2, count, segment.first⟩))
+        repaired = .ok phase afterPhase ∧
+      source.allocateToken () afterPhase = .ok token returnedAt ∧
+      table = RawMarkedOpenInterpreter.assemble directory lock cache phase token ∧
+      ∃ (checked marked afterCheckpoint afterMarker : heap) (metadata : IO.FS.Metadata),
+        rejectFlatWalWith directory
+          (optionalMetadataWith (source.calls.lookup (directory.file .wal))) cacheReady = .ok () checked ∧
+        optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked = .ok (some metadata) marked ∧
+        readIntegrityCheckpointSized directory
+          (source.fileCalls.readOptional directory (directory.file .manifest))
+          source.fileCalls.runSize source.fileCalls.runPrefix marked = .ok checkpoint afterCheckpoint ∧
+        source.fileCalls.readOptional directory (directory.file .walBoundary) afterCheckpoint =
+          .ok (some markerBytes) afterMarker
+
 /-- The selected checkpoint and WAL bytes fix the replay throughout
 the marked worker. The actual extent selects whether the keeper
 is remembered or released. The directory scan fixes the suffix
 handed to repair independently of that extent. -/
-theorem NativeReadPosition.SelectedWritePlan.readsLiteralMarkedOpen
-    (plan : current.SelectedWritePlan batch target (view.files reached).image)
+theorem RawMarkedOpenInterpreter.readsLiteralMarkedOpen
+    (source : RawMarkedOpenInterpreter heap stream) (directory : DiskDirectory)
+    {image : FileImage} {history : List WAL.Write} (layout : CanonicalKeeperLayout image history)
+    {durable : RunFiles} {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint durable layout.target.pair.manifest checkpoint)
     (lock : IO.FS.Handle) (cached : IO.Ref (Option IO.FS.Handle))
     (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cacheReady : heap)
@@ -87,66 +147,42 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralMarkedOpen
     {keeps : heap → heap → Prop} (keepsRefl : ∀ atHeap, keeps atHeap atHeap)
     (keepsTrans : ∀ {before middle after}, keeps before middle → keeps middle after → keeps before after)
     (admissionFrame : alignedReadFrame names visible scope keeps reached cacheReady)
-    (effects : source.AlignedReadEffects view dir pending names visible namespaceView root scope keeps)
-    (protectedFiles : NativeReadyProtectedStorage current.state ⟨names reached, fun inode => [visible reached inode]⟩)
-    (manifest : target.pair.manifest = current.state.writer.target.pair.manifest)
-    (markerStored : ∀ marker, (view.files reached).image.directory.active.walBoundary = some marker →
+    (effects : source.AlignedReadEffects view directory pending names visible namespaceView root scope keeps)
+    (manifestStored : (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).StoresManifest
+      directory layout.target.pair.manifest)
+    (runsStored : ∀ bytes metadata, layout.target.pair.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, ∀ payload, durable metadata.header.generation index = some payload →
       (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).Stored
-        ((dir).file .walBoundary) marker)
-    (includes : ∀ path, current.state.selectedRetryPath path → scope path)
-    (scopedWindow : ∀ start, plan.layout.first ≤ start → start ≤ plan.layout.range.through →
-      scope ((dir).file (.walSegment start)))
-    (child : ∀ start, plan.layout.first ≤ start → start ≤ plan.layout.range.through →
+        (directory.file (.run metadata.header.generation index)) payload)
+    (markerStored : ∀ marker, image.directory.active.walBoundary = some marker →
+      (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).Stored
+        ((directory).file .walBoundary) marker)
+    (manifestScoped : scope (directory.file .manifest))
+    (runsScoped : ∀ bytes metadata, layout.target.pair.manifest = some bytes →
+      Manifest.IntegrityCheckpoint.decode bytes = .ok metadata →
+      ∀ index < metadata.header.runCount.toNat, scope (directory.file (.run metadata.header.generation index)))
+    (markerScoped : scope (directory.file .walBoundary))
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (scopedWindow : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
+      scope ((directory).file (.walSegment start)))
+    (child : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        names reached ((dir).file (.walSegment start)))
-    (physical : plan.layout.VisibleWal dir (names reached) (visible reached))
+        names reached ((directory).file (.walSegment start)))
+    (physical : layout.VisibleWal directory (names reached) (visible reached))
     {returnedAt : heap} {table : DiskTable}
-    (returned : source.worker cached active pending dir lock
-      (RawMarkedOpenInterpreter.makeCache dir cached active pending) cacheReady = .ok table returnedAt) :
-    let keeperCalls := source.keeperCallbacks.withFileReads source.fileCalls
-    let segment := plan.layout.keeper
-    let path := (dir).file (.walSegment segment.first)
-    let cache := RawMarkedOpenInterpreter.makeCache dir cached active pending
-    let files := (plan.layout.sealed ++ [segment]).map fun item => (item.first, item.bytes)
-    ∃ (count : UInt64) (markerBytes patched : ByteArray) (logical : PackedTable)
-      (keeper : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat)
-      (readHeap prepared repaired : heap) (extent : Nat) (newer : List Nat)
-      (phase : IO.Ref (Phase Installed)) (afterPhase : heap) (token : IO.Ref Unit),
-      (view.files reached).image.directory.active.walBoundary = some markerBytes ∧
-      WAL.Boundary.decode markerBytes = .ok count ∧
-      count.toNat / WAL.frameSize = plan.layout.range.through ∧
-      recoverMarkedWalSegments (current.state.writer.checkpoint.getD (.empty, 0)).1 count files = .ok (patched, logical) ∧
-      names reached path = some inode ∧ attachedReadSlot view keeper slot inode readHeap ∧
-      ((segment.bytes.size = extent ∧
-        keeperCalls.modifyPending pending (pushPending path keeper) readHeap = .ok () prepared) ∨
-       (segment.bytes.size < extent ∧ source.fileCalls.release keeper readHeap = .ok () prepared)) ∧
-      extent = (segment.bytes ++ plan.layout.tail).size ∧
-      (∀ start, start ∈ newer ↔ plan.layout.range.through < start ∧
-        ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ∧
-      (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).Frames scope
-        ⟨names prepared, fun inode => [visible prepared inode]⟩ ∧
-      (∀ other, scope other → (other = (dir).path ∨ ∃ file, other = (dir).file file) →
-        names prepared other = some inode → other = path) ∧
-      keeps reached prepared ∧ keeps cacheReady prepared ∧
-      finishBoundedMarkedOpen dir ⟨plan.layout.range.through, segment.first, newer, segment.bytes⟩ extent
-        source.remove (source.stage.stage pending keeperCalls.modifyPending)
-        (keeperCalls.syncPaths (dir).path cached active pending) source.rename prepared =
-        .ok () repaired ∧
-      source.allocatePhase (.ready (Reopened.installed
-        ⟨logical, (current.state.writer.checkpoint.getD (.empty, 0)).2, count, segment.first⟩))
-        repaired = .ok phase afterPhase ∧
-      source.allocateToken () afterPhase = .ok token returnedAt ∧
-      table = RawMarkedOpenInterpreter.assemble dir lock cache phase token := by
+    (returned : source.worker cached active pending directory lock
+      (RawMarkedOpenInterpreter.makeCache directory cached active pending) cacheReady = .ok table returnedAt) :
+    source.LiteralMarkedReturn directory layout checkpoint lock cached active pending cacheReady view
+      names visible namespaceView root scope keeps reached returnedAt table := by
+  unfold RawMarkedOpenInterpreter.LiteralMarkedReturn
   intro keeperCalls segment path cache files
-  have selectedManifest := (congrArg (fun target : Target => target.pair.manifest) plan.targetEq).trans manifest
-  have selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
-      current.state.writer.target.pair.manifest current.state.writer.checkpoint :=
-    selectedManifest ▸ plan.selected
   obtain ⟨watermark, _, markerBytes, count, markerName, decoded, absolute⟩ :=
-    DirectoryPublication.Bindings.walRange_accounting plan.layout.decoded
-  have through : count.toNat / WAL.frameSize = plan.layout.range.through := by
+    DirectoryPublication.Bindings.walRange_accounting layout.decoded
+  have through : count.toNat / WAL.frameSize = layout.range.through := by
     rw [absolute, Nat.mul_div_cancel _ (by decide : 0 < WAL.frameSize)]
-  have checkpointCount := Option.some.inj (plan.selected.watermark.symm.trans watermark)
+  have checkpointCount := Option.some.inj (selected.watermark.symm.trans watermark)
   have statExtent {path before metadata after inode}
       (call : source.fileCalls.stat path before = .ok (.ok metadata) after) (bound : names before path = some inode) :
       metadata.byteSize.toNat = (visible before inode).size := by
@@ -154,55 +190,54 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralMarkedOpen
     exact (Option.some.inj (boundAtStat.symm.trans bound)) ▸ size
   let filesAt (atHeap : heap) : CheckpointSurvivingFiles := ⟨names atHeap, fun inode => [visible atHeap inode]⟩
   let visibleFrame before after := (filesAt before).Frames scope (filesAt after)
-  have markerScoped : scope ((dir).file .walBoundary) := includes _ (.inl rfl)
   obtain ⟨markerInode, markerNamed, _⟩ := markerStored _ markerName
-  have markerAtCache : names cacheReady ((dir).file .walBoundary) = some markerInode :=
+  have markerAtCache : names cacheReady ((directory).file .walBoundary) = some markerInode :=
     (admissionFrame.1 _ markerScoped).1.trans markerNamed
   have flatKeepsMarker {checked name message}
-      (ran : source.calls.lookup ((dir).file .wal) cacheReady =
+      (ran : source.calls.lookup ((directory).file .wal) cacheReady =
         .ok (.error (.noFileOrDirectory name 2 message)) checked) :
-      names checked ((dir).file .walBoundary) = names cacheReady ((dir).file .walBoundary) := by
-    simpa only [ran, reachedState] using ((effects.guard ((dir).file .wal) cacheReady).1 _ markerScoped).1
+      names checked ((directory).file .walBoundary) = names cacheReady ((directory).file .walBoundary) := by
+    simpa only [ran, reachedState] using ((effects.guard ((directory).file .wal) cacheReady).1 _ markerScoped).1
   obtain ⟨checked, marked, metadata, flat, marker⟩ :=
-    source.worker_reachesMarkedGuards dir lock cached active pending cacheReady names markerAtCache flatKeepsMarker effects.markerMissing returned
+    source.worker_reachesMarkedGuards directory lock cached active pending cacheReady names markerAtCache flatKeepsMarker effects.markerMissing returned
   have readsVisible : source.fileCalls.ScopeFrames visibleFrame :=
     effects.fileFrames.map (fun framed => framed.1)
-  have listingVisible : source.directoryCalls.ScopeFrames dir visibleFrame :=
+  have listingVisible : source.directoryCalls.ScopeFrames directory visibleFrame :=
     ⟨fun ran => (effects.listingFrames.openDir ran).1, fun ran => (effects.listingFrames.readDir ran).1,
       fun opened scanned closed => (effects.listingFrames.closeDir opened scanned closed).1⟩
   obtain ⟨afterCheckpoint, afterMarker, length, payloads, extent, prepared, repaired, patched, logical, first,
     bytes, phase, afterPhase, token, checkpointRead, markerRead, readMarker, wal, framed, replay, lastKeeper, finish, allocPhase, allocToken,
-    assembled⟩ := source.worker_selectsCheckpointAndMarker lock cached active pending cacheReady
-      names visible effects.opens effects.reads
-      selected protectedFiles (markerStored _ markerName) scope includes admissionFrame.1 (fun path before => (effects.guard path before).1)
+    assembled⟩ := source.worker_selectsCheckpointAndMarker directory lock cached active pending cacheReady
+      names visible effects.opens effects.reads selected manifestStored runsStored (markerStored _ markerName)
+      scope manifestScoped runsScoped markerScoped admissionFrame.1 (fun path before => (effects.guard path before).1)
       readsVisible (fun path before => (effects.statFrame path before).1) statExtent effects.statMissing effects.eof flat marker returned
   have countEq : length = count := Except.ok.inj (readMarker.symm.trans decoded)
   subst length
   rw [checkpointCount] at wal
-  have childAtRead (start : Nat) (lower : plan.layout.first ≤ start) (upper : start ≤ plan.layout.range.through) :
+  have childAtRead (start : Nat) (lower : layout.first ≤ start) (upper : start ≤ layout.range.through) :
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        names afterMarker ((dir).file (.walSegment start)) :=
+        names afterMarker ((directory).file (.walSegment start)) :=
     (child start lower upper).trans ((framed _ (scopedWindow start lower upper)).1).symm
   obtain ⟨payloadEq, extentEq, newer, file, slot, inode, _, _, readHeap, named, _, attached, route, preserved, privateAtReturn⟩ :=
-    source.fileCalls.readsCanonicalWal source.directoryCalls dir view names visible plan.layout namespaceView root scope
+    source.fileCalls.readsCanonicalWal source.directoryCalls directory view names visible layout namespaceView root scope
       effects.opens effects.reads readsVisible listingVisible
       (fun path file => keeperCalls.modifyPending pending (pushPending path file))
       (fun ran => (effects.remember ran).1) effects.statObject effects.stat
       (fun path before => (effects.statFrame path before).1) framed
-      (fun listed => source.directoryCalls.listedRootNames (dir).path namespaceView root effects.streamObject listed
+      (fun listed => source.directoryCalls.listedRootNames (directory).path namespaceView root effects.streamObject listed
         (fun _ _ ran => effects.streamRoot ran) (fun _ _ _ _ opened scan close => effects.complete opened scan close))
       effects.absent
-      through plan.modeledWindow.2 physical scopedWindow childAtRead wal
+      through following physical scopedWindow childAtRead wal
   let frame := alignedReadFrame names visible scope keeps
   have refl (atHeap : heap) : frame atHeap atHeap := ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, keepsRefl atHeap⟩
   have trans {before middle after : heap} (left : frame before middle) (right : frame middle after) : frame before after :=
     ⟨left.1.trans right.1, keepsTrans left.2 right.2⟩
-  have throughGuards := markedGuards_keepFrame (frame := frame) dir source.calls.lookup trans effects.guard flat marker
-  have throughCheckpoint := source.fileCalls.framesCheckpointSuccess dir refl trans effects.fileFrames effects.statFrame checkpointRead
+  have throughGuards := markedGuards_keepFrame (frame := frame) directory source.calls.lookup trans effects.guard flat marker
+  have throughCheckpoint := source.fileCalls.framesCheckpointSuccess directory refl trans effects.fileFrames effects.statFrame checkpointRead
   have throughMarker := source.fileCalls.readOptionalFrames effects.fileFrames refl trans effects.statFrame
-    dir ((dir).file .walBoundary) afterCheckpoint
+    directory ((directory).file .walBoundary) afterCheckpoint
   rw [markerRead, reachedState] at throughMarker
-  have throughWal := source.fileCalls.selectedWalKeepsFrame source.directoryCalls dir refl trans effects.fileFrames
+  have throughWal := source.fileCalls.selectedWalKeepsFrame source.directoryCalls directory refl trans effects.fileFrames
     effects.listingFrames effects.statFrame
     (fun path file => keeperCalls.modifyPending pending (pushPending path file)) effects.remember wal
   have fromCache := trans throughGuards (trans throughCheckpoint (trans throughMarker throughWal))
@@ -214,7 +249,8 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralMarkedOpen
   refine ⟨count, markerBytes, patched, logical, file, slot, inode, readHeap, prepared, repaired, extent, payloads.newer,
     phase, afterPhase, token, markerName, decoded, through, ?_, named, attached, route, extentEq, newer, preserved,
     privateAtReturn (fun looked object => effects.statLinks looked object ⟨segment.first, rfl⟩), throughReader,
-    fromCache.2, ?_, allocPhase, allocToken, assembled⟩
+    fromCache.2, ?_, allocPhase, allocToken, assembled,
+    ⟨checked, marked, afterCheckpoint, afterMarker, metadata, flat, marker, checkpointRead, markerRead⟩⟩
   · simpa only [payloadEq, files, segment] using replay
   · simpa only [through] using finish
 
@@ -1141,14 +1177,21 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (observe start.reached) := by
   have untilHeld := literalReadAdmission cache observe visible admissionFrame authority
+  have manifest := (congrArg (fun target : Target => target.pair.manifest) plan.targetEq).trans entry.manifest
   obtain ⟨count, markerBytes, patched, logical, keeper, slot, inode, readHeap, prepared, repaired, extent, newer,
     phase, afterPhase, token, markerName, decoded, _, replay, named, attached, route, extentEq, laterNames, liveFrame,
-    privateKeeper, readFrame, cacheFrame, rawFinish, phaseReturn, tokenReturn, tableEq⟩ :=
-    plan.readsLiteralMarkedOpen cache.lock cache.directoryRef cache.activeRef cache.pendingRef cache.ready
+    privateKeeper, readFrame, cacheFrame, rawFinish, phaseReturn, tokenReturn, tableEq, _⟩ :=
+    source.readsLiteralMarkedOpen dir plan.layout plan.selected
+      cache.lock cache.directoryRef cache.activeRef cache.pendingRef cache.ready
       (fun atHeap => (observe atHeap).files.names) visible namespaceView root
-      (managedPath dir) (literalReadFrame_refl cache observe) literalReadFrame_trans untilHeld shared.readEffects entry.protectedFiles
-      entry.manifest (fun _ selected => entry.markerStored selected)
-      (fun _ selected => selectedRetryManagedPath selected) (fun first _ _ => .inr ⟨.walSegment first, rfl⟩)
+      (managedPath dir) (literalReadFrame_refl cache observe) literalReadFrame_trans untilHeld shared.readEffects
+      (manifest.symm ▸ entry.protectedFiles.manifest)
+      (fun bytes metadata named decoded index within payload stored =>
+        entry.protectedFiles.runs bytes metadata (manifest.symm.trans named) decoded index within payload stored)
+      (fun _ selected => entry.markerStored selected)
+      (.inr ⟨.manifest, rfl⟩)
+      (fun _ metadata _ _ index _ => .inr ⟨.run metadata.header.generation index, rfl⟩)
+      (.inr ⟨.walBoundary, rfl⟩) plan.modeledWindow.2 (fun first _ _ => .inr ⟨.walSegment first, rfl⟩)
       (fun start lower _ => shared.child start lower) physical workerReturn
   have cutoff : plan.layout.range.through = target.range.through :=
     congrArg (fun t : Target => t.range.through) plan.targetEq
@@ -1306,6 +1349,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
     have keeperBound := preservedName.trans named
     have exactBytes : visible reached inode = plan.layout.keeper.bytes := by
       have contents := physical.keeper
+      change (observe reached).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode at named
       rw [named, Option.map_some] at contents
       apply Option.some.inj (contents.trans ?_)
       exact plan.layout.visible.symm.trans (exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm))
