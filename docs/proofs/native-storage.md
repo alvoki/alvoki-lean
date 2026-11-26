@@ -391,6 +391,17 @@ Build the argument with the following boundaries.
    observations and all allowed durable histories. A compound success scenario becomes a corollary
    of the same induction. [Ledger and replay](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean#L888) · [Snapshot refinement](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
 
+The first observed acknowledgement can start from the fresh open's returned cache
+and established storage. For the early checkpoint, terminal refinement can use a
+ledger from those raw acknowledgements. The same reached source stop and its
+protected storage also yield the chosen reboot observation. One bounded aligned
+interpreter follows a finalized MANIFEST stat rejection and opens at its actual
+cleanup heap with the same selected checkpoint and WAL bytes. This still takes
+the local reboot projection and aligned callback receipts. The first write,
+checkpoint and recovered snapshot remain to be joined in one source execution.
+[Fresh acknowledgement](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+· [Source checkpoint reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+
 Ordinary `IO.Error` and interruption must remain distinct even when they involve the same fsync.
 The first and final directory sync can also use the same path and descriptor with different
 publication consequences. Their stage must come from the reached continuation. Across an open

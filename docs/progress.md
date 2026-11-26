@@ -1,5 +1,21 @@
 # Current handoff
 
+The first acknowledged write now starts at the actual fresh open's returned heap,
+with the same directory, active and pending cache references. One source-write proof
+uses the observed return and local effects for both this fresh writer and a reopened
+writer. The first batch becomes the entire client history, with no earlier snapshot
+reads. A checkpoint terminal endpoint can consume the ledger from those raw calls.
+Its phase and protected storage remain tied to the same issued source stop.
+[First acknowledged write](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+· [Terminal checkpoint ledger](../lean/Alvoki/Storage/Disk/NativeEarlyCheckpointTerminal.lean)
+
+The same source stop can choose one admitted reboot and use its selected files to
+derive the bounded aligned layout. A held MANIFEST lookup fails, finalizes, and passes
+the same selected bytes to the aligned opener at its exact cleanup heap. The
+returned table preserves the pre-stop replay. The reboot descriptor and file-image
+projection and the local open effects remain explicit.
+[Source checkpoint reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+
 The fresh open exposes the literal cache references and proves the first write's
 physical entry at the returned heap. Acknowledged raw writes derive preparation and
 the byte-count check from the actual successful return. Their ledger can compose with

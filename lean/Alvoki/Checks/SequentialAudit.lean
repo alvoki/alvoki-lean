@@ -433,6 +433,7 @@ import Alvoki.Storage.Disk.NativeOpenedStoppedCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedEarlyCheckpointReport
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeCheckpointStopContinuation
+import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
@@ -2484,7 +2485,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.storageAtIssue
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reachedStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.terminalPrefix
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.refinesTerminalLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.observesReboot
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensQuietAfterManifestRejection
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedEarlyCheckpointReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedUncertainWriteReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkerPublicationStop.stopsOnOpenedPhase
@@ -2515,6 +2518,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.stopsAfterWrites
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.writeStorageEntry
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.acknowledgesFirstWrite
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCrash.kept
@@ -3885,6 +3889,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterPublishedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.afterAcknowledgedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesPublishedWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesObservedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.acknowledgesAndReadsAfterOldTarget
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.groupedRetryAndReads

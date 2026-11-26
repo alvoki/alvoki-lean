@@ -7,6 +7,7 @@ import Alvoki.Storage.Disk.NativeReadyWriteStorage
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication
+open WAL.Boundary (WalInodeImage)
 
 namespace NativeOpenedTrace
 
@@ -277,6 +278,67 @@ theorem writeStorageEntry {input : FilePath} {directory : DiskDirectory}
   refine ⟨cache, rfl, rfl, rfl, census, cacheAt, settled.1, settled.2, ?_⟩
   intro literal found
   exact settled.1.bindsOpenCacheDirectory view cacheAt (by rw [captured, slot]; rfl) sameObjects found
+
+/-- Start the first observed write at the actual returned heap of the
+fresh opener. Its local effects refer to the original cache references. -/
+theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
+    {image : Type} (view : OpenCloseHeapView heap image)
+    {directoryRef : IO.Ref (Option IO.FS.Handle)}
+    {activeRef : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pendingRef : IO.Ref (List (FilePath × IO.FS.Handle))}
+    (resolved : opened.handle.directory = directory)
+    (references : opened.handle.files.UsesCacheReferences activeRef pendingRef directoryRef)
+    (atDirectory : opened.handle.files.AtDirectory directory.path)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached directoryRef activeRef pendingRef = opened.start.current.ready.state.cache)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation)
+    (settled : let state := opened.start.current.ready.state
+      NativeReadyStorage state (observe opened.start.reached) ∧
+      ∀ inode, (observe opened.start.reached).files.names (state.session.directory.file
+        (.walSegment state.writer.wal.active.first)) = some inode →
+        (inodes opened.start.reached).visible inode = state.writer.wal.active.bytes)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {sequence : UInt64} {reached : heap}
+    (nonempty : request.rows ≠ [])
+    (seen : ∀ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path),
+      cache.directory = directoryRef → cache.active = activeRef → cache.pending = pendingRef →
+      opened.start.ObservesPublishedWrite appender stager syncer view cache inodes runs observe
+        inode buffered request lookup rename sequence reached) :
+    let handle := opened.handle
+    let start := opened.start
+    let dir := start.current.ready.state.session.directory
+    call entry = .ok handle.table start.reached ∧ handle.table.UsesOpenWriteSchedules dir handle.files handle.phase ∧
+    ∃ (cache : OpenSyncCacheRefs handle.files dir.path) (batch : List WAL.Write) (table : PackedTable)
+      (next : NativeOpenedPosition handle) (sameDirectory : next.current.ready.state.session.directory = dir),
+      cache.directory = directoryRef ∧ cache.active = activeRef ∧ cache.pending = pendingRef ∧
+      request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
+        (syncer.group dir.path cache.directory cache.active cache.pending)
+        rename handle.phase handle.get handle.set start.reached = .ok sequence reached ∧
+      sequence = table.committed ∧ prepareBatch start.current.ready.state.writer.installed.table request.rows =
+        some (batch, table) ∧ next.reached = reached ∧ next.pins = [] ∧
+      start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
+      next.current.history = batch ∧ next.current.submissions = [.acknowledgedBatch batch] ∧
+      next.current.ready.reads = [] ∧
+      next.WriteStorageEntry view
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
+        (observe next.reached) (inodes next.reached).visible := by
+  obtain ⟨cache, sameDir, sameActive, samePending, writeEntry⟩ :=
+    opened.writeStorageEntry used view resolved references atDirectory census cacheAt settled
+  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, ledger, physical⟩ :=
+    opened.start.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
+      request lookup rename nonempty writeEntry (seen cache sameDir sameActive samePending)
+  obtain ⟨history, submissions, reads, _⟩ := opened.refinesLedger ledger
+  refine ⟨opened.opened, schedule, cache, batch, table, next, sameDirectory, sameDir, sameActive, samePending, returned,
+    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, ?_, ?_, ?_, physical⟩
+  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using history
+  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.submissions] using submissions
+  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.reads] using reads
 
 /-- End at the checkpoint issued on the heap of the preceding returned
 call. Both the prior replay and the stop use the same opened position. -/

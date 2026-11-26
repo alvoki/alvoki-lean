@@ -346,4 +346,67 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
 
 end RawWrite
 
+/-- A particular observed success and the local laws of its callbacks.
+The storage view is a projection of the same observation at every heap. -/
+def NativeOpenedPosition.ObservesPublishedWrite
+    {heap image : Type} {opened : NativeOpenedHandle heap} (start : NativeOpenedPosition opened)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (view : OpenCloseHeapView heap image)
+    (cache : OpenSyncCacheRefs opened.files start.current.ready.state.session.directory.path)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) (sequence : UInt64) (reached : heap) : Prop :=
+  let dir := start.current.ready.state.session.directory
+  ∃ files : ∀ atHeap, RunDirectoryInodeView dir (inodes atHeap) (runs atHeap),
+    (∀ atHeap, (files atHeap).storageObservation = observe atHeap) ∧
+    request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
+      (syncer.group dir.path cache.directory cache.active cache.pending)
+      rename opened.phase opened.get opened.set start.reached = .ok sequence reached ∧
+    (∀ {batch table}, prepareBatch start.current.ready.state.writer.installed.table request.rows = some (batch, table) →
+      start.PublishedWriteEffects appender stager syncer view cache inodes runs files
+        inode buffered request lookup rename batch)
+
+/-- Interpret the successful source return from the shared physical
+observation. The next writer uses that same observation and cache. -/
+theorem NativeOpenedPosition.acknowledgesObservedWrite
+    {heap image : Type} {opened : NativeOpenedHandle heap} (start : NativeOpenedPosition opened)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (view : OpenCloseHeapView heap image)
+    (cache : OpenSyncCacheRefs opened.files start.current.ready.state.session.directory.path)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {sequence : UInt64} {reached : heap}
+    (nonempty : request.rows ≠ [])
+    (entry : start.WriteStorageEntry view cache (observe start.reached) (inodes start.reached).visible)
+    (seen : start.ObservesPublishedWrite appender stager syncer view cache inodes runs observe
+      inode buffered request lookup rename sequence reached) :
+    let directory := start.current.ready.state.session.directory
+    opened.table.UsesOpenWriteSchedules directory opened.files opened.phase ∧
+    request.runOnRawOpenPhase directory lookup (appender.run cache.active) (stager.run cache.pending)
+      (syncer.group directory.path cache.directory cache.active cache.pending)
+      rename opened.phase opened.get opened.set start.reached = .ok sequence reached ∧
+    ∃ (batch : List WAL.Write) (table : PackedTable) (next : NativeOpenedPosition opened)
+      (sameDirectory : next.current.ready.state.session.directory = directory),
+      prepareBatch start.current.ready.state.writer.installed.table request.rows = some (batch, table) ∧
+      sequence = table.committed ∧ next.reached = reached ∧ next.pins = start.pins ∧
+      start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
+      next.WriteStorageEntry view
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
+        (observe next.reached) (inodes next.reached).visible := by
+  obtain ⟨files, sameStorage, returned, effects⟩ := seen
+  have atWrite : start.WriteStorageEntry view cache
+      (files start.reached).storageObservation (inodes start.reached).visible := by
+    rw [sameStorage start.reached]
+    exact entry
+  obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, physical⟩ :=
+    start.acknowledgesPublishedWrite appender stager syncer view cache inodes runs files inode buffered
+      request lookup rename nonempty returned atWrite effects
+  refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, ?_⟩
+  rwa [← sameStorage next.reached]
+
 end Alvoki.Storage.DiskSession

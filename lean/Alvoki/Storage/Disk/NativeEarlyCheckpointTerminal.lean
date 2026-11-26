@@ -34,8 +34,19 @@ variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpene
   {stage : CheckpointPublication.Step} {reason : FilePath} {reached : CheckpointWorld heap}
   (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
 
-/-- Use the full interpreted checkpoint call and its reached protected
-storage as the terminal endpoint of the same finite replay. -/
+/-- The exact source stop is a terminal endpoint on the current writer. -/
+def terminalEnd {storage : heap → CheckpointStorageObservation}
+    (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
+    (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
+    (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
+      (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+        fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
+      opened.contents after.2 opened.phase = opened.contents before.2 opened.phase)
+    (stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase) :
+    NativeExecutionEnd current.current :=
+  .stoppedEarlyCheckpoint rfl stop early (stop.phaseAtStop returnedKeeps stoppedKeeps) stable
+
+/-- Use the same terminal endpoint for a modeled finite prefix. -/
 def terminalPrefix {storage : heap → CheckpointStorageObservation}
     (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
     (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
@@ -47,8 +58,27 @@ def terminalPrefix {storage : heap → CheckpointStorageObservation}
     (ordered : NativeExecutionInstructions instructions events)
     (prior : NativeExecutionTrace start events current.current) :
     NativeReachedExecutionPrefix start instructions .checkpoint :=
-  let ending := NativeExecutionEnd.stoppedEarlyCheckpoint rfl stop early (stop.phaseAtStop returnedKeeps stoppedKeeps) stable
+  let ending := stop.terminalEnd early stable returnedKeeps stoppedKeeps
   ⟨events, current.current, ending, ordered, prior, rfl, ending.reached⟩
+
+/-- The reached source endpoint also refines a ledger proved directly
+from raw acknowledgements and reads. -/
+theorem refinesTerminalLedger {storage : heap → CheckpointStorageObservation}
+    {start : NativeExecutionPosition} {events : List NativeExecutionEvent}
+    (early : stage = .syncRunsDirectory ∨ ∃ index, stage = .syncRun index)
+    (stable : NativeReadyStorage current.current.ready.state (storage reached.2))
+    (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
+      (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+        fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
+      opened.contents after.2 opened.phase = opened.contents before.2 opened.phase)
+    (stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase)
+    (prior : start.LedgerSuffix events current.current) :
+    let ending := stop.terminalEnd early stable returnedKeeps stoppedKeeps
+    (∀ event ∈ events, event.uncertainBatchWhole) ∧ ending.Reached ∧
+    ∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions current.current.ready.reads chosen ∧
+      ∀ read ∈ current.current.ready.reads, read.BoundedBy chosen.length := by
+  intro ending
+  exact ⟨prior.whole, ending.reached, ending.selectsAtEnd⟩
 
 end NativeCheckpointSourceStop
 end Alvoki.Storage.DiskSession

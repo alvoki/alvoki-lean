@@ -76,7 +76,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
       start.current.history = current.current.history →
       start.WriteStorageEntry view nextCache (storage start.reached) (visible start.reached) →
       start.ObservesPublishedWrite appender stager syncer view nextCache inodes runs storage
-        inode buffered nextRequest lookup rename nextSequence writeHeap) :
+        inode buffered nextRequest lookup rename nextSequence writeHeap ∧ handle.ObservesSnapshotToken writeHeap) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     source.FailedCalls rebooted returns reached ∧ returns ≠ [] ∧
     ∃ batch table guarded poisoned,
