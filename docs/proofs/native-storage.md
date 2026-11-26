@@ -209,6 +209,15 @@ actual new handle and ledger in place of those callback details. [Proof techniqu
 | Internal and discharged | An executable guard establishes the phase or preparation result, a particular step preserves a world invariant, and an admitted reader plus actual effects establish its installation. Cite the producing theorem when passing such a fact to a consumer. |
 | Internal and open | Justify each `Reports` producer from the ordered production input and effects. Establish admission coverage and scope for exact first and later returns, errors and stops. A local healthy dispatch report establishes a selected route only. |
 
+For the same-directory rename of `WAL.next` onto the keeper, the crash
+contract allows one prior managed-name map or that map with the whole rename
+applied. In the latter case the canonical name binds the staged inode, its
+bytes are the synced prefix, and the scratch name is absent in that same
+map. A returned error can occur on either side of the live rename effect.
+Atomic recovery of both names across power loss is a filesystem assumption.
+The native fault tests observe live syscall effects and process reopens.
+[Keeper rename contract and error proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperRenameError.lean)
+
 Availability of a healthy attempt and sufficient resources belong to progress claims. The current
 native assumptions and the recorded runtime limitations are in the roadmap. Fixture observations
 support those assumptions on exercised Linux runs. [Filesystem contract](../proof-roadmap.md#filesystem-assumptions-and-detailed-proof-targets) · [Native bindings](../../lean/native)

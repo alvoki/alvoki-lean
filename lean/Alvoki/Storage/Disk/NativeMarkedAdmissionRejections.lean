@@ -4,7 +4,7 @@ import Alvoki.Storage.Disk.NativeContendedAliasAdmission
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair
+open System SyncHandleRouting WalSegmentRepair
 
 variable {heap stream : Type} {view : OpenCloseHeapView heap FileImage}
   {input : FilePath} {entry : heap} {directory : DiskDirectory}
@@ -43,6 +43,108 @@ theorem RawBeforeFlockRejection.returnsMarkedInterpreter (source : RawMarkedOpen
     source.openTable input entry = .error seen.cause seen.reached ∧
     RawOpenPrefixReturn source.calls input entry (.error seen.cause seen.reached) :=
   source.returnsBeforeFlock seen.failed
+
+private theorem reachedState_bindWithoutEffects {α β : Type}
+    (first : EStateM IO.Error heap α) (next : α → EStateM IO.Error heap β)
+    (keeps : ∀ value reached, reachedState (next value reached) = reached) :
+    reachedState ((first >>= next) entry) = reachedState (first entry) := by
+  cases ran : first entry with
+  | error => simp only [Bind.bind, EStateM.bind, ran, reachedState]
+  | ok value reached =>
+    simpa only [Bind.bind, EStateM.bind, ran, reachedState] using keeps value reached
+
+private theorem openWith_reachedState (realPath : FilePath → EStateM IO.Error heap FilePath) :
+    reachedState (DiskDirectory.openWith realPath input entry) = reachedState (realPath input entry) := by
+  unfold DiskDirectory.openWith
+  apply reachedState_bindWithoutEffects
+  intro path reached
+  split <;> rfl
+
+private theorem optionalMetadata_reachedState
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) :
+    reachedState (optionalMetadataWith lookup entry) = reachedState (lookup entry) := by
+  unfold optionalMetadataWith
+  apply reachedState_bindWithoutEffects
+  intro result reached
+  cases result with
+  | ok => rfl
+  | error cause =>
+    cases cause <;> try rfl
+    rename_i name code message
+    by_cases missing : code = 2
+    · subst code
+      rfl
+    · simp [missing, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState]
+
+private theorem rejectFlatWal_reachedState
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) :
+    reachedState (rejectFlatWalWith directory (optionalMetadataWith lookup) entry) = reachedState (lookup entry) := by
+  rw [← optionalMetadata_reachedState lookup]
+  unfold rejectFlatWalWith
+  apply reachedState_bindWithoutEffects
+  intro metadata reached
+  split <;> rfl
+
+private theorem checkLock_reachedState (calls : RawOpenAdmissionCallbacks heap) :
+    reachedState (calls.checkLock directory entry) = reachedState (calls.lookup (directory.file .lock) entry) := by
+  rw [← optionalMetadata_reachedState (calls.lookup (directory.file .lock))]
+  unfold RawOpenAdmissionCallbacks.checkLock
+  apply reachedState_bindWithoutEffects
+  intro metadata reached
+  cases metadata with
+  | none => rfl
+  | some stat =>
+    dsimp only
+    unfold checkPrivateRegularWith
+    split <;> rfl
+
+/-- Local frames for the actual calls of a pre-flock failure. Only
+the reached append error can need a separate non-read-only law. -/
+structure RawOpenAdmissionCallbacks.BeforeFlockErrorFrames
+    (calls : RawOpenAdmissionCallbacks heap) (input : FilePath) (entry : heap) (cause : IO.Error) (reached : heap)
+    (frame : heap → heap → Prop) : Prop where
+  realPath : frame entry (reachedState (calls.realPath input entry))
+  lookup : ∀ path atHeap, frame atHeap (reachedState (calls.lookup path atHeap))
+  appendError : ∀ {resolvedDirectory afterResolve afterFlat afterGuard},
+    DiskDirectory.openWith calls.realPath input entry = .ok resolvedDirectory afterResolve →
+    rejectFlatWalWith resolvedDirectory (optionalMetadataWith (calls.lookup (resolvedDirectory.file .wal)))
+      afterResolve = .ok () afterFlat →
+    calls.checkLock resolvedDirectory afterFlat = .ok () afterGuard →
+    calls.openAppend (resolvedDirectory.file .lock) afterGuard = .error cause reached →
+    frame afterGuard reached
+
+/-- The returned pre-flock failure frames the projection through only
+the reached path and metadata calls. A failed append by itself carries
+no guarantee about the returned descriptor or name projections. -/
+theorem RawOpenPrefixReturn.framesRejected {calls : RawOpenAdmissionCallbacks heap}
+    {cause : IO.Error} {reached : heap} (rejected : RawOpenPrefixReturn calls input entry (.error cause reached))
+    {frame : heap → heap → Prop}
+    (trans : ∀ {before intermediate after}, frame before intermediate → frame intermediate after → frame before after)
+    (effects : calls.BeforeFlockErrorFrames input entry cause reached frame) :
+    frame entry reached := by
+  have resolvedFrame : frame entry (reachedState (DiskDirectory.openWith calls.realPath input entry)) := by
+    rw [openWith_reachedState]; exact effects.realPath
+  have flatFrame (resolvedDirectory : DiskDirectory) (afterResolve : heap) :
+      frame afterResolve (reachedState (rejectFlatWalWith resolvedDirectory
+        (optionalMetadataWith (calls.lookup (resolvedDirectory.file .wal))) afterResolve)) := by
+    rw [rejectFlatWal_reachedState]; exact effects.lookup (resolvedDirectory.file .wal) afterResolve
+  have lockFrame (resolvedDirectory : DiskDirectory) (afterFlat : heap) :
+      frame afterFlat (reachedState (calls.checkLock resolvedDirectory afterFlat)) := by
+    rw [checkLock_reachedState]; exact effects.lookup (resolvedDirectory.file .lock) afterFlat
+  cases rejected with
+  | resolveError resolved => simpa only [resolved, reachedState] using resolvedFrame
+  | @flatError resolvedDirectory afterResolve _ _ resolved flat =>
+    exact trans (by simpa only [resolved, reachedState] using resolvedFrame)
+      (by simpa only [flat, reachedState] using flatFrame resolvedDirectory afterResolve)
+  | @lockGuardError resolvedDirectory afterResolve afterFlat _ _ resolved flat checked =>
+    exact trans (by simpa only [resolved, reachedState] using resolvedFrame)
+      (trans (by simpa only [flat, reachedState] using flatFrame resolvedDirectory afterResolve)
+        (by simpa only [checked, reachedState] using lockFrame resolvedDirectory afterFlat))
+  | @appendError resolvedDirectory afterResolve afterFlat afterGuard _ _ resolved flat checked appended =>
+    exact trans (by simpa only [resolved, reachedState] using resolvedFrame)
+      (trans (by simpa only [flat, reachedState] using flatFrame resolvedDirectory afterResolve)
+        (trans (by simpa only [checked, reachedState] using lockFrame resolvedDirectory afterFlat)
+          (effects.appendError resolved flat checked appended)))
 
 /-- A flock error on the actual append handle bypasses the held worker.
 The error reaches the caller after the interpreter releases that handle. -/

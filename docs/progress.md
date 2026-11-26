@@ -12,7 +12,21 @@ both directions of membership for the observed suffix. The fold carries the sele
 facts needed by the next open. Descriptor identity is checked at the
 operations that need it. The fold itself no longer requires equality of
 the entire description-to-inode map across a failed call. The failed-call
-prefix still requires evidence for the effects of each reached repair.
+prefix still requires evidence for the effects of each reached repair. An
+open rejected before `flock` can now extend that fold directly from
+the reached resolver, path and lock checks. If the append-open of
+`LOCK` itself fails, its own local effect is required.
+
+A reported keeper-rename error now yields the exact bounded-finisher
+error and the selected live inode under the local rename contract. If
+the move reached the filesystem, a crash map that selects the new inode
+also selects its synced prefix and the absence of `WAL.next`. When
+the later directory fsync reports an error, the accepted unlink loop
+and the name observations through cleanup justify the live WAL catalog
+needed by the next attempt. The rename-error step still needs to enter
+that same failed-open fold.
+[Rename effect](../lean/Alvoki/Storage/Disk/NativeLongKeeperRenameError.lean) ·
+[Failed repair and catalog](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 When the selected keeper already has the committed length, the same
 literal-open proof now returns a usable table for an empty or nonempty

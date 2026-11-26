@@ -346,6 +346,7 @@ import Alvoki.Storage.Disk.NativeMarkedEntryObservations
 import Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
 import Alvoki.Storage.Disk.NativeMarkedAdmissionRejections
 import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
+import Alvoki.Storage.Disk.NativeLongKeeperRenameError
 import Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncObservation
@@ -4068,6 +4069,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.returnsFixedInterpreterOfRun
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.returnsFixedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.returnsBeforeFlock
+#check_axioms Alvoki.Storage.DiskSession.RawOpenPrefixReturn.framesRejected
 #check_axioms Alvoki.Storage.DiskSession.RawBeforeFlockRejection.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawFlockRejection.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawContendedAliasOpen.returnsMarkedInterpreter
@@ -4078,7 +4080,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesWriteRetry
 #check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Frames.visiblePayload
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.keepsVisibleKeeper
-#check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.keepsObservedKeeper
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.keepsCatalogAfterPruning
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.opensWithSelectedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensAfterWriteRetries
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsGroupErrorRetry
@@ -4140,6 +4142,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterAlignedBarriers
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSettlementHeap.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.afterKeeperReplacement
+#check_axioms Alvoki.Storage.DiskSession.WalKeeperRenameEffect.framesRetry
+#check_axioms Alvoki.Storage.DiskSession.WalKeeperRenameEffect.walNames
+#check_axioms Alvoki.Storage.DiskSession.WalKeeperRenameEffect.keeperSurvivors
+#check_axioms Alvoki.Storage.DiskSession.failedLongKeeperRename
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
 #check_axioms Alvoki.Storage.DiskSession.filesAndFrameOfReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.LiteralKeeperReplacementEffects.readyAfterReturn
@@ -4162,6 +4168,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preservesDurability
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.framesAfter
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnlyWithDurability
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.beforeFlock
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.worker_reachesMarkedGuards
 #check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.openWithLock_reachedSuccess

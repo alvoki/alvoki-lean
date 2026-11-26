@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.NativeMarkedAdmissionRejections
 import Alvoki.Storage.Disk.NativeRawWriteReboot
 import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 
@@ -165,6 +166,83 @@ theorem RawMarkedOpenInterpreter.FailedCalls.carriesCheckpointReset
 
 
 end CheckpointRetry
+
+section BeforeFlockRetry
+
+variable {stream : Type} {source : RawMarkedOpenInterpreter heap stream} {target : Target}
+  {first entry reached : heap} {earlier : List (FilePath × IO.Error)}
+  {prior : source.FailedCalls first earlier entry}
+  {input : FilePath} {cause : IO.Error} {firstOffset through : Nat}
+
+private abbrev retryLiveFiles (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (atHeap : heap) : CheckpointSurvivingFiles :=
+  ⟨(storage atHeap).files.names, fun inode => [visible atHeap inode]⟩
+
+private abbrev retryObservations (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (target : Target) (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (firstOffset through : Nat) (atHeap : heap) : Prop :=
+  let names := fun atHeap => (storage atHeap).files.names
+  let directory := state.session.directory
+  state.writer.wal.NamespaceWindow directory firstOffset through (names atHeap) ∧
+  RawOpenRetryTrace.KeeperAt view directory target names visible atHeap ∧
+  state.SelectedRetryDurability target (storage atHeap) ∧
+  RawOpenRetryTrace.LaterWalAt view directory target names atHeap
+
+/-- Local read-only projections at the callbacks reached by an open
+before flock. The extra WAL paths include absent names and the live
+keeper, whose uncommitted tail does not have to be durable. -/
+structure RawOpenRetryTrace.BeforeFlockFrame (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (before after : heap) : Prop where
+  image : (view.files after).image = (view.files before).image
+  live : (retryLiveFiles storage visible before).Frames
+    (fun path => state.selectedRetryPath path ∨ ∃ start, path = state.session.directory.file (.walSegment start))
+    (retryLiveFiles storage visible after)
+  durable : (storage before).Frames state.selectedRetryPath (storage after)
+
+private theorem RawOpenRetryTrace.BeforeFlockFrame.trans {before middle after : heap}
+    (left : RawOpenRetryTrace.BeforeFlockFrame view state storage visible before middle)
+    (right : RawOpenRetryTrace.BeforeFlockFrame view state storage visible middle after) :
+    RawOpenRetryTrace.BeforeFlockFrame view state storage visible before after :=
+  ⟨right.image.trans left.image, left.live.trans right.live, left.durable.trans right.durable⟩
+
+/-- Add the literal path/metadata rejection before any next retry. The
+actual pre-flock outcome determines the public diagnostic and reached
+heap. When an append is reached, its error must supply its own frame. -/
+theorem RawOpenRetryTrace.SelectedEffects.beforeFlock
+    (before : RawOpenRetryTrace.SelectedEffects view source first target (retryLiveFiles storage visible)
+      state.selectedRetryPath (retryObservations view state target storage visible firstOffset through) prior)
+    (failed : source.calls.beforeFlock input entry = .error cause reached)
+    (effects : source.calls.BeforeFlockErrorFrames input entry cause reached
+      (RawOpenRetryTrace.BeforeFlockFrame view state storage visible)) :
+    ∃ returned : source.openTable input entry = .error cause reached,
+      RawOpenRetryTrace.SelectedEffects view source first target (retryLiveFiles storage visible)
+        state.selectedRetryPath (retryObservations view state target storage visible firstOffset through)
+        (prior.next input returned) := by
+  obtain ⟨returned, rejected⟩ := source.returnsBeforeFlock failed
+  have framed := rejected.framesRejected RawOpenRetryTrace.BeforeFlockFrame.trans effects
+  refine ⟨returned, .append (calls := .next .empty input returned) before (.inl framed.image)
+    (fun path selected => framed.live path (.inl selected)) ?_⟩
+  intro carried
+  let directory := state.session.directory
+  have canonical (start : Nat) :
+      (storage reached).files.names (directory.file (.walSegment start)) =
+        (storage entry).files.names (directory.file (.walSegment start)) :=
+    (framed.live _ (.inr ⟨start, rfl⟩)).1
+  have keeperFrame := CheckpointSurvivingFiles.Frames.visiblePayload
+    (names := fun atHeap => (storage atHeap).files.names) (bytes := visible) framed.live
+    (path := directory.file (.walSegment target.first)) (.inr ⟨target.first, rfl⟩)
+  have keeper := carried.2.1
+  unfold RawOpenRetryTrace.KeeperAt at keeper
+  refine ⟨carried.1.frame (fun start _ _ => congrArg Option.isSome (canonical start)), ?_,
+    carried.2.2.1.frame framed.durable.visible
+      (framed.durable.weaken (fun path root => .inr (.inl root))),
+    carried.2.2.2.frame (congrArg (fun image : FileImage => image.later.visible) framed.image)
+      (fun start _ => canonical start)⟩
+  unfold RawOpenRetryTrace.KeeperAt
+  rw [framed.image, keeper, keeperFrame]
+
+end BeforeFlockRetry
 
 /-- A read-only failed block and a failed repair both extend the retry
 prefix. The read-only block frames the keeper that it entered with. -/
