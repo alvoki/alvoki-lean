@@ -160,6 +160,11 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   checkpoint fsync stop therefore establishes coverage of its preceding
   same-handle calls. Recovery after an uncertain write still needs the durable
   marker and the file sample selected at reboot.
+  A confirmed or uncertain write likewise establishes that its preceding calls
+  ran on the ready handle. If the final write failed in the keeper/marker file
+  sync group, this prefix joins the sampled reboot and the last failed reopen
+  on one client ledger. The group effect, reboot sample and retry frames are
+  still local inputs. [Terminal failed reopen](../lean/Alvoki/Storage/Disk/NativeFailedOpenTerminal.lean)
   [Ready-call induction](../lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean)
 
   A first acknowledged write on the fresh table carries the WAL namespace

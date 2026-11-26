@@ -4060,6 +4060,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.splitAppend
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyBeforeWrite
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readyCallStorage
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCall.Reaches.writeNotPoisoned
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteCalls.commitUnknownHasRows
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.readyResponsesOfNotPoisoned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteCalls.commitUnknownPoisons
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyFramed
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCallsFramed

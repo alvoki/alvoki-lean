@@ -92,6 +92,26 @@ theorem Reaches.heapOfPoisoned {call : NativeReturnedCall opened}
       Phase.installed, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at read
     exact atError read
 
+/-- A write that reaches success or reports uncertainty cannot have
+entered the phase guard with the handle poisoned. -/
+theorem Reaches.writeNotPoisoned
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {pins : List DiskSnapshotPin} {entry reached : heap}
+    {request : WriteRequest} {response : Except DiskWriteError UInt64}
+    (returned : (NativeReturnedCall.write request response).Reaches writes issuer pins entry reached)
+    (nonRejected : ∀ cause, response ≠ .error (.rejected cause)) :
+    opened.contents entry opened.phase ≠ some .poisoned := by
+  intro stored
+  have loaded := opened.phaseEffects.reads entry opened.phase .poisoned stored
+  simp only [Reaches] at returned
+  rw [request.runOnRawOpenPhase_rejectsPhase _ _ _ _ _ _ _ _ _ loaded rfl] at returned
+  cases response with
+  | ok => cases returned
+  | error failure =>
+    cases failure with
+    | rejected cause => exact nonRejected cause rfl
+    | commitUnknown => cases returned
+
 end NativeReturnedCall
 
 /-- A returned preflight records the response on the same model table and

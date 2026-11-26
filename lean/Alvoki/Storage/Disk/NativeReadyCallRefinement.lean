@@ -266,6 +266,31 @@ private theorem NativeReadyWriteCalls.rejectedAtGuard (writes : NativeReadyWrite
       obtain ⟨_, restores, _⟩ := opened.phaseEffects.writes settled opened.phase .poisoned (.ready next) atReadySetter
       simp [guard, excludes, publication, restores] at returned
 
+/-- An empty request on the ready phase returns before publication. -/
+theorem NativeReadyWriteCalls.commitUnknownHasRows (writes : NativeReadyWriteCalls opened)
+    (start : NativeOpenedPosition opened) {issuer : opened.LatestIssuer} {pins : List DiskSnapshotPin}
+    {request : WriteRequest} {cause : IO.Error} {reached : heap}
+    (observed : (NativeReturnedCall.write request (.error (.commitUnknown cause))).Reaches
+      writes issuer pins start.reached reached) :
+    request.rows ≠ [] := by
+  intro empty
+  let state := start.current.ready.state
+  let root := opened.directory
+  let append := writes.appender.run writes.cache.active
+  let stage := writes.stager.run writes.cache.pending
+  let sync := writes.syncer.group root.path writes.cache.directory writes.cache.active writes.cache.pending
+  have valid := start.current.ready.readPrefix.refines.1
+  have stored := start.stored.trans (congrArg some valid.phase)
+  have loaded := opened.phaseEffects.reads start.reached opened.phase (.ready state.writer.installed) stored
+  let seen : NativeWritePreflightObservation state request :=
+    ⟨fun path => (nativeWriteLookupAt writes.lookup start.reached path).1, .ok state.writer.installed.table.committed,
+      .empty empty⟩
+  obtain ⟨_, _, quiet⟩ := request.runOnRawOpenPhase_preflight root writes.lookup append stage sync writes.rename
+    opened.phase opened.get opened.set valid seen loaded start.directory rfl
+  have returned : request.runOnRawOpenPhase root writes.lookup append stage sync writes.rename
+      opened.phase opened.get opened.set start.reached = .error (.commitUnknown cause) reached := observed
+  cases quiet.symm.trans returned
+
 /-- An uncertain public return keeps the phase poisoned. Its publication
 prefix uses the same phase frame as a returned successful commit. -/
 theorem NativeReadyWriteCalls.commitUnknownPoisons (writes : NativeReadyWriteCalls opened)
@@ -274,24 +299,16 @@ theorem NativeReadyWriteCalls.commitUnknownPoisons (writes : NativeReadyWriteCal
     (observed : (NativeReturnedCall.write request (.error (.commitUnknown cause))).Reaches
       writes issuer pins start.reached reached) (frames : writes.WritePhaseFrames) :
     opened.contents reached opened.phase = some .poisoned := by
-  let state := start.current.ready.state
-  let installed := state.writer.installed
+  let installed := start.current.ready.state.writer.installed
   let root := opened.directory
   let append := writes.appender.run writes.cache.active
   let stage := writes.stager.run writes.cache.pending
   let sync := writes.syncer.group root.path writes.cache.directory writes.cache.active writes.cache.pending
-  have valid := start.current.ready.readPrefix.refines.1
-  have stored := start.stored.trans (congrArg some valid.phase)
+  have stored := start.stored.trans (congrArg some start.current.ready.readPrefix.refines.1.phase)
   have loaded := opened.phaseEffects.reads start.reached opened.phase (.ready installed) stored
   have returned : request.runOnRawOpenPhase root writes.lookup append stage sync writes.rename
       opened.phase opened.get opened.set start.reached = .error (.commitUnknown cause) reached := observed
-  have nonempty : request.rows ≠ [] := by
-    intro empty
-    let seen : NativeWritePreflightObservation state request :=
-      ⟨fun path => (nativeWriteLookupAt writes.lookup start.reached path).1, .ok installed.table.committed, .empty empty⟩
-    obtain ⟨_, _, quiet⟩ := request.runOnRawOpenPhase_preflight root writes.lookup append stage sync writes.rename
-      opened.phase opened.get opened.set valid seen loaded start.directory rfl
-    cases quiet.symm.trans returned
+  have nonempty := writes.commitUnknownHasRows start observed
   obtain ⟨batch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared root writes.lookup append stage sync
     writes.rename opened.phase opened.get opened.set loaded nonempty (by rw [returned]; trivial)
   obtain ⟨guarded, poisoned, accepted, excluded, failed, _⟩ := request.runOnRawOpenPhase_commitUnknown root
@@ -659,16 +676,68 @@ theorem NativeReturnedCalls.refinesReady
     executed.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
   exact ⟨last, events, reached, pins, physical, length, records, ledger⟩
 
-/-- A supported ready prefix and its next observed write share the
-same handle, pin list and intermediate heap. The request row budget
-bounds the WAL window independently of the write's response. -/
+/-- Locate the first uncertain return using only public responses. -/
+private theorem readyOrFirstUnknown {heap : Type} {opened : NativeOpenedHandle heap}
+    (calls : List (NativeReturnedCall opened)) :
+    NativeReturnedCalls.ReadyResponses calls ∨
+      ∃ prior request cause later, calls = prior ++ .write request (.error (.commitUnknown cause)) :: later ∧
+        NativeReturnedCalls.ReadyResponses prior := by
+  induction calls with
+  | nil => exact .inl (by simp [NativeReturnedCalls.ReadyResponses])
+  | cons call rest ih =>
+    by_cases first : call.ReadyResponse
+    · rcases ih with tail | ⟨prior, request, cause, later, rfl, prefixReady⟩
+      · exact .inl (by simpa [NativeReturnedCalls.ReadyResponses] using And.intro first tail)
+      · exact .inr ⟨call :: prior, request, cause, later, rfl,
+          by simpa [NativeReturnedCalls.ReadyResponses] using And.intro first prefixReady⟩
+    · cases call with
+      | acquire result => exact (first trivial).elim
+      | read pin request result => exact (first trivial).elim
+      | write request result =>
+        cases result with
+        | ok => exact (first trivial).elim
+        | error failure =>
+          cases failure with
+          | rejected => exact (first trivial).elim
+          | commitUnknown cause =>
+            exact .inr ⟨[], request, cause, rest, rfl, by simp [NativeReturnedCalls.ReadyResponses]⟩
+
+/-- A returned sequence that ends outside the poisoned phase contains
+no earlier commit-unknown response on that same handle. -/
+theorem NativeReturnedCalls.readyResponsesOfNotPoisoned
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {entry reached : heap} {known : List DiskSnapshotPin} {calls : List (NativeReturnedCall opened)}
+    (executed : NativeReturnedCalls writes issuer entry known calls reached)
+    (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
+    (buffered : heap → IO.FS.Handle → ByteArray)
+    (effects : writes.ReturnEffects view inodes runs storage inode buffered)
+    (start : NativeOpenedPosition opened) (sameEntry : start.reached = entry)
+    (samePins : start.pins.map NativeOpenedPin.raw = known)
+    (initial : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) start)
+    (notPoisoned : opened.contents reached opened.phase ≠ some .poisoned) :
+    NativeReturnedCalls.ReadyResponses calls := by
+  obtain covered | ⟨prior, request, cause, later, rfl, prefixReady⟩ := readyOrFirstUnknown calls
+  · exact covered
+  obtain ⟨middle, ran, remaining⟩ := executed.splitAppend
+  obtain ⟨position, _, atMiddle, _, _, _⟩ := ran.refinesReady prefixReady view inodes runs
+    storage inode buffered effects start sameEntry samePins initial
+  cases remaining with
+  | cons unknown suffix =>
+    have poisoned := writes.commitUnknownPoisons position (atMiddle.symm ▸ unknown) effects.writePhase
+    exact (notPoisoned (suffix.fromPoisoned poisoned).2).elim
+
+/-- The next write shares the prefix's handle, pins and actual heap.
+A confirmed or uncertain return proves the prefix ran in one ready
+epoch. A rejected return needs separate prefix coverage because the
+poisoned-phase guard can reject it. -/
 theorem NativeReturnedCalls.refinesReadyBeforeWrite
     {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
     {entry reached : heap} {known : List DiskSnapshotPin} {prefixCalls : List (NativeReturnedCall opened)}
     {request : WriteRequest} {response : Except DiskWriteError UInt64}
     (executed : NativeReturnedCalls writes issuer entry known
       (prefixCalls ++ [.write request response]) reached)
-    (covered : NativeReturnedCalls.ReadyResponses prefixCalls)
+    (coveredIfRejected : ∀ cause, response = .error (.rejected cause) → NativeReturnedCalls.ReadyResponses prefixCalls)
     (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
     (buffered : heap → IO.FS.Handle → ByteArray)
@@ -691,13 +760,19 @@ theorem NativeReturnedCalls.refinesReadyBeforeWrite
       (NativeReturnedCall.write request response).Reaches
         writes issuer (last.pins.map NativeOpenedPin.raw) last.reached reached := by
   obtain ⟨middle, ran, pending⟩ := executed.splitAppend
-  obtain ⟨last, events, atMiddle, pins, physical, length, records, ledger, budget, frames⟩ :=
-    ran.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
-  refine ⟨last, events, atMiddle.symm ▸ ran, pins, physical, length, records, ledger,
-    (frames names window).restrictUpper (Nat.add_le_add_right budget _), ?_⟩
   cases pending with
   | cons returned tail =>
     cases tail
+    have covered : NativeReturnedCalls.ReadyResponses prefixCalls := by
+      by_cases rejected : ∃ cause, response = .error (.rejected cause)
+      · obtain ⟨cause, declared⟩ := rejected
+        exact coveredIfRejected cause declared
+      · exact ran.readyResponsesOfNotPoisoned view inodes runs storage inode buffered
+          effects start sameEntry samePins initial (returned.writeNotPoisoned (fun cause declared => rejected ⟨cause, declared⟩))
+    obtain ⟨last, events, atMiddle, pins, physical, length, records, ledger, budget, frames⟩ :=
+      ran.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
+    refine ⟨last, events, atMiddle.symm ▸ ran, pins, physical, length, records, ledger,
+      (frames names window).restrictUpper (Nat.add_le_add_right budget _), ?_⟩
     rw [atMiddle, pins]
     exact returned
 

@@ -7,32 +7,6 @@ namespace Alvoki.Storage.DiskSession
 open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 
-/-- Locate the first uncertain return using only public responses. -/
-private theorem readyOrFirstUnknown {heap : Type} {opened : NativeOpenedHandle heap}
-    (calls : List (NativeReturnedCall opened)) :
-    NativeReturnedCalls.ReadyResponses calls ∨
-      ∃ prior request cause later, calls = prior ++ .write request (.error (.commitUnknown cause)) :: later ∧
-        NativeReturnedCalls.ReadyResponses prior := by
-  induction calls with
-  | nil => exact .inl (by simp [NativeReturnedCalls.ReadyResponses])
-  | cons call rest ih =>
-    by_cases first : call.ReadyResponse
-    · rcases ih with tail | ⟨prior, request, cause, later, rfl, prefixReady⟩
-      · exact .inl (by simpa [NativeReturnedCalls.ReadyResponses] using And.intro first tail)
-      · exact .inr ⟨call :: prior, request, cause, later, rfl,
-          by simpa [NativeReturnedCalls.ReadyResponses] using And.intro first prefixReady⟩
-    · cases call with
-      | acquire result => exact (first trivial).elim
-      | read pin request result => exact (first trivial).elim
-      | write request result =>
-        cases result with
-        | ok => exact (first trivial).elim
-        | error failure =>
-          cases failure with
-          | rejected => exact (first trivial).elim
-          | commitUnknown cause =>
-            exact .inr ⟨[], request, cause, rest, rfl, by simp [NativeReturnedCalls.ReadyResponses]⟩
-
 /-- Follow a returned ready prefix with an interrupted checkpoint on
 the same public handle. The next call starts with the observed cache
 at that exact heap. The checkpoint schedule supplies the stop witness. -/
@@ -65,21 +39,15 @@ theorem NativeReturnedCalls.refinesReadyBeforeCheckpointStop
         start.WalWindowAt storage first (start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum) →
         last.WalWindowAt storage first last.current.history.length) ∧
       Nonempty (NativeCheckpointSourceStop last primitives fsync stage reason reached) := by
-  have covered : NativeReturnedCalls.ReadyResponses calls := by
-    obtain covered | ⟨prior, request, cause, later, rfl, prefixReady⟩ := readyOrFirstUnknown calls
-    · exact covered
-    obtain ⟨middle, ran, remaining⟩ := executed.splitAppend
-    obtain ⟨position, _, atMiddle, _, _, _⟩ := ran.refinesReady prefixReady view inodes runs
-      storage inode buffered effects start sameEntry samePins initial
-    cases remaining with
-    | cons unknown suffix =>
-      have poisoned := writes.commitUnknownPoisons position (atMiddle.symm ▸ unknown) effects.writePhase
-      have stored := (suffix.fromPoisoned poisoned).2
-      have refused := runCheckpointOnOpenPhaseUntilSyncStop_rejectsPhase opened.directory opened.phase
-        opened.get opened.set primitives fsync (cache := view.cacheAt checkpointEntry writes.cache.directory
-          writes.cache.active writes.cache.pending) (opened.phaseEffects.reads _ _ _ stored) .poisoned
-      rw [refused] at stopped
-      contradiction
+  have notPoisoned : opened.contents checkpointEntry opened.phase ≠ some .poisoned := by
+    intro stored
+    have refused := runCheckpointOnOpenPhaseUntilSyncStop_rejectsPhase opened.directory opened.phase
+      opened.get opened.set primitives fsync (cache := view.cacheAt checkpointEntry writes.cache.directory
+        writes.cache.active writes.cache.pending) (opened.phaseEffects.reads _ _ _ stored) .poisoned
+    rw [refused] at stopped
+    contradiction
+  have covered := executed.readyResponsesOfNotPoisoned view inodes runs storage inode buffered
+    effects start sameEntry samePins initial notPoisoned
   obtain ⟨last, events, atCheckpoint, pins, physical, length, records, ledger, budget, frames⟩ :=
     executed.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
   have cacheAt : view.cacheAt checkpointEntry writes.cache.directory writes.cache.active writes.cache.pending =
