@@ -192,7 +192,8 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
         (fun atHeap => (state).writer.wal.NamespaceWindow dir firstOffset
           (current.current.history ++ batch).length (storageNames atHeap) ∧
           RawOpenRetryTrace.KeeperAt view dir target storageNames visible atHeap ∧
-          (state).SelectedRetryDurability target (storage atHeap)) attempts)
+          (state).SelectedRetryDurability target (storage atHeap) ∧
+          RawOpenRetryTrace.LaterWalAt view dir target storageNames atHeap) attempts)
     (exactKeeper : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       (view.files reached).image.keeper.active = some target.trimmed)
@@ -252,7 +253,8 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
   have window := reboot.walNamespace nameFrame initialWindow settledWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical⟩ :=
     (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
-      covers selected window (reboot.startsDurableRetry reset selected).2 (retryEffects target admitted active)
+      covers selected window (reboot.startsDurableRetry reset selected).2
+      (reboot.laterNames active) (retryEffects target admitted active)
       admission namespaceView root rootBinding (openEffects target admitted active) (exactKeeper target admitted active) noLater
       phaseIdentity tokenIdentity phase ptrEq openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)

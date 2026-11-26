@@ -58,7 +58,8 @@ theorem NativeOpenedPosition.groupedRetryAndReads
         (fun atHeap => (state).writer.wal.NamespaceWindow dir firstOffset
           (current.current.history.length + request.rows.length) (names atHeap) ∧
           RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible atHeap ∧
-          (state).SelectedRetryDurability (state).writer.target (storage atHeap)) attempts)
+          (state).SelectedRetryDurability (state).writer.target (storage atHeap) ∧
+          RawOpenRetryTrace.LaterWalAt view dir (state).writer.target names atHeap) attempts)
     (admission : source.AlignedAdmissionEffects view state input reached storage visible)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (rootBinding : (names reached) (dir).path = some (namespaceView.modelObject root))
@@ -134,7 +135,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical⟩ :=
       (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
         covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
-        (by simpa only [upper] using retryEffects) admission namespaceView root rootBinding (effects prepared) exactKeeper noLater phaseIdentity tokenIdentity
+        (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects) admission namespaceView root rootBinding (effects prepared) exactKeeper noLater phaseIdentity tokenIdentity
         phase ptrEq openedTable
     have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by

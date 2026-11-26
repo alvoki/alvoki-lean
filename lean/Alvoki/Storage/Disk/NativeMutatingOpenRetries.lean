@@ -97,6 +97,104 @@ def RawOpenRetryTrace.KeeperAt (view : OpenCloseHeapView heap FileImage) (direct
     (target : Target) (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (atHeap : heap) : Prop :=
   (view.files atHeap).image.keeper.active = (names atHeap (directory.file (.walSegment target.first))).map (bytes atHeap)
 
+/-- The modeled suffix and the live canonical bindings agree at the
+same retry heap. The selected target supplies the marker cutoff. -/
+def RawOpenRetryTrace.LaterWalAt (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
+    (target : Target) (names : heap → FilePath → Option Nat) (atHeap : heap) : Prop :=
+  ∀ start, start ∈ (view.files atHeap).image.later.visible ↔
+    target.range.through < start ∧ ∃ inode, names atHeap (directory.file (.walSegment start)) = some inode
+
+theorem RawOpenRetryTrace.LaterWalAt.frame {target : Target} {names : heap → FilePath → Option Nat}
+    {before after : heap} (initial : LaterWalAt view directory target names before)
+    (image : (view.files after).image.later.visible = (view.files before).image.later.visible)
+    (binds : ∀ start, target.range.through < start →
+      names after (directory.file (.walSegment start)) = names before (directory.file (.walSegment start))) :
+    LaterWalAt view directory target names after := by
+  intro start
+  rw [image, initial start]
+  by_cases later : target.range.through < start
+  · rw [binds start later]
+  · simp only [later, false_and]
+
+/-- An unlink's realized effect removes one address from both
+representations. Other canonical names beyond the marker are framed. -/
+theorem RawOpenRetryTrace.LaterWalAt.unlinked {target : Target} {names : heap → FilePath → Option Nat}
+    {before after : heap} {ordinal : Nat} (initial : LaterWalAt view directory target names before)
+    (image : (view.files after).image.later.visible = ((view.files before).image.unlinkLater ordinal).later.visible)
+    (absent : names after (directory.file (.walSegment ordinal)) = none)
+    (binds : ∀ start, target.range.through < start → start ≠ ordinal →
+      names after (directory.file (.walSegment start)) = names before (directory.file (.walSegment start))) :
+    LaterWalAt view directory target names after := by
+  intro start
+  rw [image]
+  change start ∈ ((view.files before).image.later.visible.filter fun later => decide (later ≠ ordinal)) ↔ _
+  rw [List.mem_filter, decide_eq_true_eq, initial start]
+  by_cases same : start = ordinal
+  · subst start
+    simp [absent]
+  · by_cases later : target.range.through < start
+    · rw [binds start later same]
+      exact ⟨And.left, fun bound => ⟨bound, same⟩⟩
+    · simp only [later, false_and]
+
+/-- Carry suffix agreement across the actual completed unlink prefix.
+The local effect is stated at each reached remove, with the result
+accepted by the production guard. -/
+theorem RawOpenRetryTrace.LaterWalAt.afterAcceptedUnlinks {target : Target}
+    {names : heap → FilePath → Option Nat} {first last : heap}
+    (initial : LaterWalAt view directory target names first) (plan : Plan)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (unlink : ∀ {ordinal before after result}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) before = .ok result after →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      (view.files after).image.later.visible = ((view.files before).image.unlinkLater ordinal).later.visible ∧
+      names after (directory.file (.walSegment ordinal)) = none ∧
+      ∀ start, target.range.through < start → start ≠ ordinal →
+        names after (directory.file (.walSegment start)) = names before (directory.file (.walSegment start)))
+    (returned : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
+    LaterWalAt view directory target names last := by
+  exact foldReturnedWalUnlinks directory plan remove write sync rename
+    (fun (_ : Unit) atHeap => LaterWalAt view directory target names atHeap) (fun _ _ => ())
+    (initial := ()) initial (fun member called accepted earlier => by
+      obtain ⟨image, absent, bindings⟩ := unlink member called accepted
+      exact earlier.unlinked image absent bindings) returned
+
+/-- The actual finalized read-only attempts keep their file image. A
+scoped physical frame on later names carries the matching bindings. -/
+theorem RawFinalizedOpenAttempts.keepsLaterWal {target : Target} {names : heap → FilePath → Option Nat}
+    {returns : List (FilePath × IO.Error)} {reached : heap}
+    (block : RawFinalizedOpenAttempts view directory calls init release start returns reached)
+    (binds : ∀ offset, target.range.through < offset →
+      names reached (directory.file (.walSegment offset)) = names start (directory.file (.walSegment offset)))
+    (initial : RawOpenRetryTrace.LaterWalAt view directory target names start) :
+    RawOpenRetryTrace.LaterWalAt view directory target names reached :=
+  initial.frame (congrArg (fun image => image.later.visible) block.preserves.2) binds
+
+/-- Join the actual scan's later-name characterization to the
+carried file image using its canonical child bindings. This gives both
+directions needed to justify a completed prune or an empty suffix. -/
+theorem RawOpenRetryTrace.LaterWalAt.scanNames {target : Target} {names : heap → FilePath → Option Nat}
+    {entry : heap} (initial : LaterWalAt view directory target names entry)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) {newer : List Nat}
+    (listed : ∀ start, start ∈ newer ↔ target.range.through < start ∧
+      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object)
+    (child : ∀ start, target.range.through < start →
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        names entry (directory.file (.walSegment start))) :
+    ∀ start, start ∈ newer ↔ start ∈ (view.files entry).image.later.visible := by
+  intro start
+  rw [listed start, initial start]
+  constructor
+  · rintro ⟨later, object, bound⟩
+    exact ⟨later, namespaceView.modelObject object, by simpa only [bound, Option.map_some] using (child start later).symm⟩
+  · rintro ⟨later, inode, bound⟩
+    obtain ⟨object, named, _⟩ := Option.map_eq_some_iff.mp ((child start later).trans bound)
+    exact ⟨later, object, named⟩
+
 /-- The marker joins the immutable write footprint once a retry has
 selected a target. Repair gives the live keeper its own relation. -/
 def NativeReadyState.selectedRetryPath (state : NativeReadyState) (path : FilePath) : Prop :=

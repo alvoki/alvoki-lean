@@ -5,22 +5,6 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
-/-- Project the two aligned barriers onto the ordinary recovery file
-image. Exact visible keeper bytes and an empty suffix suffice for this
-route. The resulting keeper bytes are durable only after its own sync. -/
-theorem CanonicalKeeperLayout.readyAfterAlignedEffects {initial authorized repaired : FileImage}
-    {history : List WAL.Write} (layout : CanonicalKeeperLayout initial history)
-    (tail : layout.tail = ByteArray.empty) (emptyLater : initial.later.visible = [])
-    (directoryEffect : authorized = initial.syncDirectory) (keeperEffect : repaired = authorized.syncKeeper) :
-    repaired.Ready layout.target := by
-  subst repaired
-  subst authorized
-  have bytes : initial.keeper.active = some layout.target.trimmed := by
-    simpa only [tail, ByteArray.append_empty, CanonicalKeeperLayout.target] using layout.visible
-  exact ⟨rfl, rfl, bytes, congrArg (fun value => [value]) bytes, by
-    simp [FileImage.syncDirectory, FileImage.syncKeeper, LaterNames.syncDirectory, LaterNames.settled,
-      LaterNames.DurablyEmpty, emptyLater]⟩
-
 section OpenInstallation
 
 variable {heap : Type} {view : OpenCloseHeapView heap FileImage}

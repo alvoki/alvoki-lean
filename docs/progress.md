@@ -4,8 +4,12 @@ At a write reboot, the file-image projection now uses the complete child census
 of the root bound in the chosen survivor map. A valid manifest and marker from
 that same map determine the cutoff. Parsing the canonical WAL basenames derives
 exactly which later starts are present. Early, grouped and late write recovery
-use this projection to obtain the marker bound. An intervening failed repair can
-change these names before the next successful open.
+use this projection to obtain the marker bound. Grouped and late recovery
+carry agreement between the model and live names through the failed-call
+prefix. Read-only frames and the actual accepted unlink loop each have a
+local preservation rule. A complete scan at the reached root then gives
+both directions of membership for the observed suffix. The failed-call
+prefix still requires evidence for the effects of each reached repair.
 
 The selected marked reader now derives the measured keeper extent and the exact
 set of later starts in the observed directory for every successful bounded repair.
@@ -17,9 +21,12 @@ image. If the observed list covers the visible suffix, the barrier settles
 the later-name choices to the empty list in any scan order. The existing
 frame proof uses the same induction. The pruned writer now uses the raw
 unlink loop to derive which names disappeared and which canonical paths
-kept their bindings. This replaces its report-specific induction. The next obligation is to establish
-that coverage and the local effects for the selected recovery entry, then
-carry the actual keeper handle through the barrier to the returned writer.
+kept their bindings. This replaces its report-specific induction. For a retained
+keeper, the common readiness rule needs its exact live bytes at fsync,
+the selected and settled directory, and a durably empty suffix. The
+remaining selected-writer step is to follow the nonempty unlink pass and
+directory barrier while keeping its root and keeper handles attached,
+then install the writer from those actual effects.
 
 The grouped and late write proofs now derive the cache entry of their
 literal aligned reopen. The actual path and no-follow lookups supply

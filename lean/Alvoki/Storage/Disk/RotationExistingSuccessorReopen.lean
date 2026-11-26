@@ -198,7 +198,7 @@ theorem RotationExistingSuccessorPowerLoss.reopensAligned
   let census := next.census
   obtain ⟨session, final, result, samePair, liveOwner, liveDirectory, actual⟩ :=
     next.finish.installsFromCensus census.manifest census.runs census.marker census.beforeListing
-      census.seals census.offsets census.retained next.markerFound prepared.keeperPrefix prepared.newer
+      census.seals census.offsets census.retained next.markerFound prepared.newer
       following accepted ready.resumed.ordered
   obtain ⟨_, _, installed, checkpoint, indexed, phase, exactCheckpoint, recovered, answers⟩ :=
     CachedRetryInstalled.refinesPendingClient actual replay

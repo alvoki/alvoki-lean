@@ -92,7 +92,7 @@ private theorem installSelectedAligned
   obtain ⟨openReports⟩ := observe priorCheckpoint
   obtain ⟨_, lockObject, session, final, opened, liveOwner, liveDirectory, _, _, physicalReads, installed⟩ :=
     openReports.finish.installs census earlier last openReports.ownerFresh openReports.directoryFresh
-      openReports.lockObject openReports.markerFound prepared.keeperPrefix prepared.newer openReports.following
+      openReports.lockObject openReports.markerFound prepared.newer openReports.following
       accepted ordered
   obtain ⟨actualSession, actualFinal, ready, checkpoint, same, phase, selected, recovered, refined⟩ :=
     CachedRetryInstalled.refinesPendingClient installed pending

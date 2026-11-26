@@ -313,14 +313,11 @@ theorem NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
     syncRootImage.trans (congrArg FileImage.syncDirectory (getRootImage.trans readOnly))
   have keeperEffect : (view.files repaired).image = (view.files afterDirectory).image.syncKeeper :=
     syncKeeperImage.trans (congrArg FileImage.syncKeeper (clearImage.trans getPendingImage))
-  have tail : plan.layout.tail = ByteArray.empty := by
-    have bytes : plan.layout.keeper.bytes ++ plan.layout.tail = plan.layout.keeper.bytes :=
-      Option.some.inj (plan.layout.visible.symm.trans
-        (exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm)))
-    have counts := congrArg ByteArray.size bytes
-    rw [ByteArray.size_append] at counts
-    exact ByteArray.size_eq_zero_iff.mp (by omega)
-  have ready := plan.layout.readyAfterAlignedEffects tail noLater directoryEffect keeperEffect
+  have ready : (view.files repaired).image.Ready plan.layout.target := by
+    rw [keeperEffect, directoryEffect]
+    apply FileImage.readyAfterKeeperSync rfl rfl
+    · exact exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm)
+    · simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.settled, LaterNames.DurablyEmpty, noLater]
   have keptBySync : (view.files repaired).image.kept = (view.files reached).image.kept := by
     rw [keeperEffect, directoryEffect]
     rfl
@@ -580,12 +577,9 @@ structure RawMarkedOpenInterpreter.LiteralAlignedEffects
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) where
   readEffects : source.AlignedReadEffects view dir cache.pendingRef (fun atHeap => (observe atHeap).files.names)
     visible namespaceView root (managedPath dir) (literalOpenReadFrame (current := current) (view := view) cache observe)
-  child : ∀ start, plan.layout.first ≤ start → start ≤ plan.layout.range.through →
+  child : ∀ start, plan.layout.first ≤ start →
     (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
       (observe reached).files.names ((dir).file (.walSegment start))
-  laterNames : ∀ start, plan.layout.range.through < start →
-    (∃ object, namespaceView.child root (renderWalSegmentName start) = some object) →
-    start ∈ (view.files reached).image.later.visible
   repairEffects : ∀ {keeper slot inode readHeap prepared}, attachedReadSlot view keeper slot inode readHeap →
     (observe reached).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode →
     (keeperCalls).modifyPending cache.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
@@ -634,6 +628,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
     (physical : plan.layout.VisibleWal dir (observe reached).files.names (visible reached))
     (exactKeeper : (view.files reached).image.keeper.active = some target.trimmed)
     (noLater : (view.files reached).image.later.visible = [])
+    (suffixAtEntry : RawOpenRetryTrace.LaterWalAt view dir target (fun atHeap => (observe atHeap).files.names) reached)
     (durable : current.state.SelectedRetryDurability target (observe reached))
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (phaseEffects : OpenPhaseCellEffects view.phase get set)
@@ -673,19 +668,26 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
     plan.readsLiteralMarkedOpen cache.lock cache.directoryRef cache.activeRef cache.pendingRef cache.ready
       (fun atHeap => (observe atHeap).files.names) visible namespaceView root
       (managedPath dir) (literalReadFrame_refl cache observe) literalReadFrame_trans untilHeld effects.readEffects entry.protectedFiles
-      entry.manifest markerLive scope (fun first _ _ => .inr ⟨.walSegment first, rfl⟩) effects.child physical workerReturn
+      entry.manifest markerLive scope (fun first _ _ => .inr ⟨.walSegment first, rfl⟩)
+      (fun start lower _ => effects.child start lower) physical workerReturn
   have exactImage : (view.files reached).image.keeper.active = some plan.layout.keeper.bytes :=
     exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm)
   have alignedBytes : plan.layout.keeper.bytes ++ plan.layout.tail = plan.layout.keeper.bytes :=
     Option.some.inj (plan.layout.visible.symm.trans exactImage)
   have size : extent = plan.layout.keeper.bytes.size := extentEq.trans (congrArg ByteArray.size alignedBytes)
+  have cutoff : plan.layout.range.through = target.range.through :=
+    congrArg (fun t : Target => t.range.through) plan.targetEq
+  have sameSuffix := suffixAtEntry.scanNames namespaceView root (by simpa only [cutoff] using laterNames)
+    (fun start later => by
+      rw [← cutoff] at later
+      exact effects.child start (Nat.le_trans plan.layout.covers
+        (Nat.le_trans (DirectoryPublication.Bindings.walRange_accounting plan.layout.decoded).2.1 (Nat.le_of_lt later))))
   have suffix : newer = [] := by
     apply List.eq_nil_iff_forall_not_mem.mpr
     intro start present
-    obtain ⟨later, listed⟩ := (laterNames start).mp present
-    have visibleLater := effects.laterNames start later listed
-    rw [noLater] at visibleLater
-    exact List.not_mem_nil visibleLater
+    have modeled := (sameSuffix start).mp present
+    rw [noLater] at modeled
+    exact List.not_mem_nil modeled
   have remembered := route.resolve_right (fun released => Nat.lt_irrefl _ (size ▸ released.1))
   have finish := rawFinish
   rw [size, suffix] at finish
@@ -785,6 +787,7 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun atHeap => (observe atHeap).files.names) visible first)
     (window : current.state.writer.wal.NamespaceWindow dir firstOffset (prior ++ batch).length (observe first).files.names)
     (durable : current.state.SelectedRetryDurability target (observe first))
+    (initialSuffix : RawOpenRetryTrace.LaterWalAt view dir target (fun atHeap => (observe atHeap).files.names) first)
     {attempts : source.FailedCalls first returns reached}
     (retryEffects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun atHeap => ⟨(observe atHeap).files.names, fun inode => [visible atHeap inode]⟩)
@@ -792,7 +795,8 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
       (fun atHeap =>
         current.state.writer.wal.NamespaceWindow dir firstOffset (prior ++ batch).length (observe atHeap).files.names ∧
         RawOpenRetryTrace.KeeperAt view dir target (fun atHeap => (observe atHeap).files.names) visible atHeap ∧
-        current.state.SelectedRetryDurability target (observe atHeap)) attempts)
+        current.state.SelectedRetryDurability target (observe atHeap) ∧
+        RawOpenRetryTrace.LaterWalAt view dir target (fun heap => (observe heap).files.names) atHeap) attempts)
     (admission : source.AlignedAdmissionEffects view current.state input reached observe visible)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (rootBinding : (observe reached).files.names (dir).path = some (namespaceView.modelObject root))
@@ -819,15 +823,15 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
       start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) := by
-  obtain ⟨plan, physical, entry, settled⟩ := current.preparesDurableVisibleWriteRetry prepared fits admitted
-    observe visible covers initial window durable retryEffects
+  obtain ⟨plan, physical, entry, settled, suffix⟩ := current.preparesDurableVisibleWriteRetry prepared fits admitted
+    observe visible covers initial window durable initialSuffix retryEffects
   obtain ⟨held, framed, authority, rootNamed, lockNamed, _, _, worker⟩ :=
     RawMarkedOpenInterpreter.reachesAlignedCache admission settled.protectedFiles returned
   have rootObject := Option.some.inj (rootBinding.symm.trans rootNamed)
   obtain ⟨handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry⟩ :=
     plan.returnsLiteralAlignedWriter held namespaceView root request cause observe visible
       (effects held plan authority rootObject) framed authority rootNamed lockNamed entry physical exactKeeper
-      noLater settled phaseIdentity tokenIdentity phaseEffects tokenEqual returned worker
+      noLater suffix settled phaseIdentity tokenIdentity phaseEffects tokenEqual returned worker
   exact ⟨plan, handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry⟩
 
 end LiteralContinuation

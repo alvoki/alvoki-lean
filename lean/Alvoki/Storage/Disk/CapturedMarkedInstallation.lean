@@ -85,11 +85,11 @@ theorem installsFromCensus (finish : CapturedKeeperFinish calls reads vacant sel
   cases finish with
   | aligned finish =>
     exact finish.installsFromCensus chronology.manifest chronology.runs chronology.marker chronology.beforeListing
-      chronology.seals chronology.offsets chronology.retained marker prepared.keeperPrefix prepared.newer
+      chronology.seals chronology.offsets chronology.retained marker prepared.newer
       following accepted ordered
   | prunedAligned finish =>
     obtain ⟨session, returned, pair, _, owner, directory, _, installed⟩ :=
-      finish.installsFromCensus chronology marker prepared.keeperPrefix prepared.newer following accepted ordered
+      finish.installsFromCensus chronology marker prepared.newer following accepted ordered
     exact ⟨session, finish.settled, returned, pair, owner, directory, installed⟩
   | longer finish =>
     obtain ⟨session, returned, pair, owner, directory, installed⟩ :=

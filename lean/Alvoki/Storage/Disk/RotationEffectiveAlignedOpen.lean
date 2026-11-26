@@ -131,7 +131,7 @@ theorem RotationDirectoryFsyncStop.reopensEffectiveAligned
   obtain ⟨next⟩ := observe layout first emptyKeeper tail selected
   have following := next.reads.walReads.selectedAfterWatermark (sameRange.symm ▸ offsets) (sameRange.symm ▸ descriptors)
   obtain ⟨session, final, returned, finalPair, actual⟩ := next.finish.installsAfterVacancy
-    next.markerFound prepared.keeperPrefix prepared.newer following accepted ready.resumed.ordered
+    next.markerFound prepared.newer following accepted ready.resumed.ordered
   have replay : PendingClientReplay log reads before.history := client.keyValueRefinement start.bootstrap start.held
   obtain ⟨actualSession, actualFinal, installed, actualCheckpoint, sameReturn, phase, exactCheckpoint, recovered, answers⟩ :=
     CachedRetryInstalled.refinesPendingClient actual replay

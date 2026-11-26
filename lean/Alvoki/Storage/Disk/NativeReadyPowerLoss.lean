@@ -343,7 +343,7 @@ theorem NativeReadyQuietCrash.restartsAt
       (CheckpointRepresentsPrefix state.writer.history) crash.retry.image.directory.active.manifest := ready.resumed.accepted
   obtain ⟨session, final, returned, finalPair, ownerLive, directoryLive, installed⟩ :=
     finish.installsFromCensus observed.manifest observed.runs observed.markerRead observed.chronology observed.seals
-      observed.offsets observed.retained opening.markerFound prepared.keeperPrefix prepared.newer following
+      observed.offsets observed.retained opening.markerFound prepared.newer following
       accepted ready.resumed.ordered
   obtain ⟨_, appendReady⟩ := installed.readyForAppend accepted ready.resumed.ordered
   have kept : crash.retry.image.kept = (state.writer.wal.checkpointReopenFiles state.writer.wal.directory none).kept :=

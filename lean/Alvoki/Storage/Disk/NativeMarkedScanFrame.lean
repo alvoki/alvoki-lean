@@ -618,6 +618,7 @@ theorem NativeReadPosition.preparesDurableVisibleWriteRetry
     (window : current.state.writer.wal.NamespaceWindow current.state.session.directory first
       (prior ++ batch).length (storage start).files.names)
     (durable : current.state.SelectedRetryDurability target (storage start))
+    {keep : heap → Prop} (initialKeep : keep start)
     {returns : List (FilePath × IO.Error)} {attempts : source.FailedCalls start returns reached}
     (effects : RawOpenRetryTrace.SelectedEffects view source start target
       (visibleImage (fun heap => (storage heap).files.names) visible) current.state.selectedRetryPath
@@ -626,14 +627,14 @@ theorem NativeReadPosition.preparesDurableVisibleWriteRetry
           (storage atHeap).files.names ∧
         RawOpenRetryTrace.KeeperAt view current.state.session.directory target
           (fun heap => (storage heap).files.names) visible atHeap ∧
-        current.state.SelectedRetryDurability target (storage atHeap)) attempts) :
+        current.state.SelectedRetryDurability target (storage atHeap) ∧ keep atHeap) attempts) :
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
       plan.layout.VisibleWal current.state.session.directory (storage reached).files.names (visible reached) ∧
       RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible reached ∧
-      current.state.SelectedRetryDurability target (storage reached) := by
+      current.state.SelectedRetryDurability target (storage reached) ∧ keep reached := by
   obtain ⟨plan, physical, selected, _, _, settled⟩ :=
     current.preparesVisibleWriteRetryFromEffects prepared fits admitted (fun heap => (storage heap).files.names) visible
-      covers initial effects ⟨window, initial.keeper, durable⟩ (fun kept => ⟨kept.1, kept.2.1⟩)
+      covers initial effects ⟨window, initial.keeper, durable, initialKeep⟩ (fun kept => ⟨kept.1, kept.2.1⟩)
   exact ⟨plan, physical, selected, settled⟩
 
 /-- Refine the actual WAL return using only the held recovery window

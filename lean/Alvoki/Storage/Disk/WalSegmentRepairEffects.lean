@@ -311,6 +311,15 @@ structure FileImage.Ready (image : FileImage) (target : Target) : Prop where
   keeperDurable : image.keeper.crashImages = [some target.trimmed]
   pruned : image.later.DurablyEmpty
 
+/-- Syncing the retained keeper makes its current contents durable.
+Selection and suffix removal are established at the directory barrier. -/
+theorem FileImage.readyAfterKeeperSync {image : FileImage} {target : Target}
+    (selected : image.directory.active = target.pair)
+    (settled : image.directory.crashImages = [target.pair])
+    (bytes : image.keeper.active = some target.trimmed) (pruned : image.later.DurablyEmpty) :
+    image.syncKeeper.Ready target :=
+  ⟨selected, settled, bytes, congrArg (fun payload => [payload]) bytes, pruned⟩
+
 def FileImage.effect (image : FileImage) (target : Target) : Step → Option FileImage
   | .unlink first => some (image.unlinkLater first)
   | .syncPruned => some image.syncDirectory

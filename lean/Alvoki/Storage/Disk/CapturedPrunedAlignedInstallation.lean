@@ -322,7 +322,6 @@ theorem installsFromCensus (finish : CapturedPrunedAlignedFinish calls reads vac
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
     (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -352,9 +351,9 @@ theorem installsFromCensus (finish : CapturedPrunedAlignedFinish calls reads vac
   have effects : EffectTrace layout.target retry.image finish.settled.image :=
     .aligned (.syncPruned ((EffectTrace.authorized (target := layout.target) (initial := retry.image)).unlinks
       retry.image.later.visible later)) pruned.1 read
-  have safe := effects.valid rfl keeperValid laterValid
   have ready : finish.settled.image.Ready layout.target :=
-    ⟨safe.selected, safe.settled, read, congrArg (fun bytes => [bytes]) read, pruned.1⟩
+    FileImage.readyAfterKeeperSync (image := retry.image.unlinkVisibleSuffix.syncDirectory)
+      (by rw [pruned.2.1]; rfl) (by rw [pruned.2.1]; rfl) read pruned.1
   let projectedFinish : DiskDirectory → DescriptorSlot → CensusDirectoryCache → Plan × Reopened × Nat →
       EStateM IO.Error CensusOpenState Reopened :=
     fun _ _ _ (_, opened, _) _ => .ok opened (finish.census, finish.settled)
@@ -366,7 +365,7 @@ theorem installsFromCensus (finish : CapturedPrunedAlignedFinish calls reads vac
   obtain ⟨session, returned, installed⟩ :=
     CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := reads) vacant marker laterValid
       following accepted ordered selected projectedFinish (fun _ => rfl) ready effects
-  exact ⟨session, same.trans returned, safe.selected, pruned.1, finish.lockRetained, finish.directoryRetained,
+  exact ⟨session, same.trans returned, ready.selected, pruned.1, finish.lockRetained, finish.directoryRetained,
     finish.keeperReleased, installed⟩
 
 end CapturedPrunedAlignedFinish

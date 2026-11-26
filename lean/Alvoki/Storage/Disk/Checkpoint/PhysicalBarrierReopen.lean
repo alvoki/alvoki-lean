@@ -275,7 +275,7 @@ theorem CheckpointPowerCut.reopensPhysicalBarrierAligned {directory : DiskDirect
   obtain ⟨openReports⟩ := observe layout published keeper tail descriptors rfl selected
   have following := openReports.reads.walReads.selectedAfterWatermark offsets descriptors
   obtain ⟨session, final, returned, finalPair, installed⟩ :=
-    openReports.finish.installsAfterVacancy openReports.markerFound prepared.keeperPrefix prepared.newer
+    openReports.finish.installsAfterVacancy openReports.markerFound prepared.newer
       following accepted ready.resumed.ordered
   obtain ⟨sameSession, sameFinal, table, actualCheckpoint, sameReturn, phase, actualSelected, recovered, refined⟩ :=
     CachedRetryInstalled.refinesPendingClient installed replay

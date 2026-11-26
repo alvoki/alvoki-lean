@@ -609,7 +609,6 @@ theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
     (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -620,8 +619,6 @@ theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant
       final.image.directory.active = retry.image.directory.active ∧
       CachedRetryInstalled (before := retry) report.walReads admission.reached admission.owner report.bindings
         published calls.liveRefs (.ok session final) := by
-  have prepared : Prepared retry.image layout.target layout.plan :=
-    ⟨rfl, keeperValid, laterValid, rfl, rfl, rfl, layout.visible⟩
   let after := retry.image.syncDirectory.syncKeeper
   have visible : retry.image.syncDirectory.keeper.active = some layout.target.trimmed := by
     change retry.image.keeper.active = some layout.keeper.bytes
@@ -630,9 +627,8 @@ theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant
     simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled,
       finish.repair.noLater]
   have effects : EffectTrace layout.target retry.image after := EffectTrace.aligned .authorized emptyNames visible
-  have ready : after.Ready layout.target := by
-    have safe := effects.valid prepared.pair prepared.keeperPrefix prepared.newer
-    exact ⟨safe.selected, safe.settled, visible, congrArg (fun bytes => [bytes]) visible, emptyNames⟩
+  have ready : after.Ready layout.target :=
+    FileImage.readyAfterKeeperSync rfl rfl visible emptyNames
   obtain ⟨session, returned, installed⟩ :=
     CapturedAlignedCallbacks.installsWithFinish (calls := calls) (report := report) vacant marker laterValid
       following accepted ordered selected finish.finishAt finish.finishAt_returns ready effects
@@ -658,7 +654,6 @@ theorem installsFromCensus (finish : CapturedAlignedFinish calls report vacant s
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
     (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -680,7 +675,7 @@ theorem installsFromCensus (finish : CapturedAlignedFinish calls report vacant s
       finish.finishAt_returns]
   rw [same]
   obtain ⟨session, final, returned, pair, installed⟩ :=
-    finish.installsAfterVacancy marker keeperValid laterValid following accepted ordered
+    finish.installsAfterVacancy marker laterValid following accepted ordered
   exact ⟨session, final, returned, pair, finish.lockRetained, finish.directoryRetained, installed⟩
 
 /-- The shared open and aligned repair install the table selected by the
@@ -698,7 +693,6 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
     {metadata : IO.FS.Metadata}
     (marker : admission.lookup (directory.file .walBoundary) (admission.reached, admission.held) =
       .ok (.ok metadata) (admission.reached, admission.held))
-    (keeperValid : retry.image.keeper.Valid layout.target.Accepts)
     (laterValid : retry.image.later.Beyond layout.range.through)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
@@ -719,7 +713,7 @@ theorem installs {description keeperFirst : Nat} {initial : DescriptorInventory}
     trace.capturesAfterAdmission earlier last admission distinct distinctCached lockObject (calls.recoverWithFinish report finish.finishAt)
   have sameLock := report.sameObjects.2.1.trans (congrArg some oldObject)
   obtain ⟨session, _, returned, _, installed⟩ :=
-    finish.installsAfterVacancy marker keeperValid laterValid following accepted ordered
+    finish.installsAfterVacancy marker laterValid following accepted ordered
   have sameObjects : finish.census.inode = admission.reached.inode := by
     unfold census
     rw [finish.repair.opened]

@@ -59,8 +59,7 @@ private theorem Prepared.readyAfterAlignedSync {initial : FileImage} {target : T
   have pruned : initial.syncDirectory.later.DurablyEmpty := by
     simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled, absent]
   exact ⟨EffectTrace.aligned .authorized pruned exactRead,
-    ⟨prepared.pair, congrArg (fun pair => [pair]) prepared.pair,
-      exactRead, congrArg (fun bytes => [bytes]) exactRead, pruned⟩⟩
+    FileImage.readyAfterKeeperSync prepared.pair (congrArg (fun pair => [pair]) prepared.pair) exactRead pruned⟩
 
 /-- On the aligned route, one directory barrier settles the empty suffix.
 The report contract then applies to the single reached keeper sync. -/
