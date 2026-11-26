@@ -49,12 +49,6 @@ variable {heap image : Type} {directory : DiskDirectory} {writer : Nat} {start :
   {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
   {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {cachedDirectory : IO.Ref (Option IO.FS.Handle)}
 
-def CachedCloseState.finishClears (unlocked : CloseState image)
-    (drops : CloseCacheField → List LockReferenceDrop) : CloseState image :=
-  let afterActive := unlocked.drop .active (drops .active)
-  let afterPending := afterActive.drop .pending (drops .pending)
-  { afterPending.drop .directory (drops .directory) with phase := .closed }
-
 /-- A close's reached heap has the original live image, released lock,
 empty cache, and precisely the observed cache-clear drops. -/
 def OpenCloseHeapView.ClosedFrom (view : OpenCloseHeapView heap image)

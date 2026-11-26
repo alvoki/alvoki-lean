@@ -102,8 +102,8 @@ After a returned directory-sync error, explicit close uses the original lock.
 The observed cache clears preserve the live empty successor and determine
 which descriptor slots remain. On power loss a single sampled directory map
 chooses the former or the empty active segment. Under the local filesystem
-and reset effects, both feed the same checkpoint-free reader and recover the
-earlier history. [Close](../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
+and reset effects, either sampled keeper feeds the same checkpoint-free
+reader and recovers the earlier history. [Close](../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
 · [Reboot and replay](../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
 
 **Next obligation.** Derive the live WAL catalog for the next admission

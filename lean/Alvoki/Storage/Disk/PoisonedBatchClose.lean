@@ -27,6 +27,13 @@ def CachedCloseState.drop (before : CachedCloseState handle image) (field : Clos
     files := { before.files with image := (cache, before.files.image.2) }
     descriptors := before.descriptors.afterDrops drops }
 
+/-- Clear the three cache fields in schedule order, then store the closed phase. -/
+def CachedCloseState.finishClears (unlocked : CachedCloseState handle image)
+    (drops : CloseCacheField → List LockReferenceDrop) : CachedCloseState handle image :=
+  let afterActive := unlocked.drop .active (drops .active)
+  let afterPending := afterActive.drop .pending (drops .pending)
+  { afterPending.drop .directory (drops .directory) with phase := .closed }
+
 def CachedCloseState.release (before : CachedCloseState handle image) (directory : DiskDirectory)
     (writer : Nat) : CachedCloseState handle image :=
   { before with files := { before.files with owners := before.files.owners.release (directory.file .lock) writer } }
@@ -71,9 +78,7 @@ def run (report : CachedCloseReports directory writer before) :
     (fun reached => .ok () { reached with phase := .closed }) before
 
 def finished (report : CachedCloseReports directory writer before) : CachedCloseState handle image :=
-  let active := (before.release directory writer).drop .active (report.drops .active)
-  let pending := active.drop .pending (report.drops .pending)
-  { pending.drop .directory (report.drops .directory) with phase := .closed }
+  (before.release directory writer).finishClears report.drops
 
 /-- The shared close schedule clears active, pending and directory
 references in order after successful unlock. An unlock error keeps the
@@ -96,7 +101,8 @@ theorem outcome_open (report : CachedCloseReports directory writer before) (open
       cases value
       have unlock := report.unlockEffect
       rw [returned] at unlock
-      simp only [unlock, report.active returned, report.pending returned, report.directoryCache returned, finished]
+      simp only [unlock, report.active returned, report.pending returned, report.directoryCache returned,
+        finished, CachedCloseState.finishClears]
 
 theorem outcome (report : CachedCloseReports directory writer before) (poisoned : before.phase = .poisoned) :
     report.run = match report.result with
@@ -108,7 +114,8 @@ theorem finishedFiles (report : CachedCloseReports directory writer before)
     (held : before.files.owners.Owns directory writer) :
     report.finished.files =
       ⟨(⟨none, none, []⟩, before.files.image.2), before.files.owners.set (directory.file .lock) none⟩ := by
-  simp only [finished, CachedCloseState.drop, CachedCloseState.release, LockOwners.release_owned held]
+  simp only [finished, CachedCloseState.finishClears, CachedCloseState.drop, CachedCloseState.release,
+    LockOwners.release_owned held]
 
 /-- An explicit unlock can release authority while its descriptor slot
 remains live. Slot survival follows from the measured drops at the three
@@ -119,7 +126,7 @@ theorem lockSlotAfterClears (report : CachedCloseReports directory writer before
     report.run = .ok () report.finished ∧ report.slot ∈ report.finished.descriptors.slots ∧
       report.bindings (directory.file .lock) = some (report.finished.descriptors.inode writer) := by
   refine ⟨by rw [report.outcome poisoned, successful], ?_, ?_⟩
-  · simp [finished, CachedCloseState.drop, CachedCloseState.release, DescriptorInventory.afterDrops,
+  · simp [finished, CachedCloseState.finishClears, CachedCloseState.drop, CachedCloseState.release, DescriptorInventory.afterDrops,
       report.live, List.all_eq_true]
     exact ⟨retained .directory, retained .pending, retained .active⟩
   · exact report.lockObject.trans (congrArg (fun description => some (before.descriptors.inode description))

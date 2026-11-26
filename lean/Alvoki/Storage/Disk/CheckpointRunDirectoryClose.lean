@@ -15,7 +15,8 @@ theorem finishedDescriptors {handle image : Type} {directory : DiskDirectory} {w
     {before : CachedCloseState handle image} (report : CachedCloseReports directory writer before) :
     report.finished.descriptors = before.descriptors.afterDrops
       (report.drops .active ++ report.drops .pending ++ report.drops .directory) := by
-  simp only [finished, CachedCloseState.drop, CachedCloseState.release, DescriptorInventory.afterDrops_append]
+  simp only [finished, CachedCloseState.finishClears, CachedCloseState.drop, CachedCloseState.release,
+    DescriptorInventory.afterDrops_append]
 
 end CachedCloseReports
 
