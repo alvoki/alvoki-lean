@@ -490,6 +490,8 @@ import Alvoki.Storage.Disk.NativeAlignedKeeperStorage
 import Alvoki.Storage.Disk.NativeLongKeeperStorage
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
+import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
+import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.NativePrunedKeeperStorage
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
 import Alvoki.Storage.Disk.NativeRawWriteCustody
@@ -3955,6 +3957,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.keptSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.forReopenedWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.forReopenedWriter
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.framesThroughCache
+#check_axioms Alvoki.Storage.DiskSession.exactReadFrames
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readWithFrames
+#check_axioms Alvoki.Storage.DiskSession.NativeMarkedCheckpointReadHeap.framesScan
+#check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.framesScan
+#check_axioms Alvoki.Storage.DiskSession.MarkedSealReadChain.framesSeals
+#check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.framesBeforeKeeper
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.sameCensusObjects
 #check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.readyStorage
 #check_axioms Alvoki.Storage.WalSegment.findSealedStart

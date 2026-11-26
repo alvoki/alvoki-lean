@@ -1,5 +1,15 @@
 # Current handoff
 
+The exact marked-open prefix now carries independently framed file observations through
+admission and the read-only worker. The lock and directory receipts and the three cache
+allocations share one frame composition with failed open cleanup. The manifest, ordered
+runs, marker and WAL seals reuse the same primitive read and release frames as read
+failures. The checked listing uses its actual stream and closed heap. The combined
+worker carries the selected footprint and any live keeper observation to the heap that
+starts the keeper read.
+[Open admission frames](../lean/Alvoki/Storage/Disk/NativeOpenAdmissionStorage.lean)
+· [Marked scan frames](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean)
+
 A scoped physical reboot reset now establishes the durable selected marker, checkpoint,
 runs, retained WAL seals and parent binding. The write recovery edges can carry those
 facts through the same exact failed calls as the live keeper. A shared reindexing proof

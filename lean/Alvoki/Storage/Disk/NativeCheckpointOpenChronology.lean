@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
+import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
 
 namespace Alvoki.Storage.DiskSession
 
@@ -17,91 +18,10 @@ variable {heap : Type} {files : heap → CheckpointSurvivingFiles} {selectedPath
 private theorem frameRefl (atHeap : heap) : (files atHeap).Frames selectedPath (files atHeap) :=
   fun _ _ => ⟨rfl, fun _ _ => rfl⟩
 
-/-- Record read-only file effects at each primitive's actual return.
-The frame stays on the selected names and their bound inode bytes. -/
-structure MarkedTemporaryReadCalls.FileFrames (calls : MarkedTemporaryReadCalls heap)
-    (files : heap → CheckpointSurvivingFiles) (selectedPath : FilePath → Prop) : Prop where
-  openRead : ∀ path entry,
-    (files entry).Frames selectedPath (files (reachedState (calls.openRead path entry)))
-  readChunk : ∀ file count entry,
-    (files entry).Frames selectedPath (files (reachedState (calls.readChunk file count entry)))
-  release : ∀ file entry,
-    (files entry).Frames selectedPath (files (dataErrorDropState calls.release file entry))
-
-private theorem exactReadFrames (mismatch : IO.Error) (read : USize → EStateM IO.Error heap ByteArray)
-    (keeps : ∀ count entry, (files entry).Frames selectedPath (files (reachedState (read count entry))))
-    (remaining : Nat) (buffer : ByteArray) (entry : heap) :
-    (files entry).Frames selectedPath
-      (files (reachedState (readExactPrefixWith mismatch read remaining buffer entry))) := by
-  by_cases empty : remaining = 0
-  · rw [readExactPrefixWith]
-    simpa only [empty, ↓reduceIte, Pure.pure, EStateM.pure, reachedState] using
-      (frameRefl (files := files) (selectedPath := selectedPath) entry)
-  · rw [readExactPrefixWith]
-    simp only [empty, ↓reduceIte, Bind.bind, EStateM.bind]
-    have first := keeps remaining.toUSize entry
-    cases issued : read remaining.toUSize entry with
-    | error =>
-      simpa only [issued, reachedState] using first
-    | ok chunk reached =>
-      have upToRead : (files entry).Frames selectedPath (files reached) := by
-        simpa only [issued, reachedState] using first
-      by_cases valid : 0 < chunk.size ∧ chunk.size ≤ remaining
-      · simp only [valid]
-        exact upToRead.trans (exactReadFrames mismatch read keeps (remaining - chunk.size)
-          (if buffer.isEmpty then chunk else buffer ++ chunk) reached)
-      · simpa only [issued, valid, ↓reduceDIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
-          reachedState] using upToRead
-termination_by remaining
-decreasing_by omega
-
-private theorem manifestReadFrames (read : USize → EStateM IO.Error heap ByteArray)
-    (keeps : ∀ count entry, (files entry).Frames selectedPath (files (reachedState (read count entry))))
-    (extent : Nat) (entry : heap) :
-    (files entry).Frames selectedPath
-      (files (reachedState (readIntegrityManifestPrefixWith read extent entry))) := by
-  let mismatch := IO.userError "integrity manifest extent changed while reading"
-  have first := exactReadFrames mismatch read keeps (min 48 extent) .empty entry
-  unfold readIntegrityManifestPrefixWith
-  cases issued : readExactPrefixWith mismatch read (min 48 extent) ByteArray.empty entry with
-  | error =>
-    simpa only [mismatch, Bind.bind, EStateM.bind, issued, reachedState] using first
-  | ok header reached =>
-    have upToRead : (files entry).Frames selectedPath (files reached) := by
-      simpa only [issued, reachedState] using first
-    let rest := min (extent - 48) (Manifest.IntegrityCheckpoint.declaredStampBytes header + 1)
-    by_cases short : header.size < 48
-    · simpa [mismatch, Bind.bind, EStateM.bind, issued, short, Pure.pure, EStateM.pure, reachedState] using upToRead
-    · by_cases fits : 48 + rest < USize.size
-      · simpa [mismatch, Bind.bind, EStateM.bind, issued, short, rest, fits, Pure.pure, EStateM.pure] using
-          upToRead.trans (exactReadFrames mismatch read keeps rest header reached)
-      · simpa [mismatch, Bind.bind, EStateM.bind, issued, short, rest, fits, throw, throwThe,
-          MonadExceptOf.throw, EStateM.throw, reachedState] using upToRead
-
-private theorem MarkedTemporaryReadCalls.readWithFrames (calls : MarkedTemporaryReadCalls heap)
-    (laws : calls.FileFrames files selectedPath) (path : FilePath)
-    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray)
-    (keeps : ∀ file entry, (files entry).Frames selectedPath (files (reachedState (read file entry))))
-    (entry : heap) :
-    (files entry).Frames selectedPath (files (reachedState (calls.readWith path read entry))) := by
-  have opened := laws.openRead path entry
-  cases ran : calls.openRead path entry with
-  | error =>
-    simpa only [MarkedTemporaryReadCalls.readWith, ran, reachedState] using opened
-  | ok file openedAt =>
-    have same : reachedState (calls.readWith path read entry) =
-        dataErrorDropState calls.release file (reachedState (read file openedAt)) := by
-      rw [MarkedTemporaryReadCalls.readWith, ran]
-      cases returned : read file openedAt <;> simp [returned, reachedState]
-    rw [same]
-    rw [ran] at opened
-    exact opened.trans ((keeps file openedAt).trans (laws.release file _))
-
-private theorem MarkedTemporaryReadCalls.runPrefixFrames (calls : MarkedTemporaryReadCalls heap)
-    (laws : calls.FileFrames files selectedPath) (path : FilePath) (count : Nat) (entry : heap) :
-    (files entry).Frames selectedPath (files (reachedState (calls.runPrefix path count entry))) :=
-  calls.readWithFrames laws path _ (fun file => exactReadFrames (IO.userError checkpointIntegrityMismatch)
-    (calls.readChunk file) (laws.readChunk file) count ByteArray.empty) entry
+/-- Scope effects on the selected paths and their bound inode bytes. -/
+abbrev MarkedTemporaryReadCalls.FileFrames (calls : MarkedTemporaryReadCalls heap)
+    (files : heap → CheckpointSurvivingFiles) (selectedPath : FilePath → Prop) :=
+  calls.ScopeFrames (fun before after => (files before).Frames selectedPath (files after))
 
 end SelectedReadFiles
 
@@ -125,15 +45,17 @@ theorem RawCheckpointRunPrefix.preservesSelectedFiles {stop : Manifest.Integrity
     (files seed.afterPending).Frames selectedPath (files (seen.atRun index)) := by
   induction index with
   | zero =>
-    have frame := fileCalls.readWithFrames laws (directory.file .manifest)
+    have frame := fileCalls.readWithFrames laws CheckpointSurvivingFiles.Frames.trans (directory.file .manifest)
       (fun file => readIntegrityManifestPrefixWith (fileCalls.readChunk file) seen.file.calls.metadata.byteSize.toNat)
-      (fun file => manifestReadFrames (fileCalls.readChunk file) (laws.readChunk file) seen.file.calls.metadata.byteSize.toNat)
-      seed.afterPending
+      (fun file => manifestReadFrames (frame := fun before after => (files before).Frames selectedPath (files after))
+        frameRefl CheckpointSurvivingFiles.Frames.trans (fileCalls.readChunk file) (laws.readChunk file)
+        seen.file.calls.metadata.byteSize.toNat) seed.afterPending
     simpa only [seen.manifestRead.returns.1, reachedState] using frame
   | succ index prior =>
     have inside := Nat.lt_of_succ_le within
     let path := directory.file (.run seen.manifest.header.generation index)
-    have kept := fileCalls.runPrefixFrames laws path (seen.run index inside).stamp.byteCount.toNat (seen.atRun index)
+    have kept := fileCalls.runPrefixFrames laws frameRefl CheckpointSurvivingFiles.Frames.trans
+      path (seen.run index inside).stamp.byteCount.toNat (seen.atRun index)
     have read := (seen.readsRun inside).2.1
     rw [read] at kept
     exact (prior (Nat.le_of_lt inside)).trans kept
@@ -145,7 +67,7 @@ theorem RawCheckpointChunkReadError.preservesSelectedFiles
     (seen : RawCheckpointChunkReadError selected) (laws : fileCalls.FileFrames files selectedPath) :
     (files seed.afterPending).Frames selectedPath (files seen.reached) := by
   have earlier := selected.reads.preservesSelectedFiles laws (Nat.le_refl selected.index)
-  have later := fileCalls.runPrefixFrames laws
+  have later := fileCalls.runPrefixFrames laws frameRefl CheckpointSurvivingFiles.Frames.trans
     (directory.file (.run selected.reads.manifest.header.generation selected.index))
     selected.stamp.byteCount.toNat (selected.reads.atRun selected.index)
   rw [seen.releasesSelected.returned] at later
@@ -186,11 +108,9 @@ variable {disposal finalized files selectedPath}
 private theorem RawOpenCacheDisposal.ScopeFileFrames.reachesWorker
     (frames : disposal.ScopeFileFrames finalized files selectedPath) :
     (files entry).Frames selectedPath (files seed.afterPending) :=
-  frames.lockOpen.trans frames.flock
-    |>.trans frames.openDirectory
-    |>.trans frames.directoryRef
-    |>.trans frames.activeRef
-    |>.trans frames.pendingRef
+  admitted.framesThroughCache seed (frame := fun before after => (files before).Frames selectedPath (files after))
+    (fun first last => first.trans last) (fun _ => frames.lockOpen) (fun _ => frames.flock)
+    (fun _ => frames.openDirectory) (fun _ => frames.directoryRef) (fun _ => frames.activeRef) (fun _ => frames.pendingRef)
 
 /-- Preserve the worker's reached bindings through both runtime drops
 and the intervening unlock. These bindings can include a new keeper

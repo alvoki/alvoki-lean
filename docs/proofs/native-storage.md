@@ -468,6 +468,16 @@ the new ledger. The root and lock are tied to the actual reopened descriptors.
 [Durable reboot and retries](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
 · [Reopened footprint](../../lean/Alvoki/Storage/Disk/NativeRetainedOpenStorage.lean)
 
+The actual lock, flock, directory open and cache reference allocation receipts carry a
+scoped frame through admission. The same helper serves the successful prefix and the
+existing failed-open cleanup proofs. The held manifest, chunk reads, ordered releases,
+marker and selected seal reads share one generic frame proof. The checked listing carries
+that frame through its actual stream open, iteration and close. These proofs connect the
+admission and worker to the exact entry of the keeper read. Physical file and inode
+effects are supplied for the primitive callbacks. Keeper and repair frames follow separately.
+[Open admission frames](../../lean/Alvoki/Storage/Disk/NativeOpenAdmissionStorage.lean)
+· [Marked scan frames](../../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean)
+
 The pruned aligned path derives readiness at the actual repair heap from the reached
 ordered unlinks, directory and keeper fsyncs, and protected file frames. It derives
 absence of the removed suffix names in each crash map at that heap. Carrying absence

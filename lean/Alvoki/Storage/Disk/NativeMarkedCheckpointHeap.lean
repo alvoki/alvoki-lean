@@ -129,6 +129,141 @@ def MarkedTemporaryReadCalls.runPrefix (calls : MarkedTemporaryReadCalls heap) (
     (count : Nat) : EStateM IO.Error heap ByteArray :=
   calls.readWith path (calls.runRead count)
 
+/-- Local effects at the actual open, bounded read, and scope release.
+The same relation can track any filesystem projection left intact by these callbacks. -/
+structure MarkedTemporaryReadCalls.ScopeFrames (calls : MarkedTemporaryReadCalls heap)
+    (frame : heap → heap → Prop) : Prop where
+  openRead : ∀ path entry, frame entry (reachedState (calls.openRead path entry))
+  readChunk : ∀ file count entry, frame entry (reachedState (calls.readChunk file count entry))
+  release : ∀ file entry, frame entry (dataErrorDropState calls.release file entry)
+
+section ReadScopeFrames
+
+variable {heap : Type} {frame : heap → heap → Prop}
+
+theorem exactReadFrames (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (mismatch : IO.Error) (read : USize → EStateM IO.Error heap ByteArray)
+    (keeps : ∀ count entry, frame entry (reachedState (read count entry)))
+    (remaining : Nat) (buffer : ByteArray) (entry : heap) :
+    frame entry (reachedState (readExactPrefixWith mismatch read remaining buffer entry)) := by
+  by_cases empty : remaining = 0
+  · rw [readExactPrefixWith]
+    simpa only [empty, ↓reduceIte, Pure.pure, EStateM.pure, reachedState] using
+      (refl entry)
+  · rw [readExactPrefixWith]
+    simp only [empty, ↓reduceIte, Bind.bind, EStateM.bind]
+    have first := keeps remaining.toUSize entry
+    cases issued : read remaining.toUSize entry with
+    | error =>
+      simpa only [issued, reachedState] using first
+    | ok chunk reached =>
+      have upToRead : frame entry reached := by
+        simpa only [issued, reachedState] using first
+      by_cases valid : 0 < chunk.size ∧ chunk.size ≤ remaining
+      · simp only [valid]
+        exact trans upToRead (exactReadFrames refl trans mismatch read keeps (remaining - chunk.size)
+          (if buffer.isEmpty then chunk else buffer ++ chunk) reached)
+      · simpa only [issued, valid, ↓reduceDIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
+          reachedState] using upToRead
+termination_by remaining
+decreasing_by omega
+
+theorem manifestReadFrames (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (read : USize → EStateM IO.Error heap ByteArray)
+    (keeps : ∀ count entry, frame entry (reachedState (read count entry)))
+    (extent : Nat) (entry : heap) :
+    frame entry (reachedState (readIntegrityManifestPrefixWith read extent entry)) := by
+  let mismatch := IO.userError "integrity manifest extent changed while reading"
+  have first := exactReadFrames refl trans mismatch read keeps (min 48 extent) .empty entry
+  unfold readIntegrityManifestPrefixWith
+  cases issued : readExactPrefixWith mismatch read (min 48 extent) ByteArray.empty entry with
+  | error =>
+    simpa only [mismatch, Bind.bind, EStateM.bind, issued, reachedState] using first
+  | ok header reached =>
+    have upToRead : frame entry reached := by
+      simpa only [issued, reachedState] using first
+    let rest := min (extent - 48) (Manifest.IntegrityCheckpoint.declaredStampBytes header + 1)
+    by_cases short : header.size < 48
+    · simpa [mismatch, Bind.bind, EStateM.bind, issued, short, Pure.pure, EStateM.pure, reachedState] using upToRead
+    · by_cases fits : 48 + rest < USize.size
+      · simpa [mismatch, Bind.bind, EStateM.bind, issued, short, rest, fits, Pure.pure, EStateM.pure] using
+          trans upToRead (exactReadFrames refl trans mismatch read keeps rest header reached)
+      · simpa [mismatch, Bind.bind, EStateM.bind, issued, short, rest, fits, throw, throwThe,
+          MonadExceptOf.throw, EStateM.throw, reachedState] using upToRead
+
+theorem MarkedTemporaryReadCalls.readWithFrames (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (path : FilePath)
+    (read : IO.FS.Handle → EStateM IO.Error heap ByteArray)
+    (keeps : ∀ file entry, frame entry (reachedState (read file entry)))
+    (entry : heap) :
+    frame entry (reachedState (calls.readWith path read entry)) := by
+  have opened := laws.openRead path entry
+  cases ran : calls.openRead path entry with
+  | error =>
+    simpa only [MarkedTemporaryReadCalls.readWith, ran, reachedState] using opened
+  | ok file openedAt =>
+    have same : reachedState (calls.readWith path read entry) =
+        dataErrorDropState calls.release file (reachedState (read file openedAt)) := by
+      rw [MarkedTemporaryReadCalls.readWith, ran]
+      cases returned : read file openedAt <;> simp [returned, reachedState]
+    rw [same]
+    rw [ran] at opened
+    exact trans (trans opened (keeps file openedAt)) (laws.release file _)
+
+private theorem prefixUntilEofFrames (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (mismatch : IO.Error) (read : USize → EStateM IO.Error heap ByteArray)
+    (keeps : ∀ count entry, frame entry (reachedState (read count entry)))
+    (remaining : Nat) (buffer : ByteArray) (entry : heap) :
+    frame entry (reachedState (readPrefixUntilEofWith mismatch read remaining buffer entry)) := by
+  by_cases empty : remaining = 0
+  · rw [readPrefixUntilEofWith]
+    simpa only [empty, ↓reduceIte, Pure.pure, EStateM.pure, reachedState] using (refl entry)
+  · rw [readPrefixUntilEofWith]
+    simp only [empty, ↓reduceIte, Bind.bind, EStateM.bind]
+    have first := keeps remaining.toUSize entry
+    cases issued : read remaining.toUSize entry with
+    | error =>
+      simpa only [issued, reachedState] using first
+    | ok chunk reached =>
+      have upToRead : frame entry reached := by
+        simpa only [issued, reachedState] using first
+      by_cases eof : chunk.size = 0
+      · simpa only [eof, ↓reduceIte, Pure.pure, EStateM.pure, reachedState] using upToRead
+      · by_cases within : chunk.size ≤ remaining
+        · simp only [eof, ↓reduceIte, within]
+          exact trans upToRead (prefixUntilEofFrames refl trans mismatch read keeps (remaining - chunk.size)
+            (if buffer.isEmpty then chunk else buffer ++ chunk) reached)
+        · simpa only [eof, ↓reduceIte, within, ↓reduceDIte, throw, throwThe, MonadExceptOf.throw,
+            EStateM.throw, reachedState] using upToRead
+termination_by remaining
+decreasing_by omega
+
+private theorem MarkedTemporaryReadCalls.metadataReadFrames (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (directory : DiskDirectory) (path : FilePath) (metadata : IO.FS.Metadata)
+    (file : IO.FS.Handle) (entry : heap) :
+    frame entry (reachedState (calls.readMetadata directory path metadata file entry)) := by
+  unfold MarkedTemporaryReadCalls.readMetadata
+  split
+  · exact prefixUntilEofFrames refl trans _ _ (laws.readChunk file) _ _ _
+  · exact manifestReadFrames refl trans _ (laws.readChunk file) _ _
+
+theorem MarkedTemporaryReadCalls.runPrefixFrames (calls : MarkedTemporaryReadCalls heap)
+    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (path : FilePath) (count : Nat) (entry : heap) :
+    frame entry (reachedState (calls.runPrefix path count entry)) :=
+  calls.readWithFrames laws trans path _
+    (fun file => exactReadFrames refl trans _ _ (laws.readChunk file) count ByteArray.empty) entry
+
+end ReadScopeFrames
+
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
   {layout : CanonicalKeeperLayout retry.image history} {published : CheckpointPublication.Image}
@@ -190,6 +325,14 @@ theorem RawTemporaryReadReport.returns {observations : CheckpointRunChunkReads} 
     calls.readWith path read before = .ok bytes after ∧ MarkedReadCacheFrame seed before after := by
   refine ⟨?_, (report.openFrame.trans report.readFrame).trans report.releaseFrame⟩
   simp only [MarkedTemporaryReadCalls.readWith, report.openedRaw, report.readRaw, dataErrorDropState, report.releasedRaw]
+
+private theorem RawTemporaryReadReport.frames {observations : CheckpointRunChunkReads}
+    {calls : MarkedTemporaryReadCalls heap} {read : IO.FS.Handle → EStateM IO.Error heap ByteArray}
+    {frame : heap → heap → Prop} (raw : RawTemporaryReadReport observations seed calls path drops read bytes before after)
+    (laws : calls.ScopeFrames frame)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (keeps : ∀ file entry, frame entry (reachedState (read file entry))) : frame before after := by
+  simpa only [raw.returns.1, reachedState] using calls.readWithFrames laws trans path read keeps before
 
 theorem RawTemporaryReadReport.censusAfter {observations : CheckpointRunChunkReads} {calls : MarkedTemporaryReadCalls heap}
     {read : IO.FS.Handle → EStateM IO.Error heap ByteArray}
@@ -315,6 +458,46 @@ private theorem readsRun (report : NativeMarkedCheckpointReadHeap seed chronolog
   · rw [runReadDrops, events, ← DescriptorInventory.afterDrops_append]
     exact (raw.censusAfter custody).1
 
+private theorem throughSelectedRuns {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    {invariant : Nat → Prop} (initial : invariant 0)
+    (step : ∀ {bytes manifest index payload}, retry.image.directory.active.manifest = some bytes →
+      IntegrityCheckpoint.decode bytes = .ok manifest → index < manifest.header.runCount.toNat →
+      published.durable manifest.header.generation index = some payload →
+      invariant index → invariant (index + 1)) :
+    ∀ index ≤ selectedRunCount retry.image.directory.active.manifest, invariant index := by
+  intro index
+  induction index with
+  | zero => exact fun _ => initial
+  | succ index earlier =>
+    intro within
+    have visited := Nat.lt_of_succ_le within
+    obtain ⟨_, _, _, bound, decoded, member, stored⟩ := selected.selectedRun visited
+    exact step bound decoded member stored (earlier (Nat.le_of_lt visited))
+
+/-- Follow the literal manifest, selected run and bounded marker reads to
+the exact scan heap, carrying only the frame proved for each callback. -/
+theorem framesScan (report : NativeMarkedCheckpointReadHeap seed chronology calls)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    {frame : heap → heap → Prop} (laws : calls.ScopeFrames frame)
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after) :
+    frame seed.afterPending report.atScan := by
+  have first : frame seed.afterPending (report.atRun 0) := by
+    rcases chronology.manifest.observedFile with ⟨bound, _⟩ | ⟨bytes, file, _, bound, _⟩
+    · rw [report.noManifest bound]
+      exact refl seed.afterPending
+    · obtain ⟨raw⟩ := report.manifestRead bytes bound file
+      exact raw.frames laws trans (calls.metadataReadFrames laws refl trans directory _ _)
+  have runs := throughSelectedRuns selected (invariant := fun index => frame seed.afterPending (report.atRun index))
+    first (fun bound decoded member stored earlier => by
+      obtain ⟨raw⟩ := report.runRead _ _ bound decoded _ member _ stored
+      exact trans earlier (raw.frames laws trans (fun file =>
+        exactReadFrames refl trans _ _ (laws.readChunk file) _ ByteArray.empty)))
+  exact trans (runs _ (Nat.le_refl _))
+    (report.markerRead.frames laws trans (calls.metadataReadFrames laws refl trans directory _ _))
+
 /-- The actual selected checkpoint and bounded marker reads thread the
 opened heap into the WAL scan, with the same cache and held file image.
 The continuation still checks and opens the selected WAL files. -/
@@ -352,22 +535,18 @@ theorem reachesScan (report : NativeMarkedCheckpointReadHeap seed chronology cal
   have slotsAndCells : ∀ index ≤ latest,
       MarkedReadCacheFrame seed seed.afterPending (report.atRun index) ∧
       view.descriptors (report.atRun index) = runCensus index := by
-    intro index
-    induction index with
-    | zero =>
-      intro _
-      simp only [runCensus, runReadDrops]
+    apply throughSelectedRuns selected (invariant := fun index =>
+      MarkedReadCacheFrame seed seed.afterPending (report.atRun index) ∧
+        view.descriptors (report.atRun index) = runCensus index)
+    · simp only [runCensus, runReadDrops]
       rw [firstCensus]
       refine ⟨firstFrame, ?_⟩
       generalize admission.reached.afterDrops chronology.manifestDrops = before
       cases before
       simp only [DescriptorInventory.afterDrops, List.all_nil, List.filter_eq_self.mpr (fun _ _ => rfl)]
-    | succ index earlier =>
-      intro within
-      have visited : index < latest := Nat.lt_of_succ_le within
-      obtain ⟨_, _, _, bound, decoded, member, stored⟩ := selected.selectedRun visited
+    · intro _ _ _ _ bound decoded member stored earlier
       obtain ⟨_, _, frame, census⟩ := report.readsRun bound decoded member stored
-      exact ⟨(earlier (Nat.le_of_lt visited)).1.trans frame, census⟩
+      exact ⟨earlier.1.trans frame, census⟩
   have markerRead := report.markerRead.readsOptional report.markerStat
   change calls.readOptional directory (directory.file .walBoundary) (report.atRun latest) =
     .ok (some chronology.marker.bytes) report.atScan at markerRead
