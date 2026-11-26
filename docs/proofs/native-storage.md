@@ -219,8 +219,7 @@ succeeds, the sampled marker selects the earlier history or the earlier history
 plus the whole prepared batch. Before the first checkpoint, the same opener
 and latest lookup also work with sealed WAL segments. The offset selector
 orders the reads, and the sampled file bindings supply each sealed payload
-and the active keeper bytes. Connecting an actual rotation to those storage
-premises is a separate publication obligation. An interruption during the outstanding final directory
+and the active keeper bytes. An interruption during the outstanding final directory
 fsync reaches the same recovery boundary through the cached root descriptor,
 without a write response. The file callbacks each preserve the protected paths and
 the bounded WAL names. The proof composes those local facts up to the marker
@@ -232,10 +231,23 @@ same cache. Its interrupted directory sync and one reboot sample select the
 client history. A successful open through the scoped reader then identifies
 the returned handle’s phase and token. For any key, acquiring its latest pin
 and reading it extends that history’s recorded reads. This covers a stop at
-the final directory fsync before the first checkpoint. Rotation still needs
-to supply the corresponding reached storage entry.
+the final directory fsync before the first checkpoint.
 [Fresh two-write composition](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
 [Literal reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+
+**What a successful rotation hands to the next call.** Both successor branches
+sync the empty file and then the directory. On the returned heap the former
+keeper joins the seals and the cached directory handle still names the bound
+root. For every other offset in the protected interval, the callbacks preserve
+whether a canonical WAL name exists. An extra name between two seals can
+change replay, so preserving only the files that exist would be insufficient.
+These facts give the next write its entry and let a between-call reboot reuse
+the checkpoint-free reader with the same client history and prior reads.
+The argument takes the rotation branch observations, local frames and a
+projection of the held child into the live directory and each joint crash
+sample. [Physical storage](../../lean/Alvoki/Storage/Disk/NativeRotationReadyStorage.lean) ·
+[Name interval](../../lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean) ·
+[Returned handle and replay](../../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the

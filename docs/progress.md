@@ -104,10 +104,16 @@ open and latest lookup record the observed sequence, key and value on that
 same ledger. The second submission has no returned response.
 [Two-write trace](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
-**Next obligation.** For rotation, establish
-the sealed files and the new active binding at the rotation’s actual return. On the
-failed-barrier path, the surviving namespace and cleanup inventory still need
-to feed the next admission.
+A successful nonempty rotation now hands the next writer the literal returned
+cache, census and empty successor. The old keeper becomes a seal. Creating
+the successor and reusing an existing private empty file establish the same
+WAL interval and feed the same reboot and snapshot proof. This uses the
+local callback frames and the association between the observed child and
+the joint crash namespace. [Rotation through reopen](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
+
+**Next obligation.** At a failed rotation barrier, carry the surviving
+namespace and reached cleanup inventory into the next admission. Also connect
+the successful rotation observations to a mixed execution from fresh state.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

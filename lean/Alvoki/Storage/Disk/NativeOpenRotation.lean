@@ -273,6 +273,87 @@ structure OpenRotationObservation.Reached {read create sync entry settled reset}
   lockSlot : (seen.view.handle position.reached opened.lock).2.1 = current.current.ready.state.owner
   held : (seen.view.files position.reached).owners = current.current.ready.state.files.owners
 
+/-- A callback's successful return preserves the indicated relation between heaps. -/
+abbrev RotationProjects.OnReturn {α : Type} (frame : heap → heap → Prop)
+    (call : EStateM IO.Error heap α) : Prop :=
+  ∀ {before value after}, call before = .ok value after → frame before after
+
+private theorem RotationProjects.OnReturn.bind {α β : Type} {frame : heap → heap → Prop}
+    {call : EStateM IO.Error heap α} {next : α → EStateM IO.Error heap β}
+    (first : OnReturn frame call)
+    (trans : ∀ {a b c}, frame a b → frame b c → frame a c)
+    (later : ∀ value, OnReturn frame (next value)) : OnReturn frame (call >>= next) := by
+  intro before result after returned
+  cases ran : call before with
+  | error cause failed => simp [Bind.bind, EStateM.bind, ran] at returned
+  | ok value middle =>
+    exact trans (first ran) (later value (by simpa only [Bind.bind, EStateM.bind, ran] using returned))
+
+/-- The two successful successor branches carry the same local frame. Only
+the absent branch calls create. Both sync the successor and its directory. -/
+private theorem RotationProjects.framesSuccessor
+    (directory : DiskDirectory) (first : Nat) (calls : OpenRotationCallbacks heap)
+    {frame : heap → heap → Prop} (refl : ∀ h, frame h h)
+    (trans : ∀ {a b c}, frame a b → frame b c → frame a c)
+    (read : OnReturn frame (calls.read (directory.file (.walSegment first))))
+    (create : OnReturn frame (calls.create (directory.file (.walSegment first))))
+    (fileSync : OnReturn frame (calls.sync (directory.file (.walSegment first))))
+    (dirSync : OnReturn frame (calls.sync directory.path)) :
+    OnReturn frame (WalSegmentRotation.runAt directory first calls.read calls.create calls.sync) := by
+  have pureFrame {α : Type} (value : α) : OnReturn frame (Pure.pure value) := by
+    intro before returned after same
+    exact (EStateM.Result.ok.inj same).2 ▸ refl before
+  rw [WalSegmentRotation.runAt_fileEffects]
+  apply OnReturn.bind (frame := frame) (trans := trans)
+  · unfold WalSegmentRotation.observeSuccessorWith
+    apply read.bind trans
+    intro bytes
+    cases bytes with
+    | none => exact pureFrame false
+    | some bytes =>
+      by_cases empty : bytes.size = 0
+      · simpa only [empty, ↓reduceIte] using pureFrame true
+      · simp only [empty, ↓reduceIte]
+        intro impossible
+        contradiction
+  · intro present
+    have barriers : OnReturn frame (do
+        calls.sync (directory.file (.walSegment first))
+        calls.sync directory.path
+        pure ()) := fileSync.bind trans fun _ => dirSync.bind trans fun _ => pureFrame ()
+    cases present
+    · simp only [Bool.false_eq_true, ↓reduceIte]
+      apply create.bind trans
+      intro _
+      exact @barriers
+    · exact @barriers
+
+/-- Each successful primitive preserves one footprint of the caller's choice. -/
+structure OpenRotationObservation.LocalFrames
+    {read create sync entry settled reset} (seen : OpenRotationObservation current read create sync entry settled reset)
+    (frame : heap → heap → Prop) : Prop where
+  phase : ∀ value, RotationProjects.OnReturn frame (opened.set opened.phase value)
+  reads : RotationProjects.OnReturn frame (seen.calls.read (opened.directory.file
+    (.walSegment (current.current.ready.state.writer.installed.walBytes / WAL.frameSize))))
+  creates : RotationProjects.OnReturn frame (seen.calls.create (opened.directory.file
+    (.walSegment (current.current.ready.state.writer.installed.walBytes / WAL.frameSize))))
+  syncFile : RotationProjects.OnReturn frame (seen.calls.sync (opened.directory.file
+    (.walSegment (current.current.ready.state.writer.installed.walBytes / WAL.frameSize))))
+  syncDirectory : RotationProjects.OnReturn frame (seen.calls.sync opened.directory.path)
+  clear : RotationProjects.OnReturn frame (seen.calls.setActive seen.active none)
+
+/-- Carry a footprint from the installed phase to the literal rotation return. -/
+theorem OpenRotationObservation.Reached.frames
+    {read create sync entry settled reset} {seen : OpenRotationObservation current read create sync entry settled reset}
+    {lookup position} (reached : seen.Reached lookup position)
+    {frame : heap → heap → Prop} (refl : ∀ h, frame h h)
+    (trans : ∀ {a b c}, frame a b → frame b c → frame a c) (effects : seen.LocalFrames frame) :
+    frame current.reached position.reached := by
+  obtain ⟨_, _, _, poison, published, cleared, restored⟩ := reached.steps
+  have group := RotationProjects.framesSuccessor opened.directory _ seen.calls refl trans
+    effects.reads effects.creates effects.syncFile effects.syncDirectory published
+  exact trans (effects.phase _ poison) (trans group (trans (effects.clear cleared) (effects.phase _ restored)))
+
 private theorem OpenRotationObservation.reachesReady {read create sync entry settled reset}
     (seen : OpenRotationObservation current read create sync entry settled reset)
     (lookup : FilePath → Except IO.Error IO.FS.Metadata)

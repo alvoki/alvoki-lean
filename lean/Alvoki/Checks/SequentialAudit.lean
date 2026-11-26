@@ -404,6 +404,10 @@ import Alvoki.Storage.Disk.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.NativeOpenedWalPlanning
 import Alvoki.Storage.Disk.NativeOpenRotation
+import Alvoki.Storage.Disk.NativeRotationWriteEntry
+import Alvoki.Storage.Disk.NativeRotationReadyStorage
+import Alvoki.Storage.Disk.NativeRotationWalWindow
+import Alvoki.Storage.Disk.NativeRotationWalReplay
 import Alvoki.Storage.Disk.NativeOpenedWalCollection
 import Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeObsoleteRunCollection
@@ -2743,6 +2747,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.rotationSchedule
 #check_axioms Alvoki.Storage.DiskSession.RotationProjects.rotateFiles
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesEmptyOnOpenPhase
+#check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.writeStorageEntryCreated
+#check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.writeStorageEntryExisting
+#check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.frames
+#check_axioms Alvoki.Storage.DiskSession.NativeCreatedRotationContinuation.writeStorageEntry
+#check_axioms Alvoki.Storage.DiskSession.NativeExistingRotationContinuation.writeStorageEntry
+#check_axioms Alvoki.Storage.WalSegmentImage.settlesRotatedNamespace
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.activeWalPresent
+#check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.walWindow
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesCreatedWithWal
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesExistingWithWal
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesCreatedOnOpenPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotatesExistingOnOpenPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeRotationDirectoryFailure.cachePreserved
