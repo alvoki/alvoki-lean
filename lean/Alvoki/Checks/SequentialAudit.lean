@@ -1973,6 +1973,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesVisibleWriteRetry
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.replaysSelected
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.retainedFromActualReplay
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSyncsReached
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootGroupReturned
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.pendingGroupReturned
@@ -4137,7 +4138,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.openWithLock_reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.reachesHeldCache
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.readsLiteralMarkedOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.projectsHeldCache

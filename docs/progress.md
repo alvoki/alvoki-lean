@@ -1,5 +1,12 @@
 # Current handoff
 
+The selected marked reader now derives the measured keeper extent and the exact
+set of later starts in the observed directory for every successful bounded repair.
+The common finisher exposes the ordered unlink pass and the final keeper sync
+or staged replacement. The existing aligned writer consumes both results.
+For a nonempty suffix, the next obligation is to connect the scan to all later
+model names and carry their removal through the directory barrier.
+
 The grouped and late write proofs now derive the cache entry of their
 literal aligned reopen. The actual path and no-follow lookups supply
 their reached heaps. The selected retry already binds the existing

@@ -6,6 +6,72 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentRepair
 
+/-- The successful finisher has one authorization barrier. It reaches
+the shared checked unlink pass except on the empty aligned fast path.
+The measured size then determines the tail of that same execution. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSuccess {heap : Type}
+    (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {entry reached : heap}
+    (returned : finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .ok () reached) :
+    let run := performPaths directory plan remove throw write sync rename
+    plan.valid = true ∧ plan.keeperBytes.size = plan.keeperSize ∧ plan.keeperSize ≤ physicalSize ∧
+    ∃ authorized, sync #[directory.path] entry = .ok () authorized ∧
+      if plan.newer.isEmpty && physicalSize == plan.keeperSize then
+        sync #[directory.file (.walSegment plan.keeper)] authorized = .ok () reached
+      else
+        ∃ pruned, ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM run) authorized = .ok () pruned ∧
+          (if plan.keeperSize < physicalSize then (Publication.steps.map Step.replace).forM run
+            else sync #[directory.file (.walSegment plan.keeper)]) pruned = .ok () reached := by
+  intro run
+  have guarded :
+      (plan.valid && (plan.keeperBytes.size == plan.keeperSize) && decide (plan.keeperSize ≤ physicalSize)) = true := by
+    cases guard : plan.valid && (plan.keeperBytes.size == plan.keeperSize) && decide (plan.keeperSize ≤ physicalSize)
+    · simp [finishBoundedMarkedOpen, guard, throw, throwThe, MonadExceptOf.throw, EStateM.throw, Bind.bind, EStateM.bind] at returned
+    · rfl
+  obtain ⟨valid, size, bounded⟩ : plan.valid = true ∧ plan.keeperBytes.size = plan.keeperSize ∧ plan.keeperSize ≤ physicalSize := by
+    simpa only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, and_assoc] using guarded
+  refine ⟨valid, size, bounded, ?_⟩
+  let fast := plan.newer.isEmpty && physicalSize == plan.keeperSize
+  change ∃ authorized, sync #[directory.path] entry = .ok () authorized ∧ (if fast then _ else _)
+  simp only [finishBoundedMarkedOpen, guarded, ite_true, Bind.bind] at returned
+  change ((if fast then _ else _) : EStateM IO.Error heap Unit) entry = _ at returned
+  by_cases short : fast = true
+  · simp only [short, ite_true] at returned ⊢
+    cases root : sync #[directory.path] entry with
+    | error cause failed => simp [root, EStateM.bind] at returned
+    | ok result authorized =>
+      cases result
+      exact ⟨authorized, rfl, by simpa only [Bind.bind, EStateM.bind, root] using returned⟩
+  · have notFast : fast = false := Bool.eq_false_iff.mpr short
+    simp only [notFast, Bool.false_eq_true, ite_false, runRepairPlan, Bind.bind, EStateM.bind] at returned ⊢
+    cases root : sync #[directory.path] entry with
+    | error cause failed => simp [root] at returned
+    | ok result authorized =>
+      cases result
+      have schedule : ((steps plan.newer (decide (plan.keeperSize < physicalSize))).forM run) authorized =
+          .ok () reached := by simpa only [root] using returned
+      unfold steps at schedule
+      rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at schedule
+      cases pruneReturn : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM run) authorized with
+      | error cause after => simp [Bind.bind, EStateM.bind, pruneReturn] at schedule
+      | ok result pruned =>
+        cases result
+        refine ⟨authorized, rfl, pruned, pruneReturn, ?_⟩
+        by_cases longer : plan.keeperSize < physicalSize
+        · simp only [longer, ite_true]
+          simpa only [Bind.bind, EStateM.bind, pruneReturn, decide_eq_true longer, ite_true] using schedule
+        · simp only [longer, ite_false]
+          simp [Bind.bind, EStateM.bind, pruneReturn, longer, run, performPaths, List.forM_eq_forM,
+            List.forM_cons, List.forM_nil, Pure.pure, EStateM.pure] at schedule
+          cases kept : sync #[directory.file (.walSegment plan.keeper)] pruned with
+          | error cause failed => simp [kept] at schedule
+          | ok result after =>
+            cases result
+            simpa only [kept] using schedule
+
 /-- A successful aligned finish with no later names uses exactly the
 directory barrier followed by the barrier on its existing keeper. -/
 theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSyncsReached {heap : Type}
@@ -15,18 +81,13 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedSy
     (sync : Array FilePath → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     {entry reached : heap}
-    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
     (aligned : physicalSize = plan.keeperSize) (noneLater : plan.newer = [])
     (returned : finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .ok () reached) :
     ∃ afterDirectory, sync #[directory.path] entry = .ok () afterDirectory ∧
       sync #[directory.file (.walSegment plan.keeper)] afterDirectory = .ok () reached := by
-  subst physicalSize
-  simp [finishBoundedMarkedOpen, valid, size, noneLater, Bind.bind, EStateM.bind] at returned
-  cases directoryBarrier : sync #[directory.path] entry with
-  | error cause failed => simp [directoryBarrier] at returned
-  | ok result afterDirectory =>
-    cases result
-    exact ⟨afterDirectory, rfl, by simpa only [directoryBarrier] using returned⟩
+  have ⟨_, _, _, authorized⟩ :=
+    finishBoundedMarkedOpen_reachedSuccess directory plan physicalSize remove write sync rename returned
+  simpa [aligned, noneLater] using authorized
 
 structure AlignedKeeperCacheCallbacks (heap : Type) where
   openRead : FilePath → EStateM IO.Error heap IO.FS.Handle
@@ -97,7 +158,6 @@ theorem alignedRepairSyncs {image : Type} (view : OpenCloseHeapView heap image)
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     {readHeap entry reached : heap} {root keeper : IO.FS.Handle}
-    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
     (aligned : physicalSize = plan.keeperSize) (noneLater : plan.newer = [])
     (cachedRoot : view.directory entry cached = some root)
     (remembered : calls.modifyPending pending (pushPending (directory.file (.walSegment plan.keeper)) keeper)
@@ -124,7 +184,7 @@ theorem alignedRepairSyncs {image : Type} (view : OpenCloseHeapView heap image)
   intro path
   obtain ⟨afterDirectory, rootBarrier, keeperBarrier⟩ :=
     finishBoundedMarkedOpen_alignedSyncsReached directory plan physicalSize remove write
-      (calls.syncPaths directory.path cached active pending) rename valid size aligned noneLater returned
+      (calls.syncPaths directory.path cached active pending) rename aligned noneLater returned
   let syncer : RawSyncCalls heap :=
     ⟨⟨calls.getDirectory, calls.getPending, calls.setPending, calls.getActive, calls.openRead⟩, calls.sync⟩
   change syncer.group directory.path cached active pending #[directory.path] entry = .ok () afterDirectory at rootBarrier
