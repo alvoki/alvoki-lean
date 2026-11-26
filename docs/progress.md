@@ -53,8 +53,13 @@ staged descriptor selected from the pending list through the filtered
 cache update and file fsync. The update must preserve protected bytes,
 including when another reference is dropped. The final rooted barrier
 settles the new keeper binding and removes the scratch name from each
-admissible crash map. Connecting this heap and the replayed history to
-the actual returned table and its next-write namespace remains open.
+admissible crash map. The longer-keeper proof now combines this heap with the bounded replay
+and the actual worker return. Both keeper lengths share the phase and
+token allocation proof that puts the replayed history and next-write
+storage on the returned table. The longer route still needs canonical
+WAL name presence for every prospective batch end, including holes
+outside the protected files. The grouped and late public recovery
+theorems still select the aligned route.
 [Replacement callbacks](../lean/Alvoki/Storage/Disk/NativeLongKeeperSettlementHeap.lean) ·
 [Replacement storage](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 

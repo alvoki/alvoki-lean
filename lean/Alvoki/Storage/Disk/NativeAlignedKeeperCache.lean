@@ -115,6 +115,34 @@ theorem foldReturnedWalUnlinks {heap model : Type}
             (unlink (included _ List.mem_cons_self) removed accepted known) ran
   exact preserve (fun _ member => member) entered returned
 
+/-- An accepted unlink changes its logical suffix entry while preserving
+an independently chosen frame, such as held lock authority. -/
+theorem filesAndFrameOfReturnedWalUnlinks {heap : Type}
+    (directory : DiskDirectory) (plan : Plan)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (files : heap → FileImage) (keeps : heap → heap → Prop)
+    (trans : ∀ {before middle after}, keeps before middle → keeps middle after → keeps before after)
+    {origin first last : heap} (entered : keeps origin first)
+    (unlink : ∀ {ordinal before after result}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) before = .ok result after →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      files after = (files before).unlinkLater ordinal ∧ keeps before after)
+    (returned : ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
+    files last = plan.newer.foldl FileImage.unlinkLater (files first) ∧ keeps origin last := by
+  let invariant (image : FileImage) (atHeap : heap) := files atHeap = image ∧ keeps origin atHeap
+  have step {ordinal before after result image} (member : ordinal ∈ plan.newer)
+      (called : remove (directory.file (.walSegment ordinal)) before = .ok result after)
+      (accepted : RunCollection.ownedUnlinkResult result = .ok ()) (known : invariant image before) :
+      invariant (image.unlinkLater ordinal) after := by
+    obtain ⟨same, framed⟩ := unlink member called accepted
+    exact ⟨same.trans (congrArg (fun image => image.unlinkLater ordinal) known.1), trans known.2 framed⟩
+  exact foldReturnedWalUnlinks directory plan remove write sync rename invariant FileImage.unlinkLater
+    ⟨rfl, entered⟩ step returned
+
 /-- Split the reached prune block into the ordered unlink pass and the
 directory barrier that follows it. -/
 theorem returnedWalUnlinksAndBarrier {heap : Type}
