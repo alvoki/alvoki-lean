@@ -1981,6 +1981,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.modeledWindow
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.liveWalWindow
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.visibleWal
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEntry.visibleReadyWal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesVisibleWriteRetry
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.replaysSelected
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.retainedFromActualReplay
@@ -2649,6 +2650,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.observesReboot
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.ReturnedAt.returnsFixedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensQuietAfterManifestRejection
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.reopensQuietFromFixedInterpreter
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reopensQuietFromFixedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.FirstRunStopObservations.storageAtStop
 #check_axioms Alvoki.Storage.DiskSession.FreshCheckpointStopObservations.storageAtStop
 #check_axioms Alvoki.Storage.DiskSession.QuietCheckpointRetryObservations.readsLatest
@@ -4294,6 +4297,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.protectedPathNeWalFromActive
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsDurableRetry
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsRecoveryObservations
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsReadyRecovery
 #check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Stored.samplesAtBinding
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.samplesRebootFiles
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsSampledRetry
@@ -4313,6 +4317,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.reachedSuccess
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.reachesHeldCache
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.readsLiteralMarkedOpen
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.replaysSingleSegmentAtOpen
 #check_axioms Alvoki.Storage.DiskSession.AlignedRepairImageEffects.readyAfterReturn
 
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.retainsLiteralAlignedReturn

@@ -705,6 +705,47 @@ structure CanonicalKeeperLayout.VisibleWal {files : FileImage} {history : List W
   keeper : (names (directory.file (.walSegment layout.keeper.first))).map visible =
     some (layout.keeper.bytes ++ layout.tail)
 
+private theorem CanonicalKeeperLayout.visibleWalOfSelection
+    {view : OpenCloseHeapView heap FileImage} {state : NativeReadyState} {target : Target}
+    {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray} {entry : heap}
+    {history : List WAL.Write} (layout : CanonicalKeeperLayout (view.files entry).image history)
+    (sameTarget : layout.target = target)
+    (window : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
+      ((names entry (state.session.directory.file (.walSegment start))).isSome = true ↔
+        start ∈ (layout.sealed ++ [layout.keeper]).map WalSegment.first))
+    (seals : layout.sealed ⊆ state.writer.wal.sealed)
+    (protectedFiles : NativeReadyProtectedStorage state ⟨names entry, fun inode => [visible entry inode]⟩)
+    (keeper : RawOpenRetryTrace.KeeperAt view state.session.directory target names visible entry) :
+    layout.VisibleWal state.session.directory (names entry) (visible entry) := by
+  refine ⟨window, ?_, ?_⟩
+  · intro segment member
+    obtain ⟨inode, bound, bytes⟩ := protectedFiles.sealedFiles segment (seals member)
+    change names entry (state.session.directory.file (.walSegment segment.first)) = some inode at bound
+    rw [bound, Option.map_some]
+    exact congrArg some (List.cons.inj bytes).1
+  · have first : layout.keeper.first = target.first := congrArg Target.first sameTarget
+    rw [first]
+    exact keeper.symm.trans layout.visible
+
+/-- The literal reader's WAL input follows from the sampled ready
+entry and its namespace window. Its layout selects from the unchanged
+writer, so there is no uncertain batch or independent byte report. -/
+theorem RawOpenRetryTrace.SelectedEntry.visibleReadyWal
+    {view : OpenCloseHeapView heap FileImage} {state : NativeReadyState}
+    {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray} {entry : heap}
+    (selected : RawOpenRetryTrace.SelectedEntry view state state.writer.target names visible entry)
+    (layout : CanonicalKeeperLayout (view.files entry).image state.writer.history)
+    (target : layout.target = state.writer.target)
+    (descriptors : layout.sealed ++ [layout.keeper] = state.writer.wal.readDescriptors layout.range.watermark)
+    (offsets : selectWalSegmentReads (state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
+      some (layout.first, (layout.sealed ++ [layout.keeper]).map WalSegment.first))
+    (window : state.writer.wal.NamespaceWindow state.session.directory layout.first layout.range.through (names entry)) :
+    layout.VisibleWal state.session.directory (names entry) (visible entry) := by
+  have modeled := (layout.modeledWindow _ offsets).1
+  exact layout.visibleWalOfSelection target
+    (fun start lower upper => (window start lower upper).trans (modeled start lower))
+    (WalSegmentImage.selectedSeals_subset descriptors) selected.protectedFiles selected.keeper
+
 /-- The entry of the next open combines the immutable seal footprint
 with the independently framed names and live keeper of that retry. -/
 theorem NativeReadPosition.SelectedWritePlan.visibleWal
@@ -717,17 +758,9 @@ theorem NativeReadPosition.SelectedWritePlan.visibleWal
       plan.layout.first plan.layout.range.through (names entry))
     (protectedFiles : NativeReadyProtectedStorage current.state ⟨names entry, fun inode => [visible entry inode]⟩)
     (keeper : RawOpenRetryTrace.KeeperAt view current.state.session.directory target names visible entry) :
-    plan.layout.VisibleWal current.state.session.directory (names entry) (visible entry) := by
-  refine ⟨plan.liveWalWindow (names entry) window, ?_, ?_⟩
-  · intro segment selected
-    obtain ⟨inode, bound, bytes⟩ := protectedFiles.sealedFiles segment
-      (NativeReadPosition.SelectedWritePlan.retainsSeal current plan selected)
-    change names entry (current.state.session.directory.file (.walSegment segment.first)) = some inode at bound
-    rw [bound, Option.map_some]
-    exact congrArg some (List.cons.inj bytes).1
-  · have sameFirst : plan.layout.keeper.first = target.first := congrArg Target.first plan.targetEq
-    rw [sameFirst]
-    exact keeper.symm.trans plan.layout.visible
+    plan.layout.VisibleWal current.state.session.directory (names entry) (visible entry) :=
+  plan.layout.visibleWalOfSelection plan.targetEq (plan.liveWalWindow (names entry) window)
+    (fun _ member => NativeReadPosition.SelectedWritePlan.retainsSeal current plan member) protectedFiles keeper
 
 private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
     {stream : Type} {source : RawMarkedOpenInterpreter heap stream}

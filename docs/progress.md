@@ -15,12 +15,14 @@ prefix. A failed keeper/marker sync group joins this ledger to a sampled reboot
 and either a final failed reopen or a successful reopen followed by an acknowledged
 write and a snapshot read on the returned handle, under local storage effects.
 
-After a power loss between calls, one chronological reader now produces the
-logical restart step and its recovered session together. The opened-session
-trace and the checkpoint recovery proof use the same step producer and exact
-installation result. For the first acknowledged WAL batch, the remaining
-link is from one sampled crash namespace to the actual listing and reads of
-the healthy opener. [Quiet recovery](../lean/Alvoki/Storage/Disk/NativeQuietPowerLossTableOpen.lean)
+**WAL before the first checkpoint.** For a settled writer with one segment,
+one sampled crash namespace determines the keeper, marker and repair plan.
+Under the local filesystem laws, every successful fixed `open` installs the
+replay of the writer’s entire history in the phase used by the returned
+table. The cutoff comes from the marker, and the actual scan determines
+which later segments to prune. This uses the physical write state and the
+settled WAL name interval at acknowledgement. [Sampled files](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+· [Literal open and replay](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
 **Retries.** The first reboot selects the committed prefix and keeper. Given the
 bounded WAL catalog at that sample, the actual admission, listing and read frames
@@ -78,10 +80,11 @@ common cleanup carries the observed descriptor closes at that heap through
 unlock and final lock release to derive the public diagnostic and inventory.
 Several cache references may share a handle. The fsync may already have taken effect.
 
-**Next obligation.** Carry the surviving namespace from that failed barrier,
-together with the cleanup inventory, into the next admission on the same
-execution. Successful installation still requires local file and allocation
-effects.
+**Next obligation.** Connect the first returned write after fresh bootstrap to
+this single-segment result on its exact heap. Derive the absent manifest,
+empty seal list and required WAL interval there. Then read a snapshot on the
+reopened handle. On the failed-barrier path, the surviving namespace and
+cleanup inventory still need to feed the next admission.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

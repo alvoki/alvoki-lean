@@ -9,6 +9,22 @@ def WalSegmentImage.segments (image : WalSegmentImage) : List WalSegment := imag
 def WalSegmentImage.readDescriptors (image : WalSegmentImage) (watermark : Nat) : List WalSegment :=
   if watermark < image.active.last then image.afterWatermark watermark else [image.active]
 
+/-- The bounded reader can select only seals from the original WAL. -/
+theorem WalSegmentImage.selectedSeals_subset {wal : WalSegmentImage} {watermark : Nat}
+    {sealed : List WalSegment} {keeper : WalSegment}
+    (descriptors : sealed ++ [keeper] = wal.readDescriptors watermark) : sealed ⊆ wal.sealed := by
+  intro segment chosen
+  rw [WalSegmentImage.readDescriptors] at descriptors
+  split at descriptors
+  · rename_i covered
+    have fromSeals : sealed = wal.sealed.filter (fun s => decide (watermark < s.last)) :=
+      (List.append_singleton_inj.mp (by simpa [WalSegmentImage.afterWatermark, WalSegmentImage.segments,
+        List.filter_append, covered] using descriptors)).1
+    rw [fromSeals] at chosen
+    exact (List.mem_filter.mp chosen).1
+  · have empty := (List.append_singleton_inj.mp (show sealed ++ [keeper] = [] ++ [wal.active] from descriptors)).1
+    simp [empty] at chosen
+
 /-- Available descriptors are increasing and nonoverlapping. Payloads of
 covered older segments need no validation here. The active descriptor
 records the complete encoded frames, separately from a possible torn tail. -/

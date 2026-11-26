@@ -586,21 +586,8 @@ structure NativeReadPosition.SelectedWritePlan (batch : List WAL.Write) (target 
 /-- Every selected seal belongs to the original immutable seal set. -/
 theorem NativeReadPosition.SelectedWritePlan.retainsSeal {batch : List WAL.Write} {target : Target} {image : FileImage}
     (plan : current.SelectedWritePlan batch target image) {segment : WalSegment} (chosen : segment ∈ plan.layout.sealed) :
-    segment ∈ (state).writer.wal.sealed := by
-  let wal := (state).writer.wal.appendSelectedView image.directory.active plan.history
-  have descriptors := plan.descriptors
-  change plan.layout.sealed ++ [plan.layout.keeper] = wal.readDescriptors plan.layout.range.watermark at descriptors
-  rw [WalSegmentImage.readDescriptors] at descriptors
-  split at descriptors
-  · rename_i covered
-    have fromSeals : plan.layout.sealed = wal.sealed.filter (fun s => decide (plan.layout.range.watermark < s.last)) :=
-      (List.append_singleton_inj.mp (by simpa [WalSegmentImage.afterWatermark, WalSegmentImage.segments,
-        List.filter_append, covered] using descriptors)).1
-    rw [fromSeals] at chosen
-    exact (List.mem_filter.mp chosen).1
-  · have empty := (List.append_singleton_inj.mp (show plan.layout.sealed ++ [plan.layout.keeper] = [] ++ [wal.active]
-      from descriptors)).1
-    simp [empty] at chosen
+    segment ∈ (state).writer.wal.sealed :=
+  WalSegmentImage.selectedSeals_subset plan.descriptors chosen
 
 /-- Rebuild the bounded reader and replay at an image that implements
 an already selected target. Repair may change the keeper and later names. -/

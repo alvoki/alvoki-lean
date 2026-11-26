@@ -1738,4 +1738,106 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
 
 end LiteralContinuation
 
+section SingleSegment
+
+variable {heap stream : Type} {view : OpenCloseHeapView heap FileImage}
+  {state : NativeReadyState} {source : RawMarkedOpenInterpreter heap stream}
+  {storage : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+  {acknowledged rebooted returnedAt : heap} {table : DiskTable}
+  {namespaceView : DirectoryReadNamespace} {root : DeviceInode}
+
+local notation "directory" => state.session.directory
+local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage h))
+local notation "samples" => fun h => CheckpointSurvivingFiles.mk (names h) (fun inode => [visible h inode])
+
+/-- Before rotation or checkpoint, the sampled files determine the history
+installed in the phase of the table returned by a successful public open. -/
+theorem RawWriteRebootEntry.replaysSingleSegmentAtOpen
+    (seen : RawWriteRebootEntry state view storage names visible acknowledged rebooted)
+    (valid : state.Valid) (physical : NativeReadyStorage state (storage acknowledged))
+    (reset : seen.DurableReset)
+    (catalog : state.writer.wal.SettledNamespaceWindow directory 0 state.writer.target.range.through (storage acknowledged))
+    (noManifest : state.writer.target.pair.manifest = none)
+    (single : state.writer.wal.sealed = [])
+    (admission : source.ObservedAdmissionEffects view directory (fun _ => False) input rebooted storage visible)
+    (effects : ∀ held : HeldOpenCache heap, LiteralOpenAuthority view directory held held.ready →
+      source.AlignedReadEffects view directory held.pendingRef names visible namespaceView root
+        (managedPath directory) (fun _ _ => True))
+    (child : ∀ start ≤ state.writer.target.range.through,
+      (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+        names rebooted ((directory).file (.walSegment start)))
+    (laterAbsent : ∀ {before entries listed}, source.directoryCalls.run (directory).path before = .ok entries listed →
+      (samples rebooted).Frames (managedPath directory) (samples listed) →
+      MarkedWalExtentReports.TruthfulAbsenceOn (state.writer.target.range.through < ·) source.fileCalls directory
+        namespaceView root (entries.toList.map (·.fileName)) listed)
+    (initializesPhase : ∀ {value before ref after}, source.allocatePhase (.ready value) before = .ok ref after →
+      view.phase after ref = some (.ready value))
+    (tokenKeepsPhase : ∀ {before token after}, source.allocateToken () before = .ok token after →
+      ∀ ref, view.phase after ref = view.phase before ref)
+    (returned : source.openTable input rebooted = .ok table returnedAt) :
+    ∃ (logical : PackedTable) (count : UInt64) (held : HeldOpenCache heap)
+      (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit) (repaired afterPhase : heap),
+      recoverSelected .empty (WAL.encode state.writer.history) = .ok logical ∧
+      logical.committed.toNat = state.writer.history.length ∧
+      source.allocatePhase (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩))
+        repaired = .ok phase afterPhase ∧
+      source.allocateToken () afterPhase = .ok token returnedAt ∧
+      view.phase returnedAt phase =
+        some (.ready (Reopened.installed ⟨logical, 0, count, state.writer.wal.active.first⟩)) ∧
+      table = RawMarkedOpenInterpreter.assemble directory held.lock
+        (RawMarkedOpenInterpreter.makeCache directory held.directoryRef held.activeRef held.pendingRef) phase token := by
+  obtain ⟨selected, recovery, _, _, layout, target, sameKeeper, _, descriptors, offsets, _⟩ :=
+    seen.startsReadyRecovery valid physical reset catalog
+  have through : layout.range.through = state.writer.target.range.through :=
+    congrArg (fun t : Target => t.range.through) target
+  have window : state.writer.wal.NamespaceWindow directory layout.first layout.range.through (names rebooted) :=
+    recovery.1.restrict (Nat.zero_le _) (Nat.le_of_eq through)
+  have wal := selected.visibleReadyWal layout target descriptors offsets window
+  have missing : layout.target.pair.manifest = none := (congrArg (fun t : Target => t.pair.manifest) target).trans noManifest
+  have noCheckpoint : SelectedIntegrityCheckpoint state.writer.published.durable layout.target.pair.manifest none :=
+    missing.symm ▸ .absent
+  have manifest : (samples rebooted).StoresManifest directory layout.target.pair.manifest := by
+    rw [missing, CheckpointSurvivingFiles.StoresManifest]
+    have old := selected.protectedFiles.manifest
+    rwa [noManifest] at old
+  have marker (marker : ByteArray) (present : (view.files rebooted).image.directory.active.walBoundary = some marker) :
+      (samples rebooted).Stored ((directory).file .walBoundary) marker := by
+    have atTarget := (congrArg DirectoryPublication.Bindings.walBoundary selected.valid.selected).symm.trans present
+    obtain ⟨inode, named, payload⟩ := Option.map_eq_some_iff.mp (selected.marker.trans atTarget)
+    exact ⟨inode, named, congrArg List.singleton payload⟩
+  have noSeals : layout.sealed = [] := List.eq_nil_iff_forall_not_mem.mpr (fun segment present => by
+    have original := WalSegmentImage.selectedSeals_subset descriptors present
+    simp [single] at original)
+  have following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start := by simp [noSeals]
+  obtain ⟨held, frame, authority, _, _, _, _, worker⟩ :=
+    source.reachesAlignedCache admission selected.protectedFiles.lockBound returned
+  have literal := (source.readsLiteralMarkedOpen directory layout noCheckpoint held.lock held.directoryRef held.activeRef
+    held.pendingRef held.ready names visible
+    namespaceView root (managedPath directory) (fun _ => trivial) (fun _ _ => trivial)
+    ⟨frame.1, trivial⟩ (effects held authority) manifest
+    (fun _ _ present _ _ _ _ _ => by simp [missing] at present)
+    marker (.inr ⟨.manifest, rfl⟩)
+    (fun _ _ present _ _ _ => by simp [missing] at present)
+    (.inr ⟨.walBoundary, rfl⟩) following
+    (fun start _ _ => .inr ⟨.walSegment start, rfl⟩) (fun start _ bound => child start (through ▸ bound))
+    (fun {before entries listed} scan frame => by
+      rw [through]
+      exact @laterAbsent before entries listed scan frame) wal worker).1
+
+  obtain ⟨count, markerBytes, patched, logical, _, _, _, _, _, repaired, _, _, phase, afterPhase, token,
+    markerName, decoded, _, applied, _, _, _, _, _, _, _, _, _, _, allocation, tokenReturn, assembled, _⟩ := literal
+  have accepted := valid.retained.resumed.accepted
+  rw [← selected.valid.selected] at accepted
+  obtain ⟨replayed, _, sameRows, full, _, committed, _⟩ := layout.replaysSelected noCheckpoint accepted
+    valid.retained.resumed.ordered markerName decoded (files := (layout.sealed ++ [layout.keeper]).map (fun item => (item.first, item.bytes)))
+      (by simp [List.map_append])
+  have equal : logical = replayed := congrArg Prod.snd (Except.ok.inj (applied.symm.trans sameRows))
+  subst replayed
+  exact ⟨logical, count, held, phase, token, repaired, afterPhase, full, committed,
+    sameKeeper ▸ allocation, tokenReturn, (tokenKeepsPhase tokenReturn phase).trans
+      (initializesPhase (sameKeeper ▸ allocation)), assembled⟩
+
+end SingleSegment
+
 end Alvoki.Storage.DiskSession

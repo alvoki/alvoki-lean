@@ -171,15 +171,7 @@ structure QuietCheckpointRetryObservations
   phaseIdentity : IO.Ref (Phase Installed) → Nat
   tokenIdentity : IO.Ref Unit → Nat
   observe : let crash := stable.observeCrash names chosen contents durable rebootObjects
-    ∀ layout : CanonicalKeeperLayout crash.retry.image (state).writer.history,
-      layout.target = (state).writer.target → Prepared crash.retry.image layout.target layout.plan →
-      ∀ selected : SelectedIntegrityCheckpoint (state).writer.published.durable
-        crash.retry.image.directory.active.manifest (state).writer.checkpoint,
-        ∃ (reader : NativeReadyRestartReads crash retryInput layout selected)
-          (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view source.calls source.init
-            finalized.reached phaseIdentity tokenIdentity source.allocatePhase source.allocateToken stream),
-          raw.fileCalls = source.fileCalls ∧ raw.directoryCalls = source.directoryCalls ∧
-            raw.callbacks = source.keeperCallbacks
+    source.ObservesQuietAligned crash retryInput view finalized.reached phaseIdentity tokenIdentity
   write : FilePath → ByteArray → EStateM IO.Error heap Unit
   get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)
   set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit
@@ -211,10 +203,11 @@ theorem QuietCheckpointRetryObservations.readsLatest
       last.current.ready.reads = (ready).reads ++ [request.record start.current.ready.state.writer.installed.table.committed
         (request.replay reference start.current.ready.state.writer.installed.table.committed)] ∧
       ∀ read ∈ last.current.ready.reads, read.agrees reference := by
-  obtain ⟨boot, denied, _, _, _, _, _, _, next, sameReads, _, _, returned, reopened⟩ :=
+  obtain ⟨boot, denied, _, quiet⟩ :=
     stop.reopensQuietAfterManifestRejection stable retry.names retry.chosen retry.contents retry.durable retry.rebootObjects
       retry.survivorNames retry.survivorBytes retry.booted source retry.seen retry.disposal retry.disposes retry.finalized
       retry.frames retry.observe retry.write retry.effects ptrEq
+  obtain ⟨_, _, _, _, _, _, next, sameReads, _, _, returned, reopened⟩ := quiet
   rw [retry.failedWith, retry.cleanup] at denied
   have reopenedAt : source.openTable retryInput afterFailure = .ok returned.handle.table returned.start.reached :=
     (congrArg (source.openTable retryInput) retry.cleanup).symm.trans reopened

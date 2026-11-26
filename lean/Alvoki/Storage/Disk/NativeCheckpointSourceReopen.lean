@@ -249,6 +249,141 @@ theorem RawAlignedCheckpointReopenEffects.returnsSelectedFromFixedInterpreter
 
 end
 
+section QuietOpen
+
+variable {heap stream : Type} {state : NativeReadyState} {input : FilePath}
+  {view : OpenCloseHeapView heap FileImage} {entry : heap}
+  {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+
+/-- The healthy reader and installer use the selected reboot and the
+fixed opener's callbacks at this entry. The writer derives the plan. -/
+def RawMarkedOpenInterpreter.ObservesQuietAligned (source : RawMarkedOpenInterpreter heap stream)
+    (crash : NativeReadyQuietCrash state) (input : FilePath) (view : OpenCloseHeapView heap FileImage)
+    (entry : heap) (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat) : Prop :=
+  ∀ layout : CanonicalKeeperLayout crash.retry.image state.writer.history,
+    layout.target = state.writer.target → Prepared crash.retry.image layout.target layout.plan →
+    ∀ selected : SelectedIntegrityCheckpoint state.writer.published.durable
+      crash.retry.image.directory.active.manifest state.writer.checkpoint,
+    ∃ (reader : NativeReadyRestartReads crash input layout selected)
+      (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view source.calls source.init
+        entry phaseIdentity tokenIdentity source.allocatePhase source.allocateToken stream),
+      raw.fileCalls = source.fileCalls ∧ raw.directoryCalls = source.directoryCalls ∧ raw.callbacks = source.keeperCallbacks
+
+variable {history : List WAL.Write} {log : List DatabaseSubmissions}
+  (current : NativeReadPosition history log) (crash : NativeReadyQuietCrash current.state)
+  (source : RawMarkedOpenInterpreter heap stream)
+  (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+  (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+  (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+  (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+
+local notation "selectedFootprint" => checkpointSurvivorPath current.state.session.directory current.state.writer
+  current.state.writer.target.pair.manifest
+
+/-- One aligned reader fixes both the selected bytes and the position
+installed on the table returned by the fixed opener. -/
+def NativeReadPosition.QuietFixedReturnAt (input : FilePath) (view : OpenCloseHeapView heap FileImage)
+    (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (before : heap)
+    (entry : heap) (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat) : Prop :=
+  ∃ (layout : CanonicalKeeperLayout crash.retry.image current.state.writer.history)
+    (selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+      crash.retry.image.directory.active.manifest current.state.writer.checkpoint)
+    (reader : NativeReadyRestartReads crash input layout selected)
+    (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view source.calls source.init
+      entry phaseIdentity tokenIdentity source.allocatePhase source.allocateToken stream),
+    (view.descriptors entry, view.files entry) = (crash.reboot, crash.retry) ∧
+    (layout.keeper = current.state.writer.wal.active ∧
+      ∀ path payload, selectedFootprint path → reader.ReadsSurvivor path payload →
+        ∃ read : reader.opening.reads.reads.ObservesFile path payload,
+          names before path = some read.object ∧ names entry path = some read.object ∧ bytes entry read.object = payload) ∧
+    ∃ next : NativeReadPosition history log,
+      next.reads = current.reads ∧ next.opened = reader.run ∧
+      reader.ReachedSession next.state history log current.reads ∧
+      ∃ returned : raw.ReturnedAt next source.remove write source.rename source.bootstrap
+          RawMarkedOpenInterpreter.assemble get set ptrEq,
+        source.openTable input entry = .ok returned.handle.table returned.start.reached
+
+variable {get set} {names : heap → FilePath → Option Nat} {bytes : heap → Nat → ByteArray}
+  {before rebooted : heap} {beforeCensus : DescriptorInventory}
+
+/-- The retained writer determines the aligned keeper, descriptors and
+prepared repair. The actual reader and allocator determine the table. -/
+theorem NativeReadPosition.reopensQuietFromFixedInterpreter
+    (reboot : RawQuietRebootEntry crash view names bytes before rebooted beforeCensus)
+    (frame : (⟨names rebooted, fun inode => [bytes rebooted inode]⟩ : CheckpointSurvivingFiles).Frames selectedFootprint
+      ⟨names entry, fun inode => [bytes entry inode]⟩)
+    (observed : source.ObservesQuietAligned crash input view entry phaseIdentity tokenIdentity)
+    (effects : OpenPhaseCellEffects view.phase get set) :
+    current.QuietFixedReturnAt crash source write get set ptrEq input view names bytes before entry phaseIdentity tokenIdentity := by
+  have retained := current.readPrefix.refines.1.retained
+  obtain ⟨layout, target, keeper, descriptors, offsets, prepared⟩ := retained.powerLossLayout
+  let selected : SelectedIntegrityCheckpoint current.state.writer.published.durable
+      crash.retry.image.directory.active.manifest current.state.writer.checkpoint := retained.resumed.selected
+  obtain ⟨reader, raw, files, directoryReads, callbacks⟩ := observed layout target prepared selected
+  obtain ⟨next, reads, returnedSession, replay, ⟨returned⟩⟩ :=
+    raw.reopensQuietSelection current source.remove write source.rename source.bootstrap
+      RawMarkedOpenInterpreter.assemble ptrEq target keeper descriptors offsets prepared
+      RawMarkedOpenInterpreter.assembles effects
+  have following := reader.opening.reads.walReads.selectedAfterWatermark offsets descriptors
+  have fixed := returned.returnsFixedInterpreter files directoryReads callbacks prepared following
+    retained.resumed.accepted retained.resumed.ordered
+  refine ⟨layout, selected, reader, raw, Prod.ext raw.raw.entryCensus raw.raw.entryFiles,
+    ⟨keeper, ?_⟩, next, reads, returnedSession, replay, returned, fixed⟩
+  intro path payload kept read
+  obtain ⟨actual, atBoot, byteValue⟩ := reboot.readsSurvivingFile kept read
+  have protectedPath : current.state.crashPath path := .inr (.inr kept)
+  have preBoot := (reboot.liveNames path protectedPath).trans
+    ((crash.settled crash.names crash.chosen path protectedPath).symm.trans
+      ((reboot.survivorNames path protectedPath).symm.trans atBoot))
+  obtain ⟨binding, durableBytes⟩ := frame path kept
+  exact ⟨actual, preBoot, binding.trans atBoot, (List.cons.inj (durableBytes actual.object atBoot)).1.trans byteValue⟩
+
+end QuietOpen
+
+section HealthyQuietOpen
+
+variable {heap stream : Type} {opened : NativeOpenedHandle heap} (current : NativeOpenedPosition opened)
+  {view : OpenCloseHeapView heap FileImage} {storage : heap → CheckpointStorageObservation}
+  {bytes : heap → Nat → ByteArray} {rebooted : heap}
+
+local notation "footprint" => checkpointSurvivorPath current.current.ready.state.session.directory current.current.ready.state.writer
+  current.current.ready.state.writer.target.pair.manifest
+local notation "liveNames" => fun atHeap => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage atHeap))
+
+/-- Use the settled storage of the last returned operation to choose the
+reboot. The raw heap supplies its bindings and bytes, and the local
+reader chronology supplies a successful healthy open at that heap. -/
+theorem NativeOpenedPosition.reopensQuietFromFixedInterpreter
+    (stable : NativeReadyStorage current.current.ready.state (storage current.reached))
+    (names : FilePath → Option Nat) (chosen : names ∈ (storage current.reached).crashNames)
+    (contents : Nat → ByteArray)
+    (durable : ∀ path, footprint path → ∀ inode, names path = some inode →
+      contents inode ∈ (storage current.reached).files.bytes inode)
+    (rebootObjects : Nat → Nat)
+    (census : view.descriptors current.reached = current.current.ready.state.census)
+    (survivorNames : ∀ path, current.current.ready.state.crashPath path → liveNames rebooted path = names path)
+    (survivorBytes : ∀ path, footprint path →
+      ∀ inode, names path = some inode → bytes rebooted inode = contents inode)
+    {input : FilePath} (source : RawMarkedOpenInterpreter heap stream)
+    {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+    (observed : let crash := stable.observeCrash names chosen contents durable rebootObjects
+      source.ObservesQuietAligned crash input view rebooted phaseIdentity tokenIdentity)
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (effects : OpenPhaseCellEffects view.phase get set) (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
+    let crash := stable.observeCrash names chosen contents durable rebootObjects
+    RawQuietRebootEntry crash view liveNames bytes current.reached rebooted ∧
+    current.current.ready.QuietFixedReturnAt crash source write get set ptrEq input view liveNames bytes current.reached
+      rebooted phaseIdentity tokenIdentity := by
+  intro crash
+  let reboot : RawQuietRebootEntry crash view liveNames bytes current.reached rebooted :=
+    ⟨census, fun _ _ => rfl, survivorNames, survivorBytes⟩
+  exact ⟨reboot, current.current.ready.reopensQuietFromFixedInterpreter crash source write ptrEq reboot
+    (fun _ _ => ⟨rfl, fun _ _ => rfl⟩) observed effects⟩
+
+end HealthyQuietOpen
+
 variable {heap stream : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
   {stage : CheckpointPublication.Step} {reason : FilePath} {reached : CheckpointWorld heap}
@@ -295,56 +430,25 @@ theorem NativeCheckpointSourceStop.reopensQuietAfterManifestRejection
     (finalized : RawOpenErrorLockFinalization view dir source.release admitted.lock admission.owner disposal.reached)
     (frames : seen.FileFrames disposal finalized readFiles footprint)
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
-    (observe : ∀ layout : CanonicalKeeperLayout (crash).retry.image (state).writer.history,
-      layout.target = (state).writer.target → Prepared (crash).retry.image layout.target layout.plan →
-      ∀ selected : SelectedIntegrityCheckpoint (state).writer.published.durable
-        (crash).retry.image.directory.active.manifest (state).writer.checkpoint,
-      ∃ (reader : NativeReadyRestartReads crash retryInput layout selected)
-        (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view source.calls source.init
-          finalized.reached phaseIdentity tokenIdentity source.allocatePhase source.allocateToken stream),
-        raw.fileCalls = source.fileCalls ∧ raw.directoryCalls = source.directoryCalls ∧
-          raw.callbacks = source.keeperCallbacks)
+    (observe : source.ObservesQuietAligned crash retryInput view finalized.reached phaseIdentity tokenIdentity)
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (effects : OpenPhaseCellEffects view.phase get set) (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
     RawQuietRebootEntry crash view liveNames bytes reached.2 rebooted (view.descriptors reached.2) ∧
     source.openTable input rebooted = .error (disposal.diagnostic seen.cause) finalized.reached ∧
-    ∃ (layout : CanonicalKeeperLayout (crash).retry.image (state).writer.history)
-      (selected : SelectedIntegrityCheckpoint (state).writer.published.durable
-        (crash).retry.image.directory.active.manifest (state).writer.checkpoint)
-      (reader : NativeReadyRestartReads crash retryInput layout selected)
-      (raw : RawAlignedCheckpointReopenEffects reader.opening reader.capturedChronology view source.calls source.init
-        finalized.reached phaseIdentity tokenIdentity source.allocatePhase source.allocateToken stream),
-      (view.descriptors finalized.reached, view.files finalized.reached) = (view.descriptors rebooted, view.files rebooted) ∧
-      (∀ path payload, footprint path → reader.ReadsSurvivor path payload →
-        ∃ read : reader.opening.reads.reads.ObservesFile path payload,
-          liveNames finalized.reached path = some read.object ∧ bytes finalized.reached read.object = payload) ∧
-      ∃ next : NativeReadPosition current.current.history current.current.submissions,
-        next.reads = (ready).reads ∧ next.opened = reader.run ∧
-        reader.ReachedSession next.state current.current.history current.current.submissions (ready).reads ∧
-        ∃ returned : raw.ReturnedAt next source.remove write source.rename source.bootstrap
-            RawMarkedOpenInterpreter.assemble get set ptrEq,
-          source.openTable retryInput finalized.reached = .ok returned.handle.table returned.start.reached := by
+    (view.descriptors finalized.reached, view.files finalized.reached) = (view.descriptors rebooted, view.files rebooted) ∧
+    (ready).QuietFixedReturnAt crash source write get set ptrEq retryInput view liveNames bytes reached.2
+      finalized.reached phaseIdentity tokenIdentity := by
   have reboot := (stop.observesReboot (view := view) (storage := storage) (bytes := bytes) (rebooted := rebooted)
     stable names chosen contents durable rebootObjects survivorNames survivorBytes).2
-  have retained := (ready).readPrefix.refines.1.retained
-  obtain ⟨layout, target, keeper, descriptors, offsets, prepared⟩ := retained.powerLossLayout
-  let selected : SelectedIntegrityCheckpoint (state).writer.published.durable
-      (crash).retry.image.directory.active.manifest (state).writer.checkpoint := retained.resumed.selected
-  obtain ⟨reader, raw, files, directoryReads, callbacks⟩ := observe layout target prepared selected
   obtain ⟨failed, rejected, diagnostic, reached⟩ := seen.finalizesWithInterpreter source disposal disposes finalized
   rw [diagnostic, reached] at rejected
-  obtain ⟨next, reads, returnedSession, replay, ⟨returned⟩⟩ :=
-    raw.reopensQuietSelection ready source.remove write source.rename source.bootstrap
-      RawMarkedOpenInterpreter.assemble ptrEq target keeper descriptors offsets prepared
-      RawMarkedOpenInterpreter.assembles effects
-  have following := reader.opening.reads.walReads.selectedAfterWatermark offsets descriptors
-  have fixed := returned.returnsFixedInterpreter files directoryReads callbacks prepared following
-    retained.resumed.accepted retained.resumed.ordered
-  refine ⟨reboot, rejected, layout, selected, reader, raw, (Prod.ext raw.raw.entryCensus raw.raw.entryFiles).trans booted.symm,
-    ?_, next, reads, returnedSession, replay, returned, fixed⟩
-  intro path payload kept observed
-  exact reboot.readsAfterOpenFrame frames.preserves kept observed
+  have fixed := (ready).reopensQuietFromFixedInterpreter crash source write ptrEq reboot frames.preserves observe effects
+  have retry : (view.descriptors finalized.reached, view.files finalized.reached) =
+      (view.descriptors rebooted, view.files rebooted) := by
+    obtain ⟨_, _, _, _, entry, _⟩ := fixed
+    exact entry.trans booted.symm
+  exact ⟨reboot, rejected, retry, fixed⟩
 
 end Alvoki.Storage.DiskSession

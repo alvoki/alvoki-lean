@@ -27,7 +27,7 @@ theorem SegmentedWriterState.Ready.powerLossTrace {directory : DiskDirectory} {d
     BoundedReopenTrace directory admits ⟨state.files, state.owners⟩ (state.powerLossFiles directory) :=
   ready.toRetained.powerLossTrace admits
 
-private theorem Target.eq_of_fields {left right : Target} (pair : left.pair = right.pair)
+theorem Target.eq_of_fields {left right : Target} (pair : left.pair = right.pair)
     (range : left.range = right.range) (first : left.first = right.first) (trimmed : left.trimmed = right.trimmed) :
     left = right := by
   cases left

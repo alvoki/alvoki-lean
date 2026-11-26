@@ -230,6 +230,89 @@ theorem RawWriteRebootEntry.selectsRetryAfterRepair
   rw [keeperName, Option.map_some]
   exact accepts _ bytes
 
+/-- A settled writer has no uncertain batch to select. One sampled
+reboot map carries its unchanged target and exact keeper into the next
+open, together with the bounded namespace and reset durability. -/
+theorem RawWriteRebootEntry.startsReadyRecovery
+    (seen : RawWriteRebootEntry state view storage (fun atHeap => (storage atHeap).files.names) visible failed rebooted)
+    (valid : state.Valid) (stable : NativeReadyStorage state (storage failed))
+    (reset : seen.DurableReset) {firstOffset : Nat}
+    (catalog : state.writer.wal.SettledNamespaceWindow state.session.directory firstOffset
+      state.writer.target.range.through (storage failed)) :
+    let names := fun atHeap => (storage atHeap).files.names
+    let target := state.writer.target
+    RawOpenRetryTrace.SelectedEntry view state target names visible rebooted ∧
+    RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset target.range.through rebooted ∧
+    TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+    (view.descriptors rebooted).slots = [] ∧
+    ∃ layout : CanonicalKeeperLayout (view.files rebooted).image state.writer.history,
+      layout.target = target ∧ layout.keeper = state.writer.wal.active ∧ layout.tail = ByteArray.empty ∧
+      layout.sealed ++ [layout.keeper] = state.writer.wal.readDescriptors layout.range.watermark ∧
+      selectWalSegmentReads (state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
+        some (layout.first, (layout.sealed ++ [layout.keeper]).map WalSegment.first) ∧
+      Prepared (view.files rebooted).image layout.target layout.plan := by
+  intro names target
+  let directory := state.session.directory
+  let path := directory.file (.walSegment state.writer.wal.active.first)
+  let ready := valid.retained
+  have marker : target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) :=
+    (congrArg DirectoryPublication.Bindings.walBoundary ready.resumed.ready.selected).symm.trans
+      (congrArg Publication.Image.active ready.resumed.markerImage)
+  have durable : state.SelectedRetryDurability target (storage failed) :=
+    ⟨stable.toNativeReadyProtectedStorage, fun _ bound => Option.some.inj (marker.symm.trans bound) ▸ stable.marker,
+      fun names chosen => stable.settled names chosen _ (.inl rfl)⟩
+  have bytes : target.trimmed = state.writer.wal.active.bytes := by
+    rw [ready.resumed.contents, ready.active, ready.layout.activeBytes]
+  obtain ⟨inode, live, payloads⟩ := stable.keeper
+  have keeper (map) (chosen : map ∈ (storage failed).crashNames) : map path = some inode :=
+    (stable.settled map chosen path (NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl)))).trans live
+  have exactPayload {payload : ByteArray} (sampled : payload ∈ (storage failed).files.bytes inode) :
+      payload = target.trimmed := by
+    rw [payloads, ← bytes] at sampled
+    exact List.mem_singleton.mp sampled
+  have choices : RawOpenRetryTrace.KeeperCrashChoices directory target (storage failed) := by
+    intro map allowed
+    exact ⟨inode, ready.active.symm ▸ keeper map allowed, fun payload member =>
+      exactPayload member ▸ target.acceptsTrimmed⟩
+  obtain ⟨selected, vacant, empty⟩ := seen.selectsRetryAfterRepair ready.active rfl durable
+    (fun path selected _ => stable.settled _ seen.chosen path
+      (NativeReadyState.crashPath_iff_write.mpr (selected.imp_right Or.inr))) choices
+  have bound : names rebooted path = some inode := keeper _ seen.chosen
+  have contents := exactPayload (seen.samplesWal path inode (.inr (.inr rfl)) bound)
+  have active := selected.keeper
+  unfold RawOpenRetryTrace.KeeperAt at active
+  rw [ready.active] at active
+  change _ = (names rebooted path).map (visible rebooted) at active
+  rw [bound, Option.map_some, contents] at active
+  obtain ⟨original, originalTarget, atKeeper, descriptors, offsets, _⟩ := ready.powerLossLayout
+  -- Use the original chain with the sampled marker and keeper. The
+  -- sampled image may also list later files, which repair can prune.
+  let layout : CanonicalKeeperLayout (view.files rebooted).image state.writer.history := {
+    range := original.range
+    decoded := by
+      rw [selected.valid.selected, ← originalTarget]
+      exact original.decoded
+    through := original.through
+    first := original.first
+    sealed := original.sealed
+    keeper := original.keeper
+    chain := original.chain
+    covers := original.covers
+    tail := .empty
+    visible := by
+      rw [ByteArray.append_empty]
+      exact active.trans (congrArg (fun target : Target => some target.trimmed) originalTarget.symm)
+  }
+  have sameTarget : layout.target = target :=
+    (Target.eq_of_fields (selected.valid.selected.trans (congrArg Target.pair originalTarget).symm)
+      rfl rfl rfl : layout.target = original.target).trans originalTarget
+  have chosen : (view.files rebooted).image.Valid layout.target := sameTarget.symm ▸ selected.valid
+  have prepared := layout.prepared chosen.keeper.hasCrashImage chosen.keeper.crashValid chosen.later
+  refine ⟨selected, seen.startsRecoveryObservations reset selected (catalog.2 _ seen.chosen), vacant, empty,
+    layout, sameTarget, atKeeper, rfl, descriptors, ?_, prepared⟩
+  rw [descriptors]
+  exact offsets
+
 /-- Carry a frame across a block of actual failed calls. The premise
 sees each issued call's prefix in the full chronology and its actual
 error and reached heap. -/
