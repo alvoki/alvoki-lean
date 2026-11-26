@@ -222,32 +222,37 @@ private theorem singletonFrame
   exact framed
 
 /-- A rejected MANIFEST lookup supplies the actual failed call and its
-read-only frame for a checkpoint retry with any selected manifest. -/
+read-only frame for any selected manifest. The extra frame carries
+other scoped effects, such as durable bytes and parent settlement. -/
 theorem RawManifestStatError.finalizesSelectedCheckpoint
     (seen : RawManifestStatError (admitted := raw) allocation source.fileCalls)
     (disposal : RawOpenCacheDisposal (admitted := raw) allocation seen.reached)
     (sameDisposal : source.dispose = disposal.dispose)
     (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
     (files : heap → CheckpointSurvivingFiles) (scope : FilePath → Prop)
-    (frames : seen.CallbackFrames disposal finalized (fun before after => (files before).Frames scope (files after))) :
+    {frame : heap → heap → Prop}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (frames : seen.CallbackFrames disposal finalized (fun before after =>
+      (files before).Frames scope (files after) ∧ frame before after)) :
     let errors := [(input, disposal.diagnostic seen.cause)]
     source.FailedCalls entry errors finalized.reached ∧
     (∀ {prior : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
       source.FailedCalls entry prior before → List.IsPrefix (prior ++ [(path, cause)]) errors →
       source.openTable path before = .error cause after →
-      (files before).Frames scope (files after) ∧ (view.files after).image = (view.files before).image) := by
+      (files before).Frames scope (files after) ∧ (view.files after).image = (view.files before).image ∧
+      frame before after) := by
   obtain ⟨failed, returned, diagnostic, reached, framed⟩ := seen.finalizesWithFrames disposal sameDisposal finalized
-    (fun earlier later => earlier.trans later) frames
+    (fun earlier later => ⟨earlier.1.trans later.1, trans earlier.2 later.2⟩) frames
   obtain ⟨_, _, _, _, _, _, sameImage, _⟩ := failed.returns
   have observed : source.openTable input entry = .error (disposal.diagnostic seen.cause) finalized.reached := by
     rw [← diagnostic, ← reached]
     exact returned
   have effect : (files entry).Frames scope (files finalized.reached) ∧
-      (view.files finalized.reached).image = (view.files entry).image :=
-    ⟨framed, reached ▸ sameImage⟩
+      (view.files finalized.reached).image = (view.files entry).image ∧ frame entry finalized.reached :=
+    ⟨framed.1, reached ▸ sameImage, framed.2⟩
   exact ⟨.next .empty input observed, fun prior within ran => singletonFrame
     (frame := fun before after => (files before).Frames scope (files after) ∧
-      (view.files after).image = (view.files before).image) observed effect prior within ran⟩
+      (view.files after).image = (view.files before).image ∧ frame before after) observed effect prior within ran⟩
 
 end FinalizedManifestLookup
 

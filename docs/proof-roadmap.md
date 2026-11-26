@@ -125,11 +125,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean) ·
   [Exact aligned reopen](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
-  The same aligned recovery now exposes a physical write entry at the exact
-  installed cache under the scoped durable-entry, read and repair effects.
-  Connect the sampled reset and retry frames to those durable-entry facts,
-  then consume the entry in the next publication.
-  [Write entry after aligned recovery](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
+  The final checkpoint proof carries the selected durable files and parent
+  settlement through the same reboot and failed calls. It establishes the
+  next write's entry on the exact reopened cache. One observed nonempty
+  batch and a later snapshot extend the existing ledger on that handle.
+  The reset and reached syscall effects remain explicit.
+  [Write after selected checkpoint recovery](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 - [ ] **Derive an integrated execution proof from fresh state.** Start with the ordered primitive returns and interruptions of the production schedules under the filesystem contract. Derive coverage and invariant preservation for each admitted step, including the exact returned value or error for a completed call and the reached state for an interrupted or still-running call. Connect fresh admission and terminal prefixes with one induction that reuses the existing replay. Exercise an acknowledged batch followed by an uncertain batch and independent retry attempts. [Raw open return classifier](../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean) · [Current opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 

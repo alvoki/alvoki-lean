@@ -108,6 +108,41 @@ theorem RawMarkedOpenInterpreter.FailedCalls.framesAfter
     have last := each (previousCalls.append previous) (by rw [List.append_assoc]; exact List.prefix_rfl) returned
     exact trans initial last
 
+section CheckpointRetry
+
+variable {rebooted reached : heap} {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
+  {errors : List (FilePath × IO.Error)}
+
+/-- Carry actual durable payloads of the sampled files and settlement
+of the root's name in its parent through the same failed calls. -/
+theorem RawMarkedOpenInterpreter.FailedCalls.carriesCheckpointReset
+    (attempts : source.FailedCalls rebooted errors reached)
+    (observe : heap → CheckpointStorageObservation) (scope : FilePath → Prop) (root : FilePath)
+    (sample : CheckpointSurvivingFiles) (rootSelected : scope root)
+    (reset : sample.Frames scope (observe rebooted).files)
+    (rootReset : ∀ names ∈ (observe rebooted).crashNames, names root = sample.names root)
+    (each : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+      source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(input, cause)]) errors →
+      source.openTable input before = .error cause after →
+      (observe before).files.Frames scope (observe after).files ∧
+      (observe before).Frames (· = root) (observe after)) :
+    sample.Frames scope (observe reached).files ∧
+    ∀ names ∈ (observe reached).crashNames, names root = (observe reached).files.names root := by
+  obtain ⟨files, parent⟩ := attempts.framesAfter .empty
+    (fun before after =>
+      (observe before).files.Frames scope (observe after).files ∧
+      (observe before).Frames (· = root) (observe after))
+    (fun atHeap => ⟨(CheckpointStorageObservation.Frames.refl scope (observe atHeap)).visible, .refl _ _⟩)
+    (fun first next => ⟨first.1.trans next.1, first.2.trans next.2⟩)
+    (fun prior inside ran => each prior (by simpa only [List.nil_append] using inside) ran)
+  refine ⟨reset.trans files, fun names included => parent.settledFrom ?_ names included root rfl⟩
+  intro survivor allowed name onlyRoot
+  subst name
+  exact (rootReset survivor allowed).trans (reset root rootSelected).1.symm
+
+
+end CheckpointRetry
+
 /-- Add the durable file observation to an existing retry carrier.
 The same selected-effects proof still controls the keeper and logical
 image. The extra physical laws apply only to the actual failed calls. -/

@@ -128,6 +128,46 @@ theorem NativeReadyProtectedStorage.ofCheckpointSample {state : NativeReadyState
     exact stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, selected, decoded, within, rfl⟩))))
       ((runs metadata.header.generation index).symm.trans storedPayload)
 
+/-- Scoped laws for the callbacks reached while an aligned checkpoint
+reader prepares the returned writer. -/
+structure AlignedCheckpointWriteEffects
+    (raw : RawAlignedCheckpointReopenEffects opening chronology view calls init entry phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream)
+    (state : NativeReadyState) (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) : Prop where
+  admissionEffects : raw.raw.CacheFrames raw.seed (fun before after =>
+      MarkedOpenReadFrame directory state.crashPath (directory.file (.walSegment layout.keeper.first))
+        (observe before) (observe after) (visible before) (visible after))
+  readEffects :
+      let path := directory.file (.walSegment layout.keeper.first)
+      let frame before after := MarkedOpenReadFrame directory state.crashPath path
+        (observe before) (observe after) (visible before) (visible after)
+      raw.fileCalls.ScopeFrames frame ∧ raw.directoryCalls.ScopeFrames directory frame ∧
+      ((raw.callbacks.withFileReads raw.fileCalls).modifyPending raw.seed.pendingRef
+        (SyncHandleRouting.pushPending path raw.keeper.keeper) raw.keeper.read =
+        .ok () raw.keeper.remembered → frame raw.keeper.read raw.keeper.remembered)
+  directoryLive :
+      (raw.callbacks.withFileReads raw.fileCalls).sync raw.seed.handle raw.keeper.remembered = .ok () raw.keeper.authorized →
+      (⟨(observe raw.keeper.remembered).files.names, fun inode => [visible raw.keeper.remembered inode]⟩ :
+        CheckpointSurvivingFiles).Frames (· = directory.file (.walSegment layout.keeper.first))
+        ⟨(observe raw.keeper.authorized).files.names, fun inode => [visible raw.keeper.authorized inode]⟩
+  pendingLive :
+      (raw.callbacks.withFileReads raw.fileCalls).setPending raw.seed.pendingRef [] raw.keeper.authorized =
+        .ok () raw.keeper.consumed →
+      (⟨(observe raw.keeper.authorized).files.names, fun inode => [visible raw.keeper.authorized inode]⟩ :
+        CheckpointSurvivingFiles).Frames (· = directory.file (.walSegment layout.keeper.first))
+        ⟨(observe raw.keeper.consumed).files.names, fun inode => [visible raw.keeper.consumed inode]⟩
+  links : Nonempty (RunOpenLinkCensus (path := directory.file (.walSegment layout.keeper.first))
+      (before := raw.listing.reached) raw.fileCalls.stat (observe raw.listing.reached).files.names
+      opening.reads.wal.keeper.observesFile.object)
+  effects : raw.keeper.StorageEffects observe visible state
+  phaseFrames : ∀ ref after, allocatePhase (.ready state.writer.installed) raw.keeper.reached = .ok ref after →
+      (observe raw.keeper.reached).Frames state.crashPath (observe after) ∧
+      ∀ inode, (observe raw.keeper.reached).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+        visible after inode = visible raw.keeper.reached inode
+  tokenFrames : ∀ before ref after, allocateToken () before = .ok ref after →
+      (observe before).Frames state.crashPath (observe after) ∧
+      ∀ inode, (observe before).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode → visible after inode = visible before inode
+
 /-- The sampled files at the healthy entry survive the exact admission,
 listing and reads. The same keeper inode then supplies the write entry. -/
 theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageFromCheckpointSample
@@ -153,39 +193,7 @@ theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageFromCheckpointS
       let path := directory.file (.walSegment layout.keeper.first)
       let object := opening.reads.wal.keeper.observesFile.object
       (observe entry).files.names path = some object ∧ visible entry object = layout.keeper.bytes ++ layout.tail)
-    (admissionEffects : raw.raw.CacheFrames raw.seed (fun before after =>
-      MarkedOpenReadFrame directory (reopened).crashPath (directory.file (.walSegment layout.keeper.first))
-        (observe before) (observe after) (visible before) (visible after)))
-    (readEffects :
-      let path := directory.file (.walSegment layout.keeper.first)
-      let frame before after := MarkedOpenReadFrame directory (reopened).crashPath path
-        (observe before) (observe after) (visible before) (visible after)
-      raw.fileCalls.ScopeFrames frame ∧ raw.directoryCalls.ScopeFrames directory frame ∧
-      ((raw.callbacks.withFileReads raw.fileCalls).modifyPending raw.seed.pendingRef
-        (SyncHandleRouting.pushPending path raw.keeper.keeper) raw.keeper.read =
-        .ok () raw.keeper.remembered → frame raw.keeper.read raw.keeper.remembered))
-    (directoryLive :
-      (raw.callbacks.withFileReads raw.fileCalls).sync raw.seed.handle raw.keeper.remembered = .ok () raw.keeper.authorized →
-      (⟨(observe raw.keeper.remembered).files.names, fun inode => [visible raw.keeper.remembered inode]⟩ :
-        CheckpointSurvivingFiles).Frames (· = directory.file (.walSegment layout.keeper.first))
-        ⟨(observe raw.keeper.authorized).files.names, fun inode => [visible raw.keeper.authorized inode]⟩)
-    (pendingLive :
-      (raw.callbacks.withFileReads raw.fileCalls).setPending raw.seed.pendingRef [] raw.keeper.authorized =
-        .ok () raw.keeper.consumed →
-      (⟨(observe raw.keeper.authorized).files.names, fun inode => [visible raw.keeper.authorized inode]⟩ :
-        CheckpointSurvivingFiles).Frames (· = directory.file (.walSegment layout.keeper.first))
-        ⟨(observe raw.keeper.consumed).files.names, fun inode => [visible raw.keeper.consumed inode]⟩)
-    (links : RunOpenLinkCensus (path := directory.file (.walSegment layout.keeper.first))
-      (before := raw.listing.reached) raw.fileCalls.stat (observe raw.listing.reached).files.names
-      opening.reads.wal.keeper.observesFile.object)
-    (effects : raw.keeper.StorageEffects observe visible reopened)
-    (phaseFrames : ∀ ref after, allocatePhase (.ready (reopened).writer.installed) raw.keeper.reached = .ok ref after →
-      (observe raw.keeper.reached).Frames (reopened).crashPath (observe after) ∧
-      ∀ inode, (observe raw.keeper.reached).files.names (keeperPath) = some inode →
-        visible after inode = visible raw.keeper.reached inode)
-    (tokenFrames : ∀ before ref after, allocateToken () before = .ok ref after →
-      (observe before).Frames (reopened).crashPath (observe after) ∧
-      ∀ inode, (observe before).files.names (keeperPath) = some inode → visible after inode = visible before inode) :
+    (laws : AlignedCheckpointWriteEffects raw reopened observe visible) :
     ∃ cache : OpenSyncCacheRefs returned.handle.files returned.start.current.ready.state.session.directory.path,
       cache.directory = raw.seed.directoryRef ∧ cache.active = raw.seed.activeRef ∧ cache.pending = raw.seed.pendingRef ∧
       returned.start.WriteStorageEntry view cache (observe returned.start.reached) (visible returned.start.reached) := by
@@ -193,8 +201,8 @@ theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageFromCheckpointS
   let frame before after := MarkedOpenReadFrame directory (reopened).crashPath path
     (observe before) (observe after) (visible before) (visible after)
   have refl : ∀ atHeap, frame atHeap atHeap := fun _ => .refl _ _ _ _ _
-  obtain ⟨fileEffects, listingEffects, remembered⟩ := readEffects
-  have admission := raw.raw.framesThroughCache raw.seed (frame := frame) MarkedOpenReadFrame.trans admissionEffects
+  obtain ⟨fileEffects, listingEffects, remembered⟩ := laws.readEffects
+  have admission := raw.raw.framesThroughCache raw.seed (frame := frame) MarkedOpenReadFrame.trans laws.admissionEffects
   obtain ⟨toListing, afterListing⟩ := raw.listing.framesThroughSeals selected raw.seals frame refl
     MarkedOpenReadFrame.trans fileEffects listingEffects
   have readKeeper := raw.keeper.framesRemembered refl MarkedOpenReadFrame.trans (fun opened => by
@@ -224,7 +232,7 @@ theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageFromCheckpointS
   have keeperAtEntry := keeperName.trans keeperLive.1
   have visibleAtEntry := (List.cons.inj (keeperBytes _ keeperLive.1)).1.trans keeperLive.2
   have keeperAtIssue := raw.keeper.keeperAtIssue (fun atHeap => (observe atHeap).files.names) visible
-    keeperAtEntry visibleAtEntry readKeeper.keeper directoryLive pendingLive
+    keeperAtEntry visibleAtEntry readKeeper.keeper laws.directoryLive laws.pendingLive
   rw [raw.keeper.keeperIssueInode, ← opening.reads.wal.keeper.observesFile.sameObject] at keeperAtIssue
   have valid := next.readPrefix.refines.1
   have apart : ∀ file, file = markerPath ∨ (reopened).writeFramePath file →
@@ -233,13 +241,14 @@ theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageFromCheckpointS
     have crashPath : (reopened).crashPath file := NativeReadyState.crashPath_iff_write.mpr (selectedPath.imp id Or.inr)
     have declared := NativeReadyState.crashPath_rootOrChild crashPath
     rw [returned.resolvedDirectory] at declared
+    obtain ⟨links⟩ := laws.links
     have privateAtListing := raw.extents.keeperPrivateBinding (names := fun atHeap => (observe atHeap).files.names) links
     have canonical := privateAtListing file ((listedToRemembered.names file declared).symm.trans
       (bound.trans (congrArg some opening.reads.wal.keeper.observesFile.sameObject)))
     exact NativeReadyState.protectedPathNeWalFromActive valid selectedPath (Nat.le_refl _)
       (by rw [returned.resolvedDirectory, sameFirst]; exact canonical)
   exact returned.writeStorageEntry observe visible sameFirst sameBytes protectedAtSync markerAtSync
-    (fun names member => stableRoot names member _ rfl) effects keeperAtIssue apart phaseFrames tokenFrames
+    (fun names member => stableRoot names member _ rfl) laws.effects keeperAtIssue apart laws.phaseFrames laws.tokenFrames
 
 end CheckpointReturn
 

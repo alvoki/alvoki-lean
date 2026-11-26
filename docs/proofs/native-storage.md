@@ -473,30 +473,17 @@ returned table and heap. The chosen reboot and each call's primitive
 effects are explicit.
 [Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
 
-The aligned checkpoint return exposes the selected WAL chain, run map and
-replay at the exact installed writer. A durable observation of the selected
-sample at the healthy entry supplies its protected files. The same native
-admission, manifest and WAL reads frame those files through the reached repair.
-The keeper extent and link count identify its private inode. The actual
-directory and keeper syncs and the phase and token allocations establish the
-write-entry invariant on the returned handle and cache. This uses scoped
-filesystem effects and root-name settlement. A following observed publication
-can consume that invariant. Its composition with the full source execution
-remains open.
-[Write entry after aligned recovery](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
-
-After the final checkpoint directory-fsync stop, one chosen crash image supplies
-the manifest, selected runs and WAL. The reboot contract restores exactly that
-footprint with an empty descriptor census and a vacant lock. The fixed opener's
-actual failed returns carry the footprint to the next entry, where the aligned
-reader acquires the same directory and LOCK and returns the exact replayed table.
-A failed MANIFEST lookup supplies this frame from its reached callbacks and
-cleanup. The same returned handle can acquire and read the latest snapshot with
-its own token, extending the existing client ledger. The theorem covers both
-manifest generations and an absent prior manifest. It assumes the scoped reboot
-and callback effects and observes the healthy aligned route. A subsequent write
-and retries that mutate the selected image remain separate obligations.
-[Selected reboot and snapshot](../../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
+The final checkpoint proof carries the same sampled durable files and
+parent-directory settlement through the actual framed failed opens to the
+healthy aligned reader. Its selected manifest and WAL layout determine the
+files the reopened writer must protect. The descriptor census, actual
+syncs and newly allocated phase and token establish the write entry on
+the returned table and cache. A subsequent observed nonempty write on
+that handle appends exactly its acknowledged batch. The following snapshot
+agrees with replay of the preceding history and that batch. The proof uses
+scoped reset, failed-open, repair and write effects. Mutating retries and
+composition with the full source trace from fresh storage remain open.
+[Checkpoint reboot, next write and snapshot](../../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 The source checkpoint stop has one terminal case for every reached stage.
 The source call and poisoned phase identify the stop, and the existing
