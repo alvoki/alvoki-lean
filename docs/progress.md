@@ -56,6 +56,13 @@ whether the history at the final failed open contains the whole pending
 batch or omits it. Both terminal proofs allow execution to end at that error.
 [Late publication recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
+The fresh opener now starts a finite induction over returned ready calls.
+The proof derives a client event for each observed response and carries the
+exact pins, cache and protected storage to the next call. An acquisition
+assumes a local frame at the phase setter. This lets a later write use the
+storage reached after a snapshot read.
+[Fresh ready-call consumer](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+
 The confirmed write, snapshot acquisition and read now produce their own
 ledger suffix from the calls on the returned writer. The checkpoint and
 late-error recovery proofs append that suffix to the history they recovered.

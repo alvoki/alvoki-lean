@@ -141,6 +141,14 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
 
 - [ ] **Derive an integrated execution proof from fresh state.** Start with the ordered primitive returns and interruptions of the production schedules under the filesystem contract. Derive coverage and invariant preservation for each admitted step, including the exact returned value or error for a completed call and the reached state for an interrupted or still-running call. Connect fresh admission and terminal prefixes with one induction that reuses the existing replay. Exercise an acknowledged batch followed by an uncertain batch and independent retry attempts. [Raw open return classifier](../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean) · [Current opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
+  From the returned fresh handle, one induction now covers finite sequences
+  of confirmed nonempty writes, successful snapshot acquisitions and returned
+  reads on that handle. Starting with empty pins, it derives the matching
+  client events, replay and physical state for the next call. It uses local
+  publication, phase-update and token observations. Empty writes, ordinary
+  errors and interrupted calls still need transitions into the same argument.
+  [Ready-call induction](../lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean)
+
   A first acknowledged write on the fresh table carries the WAL namespace
   through the finite offset needed by the next batch. For a late publication
   error, one marker selected at reboot determines whether recovery retains the

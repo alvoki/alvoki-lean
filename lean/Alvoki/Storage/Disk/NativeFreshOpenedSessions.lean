@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.NativeFreshTableOpen
 import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
-import Alvoki.Storage.Disk.NativeReadyWriteStorage
+import Alvoki.Storage.Disk.NativeReadyCallRefinement
 import Alvoki.Storage.Disk.NativeRawWriteReboot
 
 namespace Alvoki.Storage.DiskSession
@@ -373,6 +373,52 @@ theorem writeStorageEntry {input : FilePath} {directory : DiskDirectory}
   refine ⟨cache, rfl, rfl, rfl, census, cacheAt, settled.1, settled.2, ?_⟩
   intro literal found
   exact settled.1.bindsOpenCacheDirectory view cacheAt (by rw [captured, slot]; rfl) (congrFun sameObjects _) found
+
+/-- Consume a fixed sequence of observed public calls directly on the
+fresh returned table. The actual bootstrap cache supplies the first
+physical write entry and its empty ledgers supply the replay origin. -/
+theorem refinesReadyCalls {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
+    (resolved : opened.handle.directory = directory)
+    (writes : NativeReadyWriteCalls opened.handle) (issuer : opened.handle.LatestIssuer)
+    {image : Type} (view : OpenCloseHeapView heap image)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
+    (buffered : heap → IO.FS.Handle → ByteArray)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached writes.cache.directory writes.cache.active writes.cache.pending =
+      opened.start.current.ready.state.cache)
+    (settled : let state := opened.start.current.ready.state
+      NativeReadyStorage state (storage opened.start.reached) ∧
+      ∀ inode, (storage opened.start.reached).files.names
+        (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+        (inodes opened.start.reached).visible inode = state.writer.wal.active.bytes)
+    (effects : writes.ReturnEffects view inodes runs storage inode buffered)
+    {calls : List (NativeReturnedCall opened.handle)} {reached : heap}
+    (executed : NativeReturnedCalls writes issuer opened.start.reached [] calls reached)
+    (covered : ∀ request ∈ calls, request.ReadyContinuation) :
+    call entry = .ok opened.handle.table opened.start.reached ∧
+    ∃ (last : NativeOpenedPosition opened.handle) (events : List NativeExecutionEvent),
+      last.reached = reached ∧
+      last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins request => request.pinsAfter pins) [] ∧
+      writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) last ∧
+      events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
+      last.current.history = events.flatMap NativeExecutionEvent.writes ∧
+      last.current.submissions = events.flatMap NativeExecutionEvent.submissions ∧
+      last.current.ready.reads = events.flatMap NativeExecutionEvent.reads ∧
+      InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
+        last.current.ready.state.writer.installed last.current.ready.state.session := by
+  have atRoot := (congrArg DiskDirectory.path resolved) ▸ writes.cache.atRoot
+  obtain ⟨cache, directory, active, pending, first⟩ :=
+    opened.writeStorageEntry used view resolved writes.cache.references atRoot census cacheAt settled
+  have physical : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) opened.start := by
+    exact ⟨first.census, by rw [← directory, ← active, ← pending]; exact first.cacheAt,
+      first.physical, first.keeper, fun literal named => first.root literal (directory ▸ named)⟩
+  obtain ⟨last, events, heap, pins, stored, length, records, ledger⟩ :=
+    executed.refinesReady covered view inodes runs storage inode buffered effects opened.start rfl
+      (by rw [opened.emptyPins]; rfl) physical
+  exact ⟨opened.opened, last, events, heap, pins, stored, length, records, opened.refinesLedger ledger⟩
 
 /-- Start the first observed write at the actual returned heap of the
 fresh opener. Its local effects refer to the original cache references.
