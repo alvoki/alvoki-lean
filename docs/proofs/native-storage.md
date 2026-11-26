@@ -380,8 +380,10 @@ ineffective one preserves a predecessor map, which may name the old keeper. Both
 The earlier successful directory sync after pruning settles present and absent WAL names over
 the replay window. Scoped name-presence frames across staging, rename and cleanup carry
 that window to the same reboot sample. The failed rename and failed final sync now both
-supply the observations used by the next open. The repair prefix still needs accepted
-durable bytes for the old keeper when its read completes.
+supply the observations used by the next open. For both errors, the first reboot fixes the
+old keeper’s accepted bytes. A frame on that single path carries them through earlier
+failed calls, cache admission, directory and seal reads, and the long keeper’s read and
+release. This argument requires each earlier failed call to preserve that keeper.
 The installation still uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
 [Recovery observations](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 · [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)

@@ -654,6 +654,49 @@ local notation "callbacks" => source.keeperCallbacks.withFileReads source.fileCa
 local notation "stageWrite" => LongKeeperStageCallbacks.stage source.stage seed.pendingRef (AlignedKeeperCacheCallbacks.modifyPending callbacks)
 local notation "groupSync" => AlignedKeeperCacheCallbacks.syncPaths callbacks (DiskDirectory.path dir) seed.directoryRef seed.activeRef seed.pendingRef
 
+local notation "durableKeeperFile" => fun before after =>
+  CheckpointSurvivingFiles.Frames (fun path => path = DiskDirectory.file dir (DiskFile.walSegment target.first))
+    (CheckpointStorageObservation.files (storage before)) (CheckpointStorageObservation.files (storage after))
+
+omit extents in
+/-- The first reboot fixes the durable bytes of the selected keeper.
+The earlier read-only rejections and the current attempt's admission,
+read and release callbacks preserve that same file up to repair. -/
+theorem MarkedDirectoryReadReport.keepsLiveKeeperBeforeRepair
+    (listing : MarkedDirectoryReadReport prepared source.directoryCalls slotOf)
+    (attempts : source.FailedCalls first earlier entry)
+    {failed : heap}
+    (reboot : RawWriteRebootEntry state view storage retryNames visible failed first)
+    (reset : reboot.DurableReset)
+    (atBoot : RawOpenRetryTrace.SelectedEntry view state target retryNames visible first)
+    (sameFirst : target.first = state.writer.wal.active.first)
+    (failedKeeper : ∀ {previous : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
+      source.FailedCalls first previous before → List.IsPrefix (previous ++ [(path, cause)]) earlier →
+      source.openTable path before = .error cause after → durableKeeperFile before after)
+    (cacheKeeper : raw.CacheFrames seed durableKeeperFile)
+    (readKeeper : source.fileCalls.ScopeFrames durableKeeperFile)
+    (listKeeper : source.directoryCalls.ScopeFrames dir durableKeeperFile)
+    {checkpoint : Option (PackedTable × UInt64)} {beforeKeeper afterKeeper : heap}
+    (selected : SelectedIntegrityCheckpoint published.durable (view.files entry).image.directory.active.manifest checkpoint)
+    (seals : MarkedSealReadChain seed source.fileCalls chronology.seals listing.reached beforeKeeper)
+    (longer : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat)
+    (returned : source.fileCalls.readKeeperWithRelease
+      (fun path handle => (callbacks).modifyPending seed.pendingRef (pushPending path handle))
+      ((dir).file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
+      reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper) :
+    RawOpenRetryTrace.LiveKeeperCrashChoices dir target (storage afterKeeper) := by
+  have refl (atHeap : heap) : durableKeeperFile atHeap atHeap := fun _ _ => ⟨rfl, fun _ _ => rfl⟩
+  have trans {before middle after : heap} (left : durableKeeperFile before middle)
+      (right : durableKeeperFile middle after) : durableKeeperFile before after := left.trans right
+  have previous := attempts.framesAfter .empty durableKeeperFile refl trans (fun prior inside call =>
+    failedKeeper prior (by simpa only [List.nil_append] using inside) call)
+  have admitted := raw.framesThroughCache seed (frame := durableKeeperFile) trans cacheKeeper
+  obtain ⟨listed, sealed⟩ := listing.framesThroughSeals selected seals durableKeeperFile refl trans readKeeper listKeeper
+  have keeper := source.fileCalls.longKeeperReadFrames readKeeper refl trans
+    (fun path handle => (callbacks).modifyPending seed.pendingRef (pushPending path handle)) _ longer returned
+  exact (reboot.keeperCrashChoices reset atBoot sameFirst).1.frame
+    (trans previous (trans admitted (trans listed (trans sealed keeper)))) rfl
+
 local notation "unlinkLoop" => List.forM (List.map Step.unlink layout.boundedPlan.newer)
   (performPaths dir layout.boundedPlan source.remove throw stageWrite groupSync source.rename)
 
@@ -845,7 +888,15 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       visible finalized.reached (staged.inventory.inode staged.slot.description) = target.trimmed ∧
       (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
       (view.files finalized.reached).image.later.DurablyEmpty ∧
-      (RawOpenRetryTrace.LiveKeeperCrashChoices dir layout.target (storage afterKeeper) →
+      (∀ {failed} (reboot : RawWriteRebootEntry state view storage retryNames visible failed first),
+        reboot.DurableReset →
+        RawOpenRetryTrace.SelectedEntry view state target retryNames visible first →
+        (∀ {previous : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
+          source.FailedCalls first previous before → List.IsPrefix (previous ++ [(path, cause)]) earlier →
+          source.openTable path before = .error cause after → durableKeeperFile before after) →
+        raw.CacheFrames seed durableKeeperFile →
+        source.fileCalls.ScopeFrames durableKeeperFile →
+        source.directoryCalls.ScopeFrames dir durableKeeperFile →
         (storage afterKeeper).files.Frames (· = (dir).file (.walSegment layout.keeper.first)) (storage synced).files →
         (∀ names ∈ (storage synced).crashNames, ∀ file, state.crashPath ((dir).file file) →
           names ((dir).file file) = retryNames synced ((dir).file file)) →
@@ -943,7 +994,14 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     rw [finalImage, workerImage, ← sameTarget]
     exact issue.visibleAfterRename effective
   refine ⟨returned, selectedEffects, sameName.trans named, (sameBytes _ named).trans durable, live, active, later, ?_⟩
-  intro liveBeforeRepair oldStorage childrenSettled stagedAtSync renameEffect loadSurvivors cleanupSurvivors
+  intro beforeReboot reboot reset atBoot failedKeeper cacheKeeper readKeeper listKeeper
+    oldStorage childrenSettled stagedAtSync renameEffect loadSurvivors cleanupSurvivors
+  have observedLong : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat := by
+    rw [measured]
+    exact pruning.longer
+  have liveBeforeRepair : RawOpenRetryTrace.LiveKeeperCrashChoices dir layout.target (storage afterKeeper) :=
+    sameTarget.symm ▸ listing.keepsLiveKeeperBeforeRepair prior reboot reset atBoot (sameTarget ▸ targetAtKeeper)
+      failedKeeper cacheKeeper readKeeper listKeeper selected seals observedLong keeperRead
   let keeperPath := (dir).file (.walSegment layout.keeper.first)
   let immutableChild : FilePath → Prop := fun path => state.selectedRetryPath path ∧ path ≠ (dir).path
   let crashScope : FilePath → Prop := fun path => path = keeperPath ∨ immutableChild path
@@ -1127,7 +1185,15 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     ∃ returned : source.openTable input entry = .error (dispose.diagnostic cause) finalized.reached,
       RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath selectedWal
         (prior.next input returned) ∧
-      (RawOpenRetryTrace.LiveKeeperCrashChoices dir target (storage afterKeeper) →
+      (∀ {failed} (reboot : RawWriteRebootEntry state view storage retryNames visible failed first),
+        reboot.DurableReset →
+        RawOpenRetryTrace.SelectedEntry view state target retryNames visible first →
+        (∀ {previous : List (FilePath × IO.Error)} {before after : heap} {path : FilePath} {cause : IO.Error},
+          source.FailedCalls first previous before → List.IsPrefix (previous ++ [(path, cause)]) earlier →
+          source.openTable path before = .error cause after → durableKeeperFile before after) →
+        raw.CacheFrames seed durableKeeperFile →
+        source.fileCalls.ScopeFrames durableKeeperFile →
+        source.directoryCalls.ScopeFrames dir durableKeeperFile →
         dispose.ScopeFrames finalized (fun before after =>
           (storage before).CrashFileFrame
             (fun path => path = (dir).file (.walSegment target.first) ∨
@@ -1241,7 +1307,9 @@ theorem MarkedWalExtentReports.extendsLongRenameError
       obtain ⟨nextWindow, nextSuffix, _⟩ := retainCatalog initial.1 gone
       exact ⟨nextWindow, finalKeeper, finalDurability, nextSuffix⟩)
   refine ⟨returned, effects, ?_⟩
-  intro acceptedBefore cleanupSurvivors
+  intro beforeReboot reboot reset atBoot failedKeeper cacheKeeper readKeeper listKeeper cleanupSurvivors
+  have acceptedBefore := listing.keepsLiveKeeperBeforeRepair prior reboot reset atBoot targetAtKeeper
+    failedKeeper cacheKeeper readKeeper listKeeper selected seals observedLong keeperRead
   obtain ⟨inode, named, acceptedReady⟩ := acceptedBefore.frame durableFrame keeperPath
   have sameInode : inode = old := Option.some.inj (named.symm.trans renamedOld)
   subst inode

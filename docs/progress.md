@@ -33,9 +33,10 @@ the earlier successful root fsync after pruning settles the bounded WAL inventor
 including gaps. The same sampled files now supply the observations used by both the
 successful and terminal open proofs.
 
-**Next obligation.** Carry the accepted durable bytes of the old keeper from the
-first reboot through the actual admission and read callbacks to the repair prefix.
-For an interruption before the post-prune barrier succeeds, determine which later
+The first reboot also supplies the old keeper’s accepted bytes at repair entry,
+under a frame on that file through earlier failed attempts and the current reads.
+
+**Next obligation.** For an interruption before the post-prune barrier succeeds, determine which later
 WAL names can return on the next reboot. The
 remaining mixed sessions and maintenance cases are listed in the roadmap.
 
