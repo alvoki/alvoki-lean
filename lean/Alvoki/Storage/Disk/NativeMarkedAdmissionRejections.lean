@@ -157,15 +157,54 @@ theorem RawMarkedOpenInterpreter.framesBeforeFlock (source : RawMarkedOpenInterp
   obtain ⟨returned, rejected⟩ := source.returnsBeforeFlock failed
   exact ⟨returned, rejected.framesRejected trans effects⟩
 
+/-- A non-granting flock returns after the lock handle's own scope
+finalizer. Both diagnostics bypass cache allocation and the held worker. -/
+theorem RawMarkedOpenInterpreter.returnsRefusedFlock (source : RawMarkedOpenInterpreter heap stream)
+    {lock : IO.FS.Handle} {issued refused : heap} {cause : IO.Error}
+    (opened : source.calls.beforeFlock input entry = .ok (directory, lock) issued)
+    (outcome : source.calls.flock lock issued = .error cause refused ∨
+      source.calls.flock lock issued = .ok false refused ∧ cause = IO.userError s!"database already open: {directory.path}") :
+    source.openTable input entry = .error cause (source.release lock refused) := by
+  unfold RawMarkedOpenInterpreter.openTable
+  rw [source.calls.withOpenAdmission_afterPrefix]
+  rcases outcome with failed | ⟨busy, rfl⟩
+  · simp only [Bind.bind, EStateM.bind, opened, finishFailedOpen, openWithLock, failed]
+  · simp only [Bind.bind, EStateM.bind, opened, finishFailedOpen, openWithLock, busy, Bool.false_eq_true,
+      ↓reduceIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+
+/-- Transport a scoped observation across the reached admission callbacks,
+the non-granting flock, and finalization of the very handle just opened. -/
+theorem RawMarkedOpenInterpreter.framesRefusedFlock (source : RawMarkedOpenInterpreter heap stream)
+    {lock : IO.FS.Handle} {issued refused reached : heap} {cause publicCause : IO.Error}
+    (opened : source.calls.beforeFlock input entry = .ok (directory, lock) issued)
+    (outcome : source.calls.flock lock issued = .error cause refused ∨
+      source.calls.flock lock issued = .ok false refused ∧ cause = IO.userError s!"database already open: {directory.path}")
+    (returned : source.openTable input entry = .error publicCause reached)
+    {frame : heap → heap → Prop} (trans : ∀ {a b c}, frame a b → frame b c → frame a c)
+    (resolve : frame entry (reachedState (source.calls.realPath input entry)))
+    (lookup : ∀ path atHeap, frame atHeap (reachedState (source.calls.lookup path atHeap)))
+    (append : ∀ {before}, source.calls.openAppend (directory.file .lock) before = .ok lock issued →
+      frame before issued)
+    (flock : frame issued refused) (release : frame refused (source.release lock refused)) :
+    frame entry reached := by
+  obtain ⟨r, f, g, resolved, flat, checked, appended⟩ := source.calls.beforeFlock_steps opened
+  have hr : frame entry r := by
+    rw [← openWith_reachedState, resolved] at resolve
+    exact resolve
+  have hf := lookup (directory.file .wal) r
+  have hg := lookup (directory.file .lock) f
+  rw [← rejectFlatWal_reachedState, flat] at hf
+  rw [← checkLock_reachedState, checked] at hg
+  obtain ⟨_, endpoint⟩ := EStateM.Result.error.inj ((source.returnsRefusedFlock opened outcome).symm.trans returned)
+  exact endpoint ▸ trans hr (trans hf (trans hg (trans (append appended) (trans flock release))))
+
 /-- A flock error on the actual append handle bypasses the held worker.
 The error reaches the caller after the interpreter releases that handle. -/
 theorem RawFlockRejection.returnsMarkedInterpreter (source : RawMarkedOpenInterpreter heap stream)
     (seen : RawFlockRejection view source.calls directory source.release input entry) :
     source.openTable input entry = .error seen.report.cause seen.reached := by
-  unfold RawMarkedOpenInterpreter.openTable
-  rw [source.calls.withOpenAdmission_afterPrefix]
-  simp only [Bind.bind, EStateM.bind, seen.report.opened, finishFailedOpen, openWithLock, seen.report.flock,
-    seen.finalized.finalized, RawFlockRejection.reached]
+  simpa only [seen.finalized.finalized, RawFlockRejection.reached] using
+    source.returnsRefusedFlock seen.report.opened (.inl seen.report.flock)
 
 /-- A contending opener never initializes a cache or enters recovery.
 It closes the exact descriptor returned by the guarded append-open. -/
@@ -173,10 +212,7 @@ theorem RawContendedAliasOpen.returnsMarkedInterpreter (source : RawMarkedOpenIn
     {description : Nat} {namespaceView : DirectoryReadNamespace} {root : DeviceInode}
     (seen : RawContendedAliasOpen view source.calls source.release directory description namespaceView root input entry) :
     source.openTable input entry = .error seen.diagnostic seen.finalized.reached := by
-  unfold RawMarkedOpenInterpreter.openTable
-  rw [source.calls.withOpenAdmission_afterPrefix]
-  simp only [Bind.bind, EStateM.bind, seen.opened, finishFailedOpen, openWithLock, seen.busy, Bool.false_eq_true,
-    ↓reduceIte, throw, throwThe, MonadExceptOf.throw, EStateM.throw, seen.finalized.finalized,
-    RawContendedAliasOpen.diagnostic]
+  simpa only [seen.finalized.finalized, RawContendedAliasOpen.diagnostic] using
+    source.returnsRefusedFlock seen.opened (.inr ⟨seen.busy, rfl⟩)
 
 end Alvoki.Storage.DiskSession

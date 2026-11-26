@@ -4117,6 +4117,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.returnsBeforeFlock
 #check_axioms Alvoki.Storage.DiskSession.RawOpenPrefixReturn.framesRejected
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesBeforeFlock
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.returnsRefusedFlock
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesRefusedFlock
 #check_axioms Alvoki.Storage.DiskSession.SampledCheckpointRetryFrame.trans
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesSampledCheckpointBeforeFlock
 #check_axioms Alvoki.Storage.DiskSession.RawBeforeFlockRejection.returnsMarkedInterpreter

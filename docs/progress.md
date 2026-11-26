@@ -157,9 +157,12 @@ each allowed crash namespace. It assumes that the reboot restores the sampled
 files, each failed open preserves the selected files and root, and the later
 WAL names at the successful entry agree with the complete directory scan.
 For an open that fails before flock, the resolver, metadata checks and
-LOCK append-open now supply both the live and durable frames at the exact
-public error heap. A failed append-open needs its own local effect. Failed
-repairs after lock acquisition still require their corresponding frames.
+LOCK append-open supply both the live and durable frames at the exact
+public error heap. A failed append-open needs its own local effect. If
+append succeeds and flock reports contention or an error, both routes
+release the returned handle. A shared rule carries the same scoped
+observations through that handle’s release to the public error heap.
+Failures in a worker that acquired the lock still need their own effects.
 [Sampled checkpoint reader](../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
 
 At the earlier sync of `MANIFEST.next`, the returned run writes and
