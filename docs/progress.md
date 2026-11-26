@@ -76,7 +76,9 @@ For a failed manifest rename, the returned prefix identifies the prior staged
 write, the successful sync of its descriptor, and the cache and heap reached
 by the rename. Under a local rename effect, a single sampled directory map
 and its inode bytes select the manifest, runs and WAL for the fixed opener.
-An error before the effect selects the old manifest. After the effect either
+An error before the effect selects the old manifest. Its local contract
+preserves the canonical manifest and protected files on one predecessor
+map, so an unrelated scratch name can disappear from the crash image. After the effect either
 version can survive before the directory barrier. The returned writer, next
 confirmed write and snapshot share the same replay as the final barrier path.
 The older session-trace constructor still requires its rename report.
