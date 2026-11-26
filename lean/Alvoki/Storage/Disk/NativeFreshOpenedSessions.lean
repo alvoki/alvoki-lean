@@ -3,6 +3,7 @@ import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeReadyWriteStorage
+import Alvoki.Storage.Disk.NativeRawWriteReboot
 
 namespace Alvoki.Storage.DiskSession
 
@@ -87,6 +88,102 @@ private theorem freshEmptyWAL {state : NativeReadyState} (valid : state.Valid)
   · intro segment member
     have order := (List.pairwise_append.mp layout.ordered).2.2 segment member wal.active (List.mem_singleton_self _)
     exact Nat.not_lt_zero _ (first ▸ order.1)
+
+private theorem renderWalSegmentName_ne_marker {name : String} (offset : Nat)
+    (marker : name.toList[3]? = some '.') : renderWalSegmentName offset ≠ name := by
+  intro equal
+  have fourth := congrArg (fun child : String => child.toList[3]?) equal
+  rw [marker] at fourth
+  simp only [renderWalSegmentName, String.toList_append] at fourth
+  change some '-' = some '.' at fourth
+  exact (by decide : (some '-' : Option Char) ≠ some '.') fourth
+
+private theorem walConflictsWhenNonzero {offset : Nat} (positive : offset ≠ 0) :
+    WalSegmentRepair.conflictsWithBootstrap (renderWalSegmentName offset) = true := by
+  have different : renderWalSegmentName offset ≠ renderWalSegmentName 0 := by
+    intro equal
+    apply positive
+    exact Option.some.inj (by simpa only [parseWalSegmentName_render] using congrArg parseWalSegmentName equal)
+  have starts : (renderWalSegmentName offset).startsWith "WAL-segment-" = true := by
+    simp [renderWalSegmentName]
+  simp [WalSegmentRepair.conflictsWithBootstrap, starts, different]
+
+
+/-- The fresh listing rules out other canonical segments. The keeper
+create, marker publication and installer retain their absence through
+the requested window, including future offsets an append might reach. -/
+theorem walNamespace {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory}
+    {view : OpenCloseHeapView heap WalSegmentRotation.State} {init : OpenSyncCacheCallbacks heap} {admitted : heap}
+    {seed : OpenSyncCacheAllocations report.captured.opened view init admitted} {calls : FreshBootstrapCacheCalls heap}
+    {raw : FreshBootstrapCacheChronology seed calls} (seen : FreshBootstrapOpenHeap report raw)
+    (resolved : opened.handle.directory = directory) (observe : heap → CheckpointStorageObservation) (through : Nat)
+    (createdKeeps : ∀ start, start ≠ 0 → seen.keeper.namespaceView.child report.captured.root (renderWalSegmentName start) =
+      report.captured.view.child report.captured.root (renderWalSegmentName start))
+    (children : ∀ start ≤ through,
+      let stored := observe raw.markerDirectory.reached
+      let path := directory.file (.walSegment start)
+      let name := renderWalSegmentName start
+      let object := report.marker.renamedView.modelObject
+      stored.files.names path = (report.marker.renamedView.child report.captured.root name).map object ∧
+      ∀ surviving ∈ stored.crashNames,
+        surviving path ∈ (report.handoff.afterMarkerNames name).map (Option.map object))
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+    (allocation : OpenReferenceAllocations allocatePhase allocateToken view.phase
+      (⟨.empty, 0, 0, 0⟩ : WalSegmentRepair.Reopened).installed raw.markerDirectory.reached)
+    (returnedAt : (opened.handle.phase, opened.handle.token, opened.start.reached) =
+      (allocation.phase, allocation.token, allocation.afterToken))
+    (phaseFrame : WalNamePresenceFrame directory 0 through (observe raw.markerDirectory.reached)
+      (observe allocation.afterPhase))
+    (tokenFrame : WalNamePresenceFrame directory 0 through (observe allocation.afterPhase)
+      (observe allocation.afterToken)) :
+    let state := opened.start.current.ready.state
+    state.writer.wal.NamespaceWindow state.session.directory 0 through (observe opened.start.reached).files.names ∧
+    ∀ names ∈ (observe opened.start.reached).crashNames,
+      state.writer.wal.NamespaceWindow state.session.directory 0 through names := by
+  let state := opened.start.current.ready.state
+  let stored := observe raw.markerDirectory.reached
+  have directoryEq : state.session.directory = directory := opened.start.directory.trans resolved
+  obtain ⟨valid, history, _⟩ := opened.start.current.ready.readPrefix.refines
+  obtain ⟨first, _, seals⟩ := freshEmptyWAL valid (history.trans opened.emptyHistory)
+  change state.writer.wal.active.first = 0 at first
+  obtain ⟨_, _, keeperBinding, _, _, _, _, _, _, _, _, _, _⟩ := report.handoff.preservesKeeper
+  have catalog : state.writer.wal.NamespaceWindow directory 0 through stored.files.names := by
+    intro start _ upper
+    obtain ⟨binding, _⟩ := children start upper
+    change stored.files.names (directory.file (.walSegment start)) =
+      (report.marker.renamedView.child report.captured.root (renderWalSegmentName start)).map _ at binding
+    rw [binding, Option.isSome_map, WalSegmentImage.segments, seals]
+    by_cases zero : start = 0
+    · subst start
+      simp [keeperBinding, first]
+    · have missing : report.captured.view.child report.captured.root (renderWalSegmentName start) = none := by
+        cases found : report.captured.view.child report.captured.root (renderWalSegmentName start) with
+        | none => rfl
+        | some child =>
+          have listed := (report.captured.view.namesExact _ _).mpr ⟨child, found⟩
+          exact False.elim (Bool.noConfusion ((report.listed.noConflict _ listed).symm.trans (walConflictsWhenNonzero zero)))
+      rw [report.handoff.renameNames _ (renderWalSegmentName_ne_marker start rfl)
+        (renderWalSegmentName_ne_marker start rfl),
+        report.handoff.stageNames _ (renderWalSegmentName_ne_marker start rfl), seen.route]
+      change (seen.keeper.namespaceView.child report.captured.root (renderWalSegmentName start)).isSome = true ↔ _
+      rw [createdKeeps start zero, missing]
+      simp [first, zero]
+  have settled (names) (survives : names ∈ stored.crashNames) (start : Nat) (_ : 0 ≤ start) (upper : start ≤ through) :
+      (names (directory.file (.walSegment start))).isSome =
+        (stored.files.names (directory.file (.walSegment start))).isSome := by
+    obtain ⟨binding, chosen⟩ := children start upper
+    have same := chosen names survives
+    rw [report.handoff.markerSettlement, List.map_singleton, List.mem_singleton, ← binding] at same
+    exact congrArg Option.isSome same
+  change state.writer.wal.NamespaceWindow state.session.directory 0 through (observe opened.start.reached).files.names ∧
+    ∀ names ∈ (observe opened.start.reached).crashNames,
+      state.writer.wal.NamespaceWindow state.session.directory 0 through names
+  have reached : opened.start.reached = allocation.afterToken := congrArg (fun result => result.2.2) returnedAt
+  rw [directoryEq, reached]
+  have allocated := phaseFrame.trans tokenFrame
+  exact ⟨catalog.frame allocated.live, fun names survives => catalog.frame (allocated.chosen settled survives)⟩
 
 /-- The fresh public open starts with settled storage and visible empty
 keeper bytes on its returned heap. The keeper create frames the listed

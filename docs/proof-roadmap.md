@@ -217,9 +217,13 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   same recovery proof needs the catalog chosen by the rotation outcome.
   The aligned repair carries the actual root and keeper attachments
   through the cache calls. The phase and token allocator now has a
-  common rule for starting the exact next writer. Derive the initial
-  namespace for a reached ready state and use both rules in the literal
-  aligned retry to replace its successful-open report premise.
+  common rule for starting the exact next writer. The fresh bootstrap
+  listing and local effects establish the initial window across both
+  reference allocations, including absence at future offsets. Carry
+  it through the reachable operations and retain the crash-selected
+  successor at rotation. Use those facts and both installer rules in
+  the literal aligned retry to replace its successful-open report premise.
+  [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
   [WAL name window](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean) ·
   [Exact returned writer](../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
   [Writer from replay](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean) ·

@@ -1,5 +1,15 @@
 # Current handoff
 
+Fresh bootstrap now establishes the live and crash-selectable WAL
+name window at its actual returned heap. The checked listing rejects
+every canonical segment except zero. Exclusive creation, the marker
+steps and the reference allocations carry absence at other offsets
+through scoped name effects. The bound may include future ordinals
+so an ordinary write can use the same invariant for either surviving
+marker. Rotation has to update the window at the successor that its
+observed directory result chooses.
+[Fresh WAL namespace](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+
 A returned uncertain write now has a separate frame for the presence
 of WAL names up to either possible marker. One earlier map supplies the
 whole name window of the selected reboot. Failed open attempts pass this
