@@ -121,8 +121,8 @@ local notation "keepsVisibleKeeper" => keepsVisibleBytes keeperPath
 prior read ledger. The committed storage is observed at the last
 publication barrier, and the original phase setter carries it to the
 actual returned heap. The append and staging effects determine the
-payloads recorded by the file barriers. The returned visible keeper
-bytes are also available to justify a later append. -/
+payloads recorded by the file barriers. The returned writer supplies
+the physical entry for another write using the same cache references. -/
 theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
     (request : WriteRequest)
@@ -202,17 +202,16 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
         (storage after).files ∧ keepsVisibleKeeper issued after ∧ (storage after).crashNames ≠ [] ∧
       ∀ names ∈ (storage after).crashNames, ∀ file, names ((dir).file file) = (storage after).files.names ((dir).file file)) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧ sequence = table.committed ∧
-    ∃ next : NativeOpenedPosition opened,
+    ∃ (next : NativeOpenedPosition opened)
+      (sameDirectory : next.current.ready.state.session.directory = dir),
       next.reached = reached ∧ next.pins = current.pins ∧
       next.current.history = current.current.history ++ batch ∧
       next.current.submissions = current.current.submissions ++ [.acknowledgedBatch batch] ∧
       next.current.ready.reads = current.current.ready.reads ∧
-      next.current.ready.state.census = view.descriptors reached ∧
-      next.current.ready.state.cache = view.cacheAt reached cache.directory cache.active cache.pending ∧
-      NativeReadyStorage next.current.ready.state (storage reached) ∧
-      ∀ inode, (observe reached).visible ((dir).file (.walSegment next.current.ready.state.writer.installed.activeFirst)) =
-        some inode →
-        (inodes reached).visible inode = next.current.ready.state.writer.wal.active.bytes := by
+      next.WriteStorageEntry view
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
+        (storage next.reached) (inodes next.reached).visible := by
   obtain ⟨entryCensus, entryCache, old, entryKeeper, root⟩ := entry
   obtain ⟨valid, history, _⟩ := current.current.ready.readPrefix.refines
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
@@ -312,11 +311,19 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     · rw [← retained.resumed.bytes]
       exact marker
     · exact fun names member => ⟨(settledNames names member).1, (settledNames names member).2.1⟩
-  refine ⟨current.uses.writeSchedules, number, next, rfl, rfl, rfl, rfl, rfl, rfl, rfl, afterStorage, ?_⟩
-  intro namedInode named
-  have same := Option.some.inj (named.symm.trans exactKeeper.1)
-  subst namedInode
-  exact exactKeeper.2.trans nextKeeper.symm
+  refine ⟨current.uses.writeSchedules, number, next, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, afterStorage, ?_, ?_⟩
+  · intro namedInode named
+    change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
+    rw [← selectedKeeper] at named
+    obtain rfl := Option.some.inj (named.symm.trans exactKeeper.1)
+    exact exactKeeper.2.trans nextKeeper.symm
+  · intro literal found
+    have cached := custody.cachedDirectory
+    change (view.directory reached cache.directory).map (view.handle reached) =
+      some (custody.cachedAt, (before).directorySlot, 0) at cached
+    rw [found] at cached
+    rw [Option.some.inj cached, custody.directoryInode]
+    exact afterStorage.directoryBound
 
 end RawWrite
 

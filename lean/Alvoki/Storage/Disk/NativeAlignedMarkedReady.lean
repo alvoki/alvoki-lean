@@ -174,13 +174,9 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
       allocateToken () before = .ok ref reached →
       (observe before).Frames state.crashPath (observe reached) ∧ visible reached = visible before) :
     raw.ReadyWriterReturn log reads execute get set observe visible := by
-  have reached := durable.frame frames.visible (frames.weaken fun path same => .inr (.inl same))
   have alignedFinish : opening.finish = .aligned finish := congrArg Sigma.fst aligned
   have sameObjects : opening.finish.census.inode = opening.admission.reached.inode := by
     simpa only [alignedFinish, CapturedKeeperFinish.census] using finish.sameCensusObjects
-  have ⟨rootAtRepair, lockAtRepair⟩ := raw.reopenedAuthority (fun heap => (observe heap).files) root lock
-    (fun path used => frames.visible path (.inr (used.imp id (fun equal => .inl equal)))) sameObjects
-  rw [alignedFinish, CapturedKeeperFinish.census] at rootAtRepair lockAtRepair
   obtain ⟨bound, payload, keeperFrame, dirFrame, consumeFrame⟩ := keeperRead
   have keeperAtIssue := seen.keeperAtIssue (fun heap => (observe heap).files.names) visible
     bound payload keeperFrame dirFrame consumeFrame
@@ -191,16 +187,9 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
   have census : next.state.census = finish.census := by
     simpa only [alignedFinish, CapturedKeeperFinish.census] using modeledCensus
   have valid := next.readPrefix.refines.1
-  have authority : (observe seen.remembered).files.names next.state.session.directory.path =
-      some (next.state.census.inode next.state.directorySlot.description) := by
-    rw [directory, census, slot]
-    exact rootAtRepair
-  have owns : (observe seen.remembered).files.names (next.state.session.directory.file .lock) =
-      some (next.state.census.inode next.state.owner.description) := by
-    rw [directory, census, owner]
-    exact lockAtRepair
   obtain ⟨protectedFiles, marker, parent⟩ :=
-    reached.forReopenedWriter priorReady valid directory target manifest published (retained.trans kept) authority owns
+    raw.reopenedFootprintAt observe durable frames.visible (frames.weaken fun _ same => .inr (.inl same))
+      root lock sameObjects priorReady valid directory modeledCensus owner slot target manifest published (retained.trans kept)
   have apart : ∀ path, next.state.selectedRetryPath path →
       (observe seen.remembered).files.names path ≠
         some (opening.reads.wal.keeper.calls.inventory.inode opening.reads.wal.keeper.calls.slot.description) := by
@@ -212,7 +201,8 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
     have privateAtListing := raw.keeperPrivateBinding (names := fun heap => (observe heap).files.names) links
     have canonical := readFrame.privateBindingOn privateAtListing path framedPath
       (bound.trans (congrArg some opening.reads.wal.keeper.observesFile.sameObject))
-    exact NativeReadyState.protectedPathNeKeeper valid selectedPath (by rw [directory, first]; exact canonical)
+    exact NativeReadyState.protectedPathNeWalFromActive valid selectedPath (Nat.le_refl _)
+      (by rw [directory, first]; exact canonical)
   obtain ⟨_, ready, issuedKeeper⟩ := seen.readyStorage observe visible directory census slot first bytes protectedFiles
     marker parent (effects next.state directory) keeperAtIssue apart
   exact ⟨repairHeap.symm ▸ ready, repairHeap.symm ▸ issuedKeeper⟩

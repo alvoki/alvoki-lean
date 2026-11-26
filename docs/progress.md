@@ -1,5 +1,17 @@
 # Current handoff
 
+All three checked keeper repairs now feed the same storage proof for the table actually
+returned by the marked opener. The pruned path derives absence of later names from the
+reached unlink calls and syncs the inode it read. The longer path follows the fresh
+stage inode through its flush, fsync, rename and directory settlement. The shared
+retained-footprint and directory-barrier proofs apply at each path's actual heaps.
+The recovery ledger and the next write use the same returned position. An acknowledged
+write also supplies the common physical entry for the following write on the same cache.
+[Pruned return](../lean/Alvoki/Storage/Disk/NativePrunedMarkedReady.lean)
+· [Replacement return](../lean/Alvoki/Storage/Disk/NativeLongMarkedReady.lean)
+· [Recovery ledger](../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
+· [Write entry](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean)
+
 The aligned retry without pruning now carries the durable checkpoint and marker to the
 actual returned table. The root and lock use the reopened descriptor census. The
 keeper's one-link check and the scoped name frames rule out aliases with the protected

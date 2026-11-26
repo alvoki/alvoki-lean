@@ -78,13 +78,13 @@ theorem NativeLongKeeperSettlementHeap.readyStorage
   obtain ⟨children, parent, keptContents⟩ := directoryEffect seen.synced
     (by rw [ran.directoryAtIssue]; exact ran.directoryLive)
     (by rw [ran.directoryAtIssue]; exact root)
-  have wholeFrame : (observe renamed.reached).files.Frames state.crashPath (observe seen.reached).files := by
-    intro path kept
-    rcases NativeReadyState.crashPath_rootOrChild kept with rootPath | ⟨file, childPath⟩
-    · exact parent.visible path rootPath
-    · rw [childPath, sameDirectory]
-      exact ⟨children.visible file, fun inode named =>
-        children.bytes _ (.inl rfl) file inode ((children.visible file).trans named)⟩
+  have childFiles : (observe renamed.reached).files.Frames
+      (fun path => ∃ file, path = directory.file file) (observe seen.reached).files := by
+    rintro _ ⟨file, rfl⟩
+    exact ⟨children.visible file, fun inode named =>
+      children.bytes _ (.inl rfl) file inode ((children.visible file).trans named)⟩
+  obtain ⟨wholeFrame, settled⟩ := NativeReadyState.framesByDirectory sameDirectory parent childFiles rootSettled
+    (by simpa only [sameDirectory] using children.settled rfl)
   have activeBytes := sameBytes.symm
   have keeperAtRename : (observe renamed.reached).files.Stored
       (state.session.directory.file (.walSegment state.writer.wal.active.first)) state.writer.wal.active.bytes := by
@@ -101,15 +101,12 @@ theorem NativeLongKeeperSettlementHeap.readyStorage
   have keeperPath : state.crashPath (state.session.directory.file (.walSegment state.writer.wal.active.first)) :=
     NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
   refine ⟨(congrArg (fun observed => observed.2.1) ran.final).trans sameCensus.symm, ⟨protectedFiles.frame protectedFrame, wholeFrame.stored markerPath marker,
-    wholeFrame.stored keeperPath keeperAtRename, NativeReadyState.settledByDirectory parent rootSettled ?_⟩, ?_⟩
-  · intro names member file
-    rw [sameDirectory]
-    exact children.settled rfl names member file
-  · intro inode bound
-    have sameInode : (observe seen.reached).files.names (directory.file (.walSegment layout.keeper.first)) = some replacement :=
-      ran.keeperBound
-    rw [sameDirectory, sameFirst, sameInode] at bound
-    obtain rfl := Option.some.inj bound
-    exact keptContents.trans (movedContents.trans (stagedContents.trans (stageLive.trans activeBytes)))
+    wholeFrame.stored keeperPath keeperAtRename, settled⟩, ?_⟩
+  intro inode bound
+  have sameInode : (observe seen.reached).files.names (directory.file (.walSegment layout.keeper.first)) = some replacement :=
+    ran.keeperBound
+  rw [sameDirectory, sameFirst, sameInode] at bound
+  obtain rfl := Option.some.inj bound
+  exact keptContents.trans (movedContents.trans (stagedContents.trans (stageLive.trans activeBytes)))
 
 end Alvoki.Storage.DiskSession

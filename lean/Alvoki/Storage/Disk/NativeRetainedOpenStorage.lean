@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.NativeMarkedEntryObservations
 
 namespace Alvoki.Storage.DiskSession
 
@@ -16,12 +17,12 @@ theorem SegmentedWriterState.RetainedReady.keptSeal {state : SegmentedWriterStat
   rw [WalSegment.findSealedStart ordered member]
   rfl
 
-/-- The guarded keeper's path is outside the immutable footprint:
-distinct WAL starts and file kinds give distinct canonical paths. -/
-theorem NativeReadyState.protectedPathNeKeeper {state : NativeReadyState} (ready : state.Valid)
-    {path : FilePath}
-    (selected : state.selectedRetryPath path) :
-    path ≠ state.session.directory.file (.walSegment state.writer.wal.active.first) := by
+/-- The mutable keeper and later WAL paths are outside the immutable footprint.
+Every retained seal starts strictly before the keeper. -/
+theorem NativeReadyState.protectedPathNeWalFromActive {state : NativeReadyState} (ready : state.Valid)
+    {path : FilePath} (selected : state.selectedRetryPath path) {first : Nat}
+    (atOrAfter : state.writer.wal.active.first ≤ first) :
+    path ≠ state.session.directory.file (.walSegment first) := by
   rcases selected with marker | protectedPath
   · intro equal
     obtain ⟨_, collision⟩ := DiskDirectory.walSegment_exclusive (marker.symm.trans equal)
@@ -36,7 +37,7 @@ theorem NativeReadyState.protectedPathNeKeeper {state : NativeReadyState} (ready
       cases collision
     · have ordered := (List.pairwise_append.mp ready.retained.layout.ordered).2.2 _ member
           state.writer.wal.active (List.mem_singleton_self _)
-      exact fun same => Nat.ne_of_lt ordered.1 (state.session.directory.walSegment_path_injective same)
+      exact fun same => Nat.ne_of_lt (Nat.lt_of_lt_of_le ordered.1 atOrAfter) (state.session.directory.walSegment_path_injective same)
     · intro equal
       obtain ⟨_, collision⟩ := DiskDirectory.walSegment_exclusive equal
       cases collision
@@ -105,5 +106,54 @@ theorem NativeReadyState.SelectedRetryDurability.forReopenedWriter
     exact previous.marker _ marker
   · rw [directory]
     exact previous.rootSettled
+
+/-- Carry the durable footprint to a repair stage that frames the
+retained files and the parent binding. Reindex it to the selected
+writer using the root and lock of this actual admission. -/
+theorem RawHealthyMarkedOpenEffects.reopenedFootprintAt
+    {heap stream : Type} {prior next : NativeReadyState} {input : FilePath}
+    {inventory : DescriptorInventory} {retry : LockedFileState FileImage}
+    {vacant : TryLockObserves retry.owners prior.session.directory (.ok true)}
+    {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
+    {selected : SelectedIntegrityCheckpoint prior.writer.published.durable
+      retry.image.directory.active.manifest prior.writer.checkpoint}
+    {opening : MarkedReadyOpenObservations input prior.session.directory inventory retry layout
+      prior.writer.published vacant selected}
+    {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+    {init : OpenSyncCacheCallbacks heap} {entry atHeap : heap}
+    {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+    {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+    {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)} {stage : LongKeeperStageCallbacks heap}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    (raw : RawHealthyMarkedOpenEffects opening view calls init entry phaseIdentity tokenIdentity
+      allocatePhase allocateToken stream remove stage rename)
+    (observe : heap → CheckpointStorageObservation)
+    (durable : prior.SelectedRetryDurability layout.target (observe entry))
+    (files : (observe entry).files.Frames prior.selectedRetryPath (observe atHeap).files)
+    (parent : (observe entry).Frames (· = prior.session.directory.path) (observe atHeap))
+    (root : (observe entry).files.names prior.session.directory.path =
+      some ((view.handle raw.seed.afterPending raw.seed.handle).1.inode
+        (view.handle raw.seed.afterPending raw.seed.handle).2.1.description))
+    (lock : (observe entry).files.names (prior.session.directory.file .lock) =
+      some ((view.handle raw.raw.afterFlock raw.raw.lock).1.inode (view.handle raw.raw.afterFlock raw.raw.lock).2.1.description))
+    (sameObjects : opening.finish.census.inode = opening.admission.reached.inode)
+    (priorReady : prior.Valid) (nextReady : next.Valid)
+    (directory : next.session.directory = prior.session.directory)
+    (census : next.census = opening.finish.census)
+    (owner : next.owner = opening.admission.owner) (slot : next.directorySlot = opening.admission.cached)
+    (target : next.writer.target = layout.target)
+    (manifest : layout.target.pair.manifest = prior.writer.target.pair.manifest)
+    (published : next.writer.published.durable = prior.writer.published.durable)
+    (kept : next.writer.files.kept = prior.writer.files.kept) :
+    NativeReadyProtectedStorage next (observe atHeap).files ∧
+      (observe atHeap).files.Stored (next.session.directory.file .walBoundary)
+        (WAL.Boundary.encode (WAL.encode next.writer.history).size.toUInt64) ∧
+      ∀ names ∈ (observe atHeap).crashNames,
+        names next.session.directory.path = (observe atHeap).files.names next.session.directory.path := by
+  obtain ⟨boundRoot, boundLock⟩ := raw.reopenedAuthority (fun heap => (observe heap).files) root lock
+    (fun path selected => files path (.inr (selected.imp id (fun same => .inl same)))) sameObjects
+  exact (durable.frame files parent).forReopenedWriter priorReady nextReady directory target manifest published kept
+    (by rw [directory, census, slot]; exact boundRoot) (by rw [directory, census, owner]; exact boundLock)
 
 end Alvoki.Storage.DiskSession

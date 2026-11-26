@@ -456,8 +456,17 @@ its parent. The aligned retry consumes the durable selected footprint, matches t
 root and lock, and frames the exact keeper through its bounded read and cache updates.
 The one-link stat and a link census at that heap rule out protected names aliasing the
 keeper. The successful open supplies the same physical entry consumed by the next
-acknowledged write. The next operation still has its own primitive effect laws. The
-other repair paths need to supply the same entry.
+acknowledged write. Aligned pruning and replacement through a fresh exclusive stage
+supply that entry through the same allocation proof. The retained-file reindexing,
+root and lock identity, and directory-barrier frames are shared. Pruning proves
+absence at its repair heap. Replacement follows the new inode through the literal
+stage, fsync and rename. The recovery ledger is proved at the same position used by
+the next write. An acknowledged write produces the entry again on the same cache
+references. The local callback laws and their composition across the full execution
+remain explicit, including the guarded staging-collision route.
+[Pruned returned writer](../../lean/Alvoki/Storage/Disk/NativePrunedMarkedReady.lean)
+· [Replacement returned writer](../../lean/Alvoki/Storage/Disk/NativeLongMarkedReady.lean)
+· [Recovery ledger](../../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
 [Late publication recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 · [Ready allocations](../../lean/Alvoki/Storage/Disk/NativeOpenReadyStorage.lean)
 · [Aligned returned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)

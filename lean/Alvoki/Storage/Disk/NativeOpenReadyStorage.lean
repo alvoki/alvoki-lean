@@ -33,6 +33,24 @@ theorem NativeReadyState.settledByDirectory {state : NativeReadyState} {issued r
       names member path same
   · exact children names member file
 
+/-- Project the observed directory barrier onto the ready writer's files.
+The parent frame and its prior settlement account for the directory's own name. -/
+theorem NativeReadyState.framesByDirectory {state : NativeReadyState} {directory : DiskDirectory}
+    {issued reached : CheckpointStorageObservation} (sameDirectory : state.session.directory = directory)
+    (parent : issued.Frames (· = state.session.directory.path) reached)
+    (childFiles : issued.files.Frames (fun path => ∃ file, path = directory.file file) reached.files)
+    (rootSettled : ∀ names ∈ issued.crashNames, names state.session.directory.path =
+      issued.files.names state.session.directory.path)
+    (children : ∀ names ∈ reached.crashNames, ∀ file, names (state.session.directory.file file) =
+      reached.files.names (state.session.directory.file file)) :
+    issued.files.Frames state.crashPath reached.files ∧
+    ∀ names ∈ reached.crashNames, ∀ path, state.crashPath path → names path = reached.files.names path := by
+  refine ⟨?_, settledByDirectory parent rootSettled children⟩
+  intro path selected
+  rcases crashPath_rootOrChild selected with root | ⟨file, child⟩
+  · exact parent.visible path root
+  · exact childFiles path ⟨file, child.trans (congrArg (·.file file) sameDirectory)⟩
+
 /-- The final regular-file barrier establishes keeper bytes. Earlier
 directory settlement and the durable unrelated files are preserved. -/
 theorem NativeReadyStorage.afterKeeperSync {state : NativeReadyState} {issued reached : CheckpointStorageObservation}

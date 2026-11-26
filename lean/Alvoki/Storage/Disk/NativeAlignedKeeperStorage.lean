@@ -138,11 +138,8 @@ theorem AlignedKeeperCacheReport.readyStorage
     change _ = some (reads.wal.keeper.calls.inventory.inode admission.cached.description)
     rw [finish.readCustody.opened]
     exact root)
-  have directoryFrame : (observe seen.remembered).files.Frames state.crashPath (observe seen.authorized).files := by
-    intro path keep
-    rcases NativeReadyState.crashPath_rootOrChild keep with parent | ⟨file, child⟩
-    · exact parentFrame.visible path parent
-    · exact childFrame path ⟨file, child.trans (congrArg (fun dir => dir.file file) sameDirectory)⟩
+  obtain ⟨directoryFrame, settled⟩ :=
+    NativeReadyState.framesByDirectory sameDirectory parentFrame childFrame rootSettled children
   have consumedFrame := effects.consume seen.consume
   have toKeeperSync := directoryFrame.trans consumedFrame.visible
   have protectedAtIssue := protectedFiles.frame (fun path inside => toKeeperSync path
@@ -174,7 +171,7 @@ theorem AlignedKeeperCacheReport.readyStorage
     exact apart path kept (sameName.symm.trans atIssue)
   refine ⟨seen.reachedCensus.trans sameCensus.symm, NativeReadyStorage.afterKeeperSync synced initialKeeper
     protectedAtIssue markerAtIssue apartAtIssue
-      (consumedFrame.settledFrom (NativeReadyState.settledByDirectory parentFrame rootSettled children)),
+      (consumedFrame.settledFrom settled),
     ?_⟩
   intro inode after
   rw [synced.names, initialKeeper] at after

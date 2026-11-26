@@ -74,7 +74,7 @@ theorem PrunedAlignedKeeperCacheReport.readyStorage
       visible seen.reached keeperInode = visible seen.consumed keeperInode)
     (keeperBytes : visible seen.consumed keeperInode = layout.keeper.bytes)
     (apart : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
-      (observe seen.consumed).files.names path ≠ some keeperInode) :
+      (observe seen.pruned).files.names path ≠ some keeperInode) :
     view.descriptors seen.reached = state.census ∧ NativeReadyStorage state (observe seen.reached) ∧
     (∀ inode, (observe seen.reached).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
       some inode → visible seen.reached inode = state.writer.wal.active.bytes) ∧
@@ -99,11 +99,8 @@ theorem PrunedAlignedKeeperCacheReport.readyStorage
     rwa [ran.directoryAtSuffix]
   obtain ⟨childFrame, parentFrame, children⟩ := suffixEffect seen.suffixSync directoryLive bound
   have settledFrame := (consumeFrame seen.consume).weaken (fun _ inside => Or.inl inside)
-  have selectedFrame : (observe seen.pruned).files.Frames state.crashPath (observe seen.suffixSettled).files := by
-    intro path inside
-    rcases NativeReadyState.crashPath_rootOrChild inside with parent | ⟨file, child⟩
-    · exact parentFrame.visible path parent
-    · exact childFrame path ⟨file, child.trans (congrArg (·.file file) sameDirectory)⟩
+  obtain ⟨selectedFrame, settled⟩ :=
+    NativeReadyState.framesByDirectory sameDirectory parentFrame childFrame rootSettled children
   have toKeeperSync := selectedFrame.trans settledFrame.visible
   have protectedAtIssue := protectedFiles.frame (fun path inside => toKeeperSync path
     (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr inside))))
@@ -121,9 +118,15 @@ theorem PrunedAlignedKeeperCacheReport.readyStorage
   have initialKeeper : (observe seen.consumed).files.names
       (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some keeperInode := by
     rwa [keeperPathEq]
+  have apartAtIssue : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
+      (observe seen.consumed).files.names path ≠ some keeperInode := by
+    intro path kept atIssue
+    have inScope : state.crashPath path := NativeReadyState.crashPath_iff_write.mpr (kept.imp id Or.inr)
+    have sameName := (toKeeperSync path inScope).1
+    exact apart path kept (sameName.symm.trans atIssue)
   refine ⟨seen.reachedCensus.trans sameCensus.symm,
-    NativeReadyStorage.afterKeeperSync synced initialKeeper protectedAtIssue markerAtIssue apart
-      (settledFrame.settledFrom (NativeReadyState.settledByDirectory parentFrame rootSettled children)), ?_, ?_⟩
+    NativeReadyStorage.afterKeeperSync synced initialKeeper protectedAtIssue markerAtIssue apartAtIssue
+      (settledFrame.settledFrom settled), ?_, ?_⟩
   · intro inode named
     rw [synced.names, initialKeeper] at named
     obtain rfl := Option.some.inj named

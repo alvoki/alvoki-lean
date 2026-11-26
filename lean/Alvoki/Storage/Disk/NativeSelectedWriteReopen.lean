@@ -320,10 +320,9 @@ def NativeReadPosition.SelectedWriteRecovery
       (∀ segment ∈ plan.layout.sealed,
         ∃ read : opening.reads.reads.ObservesFile ((dir).file (.walSegment segment.first)) segment.bytes,
           names reached ((dir).file (.walSegment segment.first)) = some read.object ∧ visible reached read.object = segment.bytes) ∧
-      (∃ read : opening.reads.reads.ObservesFile ((dir).file (.walSegment plan.layout.keeper.first))
-          (plan.layout.keeper.bytes ++ plan.layout.tail),
-        names reached ((dir).file (.walSegment target.first)) = some read.object ∧
-        visible reached read.object = plan.layout.keeper.bytes ++ plan.layout.tail) ∧
+      (names reached ((dir).file (.walSegment plan.layout.keeper.first)) =
+        some opening.reads.wal.keeper.observesFile.object ∧
+        visible reached opening.reads.wal.keeper.observesFile.object = plan.layout.keeper.bytes ++ plan.layout.tail) ∧
       (∀ bytes, (retryFiles).image.directory.active.manifest = some bytes →
         ∃ read : opening.reads.reads.ObservesFile ((dir).file .manifest) bytes,
           names reached ((dir).file .manifest) = some read.object ∧ visible reached read.object = bytes) ∧
@@ -382,7 +381,8 @@ theorem NativeReadPosition.opensAfterWriteRetries
   have keptFiles := initial.protectedFiles.frame (fun path keep => frame path (.inr keep))
   have reachedManifest : (retryFiles).image.directory.active.manifest = current.state.writer.target.pair.manifest :=
     (congrArg (fun (target : Target) => target.pair.manifest) plan.targetEq).trans initial.manifest
-  refine ⟨atReached, attempts, keptFiles, kept.trans initial.kept, initial.manifest, plan, opening, raw, fileCalls, directoryCalls, keeperCallbacks, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
+  refine ⟨atReached, attempts, keptFiles, kept.trans initial.kept, initial.manifest, plan, opening, raw, fileCalls,
+    directoryCalls, keeperCallbacks, rootObject, lockObject, ?_, ?_, ⟨named, contents⟩, ?_, ?_, ?_⟩
   · intro bytes selectedMarker
     have sameMarker : (retryFiles).image.directory.active.walBoundary = target.pair.walBoundary :=
       congrArg (fun (t : Target) => t.pair.walBoundary) plan.targetEq

@@ -67,10 +67,10 @@ variable {heap : Type} {input : FilePath} {directory : DiskDirectory} {inventory
 
 variable {opening : MarkedReadyOpenObservations input directory inventory retry layout published vacant selected}
 
-/-- Continue the exact checkpoint frame through that worker's checked
-listing and ordered seals. The extent probes between them did not move
-the heap, and the keeper is reached at its own reported entry. -/
-theorem RawHealthyMarkedOpenEffects.framesBeforeKeeper
+/-- Carry the frame to the checked listing and separately through the
+ordered seal reads to the keeper entry. The extent probes did not move
+the heap. The split exposes the point where the link census was read. -/
+theorem RawHealthyMarkedOpenEffects.framesReadPrefix
     (raw : RawHealthyMarkedOpenEffects opening view calls init entry phaseIdentity tokenIdentity
       allocatePhase allocateToken stream remove stage rename)
     (frame : heap → heap → Prop) (refl : ∀ atHeap, frame atHeap atHeap)
@@ -81,7 +81,7 @@ theorem RawHealthyMarkedOpenEffects.framesBeforeKeeper
     (scan : ∀ handle entryHeap, frame entryHeap (raw.directoryCalls.readDir handle entryHeap).2)
     (closed : ∀ {entryHeap reached handle}, raw.directoryCalls.closeDir handle entryHeap = .ok () reached →
       frame entryHeap reached) :
-    frame raw.seed.afterPending raw.beforeKeeper := by
+    frame raw.seed.afterPending raw.listing.reached ∧ frame raw.listing.reached raw.beforeKeeper := by
   have sealFrame (first count : Nat) {start finish : heap} {bytes : ByteArray}
       (returned : raw.fileCalls.seal (directory.file (.walSegment first)) count start = .ok bytes finish) :
       frame start finish := by
@@ -90,8 +90,8 @@ theorem RawHealthyMarkedOpenEffects.framesBeforeKeeper
         (reads.readChunk file) count ByteArray.empty) start
     change frame start (reachedState (raw.fileCalls.seal (directory.file (.walSegment first)) count start)) at read
     simpa only [returned, reachedState] using read
-  exact trans (raw.checkpoint.framesScan selected reads refl trans)
-    (trans (raw.listing.framesScan frame trans listed scan closed) (raw.seals.framesSeals frame refl trans sealFrame))
+  exact ⟨trans (raw.checkpoint.framesScan selected reads refl trans)
+    (raw.listing.framesScan frame trans listed scan closed), raw.seals.framesSeals frame refl trans sealFrame⟩
 
 end Healthy
 
