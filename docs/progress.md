@@ -1,16 +1,29 @@
 # Current handoff
 
+At a final manifest-directory stop, the source prefix now identifies each
+new run write and the returned file fsync on its remembered handle. Local
+write and fsync effects give the exact durable run bytes. The preceding
+successful runs-directory barrier settles their names in each admitted map.
+The staged MANIFEST write uses the same handle-selection argument for its
+own returned fsync. The next proof must carry the settled bytes and names
+through staging, rename and the final barrier's selected map.
+[New run durability](../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean)
+
+The aligned returned table now retains its actual phase and token allocations,
+with the exact repair and return heaps. This exposes the remaining frame
+transport for a write on the returned handle.
+[Aligned return allocations](../lean/Alvoki/Storage/Disk/NativeAlignedCheckpointReopenEffects.lean)
+
 A stop during the final manifest-directory fsync determines the exact
 successful MANIFEST rename that preceded it. The source prefix exposes the
 rename entry and return heaps, the unchanged cache, and the directory
 descriptor used by the stopped fsync. A returned rename error stays in the
-ordinary I/O result. The old and new manifest choices still need physical
-durability of the matching selected run inodes and bytes.
+ordinary I/O result. The old and new manifest choices still need the
+matching run bindings and bytes through the final directory barrier.
 [Final manifest-directory stop](../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
 
-One theorem now composes either early checkpoint cut with the exact fresh
-open and one confirmed
-nonempty write with the interrupted checkpoint, the selected reboot, a finalized
+One theorem starts with the exact fresh open and a confirmed nonempty write.
+It follows either early checkpoint cut through the selected reboot, a finalized
 MANIFEST failure, an aligned reopen and a snapshot read. The checkpoint runs at
 the write's returned heap using its original cache references. One derived stop
 and one storage observation supply both the terminal ledger and the retry. The

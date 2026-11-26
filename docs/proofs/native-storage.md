@@ -473,6 +473,15 @@ returned table and heap. The chosen reboot and each call's primitive
 effects are explicit.
 [Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
 
+The late source prefix identifies each new run write and its returned
+file fsync on the same remembered descriptor. The file effects give
+singleton durable bytes at the written inodes. At the returned first
+directory barrier, the scoped child-name effect settles the new run
+bindings. The actual staged MANIFEST fsync also uses the descriptor
+remembered by its own write. Carrying both run generations through the
+remaining publication stages is still required.
+[New run durability](../../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean)
+
 At the final manifest-directory stop, the source order determines the
 preceding successful replacement of MANIFEST. The returned prefix exposes
 its entry and return heaps and the cache used to resolve the directory of the

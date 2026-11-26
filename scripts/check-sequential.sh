@@ -351,6 +351,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointSourceCrash
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointStopContinuation
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointSourceReopen
+lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointRunDurability
 lake env leanchecker Alvoki.Storage.Disk.NativeFreshCheckpointReplay
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport

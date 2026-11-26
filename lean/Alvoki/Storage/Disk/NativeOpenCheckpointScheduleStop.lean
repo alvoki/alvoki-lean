@@ -506,6 +506,59 @@ theorem CheckpointPrimitiveCalls.returnedFsync
       cases result <;> cases sync
       exact ⟨handle, heapAtEffect, rfl, ran⟩
 
+/-- A returned file fsync consumes the handle remembered by its write.
+The cached selection keeps the raw heap at the actual syscall entry. -/
+theorem CheckpointPrimitiveCalls.returnedRememberedFile
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {directory path : FilePath} {atIssue after : CheckpointWorld heap}
+    {cache : CensusDirectoryCache} {handle : CheckpointOpenHandle}
+    (separate : path ≠ directory) (remembered : atIssue.1 = cache.remember path handle)
+    (returned : (primitives.syncUntilStop directory fsync #[path]).run atIssue = .ok (.ok ()) after) :
+    after.1 = cache.consume path ∧ fsync handle atIssue.2 = .ok (.ok ()) after.2 := by
+  obtain ⟨literal, atSync, resolved, effect⟩ := primitives.returnedFsync fsync directory path returned
+  rw [remembered, Cache.resolveRemembered separate handle primitives.openRead atIssue.2] at resolved
+  obtain ⟨rfl, same⟩ := EStateM.Result.ok.inj resolved
+  exact ⟨(congrArg Prod.fst same).symm, (congrArg Prod.snd same).symm ▸ effect⟩
+
+/-- The manifest staged on the way to the final directory barrier was
+synced using the descriptor returned by the actual write. Consuming that
+descriptor does not change the raw heap where the fsync issues. -/
+theorem NativeCheckpointSourceStop.manifestRenameFollowsStagedSync
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+    {beforeRename : CheckpointWorld heap}
+    (returned : let directory := current.current.ready.state.session.directory
+      let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+      ((runSteps stop.next.table.runs.length ++
+        [Step.syncRunsDirectory, Step.manifest .writeStaged, Step.manifest .syncStaged]).forM perform).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) beforeRename) :
+    let directory := current.current.ready.state.session.directory
+    let path := directory.file .stagedManifest
+    let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+    ∃ (beforeWrite afterWrite : CheckpointWorld heap) (handle : CheckpointOpenHandle),
+      ((runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]).forM perform).run
+        (current.current.ready.state.cache, stop.poisoned) = .ok (.ok ()) beforeWrite ∧
+      primitives.cached.writeStaged path stop.manifest beforeWrite.2 = .ok handle afterWrite.2 ∧
+      afterWrite.1 = beforeWrite.1.remember path handle ∧
+      fsync handle afterWrite.2 = .ok (.ok ()) beforeRename.2 ∧
+      beforeRename.1 = beforeWrite.1.consume path := by
+  intro directory path perform
+  let prior := runSteps stop.next.table.runs.length ++ [Step.syncRunsDirectory]
+  change ((runSteps stop.next.table.runs.length ++
+    [Step.syncRunsDirectory, Step.manifest .writeStaged, Step.manifest .syncStaged]).forM perform).run _ = _ at returned
+  have order : runSteps stop.next.table.runs.length ++
+      [Step.syncRunsDirectory, Step.manifest .writeStaged, Step.manifest .syncStaged] =
+      (prior ++ [.manifest .writeStaged]) ++ [.manifest .syncStaged] := by
+    simp only [prior, List.append_assoc, List.cons_append, List.nil_append]
+  rw [order] at returned
+  obtain ⟨afterWrite, written, sync⟩ := returnedLastStep perform
+    (prior ++ [.manifest .writeStaged]) (.manifest .syncStaged) returned
+  obtain ⟨beforeWrite, earlier, write⟩ := returnedLastStep perform prior (.manifest .writeStaged) written
+  obtain ⟨handle, wrote, remembered⟩ :=
+    checkpointManifestWriteReturned primitives directory fsync stop.next stop.manifest write
+  have synced : (primitives.syncUntilStop directory.path fsync #[path]).run afterWrite = .ok (.ok ()) beforeRename := sync
+  obtain ⟨consumed, effect⟩ := primitives.returnedRememberedFile fsync (file_ne_directory _ _) remembered synced
+  exact ⟨beforeWrite, afterWrite, handle, earlier, wrote, remembered, effect, consumed⟩
+
 private theorem checkpointSyncKeepsDirectory
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
     (dir path : FilePath) {before after : CheckpointWorld heap}

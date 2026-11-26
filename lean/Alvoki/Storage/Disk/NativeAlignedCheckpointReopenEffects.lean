@@ -152,7 +152,7 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
   (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
 
 /-- The actual open returns the table and ready position of the fixed
-reader, with the same cache and callback projections. -/
+reader, with the same cache, callback projections, and reference allocations. -/
 structure ReturnedAt where
   cacheOpen : IO DiskTable.OpenSyncFiles
   makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
@@ -179,6 +179,9 @@ structure ReturnedAt where
   files : view.files start.reached = next.state.files
   census : view.descriptors start.reached = next.state.census
   cache : view.cacheAt start.reached seen.seed.directoryRef seen.seed.activeRef seen.seed.pendingRef = next.state.cache
+  allocation : ∃ allocated : OpenReferenceAllocations allocatePhase allocateToken view.phase
+      next.state.writer.installed seen.keeper.reached,
+    (handle.phase, handle.token, start.reached) = (allocated.phase, allocated.token, allocated.afterToken)
 
 end
 
@@ -229,7 +232,7 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     selectedReport.opensAlignedFromAdmission seen.raw seen.seed opening.finish rfl seen.checkpoint seen.listing
       seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked remove write rename bootstrap assemble
       constructs seen.allocations
-  obtain ⟨handle, start, table, _, lock, files, _, _, contents, getEq, setEq, compared, position,
+  obtain ⟨handle, start, table, _, lock, files, phase, token, contents, getEq, setEq, compared, position,
     reached, pins, sameFiles, sameCensus, sameCache, _, _, _, _, tokenRef⟩ :=
     installed.startsAtReportedPosition next sameReturn returned cache owner slot effects ptrEq
   refine ⟨{
@@ -253,9 +256,19 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     pins := pins
     files := sameFiles
     census := sameCensus
-    cache := sameCache }⟩
-  rw [table, reached]
-  exact openedTable
+    cache := sameCache
+    allocation := ?_ }⟩
+  · rw [table, reached]
+    exact openedTable
+  · have stored := start.stored
+    rw [contents, phase, reached, position, next.readPrefix.refines.1.phase] at stored
+    have allocated := installed.allocation.keepsPhase.trans installed.allocation.initialized
+    have payload := Phase.ready.inj (Option.some.inj (allocated.symm.trans stored))
+    let Issued (value : Installed) : Prop :=
+      ∃ refs : OpenReferenceAllocations allocatePhase allocateToken view.phase value seen.keeper.reached,
+        (handle.phase, handle.token, start.reached) = (refs.phase, refs.token, refs.afterToken)
+    have receipt : Issued installed.opened.installed := ⟨installed.allocation, by rw [phase, token, reached]⟩
+    exact Eq.mp (congrArg Issued payload) receipt
 
 end
 
