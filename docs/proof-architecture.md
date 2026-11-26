@@ -51,8 +51,8 @@ Use the [proof index](proof-index.md) for transferable techniques and proof impl
 Use the [verification status](verification-status.md) for the checked subsystem and experiment inventory.
 The [active checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement) owns work
 priorities and completion state. The detailed roadmap contracts and milestone notes remain references.
-The [handoff history](progress.md) records deliveries. When a proof family is consolidated, summarize
-its current argument under one claim here and keep exact old evidence in the handoff.
+The [current handoff](progress.md) identifies the next missing premise and the last verified baseline.
+Update the invariant map when consolidation changes the argument. Git history preserves earlier deliveries.
 
 ## Design and review a proof task
 
