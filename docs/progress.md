@@ -26,7 +26,9 @@ keeper, the common readiness rule needs its exact live bytes at fsync,
 the selected and settled directory, and a durably empty suffix. The
 selected writer now derives retained readiness for a covering, nonempty
 suffix from the actual accepted unlink calls, the second directory fsync,
-and the fsync of the remembered keeper. The longer-keeper path reuses
+and the fsync of the remembered keeper. The existing pruned installer now uses the same physical storage theorem as
+the aligned installer after the last directory barrier. It separately proves
+the durable absence of removed names. The longer-keeper path reuses
 the same split of the unlink pass from its barrier. Returning the literal
 table after nonempty pruning still requires tracking live descriptors and
 physical inode bindings through that pass.
