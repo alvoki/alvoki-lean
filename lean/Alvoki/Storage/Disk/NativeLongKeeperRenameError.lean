@@ -187,11 +187,12 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
     (∀ lower upper, WalNamePresenceFrame state.session.directory lower upper (storage synced) (storage reached)) ∧
     (storage reached).files.names (state.session.directory.file (.walSegment target.first)) =
       some (if effective then replacement else old) ∧
-    ∀ names ∈ (storage reached).crashNames, ∃ moved : Bool, (moved = true → effective = true) ∧
+    (∀ names ∈ (storage reached).crashNames, ∃ moved : Bool, (moved = true → effective = true) ∧
       let inode := if moved then replacement else old
       names (state.session.directory.file (.walSegment target.first)) = some inode ∧
       ((storage reached).files.bytes inode = if moved then [target.trimmed] else (storage synced).files.bytes old) ∧
-      (moved = true → names (state.session.directory.file .stagedWal) = none) := by
+      (moved = true → names (state.session.directory.file .stagedWal) = none)) ∧
+    (view.files reached).image.later.DurablyEmpty := by
   let directory := state.session.directory
   let keeperPath := directory.file (.walSegment target.first)
   obtain ⟨effect, image⟩ := observation failed stagedNamed oldNamed distinct
@@ -232,8 +233,12 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
     · exact fun collision => Nat.ne_of_gt (Nat.lt_of_le_of_lt target.firstCovered past)
         (directory.walSegment_path_injective collision)
     · exact WalKeeperRenameEffect.segmentNeScratch directory start
+  have absent : (view.files reached).image.later.DurablyEmpty := by
+    rw [imageAfter, syncedImage]
+    cases effective <;> exact prunedEmpty
   refine ⟨?_, trace, prefixFrame.trans (effect.framesRetry rfl safe), keeperAt, laterAt,
-    fun lower upper => effect.walNames oldNamed oldSettled lower upper, named, effect.keeperSurvivors oldSettled stagedDurable⟩
+    fun lower upper => effect.walNames oldNamed oldSettled lower upper, named,
+    effect.keeperSurvivors oldSettled stagedDurable, absent⟩
   rw [finishBoundedMarkedOpen_afterStage directory plan extent remove write sync rename valid size longer
     authorize prune (payload.symm ▸ written)]
   have syncStage : performPaths directory plan remove throw write sync rename (.replace .syncStaged) recorded = .ok () synced :=

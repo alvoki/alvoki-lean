@@ -2190,6 +2190,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.workerReturnsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFinalSyncError
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsLongRenameError
 #check_axioms Alvoki.Storage.DiskSession.foldReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.namesOfReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.foldReturnedPrune
@@ -4146,6 +4147,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalKeeperRenameEffect.walNames
 #check_axioms Alvoki.Storage.DiskSession.WalKeeperRenameEffect.keeperSurvivors
 #check_axioms Alvoki.Storage.DiskSession.failedLongKeeperRename
+#check_axioms Alvoki.Storage.DiskSession.longKeeperSyncPrefix
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.prunedAndSyncedReplacement
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
 #check_axioms Alvoki.Storage.DiskSession.filesAndFrameOfReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.LiteralKeeperReplacementEffects.readyAfterReturn

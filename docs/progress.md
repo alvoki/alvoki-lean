@@ -17,14 +17,15 @@ open rejected before `flock` can now extend that fold directly from
 the reached resolver, path and lock checks. If the append-open of
 `LOCK` itself fails, its own local effect is required.
 
-A reported keeper-rename error now yields the exact bounded-finisher
-error and the selected live inode under the local rename contract. If
-the move reached the filesystem, a crash map that selects the new inode
-also selects its synced prefix and the absence of `WAL.next`. When
-the later directory fsync reports an error, the accepted unlink loop
-and the name observations through cleanup justify the live WAL catalog
-needed by the next attempt. The rename-error step still needs to enter
-that same failed-open fold.
+The failed keeper rename now enters the same fixed-opener retry fold as
+the later directory fsync error. An error before the move leaves the old
+longer keeper live. After the move, the new inode is live with the synced
+prefix. Each crash map selecting the new inode also excludes `WAL.next`.
+The actual accepted unlink loop and scoped name effects through cleanup
+give the next attempt the same selected WAL catalog and no later names.
+The shared repair prefix derives the staged descriptor, synced bytes and
+old keeper's settled name before either rename result. The reported
+effect of the exact rename call remains a local input.
 [Rename effect](../lean/Alvoki/Storage/Disk/NativeLongKeeperRenameError.lean) ·
 [Failed repair and catalog](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
