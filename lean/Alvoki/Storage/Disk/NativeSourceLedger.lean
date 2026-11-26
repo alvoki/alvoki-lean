@@ -198,41 +198,4 @@ theorem NativeReadPosition.SelectedWriteRecovery.replaysOldTarget
 
 end
 
-/-- Attach the recovery ledger to the same opened position that has the
-physical storage entry for the following write. -/
-theorem NativeReadPosition.SelectedWritePlan.ledgerAtReadyWriter
-    {heap stream : Type} {input : FilePath} {view : OpenCloseHeapView heap FileImage}
-    {history : List WAL.Write} {log : List DatabaseSubmissions}
-    {current : NativeReadPosition history log} {batch : List WAL.Write} {target : Target}
-    {source : RawMarkedOpenInterpreter heap stream} {entry : heap} {inventory : DescriptorInventory}
-    {vacant : TryLockObserves (view.files entry).owners current.state.session.directory (.ok true)}
-    {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
-    (plan : current.SelectedWritePlan batch target (view.files entry).image)
-    {opening : MarkedReadyOpenObservations input current.state.session.directory inventory (view.files entry) plan.layout
-      current.state.writer.published vacant plan.selected}
-    {raw : RawHealthyMarkedOpenEffects opening view source.calls source.init entry phaseIdentity tokenIdentity
-      source.allocatePhase source.allocateToken stream source.remove source.stage source.rename}
-    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
-    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
-    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
-    (returned : raw.ReadyWriterReturn (log ++ [.uncertainBatch batch]) current.reads
-      (fun _ => source.openTable input entry) get set observe visible)
-    (request : WriteRequest) (cause : IO.Error) :
-    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
-      (cache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
-      (retained : List WAL.Write),
-      source.openTable input entry = .ok handle.table start.reached ∧
-      start.current.history = plan.history ∧
-      (⟨history, log, current⟩ : NativeExecutionPosition).LedgerSuffix
-        [.uncertainWriteCrashRecovered request input cause batch retained] start.current ∧
-      InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
-        start.current.ready.state.writer.installed start.current.ready.state.session ∧
-      start.WriteStorageEntry view cache (observe start.reached) (visible start.reached) := by
-  obtain ⟨_, handle, start, cache, success, selectedHistory, submissions, reads, _, _, _, _, _, _, _, _, _, physical⟩ :=
-    returned
-  obtain ⟨retained, ledger⟩ :=
-    plan.ledgerAfterReopen start.current selectedHistory submissions reads request input cause
-  exact ⟨handle, start, cache, retained, success, selectedHistory, ledger, start.current.ready.readPrefix.guardedReplay,
-    physical⟩
-
 end Alvoki.Storage.DiskSession

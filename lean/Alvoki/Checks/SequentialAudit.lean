@@ -4095,7 +4095,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.selectsAfterPublicationError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reopensReadyAfterPublicationError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.replaysSelectedLedger
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.ledgerAtReadyWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.oldHistory
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.framesReadyStorage
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.installsReadyState
@@ -4120,7 +4119,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.preservesSelectedStage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.preservesSelectedReplacement
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
-#check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterLongerRetry
 #check_axioms Alvoki.Storage.DiskSession.PrunedWalUnlinkHeaps.removesNames
 #check_axioms Alvoki.Storage.DiskSession.PrunedAlignedKeeperCacheReport.keeperIssueInode
@@ -4134,13 +4132,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preservesDurability
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.framesAfter
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnlyWithDurability
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
-#check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.alignedOfExactKeeper
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.literalAuthorityAtCache
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensLiteralAlignedAfterWriteRetries
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preparesDurableVisibleWriteRetry
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.ScopeFrames.map
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.ScopeFrames.openRead
@@ -4148,7 +4145,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.GuardedReadFrame.refl
 #check_axioms Alvoki.Storage.DiskSession.GuardedReadFrame.trans
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.exactPrefixFrames
-#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensReadyAfterAlignedRetries
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.keptSeal
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.forReopenedWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.forReopenedWriter

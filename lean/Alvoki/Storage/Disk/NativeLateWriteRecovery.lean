@@ -177,26 +177,44 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (reset : reboot.DurableReset)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
     {attempts : source.FailedCalls rebooted returns reached}
-    (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
-    {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+    {firstOffset : Nat} (covers : ∀ offset ∈ (state).writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
+    (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename storage firstOffset
+      ((current.current.history ++ batch).length))
+    (initialWindow : (state).writer.wal.NamespaceWindow dir firstOffset ((current.current.history ++ batch).length) (storage current.reached).files.names)
+    (settledWindow : ∀ prior ∈ (storage current.reached).crashNames, ∀ offset, firstOffset ≤ offset →
+      offset ≤ (current.current.history ++ batch).length →
+      (prior ((dir).file (.walSegment offset))).isSome =
+        ((storage current.reached).files.names ((dir).file (.walSegment offset))).isSome)
+    {inventory : DescriptorInventory}
+    {admission : CensusOpenAdmissionReports input current.current.ready.state.session.directory inventory (view.files reached)}
+    (raw : RawOpenAdmissionReport admission view source.calls reached)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    {checked marked returnedAt : heap} {metadata : IO.FS.Metadata} {reopened : DiskTable}
+    (flat : rejectFlatWalWith dir
+      (optionalMetadataWith (source.calls.lookup ((dir).file .wal))) seed.afterPending = .ok () checked)
+    (marker : optionalMetadataWith (source.calls.lookup ((dir).file .walBoundary)) checked = .ok (some metadata) marked)
+    (openedTable : source.openTable input reached = .ok reopened returnedAt)
+    (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (later : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       ∀ ordinal ∈ (view.files rebooted).image.later.visible, target.range.through < ordinal)
-    (observe : ∀ target : Target,
+    (retryEffects : ∀ target : Target,
       BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun atHeap => ⟨storageNames atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
-        (fun atHeap => RawOpenRetryTrace.KeeperAt view dir target storageNames visible atHeap ∧
-          (state).SelectedRetryDurability target (storage atHeap)) attempts ∧
-      (view.files reached).image.keeper.active = some target.trimmed ∧
-      (view.files reached).image.later.visible = [] ∧
-      (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)
-        (target := target) (reached := reached) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-        source storageNames vacant ∧
-      NativeReadPosition.AlignedRetryEffects (current := ready) (batch := batch) (target := target)
-        (input := input) (view := view) (reached := reached) (vacant := vacant) (source := source)
-        (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) storage visible)
+        (fun atHeap => (state).writer.wal.NamespaceWindow dir firstOffset
+          (current.current.history ++ batch).length (storageNames atHeap) ∧
+          RawOpenRetryTrace.KeeperAt view dir target storageNames visible atHeap ∧
+          (state).SelectedRetryDurability target (storage atHeap)) attempts)
+    (exactKeeper : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
+      target.pair = (view.files rebooted).image.directory.active →
+      (view.files reached).image.keeper.active = some target.trimmed)
+    (noLater : (view.files reached).image.later.visible = [])
+    (openEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
+      target.pair = (view.files rebooted).image.directory.active →
+      ∀ plan : (ready).SelectedWritePlan batch target (view.files reached).image,
+        raw.LiteralAlignedEffects seed plan storage visible)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
@@ -241,10 +259,14 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
   obtain ⟨schedules, returned, rebootVacant, slots, target, admitted, active, selected⟩ :=
     current.selectsAfterPublicationError view cache appender stager syncer storage request lookup rename
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot later
-  obtain ⟨effects, exactKeeper, noLater, healthy, aligned⟩ := observe target admitted active
+  have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
+    nonempty returned nameEffects
+  have window := reboot.walNamespace nameFrame initialWindow settledWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical⟩ :=
-    (ready).opensReadyAfterAlignedRetries storage visible request cause prepared fits admitted effects selected
-      (reboot.startsDurableRetry reset selected).2 exactKeeper noLater healthy phase ptrEq aligned
+    (ready).opensLiteralAlignedAfterWriteRetries (raw := raw) seed storage visible request cause prepared fits admitted
+      covers selected window (reboot.startsDurableRetry reset selected).2 (retryEffects target admitted active)
+      (openEffects target admitted active) (exactKeeper target admitted active) noLater
+      phaseIdentity tokenIdentity phase ptrEq flat marker openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
   refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
     active, opened, history, whole, ledger, replay, physical, ?_⟩

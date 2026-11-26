@@ -70,37 +70,4 @@ noncomputable def RawHealthyMarkedOpenEffects.openTable
     installReady opened.installed allocatePhase allocateToken (fun phase token => pure (assemble resolved lock cache phase token))) entry
 
 
-/-- The reached live image and the extent read by this worker determine
-the aligned report at its actual repair heap. -/
-theorem RawHealthyMarkedOpenEffects.alignedOfExactKeeper
-    (raw : RawHealthyMarkedOpenEffects opening view calls init entry phaseIdentity tokenIdentity
-      allocatePhase allocateToken stream remove stage rename)
-    (exactLive : retry.image.keeper.active = some layout.keeper.bytes)
-    (noLater : retry.image.later.visible = []) :
-    ∃ (finish : CapturedAlignedFinish opening.callbacks opening.reads vacant selected)
-      (seen : AlignedKeeperCacheReport finish view init raw.raw.afterFlock raw.seed
-          (raw.callbacks.withFileReads raw.fileCalls) raw.beforeKeeper),
-        (⟨opening.finish, raw.repaired, raw.keeper⟩ :
-          Σ finish : CapturedKeeperFinish opening.callbacks opening.reads vacant selected, Σ atHeap : heap,
-            NativeHealthyMarkedKeeperReport raw.seed raw.fileCalls raw.callbacks raw.beforeKeeper remove
-              stage rename finish atHeap) = ⟨.aligned finish, seen.reached, .aligned seen⟩ := by
-  have measured := opening.reads.wal.keeper.observesFile.extent
-  change opening.reads.wal.keeper.calls.metadata.byteSize.toNat =
-    (layout.keeper.bytes ++ layout.tail).size at measured
-  have actualSize := measured.trans (congrArg ByteArray.size (Option.some.inj (layout.visible.symm.trans exactLive)))
-  have equalSize : layout.boundedPlan.keeperSize = opening.reads.wal.keeper.calls.metadata.byteSize.toNat :=
-    layout.target.trimmedSize.symm.trans actualSize.symm
-  have emptyNewer : layout.boundedPlan.newer = [] := noLater
-  let pair : Σ finish : CapturedKeeperFinish opening.callbacks opening.reads vacant selected, Σ atHeap : heap,
-      NativeHealthyMarkedKeeperReport raw.seed raw.fileCalls raw.callbacks raw.beforeKeeper remove
-        stage rename finish atHeap := ⟨opening.finish, raw.repaired, raw.keeper⟩
-  have branch : pair.1.UsesMeasuredRepair := opening.finish.usesMeasuredRepair
-  change ∃ finish seen, pair = ⟨.aligned finish, seen.reached, .aligned seen⟩
-  generalize pair = actual at branch ⊢
-  obtain ⟨chosen, atHeap, report⟩ := actual
-  cases report with
-  | aligned seen => exact ⟨_, seen, rfl⟩
-  | prunedAligned seen => exact False.elim (branch.2 emptyNewer)
-  | longer seen => exact False.elim (Nat.not_lt_of_ge (Nat.le_of_eq equalSize.symm) branch)
-
 end Alvoki.Storage.DiskSession

@@ -239,8 +239,13 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   table supplies the next write entry and client ledger. Temporary
   release uses the guard from its actual read scope. The failed-open
   fold supplies the reached WAL window, live keeper and durable files
-  together. Connect that fold and the local open effects at the grouped
-  and late write consumers, then remove their older aligned adapter.
+  together. The grouped and late write consumers now use that same fold
+  and literal open, then chain a write and snapshot on its returned
+  table. The grouped error omits its batch. The late error keeps the
+  batch whole or omits it according to the selected marker. The older
+  aligned report adapter was removed. Derive the remaining admission
+  evidence from the fixed open and connect long and pruned recoveries
+  to the same reached-state execution.
   [Literal aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
   [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)

@@ -44,24 +44,37 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     (reset : reboot.DurableReset)
     (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
+    {firstOffset : Nat} (covers : ∀ offset ∈ (state).writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
+    (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename storage firstOffset
+      (current.current.history.length + request.rows.length))
+    (initialWindow : (state).writer.wal.NamespaceWindow dir firstOffset (current.current.history.length + request.rows.length) (storage current.reached).files.names)
+    (settledWindow : ∀ prior ∈ (storage current.reached).crashNames, ∀ offset, firstOffset ≤ offset →
+      offset ≤ current.current.history.length + request.rows.length →
+      (prior ((dir).file (.walSegment offset))).isSome =
+        ((storage current.reached).files.names ((dir).file (.walSegment offset))).isSome)
     (retry : ∃ attempts : source.FailedCalls rebooted returns reached,
       returns ≠ [] ∧
       RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
         (fun atHeap => ⟨names atHeap, fun inode => [visible atHeap inode]⟩) (state).selectedRetryPath
-        (fun atHeap => RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible atHeap ∧
+        (fun atHeap => (state).writer.wal.NamespaceWindow dir firstOffset
+          (current.current.history.length + request.rows.length) (names atHeap) ∧
+          RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible atHeap ∧
           (state).SelectedRetryDurability (state).writer.target (storage atHeap)) attempts)
-    (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
+    {inventory : DescriptorInventory}
+    {admission : CensusOpenAdmissionReports input current.current.ready.state.session.directory inventory (view.files reached)}
+    (raw : RawOpenAdmissionReport admission view source.calls reached)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    {checked marked returnedAt : heap} {metadata : IO.FS.Metadata} {reopened : DiskTable}
+    (flat : rejectFlatWalWith dir
+      (optionalMetadataWith (source.calls.lookup ((dir).file .wal))) seed.afterPending = .ok () checked)
+    (marker : optionalMetadataWith (source.calls.lookup ((dir).file .walBoundary)) checked = .ok (some metadata) marked)
+    (openedTable : source.openTable input reached = .ok reopened returnedAt)
     (exactKeeper : (view.files reached).image.keeper.active = some (state).writer.target.trimmed)
     (noLater : (view.files reached).image.later.visible = [])
-    {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
-    (healthy : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
-      (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)
-        (target := (state).writer.target) (reached := reached)
-        (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) source names vacant)
-    (aligned : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
-      NativeReadPosition.AlignedRetryEffects (current := ready) (batch := batch) (target := (state).writer.target)
-        (input := input) (view := view) (reached := reached) (vacant := vacant) (source := source)
-        (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) storage visible)
+    (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
+    (effects : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
+      ∀ plan : (ready).SelectedWritePlan batch (state).writer.target (view.files reached).image,
+        raw.LiteralAlignedEffects seed plan storage visible)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
@@ -116,9 +129,16 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   refine ⟨schedules, attempts, retried, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with ⟨group, admitted, selected, _, _⟩ | elsewhere
   · refine .inr ⟨group, ?_⟩
+    have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
+      nonempty returned nameEffects
+    have window := reboot.walNamespace nameFrame initialWindow settledWindow
+    have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
+      simp only [List.length_append, (prepareBatch_spec prepared).1]
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical⟩ :=
-      (ready).opensReadyAfterAlignedRetries storage visible request cause prepared fits admitted retryEffects selected
-        (reboot.startsDurableRetry reset selected).2 exactKeeper noLater (healthy prepared) phase ptrEq (aligned prepared)
+      (ready).opensLiteralAlignedAfterWriteRetries (raw := raw) seed storage visible request cause prepared fits admitted
+        covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
+        (by simpa only [upper] using retryEffects) (effects prepared) exactKeeper noLater phaseIdentity tokenIdentity
+        phase ptrEq flat marker openedTable
     have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by
       simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using

@@ -1,5 +1,20 @@
 # Current handoff
 
+The grouped-sync error and late-publication error now share one aligned
+retry proof. Each write selects its own reboot entry. The same failed-open
+fold preserves the WAL window, keeper and durable checkpoint for the
+literal successful open. The returned table supports the next write and
+snapshot under the existing client ledger. The grouped case omits the
+failed batch. The late case admits the whole batch or omits it according
+to the selected marker. The old aligned report adapter and its
+installation wrappers were removed. Longer keepers and pruning retain
+their own proofs. The raw admission, local Linux callback effects and
+coverage of other recovery states still need to enter the common
+production execution.
+[Shared retry proof](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
+[Grouped write](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean) ·
+[Late write](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+
 One successful aligned marked open now supplies the exact replay, both
 repair barriers and the next write entry on its returned table. The same
 proof uses the admitted root, acquired lock, original cache cells and
