@@ -2469,7 +2469,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncUsesWrittenHandle
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncIssuesRawSync
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.manifestSyncPreservesSelected
-#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runSyncPreservesSelected
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.runSyncFrames
+#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.firstRunWriteFrames
 #check_axioms Alvoki.Storage.DiskSession.readSelectedWithCachedExtents_ignoresStagedManifest
 #check_axioms Alvoki.Storage.DiskSession.readSelectedWithCachedExtents_projectsWalNames
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.powerLossFiles_stagedMetadata
@@ -2483,7 +2484,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.successfulCheckpointStepsPreserve
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.observeCrash
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.storageAtIssue
-#check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reachedStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.terminalPrefix
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.refinesTerminalLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.observesReboot

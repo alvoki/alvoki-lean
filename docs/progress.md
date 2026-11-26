@@ -1,5 +1,14 @@
 # Current handoff
 
+Before the first stopped run fsync, the schedule has returned exactly one
+run write. Its returned handle and the private run inode supply the frame
+for the selected checkpoint and WAL. The pending-cache removal and stopped
+fsync supply the next frame independently. The consumer can combine these
+frames with the poisoned-phase update and pass the resulting storage to both
+terminal refinement and recovery. This removes the combined fsync wrapper
+and a separate wrapper for applying the final frame.
+[Local run frames](../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
 The first acknowledged write now starts at the actual fresh open's returned heap,
 with the same directory, active and pending cache references. One source-write proof
 uses the observed return and local effects for both this fresh writer and a reopened

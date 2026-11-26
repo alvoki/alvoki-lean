@@ -123,14 +123,4 @@ theorem NativeCheckpointSourceStop.storageAtIssue
     stop.completed returnedKeeps stop.returnedPrefix
   exact initial.frame (phaseFrame.trans returned)
 
-/-- Carry the selected files through the last observed, non-returning
-effect independently of any subsequent reboot. -/
-theorem NativeCheckpointSourceStop.reachedStorage
-    (stop : NativeCheckpointSourceStop current primitives fsync step reason reached)
-    (observe : heap → CheckpointStorageObservation)
-    (stable : NativeReadyStorage current.current.ready.state (observe stop.atIssue.2))
-    (stoppedKeeps : (observe stop.atIssue.2).Frames current.current.ready.state.crashPath (observe reached.2)) :
-    NativeReadyStorage current.current.ready.state (observe reached.2) :=
-  stable.frame stoppedKeeps
-
 end Alvoki.Storage.DiskSession

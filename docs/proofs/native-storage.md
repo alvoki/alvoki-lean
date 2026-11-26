@@ -441,6 +441,15 @@ comparison. These lemmas supply the individual transitions for a combined execut
 · [Aligned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 · [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
+At the first run fsync, the completed prefix contains the run write. The
+literal write determines the heap before sync and frames the selected files.
+Pending-cache removal and the stopped fsync provide a second frame. Both
+consume the same storage observation and compose with the phase-update
+frame. Longer prefixes can use the returned-step fold with the same sync
+frame. A storage fact at the stop can feed terminal refinement and the
+selected reboot independently.
+[Checkpoint stop frames](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+
 A held MANIFEST lookup error and its actual cleanup supply a singleton failed-call
 trace and the precise frames required by the grouped retry pilot. A later admission
 still needs its own lock-vacancy observation. The fresh installer exposes the cache

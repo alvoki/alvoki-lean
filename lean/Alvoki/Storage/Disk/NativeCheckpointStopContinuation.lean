@@ -207,11 +207,9 @@ private theorem newRunOffSelected {state : NativeReadyState} (valid : state.Vali
     have conflict := congrArg UInt64.toNat (old.symm.trans new)
     omega
 
-/-- The exact stopped run fsync carries the protected checkpoint and WAL
-to the reached heap. Before this effect the source-derived returned prefix
-and the literal pending-cell removal preserve the same files. The new run
-may become durable independently of the installed generation. -/
-theorem NativeCheckpointSourceStop.runSyncPreservesSelected {index : Nat}
+/-- A pending consume and the exact issued file sync leave the prior
+checkpoint and WAL footprint unchanged at the source stop. -/
+theorem NativeCheckpointSourceStop.runSyncFrames {index : Nat}
     (stop : NativeCheckpointSourceStop current primitives fsync (.syncRun index) reason reached)
     (calls : CheckpointRawSyncCalls heap)
     (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
@@ -221,14 +219,6 @@ theorem NativeCheckpointSourceStop.runSyncPreservesSelected {index : Nat}
       (current.current.ready.state.session.directory.file (.run stop.next.generation index)) stop.atIssue.2 atFsync)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
-    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
-    (phaseFrame : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
-      (observe stop.poisoned).storageObservation)
-    (returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
-      (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
-        fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
-      (observe before.2).storageObservation.Frames current.current.ready.state.crashPath
-        (observe after.2).storageObservation)
     (consume : (observe stop.atIssue.2).storageObservation.Frames current.current.ready.state.crashPath
       (observe atFsync).storageObservation)
     (effective : Bool)
@@ -240,14 +230,37 @@ theorem NativeCheckpointSourceStop.runSyncPreservesSelected {index : Nat}
       inodes reached.2 = (if effective then (inodes atFsync).completeFileSync inode else inodes atFsync) ∧
       (observe reached.2).visible = (observe atFsync).visible ∧
       (observe reached.2).crashBindings = (observe atFsync).crashBindings) :
-    NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
-  have stable := stop.storageAtIssue (fun heap => (observe heap).storageObservation) initial phaseFrame returnedKeeps
+    (observe stop.atIssue.2).storageObservation.Frames current.current.ready.state.crashPath
+      (observe reached.2).storageObservation := by
   obtain ⟨literal, _, _, target, _, stopped, _⟩ := stop.runFileIssuesRawSync calls cache projected
     pending.loaded pending.stored pending.consumed pending.primitive
   have valid := current.current.ready.readPrefix.refines.1
   have frame := target.stoppedRunFrames calls stopped inodes runs observe _ effective (effect literal)
     (fun _ selected => newRunOffSelected valid stop.prepared index selected)
-  exact stop.reachedStorage (fun heap => (observe heap).storageObservation) stable (consume.trans frame.2)
+  exact consume.trans frame.2
+
+/-- The only successful step before the first run fsync is the run
+write. Its returned handle and byte buffer supply the physical frame. -/
+theorem NativeCheckpointSourceStop.firstRunWriteFrames
+    (stop : NativeCheckpointSourceStop current primitives fsync (.syncRun 0) reason reached)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
+    (writeEffect : ∀ payload handle,
+      let path := current.current.ready.state.session.directory.file (.run stop.next.generation 0)
+      primitives.cached.writeRun path payload stop.poisoned = .ok handle stop.atIssue.2 →
+      ∃ inode, RunWriteInodeFrame path inode (inodes stop.atIssue.2) (observe stop.poisoned) (observe stop.atIssue.2) ∧
+        ∀ other, (observe stop.poisoned).visible other = some inode → other = path) :
+    (observe stop.poisoned).storageObservation.Frames current.current.ready.state.crashPath
+      (observe stop.atIssue.2).storageObservation := by
+  obtain ⟨entry, run, handle, earlier, _, wrote, _, _, _⟩ := stop.runFileUsesWrittenHandle
+  have sameEntry : entry = (current.current.ready.state.cache, stop.poisoned) := by
+    rw [show runSteps 0 = [] from rfl] at earlier
+    simpa [List.forM, Pure.pure, ExceptT.pure, ExceptT.run, ExceptT.mk, EStateM.pure] using earlier.symm
+  rw [sameEntry] at wrote
+  obtain ⟨_, effect, privateBinding⟩ := writeEffect run.run.bytes handle wrote
+  have valid := current.current.ready.readPrefix.refines.1
+  exact effect.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding
+    (fun _ selected => newRunOffSelected valid stop.prepared 0 selected)
 
 /-- The optional reboot starts at the source stop's exact heap. It chooses
 one joint survivor of the reached protected files. The original census,
