@@ -202,12 +202,13 @@ sampled reboot and the effects of the intervening failed opens, it establishes
 the next write entry. A finite sequence of supported writes and snapshot calls
 then extends the actual predecessor's ledger. [Checkpoint consumer][checkpoint] · [Finite induction][fold]
 
-**Where it is still conditional.** A successful stat accounts for each later
-WAL file selected for pruning. Completeness in the other direction is a
-filesystem obligation. Internally, every reachable failure must still supply
-its local effects through cleanup to the public return, and each interruption
-must supply its reached state. If segments 4 and 8 both start beyond the marker, a retry can delete 4
-and then fail at 8. The next open must see the surviving suffix while the
+**Where it is still conditional.** A complete scan of the held directory must
+cover every physically present WAL name beyond the marker. The pruning proof
+uses this filesystem law and the effects of the reached unlinks, including
+accepted `ENOENT`. Every reachable failure must still supply its local effects
+through cleanup to the public return, and each interruption must supply its
+reached state. If segments 4 and 8 both start beyond the marker, a retry can
+delete 4 and then fail at 8. The next open must see the surviving suffix while the
 selected checkpoint and bounded WAL range remain intact. The global
 induction must cover these outcomes from the actual source execution.
 [Premise provenance](#premise-provenance) · [Open obligations](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)

@@ -448,14 +448,13 @@ theorem DiskSession.MarkedWalExtentReports.selectsWindow
     (catalog : ∀ start, first ≤ start → start ≤ through →
       ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔ start ∈ first :: expected)) :
     required.map Prod.fst = first :: expected ∧
-      (∀ start, start ∈ later ↔ through < start ∧
-        ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ∧
-      ∀ start ∈ later, start ∈ extents.map Prod.fst := by
+      ∀ start, start ∈ later ↔ through < start ∧
+        ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
   obtain ⟨inventory, exactNames⟩ := exactInventory fileCalls directory namespaceView root names listedNames scan absent
   have ordered := inventory.symm ▸ walOffsetsOrdered ((namespaceView.names root).filterMap parseWalSegmentName)
   obtain ⟨offsets, rfl⟩ := selectWalExtentsThrough_matchesWindow ordered selected strict
     canonical covers bounded within (fun start lower upper => (exactNames start).trans (catalog start lower upper))
-  refine ⟨offsets, ?_, fun _ later => (List.mem_filter.mp later).1⟩
+  refine ⟨offsets, ?_⟩
   intro start
   rw [List.mem_filter, exactNames start]
   simp only [decide_eq_true_eq, and_comm]

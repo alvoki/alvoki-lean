@@ -29,7 +29,7 @@ theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.afterAcceptedUnlin
     (bounded : ∀ start ∈ wal.segments.map WalSegment.first, start ≤ cutoff)
     (later : ∀ start ∈ plan.newer, cutoff < start)
     (listed : ∀ start, cutoff < start →
-      ((names before (directory.file (.walSegment start))).isSome = true ↔ start ∈ plan.newer))
+      (names before (directory.file (.walSegment start))).isSome = true → start ∈ plan.newer)
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (sync : Array FilePath → EStateM IO.Error heap Unit)
@@ -62,7 +62,7 @@ theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.afterAcceptedUnlin
       · rw [unchanged found]
         cases named : names before path with
         | none => rfl
-        | some inode => exact (found ((listed start past).mp (by simp [path, named]))).elim
+        | some inode => exact (found (listed start past (by simp [path, named]))).elim
     change (names after path).isSome = true ↔ start ∈ wal.segments.map WalSegment.first
     simp only [absent, Option.isSome_none, Bool.false_eq_true, false_iff]
     exact fun modeled => (Nat.not_le_of_gt past) (bounded start modeled)

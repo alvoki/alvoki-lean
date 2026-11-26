@@ -653,7 +653,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
   intro firstOffset selected bounded later listed unlinkNames through
   have fromAuth := selected.frame (fun start _ _ => congrArg Option.isSome (authNames start))
   have fromPrune := fromAuth.afterAcceptedUnlinks (plan := plan) (names := fun atHeap => (observe atHeap).files.names)
-    bounded later (fun start beyond => by rw [authNames start]; exact listed start beyond) remove write group rename
+    bounded later (fun start beyond => by rw [authNames start]; exact (listed start beyond).mp) remove write group rename
     (fun member called accepted => unlinkNames (later _ member) called accepted) unlinks through
   have beforeRoot := (fromPrune.frame fun start _ _ => congrArg Option.isSome (stageNames start)).frame
     (fun start _ _ => by

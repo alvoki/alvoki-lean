@@ -534,7 +534,7 @@ theorem AlignedRepairStorageEffects.readyAfterAlignedRepair
     (afterKeeper : ∀ ordinal ∈ plan.newer, state.writer.wal.active.first < ordinal)
     (later : ∀ ordinal ∈ plan.newer, plan.through < ordinal)
     (listed : ∀ start, plan.through < start →
-      (((observe prepared).files.names (state.session.directory.file (.walSegment start))).isSome = true ↔ start ∈ plan.newer))
+      ((observe prepared).files.names (state.session.directory.file (.walSegment start))).isSome = true → start ∈ plan.newer)
     (names : AlignedRepairWalNameEffects calls state.session.directory observe cached pending remove plan.through) :
     NativeReadyStorage state (observe repaired) ∧
     (∀ inode, (observe repaired).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =

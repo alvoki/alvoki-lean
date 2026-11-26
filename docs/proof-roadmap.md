@@ -122,10 +122,11 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   preserved through the reboot and actual read-only failed calls. The
   aligned opener supplies the exact replayed table, its keeper sync and any
   suffix pruning. The reboot and failed-open frames preserve the selected
-  durable files, marker and root through the reader’s preparation. With
-  the held scan covering all physically present later names, the successful
-  no-follow stats derive presence for each selected unlink. The opener supplies its own
-  installation and repair to the finite ready-call proof. The reinstalled handle starts
+  durable files, marker and root through the reader’s preparation. The repair
+  uses one local completeness law: the held scan covers every physically
+  present later WAL name. Accepted unlinks then establish the retained WAL
+  catalog. The opener supplies its installation and repair to the finite
+  ready-call proof. The reinstalled handle starts
   with empty pins and carries its actual predecessor’s incoming ledger.
   Coverage of those file effects for all reachable failed opens remains open.
   [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean) ·

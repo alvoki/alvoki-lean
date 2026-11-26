@@ -177,7 +177,8 @@ theorem RawOpenRetryTrace.keepsCatalogAfterPruning
     wal.NamespaceWindow directory first through (names reached) ∧
       RawOpenRetryTrace.LaterWalAt view directory target names reached := by
   have selected := (initial.restrict (Nat.le_refl first) cutoffCovered).frame beforePrune
-  have pruned := selected.afterAcceptedUnlinks bounded later listed remove write sync rename unlink returned
+  have pruned := selected.afterAcceptedUnlinks bounded later (fun start beyond => (listed start beyond).mp)
+    remove write sync rename unlink returned
   have complete upper := (pruned upper).frame (fun start lower _ => afterPrune start lower)
   refine ⟨complete through, ?_⟩
   intro start

@@ -17,10 +17,8 @@ and work accounting. [Failed repair](../lean/Alvoki/Storage/Disk/NativeLongKeepe
 
 **Next obligation.** Derive the retry frame for remaining failed reads and
 repairs through their actual cleanup, then feed that frame to the existing
-failed-call induction. At a successful reopen, a selected segment's stat
-establishes its presence. The reverse direction needs a complete observation
-of the held directory at the relevant heap. Keep the filesystem enumeration
-assumption visible when deriving the protocol's later-segment inventory.
+failed-call induction. A successful reopen needs the held scan to cover all
+physical later WAL names. This remains a local filesystem enumeration law.
 Mixed sessions and interruptions outside the covered paths remain open.
 
 **Verification baseline.** At `a758f0ad`, 779 kernel checks, the axiom audit

@@ -745,8 +745,6 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     extent = (layout.keeper.bytes ++ layout.tail).size ∧
     (∀ start, start ∈ payloads.newer ↔ layout.range.through < start ∧
       ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ∧
-    (∀ start ∈ payloads.newer, scope (directory.file (.walSegment start)) →
-      ∃ inode, names initial (directory.file (.walSegment start)) = some inode) ∧
     ∃ (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat) (beforeKeeper opened readHeap : heap),
       let path := directory.file (.walSegment layout.keeper.first)
       names initial path = some inode ∧
@@ -786,7 +784,7 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     have present := physical.window start lower upper
     rw [← atInitial, Option.isSome_map, first] at present
     exact Option.isSome_iff_exists.symm.trans present
-  obtain ⟨need, laterNames, laterMeasured⟩ :=
+  obtain ⟨need, laterNames⟩ :=
     MarkedWalExtentReports.selectsWindow fileCalls directory namespaceView root _ (listedNames listedCall) scan
       (absent listedCall) selected (orderedReads.successfulOrder rfl) canonical layout.covers
       (through ▸ aligned.2) bounds heldWindow
@@ -803,15 +801,6 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
   have refl (atHeap : heap) : frame atHeap atHeap := fun _ _ => ⟨rfl, fun _ _ => rfl⟩
   have listedFrame : frame initial listed :=
     starts.trans (directoryCalls.successKeepsFrame directory listingFrames CheckpointSurvivingFiles.Frames.trans listedCall)
-  have laterPresent (start : Nat) (later : start ∈ payloads.newer) (inside : scope (directory.file (.walSegment start))) :
-      ∃ inode, names initial (directory.file (.walSegment start)) = some inode := by
-    obtain ⟨⟨_, metadata⟩, measured, rfl⟩ := List.mem_map.mp (laterMeasured start later)
-    obtain ⟨earlier, _, _, _, issued, _, _, _, prior, guarded⟩ :=
-      readWalSegmentExtentsWith_memberStat directory (MarkedWalExtentReports.inspect fileCalls) _ scan measured
-    have beforeStat : frame listed issued := filterMapM_success_frames _ earlier refl
-      CheckpointSurvivingFiles.Frames.trans (walExtentProbe_success_frame fileCalls directory refl statFrame) prior
-    obtain ⟨inode, _, named, _⟩ := statTruth (MarkedWalExtentReports.inspectReturned fileCalls _ guarded)
-    exact ⟨inode, ((listedFrame.trans beforeStat) _ inside).1.symm.trans named⟩
   have scannedFrame : frame listed scanned :=
     walExtentScan_success_frame fileCalls directory _ refl CheckpointSurvivingFiles.Frames.trans statFrame scan
   obtain ⟨keeper, metadata, earlier, bytes, beforeKeeper, opened, readHeap, file, slot, inode, last,
@@ -834,7 +823,7 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     simpa [segments, last] using seen
   have count : layout.keeper.bytes.size = (layout.range.through - keeper) * WAL.frameSize := by
     simpa [keeperFirst, CanonicalKeeperLayout.target] using layout.target.trimmedSize
-  refine ⟨fileList.trans sameFiles, extentEq.trans sameExtent, laterNames, laterPresent,
+  refine ⟨fileList.trans sameFiles, extentEq.trans sameExtent, laterNames,
     file, slot, inode, beforeKeeper, opened, readHeap, ?_, ?_, held, ?_, finalFrame, ?_⟩
   · simpa only [keeperFirst] using named
   · simpa only [keeperFirst] using acquired
