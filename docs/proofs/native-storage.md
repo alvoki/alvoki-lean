@@ -375,9 +375,10 @@ bytes of the replacement leave the old inode's durable contents undetermined. Th
 At another observed power loss, `selectsRetryAfterRepair` samples the keeper, marker,
 manifest, seals and runs through that one map and rebuilds the ordinary retry entry. It
 requires the selected immutable child names on that map to agree with the reached names.
-For the final directory fsync error, the proof takes the post-prune settlement and
-synced-stage bytes, follows the rename, and transports those facts through the reported
-descriptor load and cleanup. An effective final barrier settles the replacement. An
+Both repair errors derive the post-prune settlement and synced-stage bytes from the same
+unlinks, root fsync, staged write and pending-file fsync. For a final directory fsync error,
+the binding after the successful rename identifies that staged inode at the issued barrier.
+The descriptor load and cleanup preserve the corresponding file observations. An effective final barrier settles the replacement. An
 ineffective one preserves a predecessor map, which may name the old keeper. Both establish a retry entry for the same committed target.
 The earlier successful directory sync after pruning settles present and absent WAL names over
 the replay window. Scoped name-presence frames across staging, rename and cleanup carry
