@@ -216,9 +216,10 @@ both have sequence number equal to the batch length.
 For a later write returning `commitUnknown` after the file-sync group
 succeeds, the sampled marker selects the earlier history or the earlier history
 plus the whole prepared batch. Before rotation or checkpoint, the same opener
-and latest lookup use that selected history. The client receives an error in
-this execution. An interruption while a syscall is outstanding has a different
-source prefix. [Late publication](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+and latest lookup use that selected history. An interruption during the outstanding final directory
+fsync reaches the same recovery boundary through the cached root descriptor,
+without a write response. This path still takes a protected-file frame and a
+bounded WAL-name frame over the write prefix. [Interrupted root sync](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) [Late publication](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the

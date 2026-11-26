@@ -25,21 +25,21 @@ private def fileEffect {α : Type} (classify : IO.Error → DiskWriteError) (act
     EStateM DiskWriteError (heap × OpenWriteFiles) α :=
   fun (heap, files) => writeResult classify (fun reached => (heap, reached)) (action files)
 
-private def requireWritePreparation {s α : Type} : Option α → EStateM DiskWriteError s α
+def WriteRequest.requireWritePreparation {α : Type} {m : Type → Type} [Monad m] [MonadExceptOf DiskWriteError m] :
+    Option α → m α
   | some result => pure result
   | none => throw (.rejected (IO.userError "write sequence space exhausted"))
 
-private abbrev WriteRequest.runWithPublication {state : Type}
-    (request : WriteRequest) (load : EStateM DiskWriteError state Installed)
-    (guard : Installed → EStateM DiskWriteError state Unit)
-    (setPhase : Phase Installed → EStateM DiskWriteError state Unit)
-    (commit : Installed → ByteArray → Nat → EStateM DiskWriteError state Unit) :
-    EStateM DiskWriteError state UInt64 :=
+/-- The public write dispatcher shares one schedule across ordinary
+returns and the interpretation that observes a callback with no return. -/
+abbrev WriteRequest.runWithPublication {m : Type → Type} [Monad m] [MonadExceptOf DiskWriteError m]
+    (request : WriteRequest) (load : m Installed) (guard : Installed → m Unit)
+    (setPhase : Phase Installed → m Unit) (commit : Installed → ByteArray → Nat → m Unit) : m UInt64 :=
   match request with
-  | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected requireWritePreparation guard
+  | .single key value => withPreparedSingleWrite key value load DiskWriteError.rejected WriteRequest.requireWritePreparation guard
       (fun installed event next bytes => publishPreparedWrite { installed with table := next, walBytes := bytes }
         event.sequence setPhase (commit installed (WAL.encodeFrame event) bytes))
-  | .batch rows => writeBatchSchedule rows load DiskWriteError.rejected requireWritePreparation guard setPhase
+  | .batch rows => writeBatchSchedule rows load DiskWriteError.rejected WriteRequest.requireWritePreparation guard setPhase
       (fun installed batch count => commit installed (WAL.encodeBatch batch) count)
 
 /-- The pure preparation of either request reaches its metadata guard
@@ -71,14 +71,14 @@ private theorem preparedWrite_reachesGuard {s : Type}
       obtain ⟨rfl, rfl⟩ := prepared
       have count : installed.walBytes + WAL.frameSize < UInt64.size := by simpa using fits
       simp only [withPreparedSingleWrite, Bind.bind, EStateM.bind, loaded, prepareWrite, written, Option.map_some,
-        requireWritePreparation, Pure.pure, EStateM.pure, count, ↓reduceIte,
+        WriteRequest.requireWritePreparation, Pure.pure, EStateM.pure, count, ↓reduceIte,
         WriteRequest.runWithPublication, List.length_singleton, Nat.mul_one, WAL.encodeBatch_singleton]
   | batch group =>
     change group = rows at submitted
     subst rows
     have present : group.isEmpty = false := by cases group <;> simp_all
     simp only [writeBatchSchedule, Bind.bind, EStateM.bind, loaded, present, Bool.false_eq_true, ↓reduceIte,
-      fits, prepared, requireWritePreparation, Pure.pure, EStateM.pure, WriteRequest.runWithPublication]
+      fits, prepared, WriteRequest.requireWritePreparation, Pure.pure, EStateM.pure, WriteRequest.runWithPublication]
 
 /-- On either production dispatcher, the reached ready-cell read and
 successful nonempty preflight issue the same encoded publication tail.
@@ -314,7 +314,7 @@ private theorem NativeWritePreflightObservation.returnsThroughPublication {σ : 
         have tooLarge : ¬ state.writer.installed.walBytes + WAL.frameSize < UInt64.size := by
           simpa [WriteRequest.rows] using Nat.not_lt.mpr overflow
         refine ⟨entry, .inl rfl, ?_⟩
-        simp [WriteRequest.runWithPublication, withPreparedSingleWrite, loaded, prepared, requireWritePreparation, tooLarge, Bind.bind, EStateM.bind,
+        simp [WriteRequest.runWithPublication, withPreparedSingleWrite, loaded, prepared, WriteRequest.requireWritePreparation, tooLarge, Bind.bind, EStateM.bind,
           Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
           NativeWritePreflightObservation.resultAt]
       | sequence _ _ exhausted =>
@@ -344,7 +344,7 @@ private theorem NativeWritePreflightObservation.returnsThroughPublication {σ : 
       | sequence present room exhausted =>
         simp only [WriteRequest.rows] at room exhausted
         refine ⟨entry, .inl rfl, ?_⟩
-        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, room, exhausted, requireWritePreparation,
+        simp [WriteRequest.runWithPublication, writeBatchSchedule, loaded, nonempty present, room, exhausted, WriteRequest.requireWritePreparation,
           Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw,
           NativeWritePreflightObservation.resultAt]
       | active present room prepared checked =>
@@ -839,7 +839,7 @@ theorem WriteRequest.runOnRawOpenPhase_prepared
     cases prepared : prepareWrite installed.table key value with
     | none =>
       simp [runOnRawOpenPhase, WriteRequest.runWithPublication, withPreparedSingleWrite, reads,
-        prepared, requireWritePreparation, Bind.bind, EStateM.bind, throw, throwThe,
+        prepared, WriteRequest.requireWritePreparation, Bind.bind, EStateM.bind, throw, throwThe,
         MonadExceptOf.throw, EStateM.throw] at accepted
     | some plan =>
       obtain ⟨event, table⟩ := plan
@@ -848,7 +848,7 @@ theorem WriteRequest.runOnRawOpenPhase_prepared
         · simp [WriteRequest.rows, prepareBatch_singleton, prepared]
         · simpa [WriteRequest.rows] using fits
       · simp [runOnRawOpenPhase, WriteRequest.runWithPublication, withPreparedSingleWrite, reads,
-          prepared, requireWritePreparation, fits, Pure.pure, EStateM.pure, Bind.bind, EStateM.bind,
+          prepared, WriteRequest.requireWritePreparation, fits, Pure.pure, EStateM.pure, Bind.bind, EStateM.bind,
           throw, throwThe, MonadExceptOf.throw, EStateM.throw] at accepted
   | batch rows =>
     have present : rows.isEmpty = false := List.isEmpty_eq_false_iff.mpr nonempty
@@ -856,7 +856,7 @@ theorem WriteRequest.runOnRawOpenPhase_prepared
     · cases prepared : prepareBatch installed.table rows with
       | none =>
         simp [runOnRawOpenPhase, WriteRequest.runWithPublication, writeBatchSchedule, reads,
-          present, fits, prepared, requireWritePreparation, Bind.bind, EStateM.bind,
+          present, fits, prepared, WriteRequest.requireWritePreparation, Bind.bind, EStateM.bind,
           throw, throwThe, MonadExceptOf.throw, EStateM.throw] at accepted
       | some plan =>
         obtain ⟨batch, table⟩ := plan

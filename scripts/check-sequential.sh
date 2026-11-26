@@ -415,6 +415,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeSourceLedger
 lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeEarlyWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeLateWriteRecovery
+lake env leanchecker Alvoki.Storage.Disk.NativeRawWriteRootStop
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenReadyStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedKeeperStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperStorage

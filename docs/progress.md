@@ -87,8 +87,12 @@ by replaying the prepared batch. Its pin carries the sequence returned by the wr
 For a subsequent late publication error after the file group succeeded, the
 selected old-or-whole history also feeds that same open and snapshot proof.
 
-**Next obligation.** Feed an interruption during the outstanding final directory
-fsync into the same physical crash selection, without assuming a returned error. On the
+If the write stops during the final directory fsync, the cached handle and its
+actual reached heap feed the same crash selection under scoped filesystem frames.
+A barrier that took effect rules out the old marker in the physical result.
+
+**Next obligation.** Derive the protected-file and bounded WAL-name frames
+across the stopped write from the effects of its individual callbacks. On the
 failed-barrier path, the surviving namespace and cleanup inventory still need
 to feed the next admission.
 Further interruptions, mixed sessions and maintenance remain in the

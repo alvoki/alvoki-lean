@@ -495,6 +495,7 @@ import Alvoki.Storage.Disk.NativeSourceLedger
 import Alvoki.Storage.Disk.NativeGroupedWriteRecovery
 import Alvoki.Storage.Disk.NativeEarlyWriteRecovery
 import Alvoki.Storage.Disk.NativeLateWriteRecovery
+import Alvoki.Storage.Disk.NativeRawWriteRootStop
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeAlignedKeeperStorage
 import Alvoki.Storage.Disk.NativeLongKeeperStorage
@@ -4061,6 +4062,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedRootSyncFromPublication
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reachedLatePublicationPayloads
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.selectsAfterLatePublicationError
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.selectsDurableReachedWrite
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.SelectedWriteReboot.sampledPlan
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.stopsAtRootFsync
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.stopsAtRootFsync
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAtRootFsync
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write

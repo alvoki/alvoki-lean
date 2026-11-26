@@ -280,7 +280,9 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
     recovered.replaysSelectedLedger request cause⟩
 
 
-private theorem NativeOpenedPosition.selectsDurableReachedWrite
+/-- Select the next recovery input from physical publication effects at the
+reached heap, whether the outstanding write has returned or stopped. -/
+theorem NativeOpenedPosition.selectsDurableReachedWrite
     {request : WriteRequest} {batch : List WAL.Write} {table : PackedTable}
     (prepared : prepareBatch (installed).table request.rows = some (batch, table))
     (fits : (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
@@ -365,6 +367,24 @@ variable {heap stream : Type} {source : RawMarkedOpenInterpreter heap stream}
   {attempts : source.FailedCalls rebooted returns reached}
 
 local notation "names" => fun atHeap => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage atHeap))
+
+/-- The crash image fixes the plan before the opener or its outcome is
+chosen. Its history is either the prior history or the whole prepared batch. -/
+theorem sampledPlan {current : NativeExecutionPosition}
+    (handoff : current.SelectedWriteReboot view storage visible firstOffset request batch table target failed rebooted) :
+    ∃ plan : current.ready.SelectedWritePlan batch target (view.files rebooted).image,
+      ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
+        current.ready.state.writer.target.pair.manifest = none → current.ready.state.writer.wal.sealed = [] →
+        opener.ReplaysSingleSegmentAtOpen view current.ready.state storage visible rebooted namespaceView root
+          plan.history := by
+  obtain ⟨plan⟩ := current.ready.preparesSelectedWrite handoff.prepared handoff.fits handoff.admitted
+    handoff.selected.valid handoff.selected.manifest
+  refine ⟨plan, ?_⟩
+  intro stream opener namespaceView root absent single
+  exact @NativeReadPosition.SelectedWritePlan.replaysSingleSegmentAtOpen
+    (source := opener) (namespaceView := namespaceView) (root := root) (plan := plan)
+    (selected := handoff.selected) (recovery := handoff.recovery) (covers := handoff.covers)
+    (noManifest := absent) (single := single)
 
 /-- End at a literal failed open on the selected reboot's retry prefix. -/
 theorem stopsAfterRetries
@@ -554,17 +574,11 @@ theorem NativeReturnedCalls.selectsAfterLatePublicationError
   obtain ⟨target, handoff⟩ :=
     last.selectsDurableReachedWrite view storage prepared fits write.physical fileFrame publication visible reboot
       reset nameFrame write.window
-  obtain ⟨plan⟩ := last.current.ready.preparesSelectedWrite handoff.prepared handoff.fits handoff.admitted
-    handoff.selected.valid handoff.selected.manifest
+  obtain ⟨plan, opens⟩ := handoff.sampledPlan
   refine ⟨target, plan, handoff,
-    (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through, ?_, ?_, ?_, ?_⟩
+    (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through, ?_, ?_, ?_, @opens⟩
   · simpa only [← through.history] using plan.allowed
   · simpa only [← through.submissions, ← through.reads] using plan.pending
   · simpa only [← through.reads] using plan.bounded
-  · intro stream opener namespaceView root absent single
-    exact @NativeReadPosition.SelectedWritePlan.replaysSingleSegmentAtOpen
-      (source := opener) (namespaceView := namespaceView) (root := root) (plan := plan)
-      (selected := handoff.selected) (recovery := handoff.recovery) (covers := handoff.covers)
-      (noManifest := absent) (single := single)
 
 end Alvoki.Storage.DiskSession
