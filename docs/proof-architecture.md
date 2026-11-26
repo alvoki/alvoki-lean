@@ -31,18 +31,12 @@ separates kernel evidence, executable coverage, premises and remaining obligatio
 
 ## How the argument composes
 
-The public contract uses finite client histories. The logical table establishes ordering, visibility,
-versions and retention. The storage protocol establishes which checkpoint and marker-bounded WAL
-represent a history. Executable refinements account for the schedules, exact results and their
-reached states. At the native boundary, evidence supplies the identity, contents and actual effect
-of the issued primitive. Proofs carry just the invariant needed by the next layer, including any
-file identity, crash correlation or live reference on which the conclusion depends. The hierarchy
-describes reasoning boundaries and can cross the source module structure. [Native refinement boundaries](proofs/native-storage.md#refinement-boundaries)
-
-For lifecycle proofs, make the call, exit, reboot and individual open attempts compose at the same
-reached state. Put the local facts that permit the next step in the invariant. A further outcome should
-extend a local refinement and feed the same induction. If the change also needs another compound
-trace constructor, check for a missing intermediate state before adding it. [Migration test](proofs/native-storage.md#migration-test)
+Start with the [invariant map](proofs/native-storage.md#refinement-boundaries).
+It follows one crash and reopen from file bindings to client history, identifies
+who establishes and consumes each invariant, and marks the unproven steps.
+A new error normally adds one local obligation at one of those boundaries.
+Update the map when the argument or its assumptions change. Record individual
+cases in the [roadmap](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 ## How to navigate the evidence
 
@@ -68,6 +62,14 @@ external assumptions and the internal facts to derive. Write down how to verify 
 closes the obligation. When making a shared boundary, check it on materially different consumers and
 try a case that challenges the invariant. A new layer earns its place by discharging an internal
 premise, extending justified coverage or eliminating duplicated reasoning. [Proof-engineering guidance](proof-index.md#how-to-structure-a-proof)
+
+When a signature grows, read it from the consumer's side. Which premise is
+produced by an earlier step? Which paths or references does the next step
+actually inspect? Discharge the first at its producer and scope the second
+to that footprint. Keep filesystem facts about names, inodes and effects
+independent of protocol facts about manifests, WAL cutoffs and acknowledgments.
+After migrating consumers, remove any older proof that supplies only the
+same guarantee. Preserve stronger guarantees that still have a caller.
 
 Review specification and proof separately. Try a client-visible counterexample against the formal
 statement, then check which premise or derived invariant rules it out. Check that the relevant
