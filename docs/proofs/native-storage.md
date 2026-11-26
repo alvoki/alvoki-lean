@@ -438,6 +438,16 @@ lemma accepts a WAL target selected after different operations, under
 the supplied writer's manifest and protected footprint.
 [Failed marked repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
+After a successful replacement rename and a final sync error, the
+actual returned heap has the selected live keeper and no later WAL
+names. The next healthy open uses that image to derive the aligned
+worker branch from its observed extent. The collection of local
+read, sync and allocation effects then applies to that branch on
+the same interpreter. The ready table carries the selected replay
+and the physical entry used by later writes. Admission still depends
+on the observed lock state.
+[Ready writer from aligned retry](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+
 Read-only failures frame the keeper they enter with. A repair failure
 can supply a replacement to the same prefix. Both carry the protected
 files and parent settlement at each returned heap, so grouped recovery
@@ -464,8 +474,9 @@ payload under either effect. Only the effective branch settles the new
 keeper name in every crash map. The actual cached directory load and
 reported fsync supply the bounded repair error. Cleanup carries the
 renamed inode and its durable bytes to the exact fixed opener's error
-heap. This extends the existing selected retry prefix, which still
-needs to be joined to the successful next call in the integrated proof.
+heap. The resulting selected retry prefix supplies the next healthy
+aligned open. Connecting its ready ledger to the complete mixed
+execution remains open.
 [Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached

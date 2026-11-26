@@ -51,6 +51,8 @@ theorem NativeOpenedPosition.groupedRetryAndReads
         (fun atHeap => RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible atHeap ∧
           (state).SelectedRetryDurability (state).writer.target (storage atHeap)) attempts)
     (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
+    (exactKeeper : (view.files reached).image.keeper.active = some (state).writer.target.trimmed)
+    (noLater : (view.files reached).image.later.visible = [])
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
     (healthy : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
       (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)
@@ -116,7 +118,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   rcases classified with ⟨group, _, _, footprint, recovered, _⟩ | elsewhere
   · refine .inr ⟨group, ?_⟩
     obtain ⟨plan, _, _, writer⟩ :=
-      recovered.readyAlignedWriter storage visible footprint.2 (aligned prepared)
+      recovered.readyAlignedWriter storage visible footprint.2 exactKeeper noLater (aligned prepared)
     obtain ⟨handle, start, nextCache, retained, opened, selected, recoveredLedger, _, physical⟩ :=
       plan.ledgerAtReadyWriter writer request cause
     have old := selected.trans plan.oldHistory

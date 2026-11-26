@@ -181,10 +181,14 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   the actual loaded directory handle and local fsync effect determine
   the failed repair. The raw finalizers carry the renamed inode and
   its durable trimmed bytes into the failed-call prefix at the exact
-  returned heap. The next successful open still needs to consume that
-  prefix in the integrated proof. The preceding callback and cleanup
-  frames remain explicit.
+  returned heap. Its trimmed keeper and empty suffix determine the
+  aligned worker at the next successful open. That exact table carries
+  the recovered history, prior reads and physical entry for the next
+  write. Lock vacancy and reached callback effects remain explicit.
+  The next write and snapshot still need to use that entry in the
+  integrated execution.
   [Failed repair and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+  · [Ready writer from aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
   The raw longer-keeper schedule consumes the same successful acquisition
   in both the direct and guarded collision branches. Its stage frame
@@ -193,9 +197,8 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   A successful staged fsync establishes the exact durable replacement
   bytes and the protected footprint from the reached create, write,
   flush and sync effects. Local rename and final directory-fsync error
-  proofs keep that inode and the protected footprint. With these results,
-  the next proof can extend the actual failed-open sequence through
-  cleanup and into the subsequent successful open.
+  proofs keep that inode and the protected footprint through cleanup,
+  supplying the failed-call prefix used by the next healthy opener.
   [Long-keeper stage](../lean/Alvoki/Storage/Disk/NativeLongKeeperSuffixStageHeap.lean)
 
   The same marked worker exposes its actual error heap after the measured repair. Finalization carries that image through the cache drop and unlock, including when it differs from the admitted image. One mixed retry fold preserves the selected repair target and the unaffected file footprint across read-only errors and repair effects. It derives the next read plan using the reached keeper and later names. Local stage and final sync proofs derive those repair effects directly from their reached callbacks. The healthy reader now consumes the changed live keeper and its replay plan at that exact heap. The fold carries the keeper observation independently of the unchanged checkpoint frame. A projected final fsync can expose a replacement while retaining the old name as a crash alternative. The fixed interpreter's failed-call sequence is the retry trace. One proof fold applies the local read-only and repair effects at those exact endpoints. The same interpreter returns the successful installation. The grouped file-sync route supplies one preceding write and reboot. Full integration still needs the fixed primitive schedules to supply the local recovery effects for the remaining routes. [Mutating repair retries](../lean/Alvoki/Storage/Disk/NativeMutatingOpenRetries.lean) · [Live keeper after final sync error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)

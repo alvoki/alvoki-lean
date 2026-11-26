@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeAlignedMarkedReady
+import Alvoki.Storage.Disk.NativeSourceLedger
 
 namespace Alvoki.Storage.DiskSession
 
@@ -30,13 +30,13 @@ def NativeReadPosition.AlignedRetryEffects
       let live (heap : heap) : CheckpointSurvivingFiles := ⟨(observe heap).files.names, fun inode => [visible heap inode]⟩
       let frame before after := MarkedOpenReadFrame dir current.state.selectedRetryPath path
         (observe before) (observe after) (visible before) (visible after)
-      ∃ (finish : CapturedAlignedFinish opening.callbacks opening.reads vacant plan.selected)
+      ∀ (finish : CapturedAlignedFinish opening.callbacks opening.reads vacant plan.selected)
         (seen : AlignedKeeperCacheReport finish view source.init raw.raw.afterFlock raw.seed
           (raw.callbacks.withFileReads raw.fileCalls) raw.beforeKeeper),
         (⟨opening.finish, raw.repaired, raw.keeper⟩ :
           Σ finish : CapturedKeeperFinish opening.callbacks opening.reads vacant plan.selected, Σ heap : heap,
             NativeHealthyMarkedKeeperReport raw.seed raw.fileCalls raw.callbacks raw.beforeKeeper source.remove
-              source.stage source.rename finish heap) = ⟨.aligned finish, seen.reached, .aligned seen⟩ ∧
+              source.stage source.rename finish heap) = ⟨.aligned finish, seen.reached, .aligned seen⟩ →
         (raw.raw.CacheFrames raw.seed fun before after =>
           (observe before).Frames current.state.selectedRetryPath (observe after) ∧
           (live before).Frames (· = path) (live after)) ∧
@@ -67,6 +67,8 @@ theorem NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
       (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
       source (fun heap => (observe heap).files.names) visible first vacant get set ptrEq)
     (durable : current.state.SelectedRetryDurability target (observe reached))
+    (exactKeeper : (view.files reached).image.keeper.active = some target.trimmed)
+    (noLater : (view.files reached).image.later.visible = [])
     (laws : NativeReadPosition.AlignedRetryEffects (current := current) (batch := batch) (target := target) (input := input)
       (view := view) (reached := reached) (vacant := vacant) (source := source)
       (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) observe visible) :
@@ -79,13 +81,59 @@ theorem NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
         get set observe visible := by
   obtain ⟨_, _, kept, manifest, plan, opening, raw, files, listing, keeperCalls, root, lock, _, _, keeper, _, _, returned⟩ :=
     recovered
-  obtain ⟨finish, seen, aligned, admitted, read, scan, remember, repair, directory, consume, ⟨links⟩, phase, token⟩ :=
-    laws plan opening raw files listing keeperCalls
+  have exactBytes : plan.layout.keeper.bytes = target.trimmed := congrArg Target.trimmed plan.targetEq
+  obtain ⟨finish, seen, aligned⟩ := raw.alignedOfExactKeeper (by simpa only [exactBytes] using exactKeeper) noLater
+  obtain ⟨admitted, read, scan, remember, repair, directory, consume, ⟨links⟩, phase, token⟩ :=
+    laws plan opening raw files listing keeperCalls finish seen aligned
   have footprint : current.state.SelectedRetryDurability plan.layout.target (observe reached) :=
     plan.targetEq.symm ▸ durable
   have selectedManifest := (congrArg (fun target : Target => target.pair.manifest) plan.targetEq).trans manifest
   refine ⟨plan, opening, raw, returned.readyAfterAlignedRetry seen aligned observe visible current.readPrefix.refines.1
     footprint kept selectedManifest root lock admitted ⟨read, scan, remember⟩ repair
     ⟨keeper.1, keeper.2, directory, consume⟩ links phase token⟩
+
+/-- Continue the same failed-call prefix at its last returned heap.
+An exact keeper and empty suffix select the aligned repair on that open.
+The successful open's phase, token and cache are the next writer's. -/
+theorem NativeReadPosition.opensReadyAfterAlignedRetries
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (request : WriteRequest) (cause : IO.Error) {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table request.rows = some (batch, table))
+    (fits : current.state.writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
+    {attempts : source.FailedCalls first returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view source first target
+      (fun heap => ⟨(observe heap).files.names, fun inode => [visible heap inode]⟩)
+      current.state.selectedRetryPath
+      (fun heap => RawOpenRetryTrace.KeeperAt view dir target (fun heap => (observe heap).files.names) visible heap ∧
+        current.state.SelectedRetryDurability target (observe heap)) attempts)
+    (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (observe heap).files.names) visible first)
+    (durable : current.state.SelectedRetryDurability target (observe first))
+    (exactKeeper : (view.files reached).image.keeper.active = some target.trimmed)
+    (noLater : (view.files reached).image.later.visible = [])
+    (healthy : current.ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch) (target := target)
+      (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) source (fun heap => (observe heap).files.names) vacant)
+    (phase : OpenPhaseCellEffects view.phase get set) (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (laws : NativeReadPosition.AlignedRetryEffects (current := current) (batch := batch) (target := target)
+      (input := input) (view := view) (reached := reached) (vacant := vacant) (source := source)
+      (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) observe visible) :
+    ∃ (plan : current.SelectedWritePlan batch target (view.files reached).image)
+      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (cache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
+      (retained : List WAL.Write),
+      source.openTable input reached = .ok handle.table start.reached ∧
+      start.current.history = plan.history ∧
+      (⟨prior, log, current⟩ : NativeExecutionPosition).LedgerSuffix
+        [.uncertainWriteCrashRecovered request input cause batch retained] start.current ∧
+      InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
+        start.current.ready.state.writer.installed start.current.ready.state.session ∧
+      start.WriteStorageEntry view cache (observe start.reached) (visible start.reached) := by
+  obtain ⟨retained, recovered⟩ := current.opensAfterWriteRetries source prepared fits admitted
+    (fun heap => (observe heap).files.names) visible effects initial ⟨initial.keeper, durable⟩ And.left
+    vacant healthy phase ptrEq
+  obtain ⟨plan, _, _, writer⟩ := recovered.readyAlignedWriter observe visible retained.2 exactKeeper noLater laws
+  obtain ⟨handle, start, cache, retained, opened, selected, ledger, replay, physical⟩ :=
+    plan.ledgerAtReadyWriter writer request cause
+  exact ⟨plan, handle, start, cache, retained, opened, selected, ledger, replay, physical⟩
 
 end Alvoki.Storage.DiskSession

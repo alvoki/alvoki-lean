@@ -1,5 +1,17 @@
 # Current handoff
 
+Both timings of the final keeper directory-fsync error now leave the
+exact trimmed keeper and durably empty suffix at the returned error
+heap. The next healthy open uses the actual keeper extent and the
+empty suffix to derive its aligned repair branch. The same failed-call
+prefix carries the selected checkpoint and WAL footprint into the
+open, which returns a ready table with the existing recovery ledger
+and physical entry for the next write. Vacant lock and reached I/O
+effects remain explicit. A subsequent observed write and snapshot
+still need to consume this entry in the mixed execution proof.
+[Failed keeper repair](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+· [Ready from the exact retry heap](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+
 The final-sync error now uses one proof for the observed filesystem
 effect. It retains live and durable keeper bytes on either outcome
 and proves the keeper name settled in every crash map after an

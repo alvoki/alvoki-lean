@@ -27,6 +27,20 @@ theorem ListedLongKeeperDirectoryIssue.readyAfterEffect
   have valid := (issue.stoppedEffects true).valid prepared.pair prepared.keeperPrefix prepared.newer
   exact ⟨valid.selected, valid.settled, rfl, rfl, pruning.stageInputEffects.2⟩
 
+/-- Once the replacement rename returned, the next live reader sees the
+trimmed keeper and the suffix already removed by the earlier barrier. -/
+theorem ListedLongKeeperDirectoryIssue.visibleAfterRename
+    (issue : ListedLongKeeperDirectoryIssue moved) (effective : Bool) :
+    (issue.stopped effective).image.keeper.active = some layout.target.trimmed ∧
+      (issue.stopped effective).image.later.DurablyEmpty := by
+  have pruned := pruning.stageInputEffects.2
+  cases effective with
+  | false => exact ⟨rfl, pruned⟩
+  | true =>
+    refine ⟨rfl, ?_⟩
+    change pruning.stageInput.image.later.syncDirectory.DurablyEmpty
+    exact ⟨pruned.1, congrArg (fun names => [names]) pruned.1⟩
+
 /-- The cached handle at the issued call is live and refers to the
 database directory whose child bindings can be settled by this fsync. -/
 theorem ListedLongKeeperDirectoryIssue.rawDirectoryTarget
