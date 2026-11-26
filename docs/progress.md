@@ -1,15 +1,25 @@
 # Current handoff
 
-The first run-fsync pilot now composes the exact fresh open and one confirmed
+A stop during the final manifest-directory fsync determines the exact
+successful MANIFEST rename that preceded it. The source prefix exposes the
+rename entry and return heaps, the unchanged cache, and the directory
+descriptor used by the stopped fsync. A returned rename error stays in the
+ordinary I/O result. The old and new manifest choices still need physical
+durability of the matching selected run inodes and bytes.
+[Final manifest-directory stop](../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
+
+One theorem now composes either early checkpoint cut with the exact fresh
+open and one confirmed
 nonempty write with the interrupted checkpoint, the selected reboot, a finalized
 MANIFEST failure, an aligned reopen and a snapshot read. The checkpoint runs at
 the write's returned heap using its original cache references. One derived stop
 and one storage observation supply both the terminal ledger and the retry. The
 snapshot belongs to the table and heap returned by the fixed opener. The theorem
 takes the fresh bootstrap and settled initial storage evidence and the scoped
-callback and reboot observations. The runs-directory cut still needs the same
-composition, and later publication must cover both manifest choices.
-[Integrated first run-fsync pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
+callback and reboot observations. Only the physical frames differ between
+the first run-fsync and the first directory-fsync. Later publication must
+cover both manifest choices.
+[Integrated early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
 
 At the first runs-directory fsync, the checkpoint schedule now supplies
 the ordered prefix of actual returned run writes and file fsyncs.

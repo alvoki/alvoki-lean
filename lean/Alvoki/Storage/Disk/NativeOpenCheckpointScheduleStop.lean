@@ -408,6 +408,41 @@ theorem NativeCheckpointSourceStop.runsDirectoryIssue
         .ok handle (reached.1, atEffect) ∧ fsync handle atEffect = .error reason reached.2 := by
   exact ⟨prefixBeforeRunsDirectory stop.ordered, primitives.issuedFsync stop.stoppedStep⟩
 
+/-- The final directory barrier follows the actual returned replacement
+of MANIFEST. Extract the rename's entry and return from the same prefix
+that supplies the issued directory descriptor and fsync heap. -/
+theorem NativeCheckpointSourceStop.manifestDirectoryFollowsRename
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached) :
+    let directory := current.current.ready.state.session.directory
+    let perform := primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest
+    let beforeRenameSteps : List Step := runSteps stop.next.table.runs.length ++
+      [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged]
+    ∃ beforeRename handle atSync,
+      (beforeRenameSteps.forM perform).run (current.current.ready.state.cache, stop.poisoned) =
+        .ok (.ok ()) beforeRename ∧
+      primitives.rename (directory.file .stagedManifest) (directory.file .manifest) beforeRename.2 =
+        .ok () stop.atIssue.2 ∧ stop.atIssue.1 = beforeRename.1 ∧
+      stop.atIssue.1.resolve directory.path directory.path primitives.openRead stop.atIssue.2 =
+        .ok handle (reached.1, atSync) ∧ fsync handle atSync = .error reason reached.2 := by
+  intro directory perform beforeRenameSteps
+  have completed := stop.returnedPrefix
+  rw [prefixBeforeManifestDirectory stop.ordered] at completed
+  obtain ⟨beforeRename, earlier, renameReturned⟩ :=
+    returnedLastStep perform beforeRenameSteps (.manifest .renameStaged) completed
+  obtain ⟨handle, atSync, resolved, issued⟩ := primitives.issuedFsync stop.stoppedStep
+  obtain ⟨renameCache, renameHeap⟩ := beforeRename
+  rw [show perform = primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest from rfl,
+    CheckpointFileCallbacks.performManifestRenameUntilSyncStop] at renameReturned
+  simp only [CheckpointCacheCalls.callbacks, CheckpointPrimitiveCalls.cached] at renameReturned
+  cases renamed : primitives.rename (directory.file .stagedManifest) (directory.file .manifest) renameHeap with
+  | error cause after => simp [withCache, renamed] at renameReturned
+  | ok value after =>
+    cases value
+    simp only [withCache, renamed] at renameReturned
+    have same := (EStateM.Result.ok.inj renameReturned).2
+    exact ⟨(renameCache, renameHeap), handle, atSync, earlier,
+      (congrArg Prod.snd same) ▸ renamed, (congrArg Prod.fst same).symm, resolved, issued⟩
+
 private theorem resolveKeepsDirectory (cache : CensusDirectoryCache) (dir path : FilePath)
     (openRead : FilePath → EStateM IO.Error heap CheckpointOpenHandle) (before : heap) :
     (reachedState (cache.resolve dir path openRead before)).1.directory = cache.directory := by

@@ -8,15 +8,29 @@ open System CheckpointPublication WalSegmentRepair SyncHandleRouting
 open Sequential (SnapshotTable)
 open WAL.Boundary (WalInodeImage)
 
-section FirstRun
+/-- The two source cuts in this pilot, before a manifest has been staged. -/
+inductive FreshCheckpointCut where
+  | firstRun
+  | runsDirectory
+
+def FreshCheckpointCut.step : FreshCheckpointCut → CheckpointPublication.Step
+  | .firstRun => .syncRun 0
+  | .runsDirectory => .syncRunsDirectory
+
+private theorem FreshCheckpointCut.early (cut : FreshCheckpointCut) :
+    cut.step = .syncRunsDirectory ∨ ∃ index, cut.step = .syncRun index := by
+  cases cut
+  · exact .inr ⟨0, rfl⟩
+  · exact .inl rfl
+
+section EarlyCut
 
 variable {heap : Type} {opened : NativeOpenedHandle heap} {current : NativeOpenedPosition opened}
   {primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap} {fsync : CheckpointFsync heap}
   {reason : FilePath} {reached : CheckpointWorld heap}
   {view : OpenCloseHeapView heap FileImage}
 
-/-- Local phase, run write, cache and fsync observations on the heaps
-reached by the first run stop. The source schedule supplies the stop. -/
+/-- The run write, cache and fsync observations at the first run stop. -/
 structure FirstRunStopObservations
     (stop : NativeCheckpointSourceStop current primitives fsync (.syncRun 0) reason reached)
     (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
@@ -44,13 +58,6 @@ structure FirstRunStopObservations
     primitives.cached.writeRun path payload stop.poisoned = .ok handle stop.atIssue.2 →
     ∃ inode, RunWriteInodeFrame path inode (inodes stop.atIssue.2) (observe stop.poisoned) (observe stop.atIssue.2) ∧
       ∀ other, (observe stop.poisoned).visible other = some inode → other = path
-  phaseStorage : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
-    (observe stop.poisoned).storageObservation
-  returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
-    (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
-      fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
-    opened.contents after.2 opened.phase = opened.contents before.2 opened.phase
-  stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase
 
 theorem FirstRunStopObservations.storageAtStop
     {stop : NativeCheckpointSourceStop current primitives fsync (.syncRun 0) reason reached}
@@ -59,14 +66,70 @@ theorem FirstRunStopObservations.storageAtStop
     {observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
       (inodes atHeap) (runs atHeap)}
     (seen : FirstRunStopObservations (view := view) stop cache inodes runs observe)
-    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation) :
+    (initial : NativeReadyStorage current.current.ready.state (observe stop.poisoned).storageObservation) :
     NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation :=
-  initial.frame (seen.phaseStorage.trans
-    ((stop.firstRunWriteFrames inodes runs observe seen.writeEffect).trans
-      (stop.runSyncFrames seen.calls cache seen.projected seen.pending inodes runs observe
-        seen.consume seen.effective seen.effect)))
+  initial.frame ((stop.firstRunWriteFrames inodes runs observe seen.writeEffect).trans
+    (stop.runSyncFrames seen.calls cache seen.projected seen.pending inodes runs observe
+      seen.consume seen.effective seen.effect))
 
-end FirstRun
+/-- The returned run prefix and the first directory barrier have separate
+physical obligations on the same reached execution. -/
+structure RunsDirectoryCutObservations
+    (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
+      (inodes atHeap) (runs atHeap)) where
+  returnedRuns : ReturnedCheckpointRunEffects stop stop.next.table.runs.length inodes runs observe
+  atSync : RunsDirectoryStopObservations (view := view) stop cache inodes runs observe
+
+def FreshCheckpointCut.Physical (cut : FreshCheckpointCut)
+    (view : OpenCloseHeapView heap FileImage)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
+      (inodes atHeap) (runs atHeap)) :
+    NativeCheckpointSourceStop current primitives fsync cut.step reason reached → Type :=
+  match cut with
+  | .firstRun => fun stop => FirstRunStopObservations (view := view) stop cache inodes runs observe
+  | .runsDirectory => fun stop => RunsDirectoryCutObservations (view := view) stop cache inodes runs observe
+
+/-- The common phase observations and the local effects for one source cut. -/
+structure FreshCheckpointStopObservations
+    (cut : FreshCheckpointCut)
+    (stop : NativeCheckpointSourceStop current primitives fsync cut.step reason reached)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
+      (inodes atHeap) (runs atHeap)) where
+  physical : cut.Physical view cache inodes runs observe stop
+  phaseStorage : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
+    (observe stop.poisoned).storageObservation
+  returnedKeeps : ∀ step ∈ stop.completed, ∀ before after,
+    (primitives.checkpointStepUntilStop current.current.ready.state.session.directory
+      fsync stop.next stop.manifest step).run before = .ok (.ok ()) after →
+    opened.contents after.2 opened.phase = opened.contents before.2 opened.phase
+  stoppedKeeps : opened.contents reached.2 opened.phase = opened.contents stop.atIssue.2 opened.phase
+
+theorem FreshCheckpointStopObservations.storageAtStop
+    {cut : FreshCheckpointCut}
+    {stop : NativeCheckpointSourceStop current primitives fsync cut.step reason reached}
+    {cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path}
+    {inodes : heap → WalInodeImage} {runs : heap → RunUnlinkImage}
+    {observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory
+      (inodes atHeap) (runs atHeap)}
+    (seen : FreshCheckpointStopObservations (view := view) cut stop cache inodes runs observe)
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation) :
+    NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
+  have atPoison := initial.frame seen.phaseStorage
+  cases cut with
+  | firstRun => exact FirstRunStopObservations.storageAtStop seen.physical atPoison
+  | runsDirectory =>
+    have effects : RunsDirectoryCutObservations (view := view) stop cache inodes runs observe := seen.physical
+    have runsFrame := stop.returnedRunFrames stop.runsDirectoryIssue.1 inodes runs observe effects.returnedRuns
+    exact stop.runsDirectoryPreservesSelected cache inodes runs observe (atPoison.frame runsFrame) effects.atSync
+
+end EarlyCut
 
 section QuietRetry
 
@@ -189,10 +252,10 @@ private theorem storageObservation_cast {directory other : DiskDirectory}
 
 variable {heap : Type} {call : EStateM IO.Error heap DiskTable} {entry : heap}
 
-/-- Follow the actual first acknowledgement through the first run fsync
+/-- Follow the actual first acknowledgement through an early checkpoint
 cut. The stopped ledger and the exact retry and snapshot use the storage
 derived from that same source stop. -/
-theorem FreshBootstrapOpenHeap.Returned.replaysAfterFirstRunStop
+theorem FreshBootstrapOpenHeap.Returned.replaysAfterEarlyCheckpointStop
     (opened : FreshBootstrapOpenHeap.Returned call entry) {input : FilePath} {directory : DiskDirectory}
     {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
     (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
@@ -223,17 +286,17 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterFirstRunStop
         (fun atHeap => (filesObserved atHeap).storageObservation)
         inode buffered request lookup rename sequence reached)
     (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap)
-    (fsync : CheckpointFsync heap) {reason : FilePath} {stoppedAt : CheckpointWorld heap}
+    (fsync : CheckpointFsync heap) (cutStage : FreshCheckpointCut) {reason : FilePath} {stoppedAt : CheckpointWorld heap}
     (stopped : (runCheckpointOnOpenPhaseUntilSyncStop directory
       opened.handle.phase opened.handle.get opened.handle.set primitives fsync).run
-      (view.cacheAt reached directoryRef activeRef pendingRef, reached) = .error (.syncRun 0, reason) stoppedAt)
+      (view.cacheAt reached directoryRef activeRef pendingRef, reached) = .error (cutStage.step, reason) stoppedAt)
     (cutEffects : ∀ (next : NativeOpenedPosition opened.handle)
       (directoryAtNext : next.current.ready.state.session.directory = directory),
       next.reached = reached →
       ∀ (cache : OpenSyncCacheRefs opened.handle.files next.current.ready.state.session.directory.path),
         cache.directory = directoryRef → cache.active = activeRef → cache.pending = pendingRef →
-        ∀ stop : NativeCheckpointSourceStop next primitives fsync (.syncRun 0) reason stoppedAt,
-          Nonempty (FirstRunStopObservations (view := view) stop cache inodes runs
+        ∀ stop : NativeCheckpointSourceStop next primitives fsync cutStage.step reason stoppedAt,
+          Nonempty (FreshCheckpointStopObservations (view := view) cutStage stop cache inodes runs
             (fun atHeap => directoryAtNext.symm ▸ filesObserved atHeap)))
     {stream : Type} (source : RawMarkedOpenInterpreter heap stream)
     {failedInput retryInput : FilePath} {rebooted afterFailure : heap} {diagnostic : IO.Error}
@@ -255,11 +318,11 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterFirstRunStop
       rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
     source.openTable failedInput rebooted = .error diagnostic afterFailure ∧
     ∃ (batch : List WAL.Write) (next : NativeOpenedPosition opened.handle)
-      (stop : NativeCheckpointSourceStop next primitives fsync (.syncRun 0) reason stoppedAt)
+      (stop : NativeCheckpointSourceStop next primitives fsync cutStage.step reason stoppedAt)
       (poisoned : opened.handle.contents stoppedAt.2 opened.handle.phase = some .poisoned)
       (stable : NativeReadyStorage next.current.ready.state (filesObserved stoppedAt.2).storageObservation),
       let ending := NativeExecutionEnd.stoppedEarlyCheckpoint
-        (storage := fun atHeap => (filesObserved atHeap).storageObservation) rfl stop (.inr ⟨0, rfl⟩) poisoned stable
+        (storage := fun atHeap => (filesObserved atHeap).storageObservation) rfl stop cutStage.early poisoned stable
       next.reached = reached ∧ next.current.history = batch ∧ ending.Reached ∧
       (∃ chosen, ending.allows chosen ∧ PendingClientReplay ending.submissions next.current.ready.reads chosen ∧
         ∀ read ∈ next.current.ready.reads, read.BoundedBy chosen.length) ∧
@@ -294,7 +357,7 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterFirstRunStop
   rw [atNext, sameDirectory, sameActive, samePending] at cacheAtNext
   have exactStop : (runCheckpointOnOpenPhaseUntilSyncStop next.current.ready.state.session.directory
       opened.handle.phase opened.handle.get opened.handle.set primitives fsync).run
-      (next.current.ready.state.cache, next.reached) = .error (.syncRun 0, reason) stoppedAt := by
+      (next.current.ready.state.cache, next.reached) = .error (cutStage.step, reason) stoppedAt := by
     rw [directoryAtNext, atNext, ← cacheAtNext]
     exact stopped
   obtain ⟨stop⟩ := next.checkpointStopsFromWhole primitives fsync exactStop
@@ -308,7 +371,7 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterFirstRunStop
   have stable : NativeReadyStorage next.current.ready.state (filesObserved stoppedAt.2).storageObservation := by
     simpa only [storageObservation_cast] using cut.storageAtStop initial
   have terminal := stop.refinesTerminalLedger (storage := fun atHeap => (filesObserved atHeap).storageObservation)
-    (.inr ⟨0, rfl⟩) stable cut.returnedKeeps cut.stoppedKeeps ledger
+    cutStage.early stable cut.returnedKeeps cut.stoppedKeeps ledger
   obtain ⟨retry⟩ := retryEffects next atNext stable
   obtain ⟨boot, denied, handle, start, last, events, reference, reopened, calls, subsequent, replay, observed, _⟩ :=
     retry.readsLatest stop snapshot compares

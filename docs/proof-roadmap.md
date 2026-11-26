@@ -111,15 +111,14 @@ The same checkpoint stop interpreter now identifies the staged manifest fsync af
 First validate the [target execution argument](proofs/native-storage.md#target-execution-argument) on the two early checkpoint fsyncs. Extract the exact issued prefix, heap and physical effect from one interpretation of the full production schedule. Use the same reached result to end the execution there or continue through reboot, a rejected open and the actual subsequent installation and read. The existing replay and installer are the consumers. Prove the stop, reboot and open attempts as separate adjacent steps before expanding the case list. [Migration test](proofs/native-storage.md#migration-test)
 
 - [ ] **Validate a compositional execution proof.** Derive both early fsync stops from one schedule interpretation. Both the terminal and reboot proofs consume the same stopped-state witness. Neither requires a separately supplied successful prefix. Derive failed and successful `open` using the same production worker and exact intermediate heaps. Challenge the boundary with an ordinary error before the stop, a same-target later barrier, and manifest rename with either selected checkpoint. Require the exact read on the returned table. Run the kernel and axiom audits, native regressions and reproduction. Check that proof-only changes preserve generated production code. [Checkpoint pilot](proofs/native-storage.md#checkpoint-pilot) · [Migration test](proofs/native-storage.md#migration-test)
-  The first run-fsync pilot connects a justified fresh open, a confirmed
+  The early checkpoint pilot connects a justified fresh open, a confirmed
   nonempty write, the source-derived stop and a later snapshot on the exact
   table returned by the fixed marked opener. One reached storage observation
   supplies the terminal ledger and the admitted reboot. The failed MANIFEST
-  open precedes the successful aligned retry at its exact cleanup heap. The
-  first directory cut has local storage proofs and still needs this same
-  composition. Later manifest publication still needs the shared old and new
-  selected-file argument.
-  [First run-fsync pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
+  open precedes the successful aligned retry at its exact cleanup heap. Both
+  early stops share the terminal and recovery proofs. Later manifest publication
+  still needs the shared old and new selected-file argument.
+  [Early checkpoint pilot](../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
 
 - [ ] **Derive an integrated execution proof from fresh state.** Start with the ordered primitive returns and interruptions of the production schedules under the filesystem contract. Derive coverage and invariant preservation for each admitted step, including the exact returned value or error for a completed call and the reached state for an interrupted or still-running call. Connect fresh admission and terminal prefixes with one induction that reuses the existing replay. Exercise an acknowledged batch followed by an uncertain batch and independent retry attempts. [Raw open return classifier](../lean/Alvoki/Storage/Disk/NativeRawRecoveryReturn.lean) · [Current opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 

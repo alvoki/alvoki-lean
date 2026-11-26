@@ -262,6 +262,32 @@ theorem NativeCheckpointSourceStop.firstRunWriteFrames
   exact effect.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding
     (fun _ selected => newRunOffSelected valid stop.prepared 0 selected)
 
+/-- Byte and namespace effects of each successful run write and file
+sync, indexed by the prior prefix of a source checkpoint stop. -/
+structure ReturnedCheckpointRunEffects
+    (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
+    (count : Nat) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory
+      (inodes heap) (runs heap)) : Prop where
+  write : ∀ index < count, ∀ before after payload handle,
+    let path := current.current.ready.state.session.directory.file (.run stop.next.generation index)
+    primitives.cached.writeRun path payload before = .ok handle after →
+    let inode := handle.1.inode handle.2.1.description
+    RunWriteInodeFrame path inode (inodes after) (observe before) (observe after) ∧
+      ∀ other, (observe before).visible other = some inode → other = path
+  sync : ∀ index < count, ∀ (before after : CheckpointWorld heap) handle issued,
+    let state := current.current.ready.state
+    let path := state.session.directory.file (.run stop.next.generation index)
+    before.1.resolve state.session.directory.path path primitives.openRead before.2 = .ok handle (after.1, issued) →
+    fsync handle issued = .ok (.ok ()) after.2 →
+    let inode := handle.1.inode handle.2.1.description
+    (observe before.2).storageObservation.Frames state.crashPath (observe issued).storageObservation ∧
+    (observe issued).visible path = some inode ∧
+    (∀ other, (observe issued).visible other = some inode → other = path) ∧
+    inodes after.2 = (inodes issued).completeFileSync inode ∧
+    (observe after.2).visible = (observe issued).visible ∧
+    (observe after.2).crashBindings = (observe issued).crashBindings
+
 /-- Fold the prior checkpoint and WAL frame over the actual returned run
 prefix. The write, handle selection and successful file sync each retain
 their own reached heap. -/
@@ -270,24 +296,7 @@ theorem NativeCheckpointSourceStop.returnedRunFrames
     {count : Nat} (completedRuns : stop.completed = runSteps count)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
-    (writeEffect : ∀ index < count, ∀ before after payload handle,
-      let path := current.current.ready.state.session.directory.file (.run stop.next.generation index)
-      primitives.cached.writeRun path payload before = .ok handle after →
-      let inode := handle.1.inode handle.2.1.description
-      RunWriteInodeFrame path inode (inodes after) (observe before) (observe after) ∧
-        ∀ other, (observe before).visible other = some inode → other = path)
-    (syncEffect : ∀ index < count, ∀ (before after : CheckpointWorld heap) handle issued,
-      let state := current.current.ready.state
-      let path := state.session.directory.file (.run stop.next.generation index)
-      before.1.resolve state.session.directory.path path primitives.openRead before.2 = .ok handle (after.1, issued) →
-      fsync handle issued = .ok (.ok ()) after.2 →
-      let inode := handle.1.inode handle.2.1.description
-      (observe before.2).storageObservation.Frames state.crashPath (observe issued).storageObservation ∧
-      (observe issued).visible path = some inode ∧
-      (∀ other, (observe issued).visible other = some inode → other = path) ∧
-      inodes after.2 = (inodes issued).completeFileSync inode ∧
-      (observe after.2).visible = (observe issued).visible ∧
-      (observe after.2).crashBindings = (observe issued).crashBindings) :
+    (effects : ReturnedCheckpointRunEffects stop count inodes runs observe) :
     (observe stop.poisoned).storageObservation.Frames current.current.ready.state.crashPath
       (observe stop.atIssue.2).storageObservation := by
   let state := current.current.ready.state
@@ -303,60 +312,71 @@ theorem NativeCheckpointSourceStop.returnedRunFrames
   obtain ⟨index, within, write | sync⟩ := member
   · subst step
     obtain ⟨run, handle, _, wrote, _⟩ := primitives.runWriteReturned directory fsync stop.next stop.manifest index returned
-    obtain ⟨effect, privateBinding⟩ := writeEffect index within before.2 after.2 run.run.bytes handle wrote
+    obtain ⟨effect, privateBinding⟩ := effects.write index within before.2 after.2 run.run.bytes handle wrote
     exact effect.preservesCheckpointFootprint (fun _ _ => rfl) privateBinding
       (fun _ selected => newRunOffSelected valid stop.prepared index selected)
   · subst step
     have completed : (primitives.syncUntilStop directory.path fsync
         #[directory.file (.run stop.next.generation index)]).run before = .ok (.ok ()) after := returned
     obtain ⟨handle, issued, resolved, synced⟩ := primitives.returnedFsync fsync directory.path _ completed
-    obtain ⟨selection, _, privateBinding, bytes, visible, surviving⟩ := syncEffect index within before after handle issued
+    obtain ⟨selection, _, privateBinding, bytes, visible, surviving⟩ := effects.sync index within before after handle issued
       resolved synced
     have effect := (observe issued).fileSyncEffect (observe after.2) bytes visible surviving
     refine selection.trans (effect.frames ?_)
     intro path selected inode bound same
     exact newRunOffSelected valid stop.prepared index selected (privateBinding path (same ▸ bound))
 
+/-- Cache routing and physical effects at the literal first directory
+sync reached by the source checkpoint. -/
+structure RunsDirectoryStopObservations
+    (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap)) where
+  calls : CheckpointRawSyncCalls heap
+  projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1
+  load : calls.readDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2
+  primitive : ∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
+    fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal stop.atIssue.2 ∧
+      RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal
+  effective : Bool
+  effect : ∀ literal, calls.fsync literal stop.atIssue.2 = .error reason reached.2 →
+    let state := current.current.ready.state
+    let root := state.session.directory.path
+    (observe stop.atIssue.2).visible root =
+      some ((view.descriptors stop.atIssue.2).inode (view.handle stop.atIssue.2 literal).2.1.description) ∧
+    inodes reached.2 = inodes stop.atIssue.2 ∧
+    (observe reached.2).visible = (observe stop.atIssue.2).visible ∧
+    ∀ names ∈ (observe reached.2).crashBindings,
+      if effective then
+        ∃ prior ∈ (observe stop.atIssue.2).crashBindings, names root = prior root ∧
+          ∀ child, state.crashPath child → child ≠ root → names child = (observe stop.atIssue.2).visible child
+      else names ∈ (observe stop.atIssue.2).crashBindings
+
 /-- The stopped run-directory barrier preserves the already selected
 checkpoint. Effective fsync settles the selected child names. The
 directory's own binding remains subject to the independent parent frame. -/
 theorem NativeCheckpointSourceStop.runsDirectoryPreservesSelected
     (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached)
-    (calls : CheckpointRawSyncCalls heap)
     (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
-    (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
-    (load : calls.readDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2)
-    (primitive : ∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
-      fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal stop.atIssue.2 ∧
-        RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
     (stable : NativeReadyStorage current.current.ready.state (observe stop.atIssue.2).storageObservation)
-    (effective : Bool)
-    (effect : ∀ literal, calls.fsync literal stop.atIssue.2 = .error reason reached.2 →
-      let state := current.current.ready.state
-      let root := state.session.directory.path
-      (observe stop.atIssue.2).visible root =
-        some ((view.descriptors stop.atIssue.2).inode (view.handle stop.atIssue.2 literal).2.1.description) ∧
-      inodes reached.2 = inodes stop.atIssue.2 ∧
-      (observe reached.2).visible = (observe stop.atIssue.2).visible ∧
-      ∀ names ∈ (observe reached.2).crashBindings,
-        if effective then
-          ∃ prior ∈ (observe stop.atIssue.2).crashBindings, names root = prior root ∧
-            ∀ child, state.crashPath child → child ≠ root → names child = (observe stop.atIssue.2).visible child
-        else names ∈ (observe stop.atIssue.2).crashBindings) :
+    (seen : RunsDirectoryStopObservations (view := view) stop cache inodes runs observe) :
     NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
-  obtain ⟨literal, _, _, _, stopped, _⟩ := stop.runsDirectoryIssuesRawSync calls cache projected load primitive
-  obtain ⟨_, bytes, visible, survives⟩ := effect literal stopped
+  obtain ⟨literal, _, _, _, stopped, _⟩ := stop.runsDirectoryIssuesRawSync seen.calls cache seen.projected seen.load seen.primitive
+  obtain ⟨_, bytes, visible, survives⟩ := seen.effect literal stopped
   apply stable.frame
   constructor
   · intro path _
     exact ⟨congrFun visible path, fun inode _ => congrArg (fun state : WalInodeImage => state.crashBytes inode) bytes⟩
   · intro names allowed
     have chosen := survives names allowed
-    cases effective
-    · exact ⟨names, chosen, fun _ _ => rfl⟩
-    · obtain ⟨prior, earlier, root, children⟩ := chosen
+    cases effective : seen.effective
+    · simp only [effective, Bool.false_eq_true, ite_false] at chosen
+      exact ⟨names, chosen, fun _ _ => rfl⟩
+    · simp only [effective, ite_true] at chosen
+      obtain ⟨prior, earlier, root, children⟩ := chosen
       refine ⟨prior, earlier, fun path selected => ?_⟩
       by_cases same : path = current.current.ready.state.session.directory.path
       · simpa only [same] using root

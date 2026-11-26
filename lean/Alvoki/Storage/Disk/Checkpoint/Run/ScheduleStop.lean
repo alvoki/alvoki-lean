@@ -144,8 +144,15 @@ theorem prefixBeforeManifestSync {count : Nat} {done remaining : List Step}
   apply samePrefix ordered (later := [.manifest .renameStaged, .manifest .syncDirectory])
   simp [steps, Publication.steps, List.append_assoc]
 
-/-- A returned prefix ending in a write determines that write's entry
-heap. This is used by both cached checkpoint file barriers. -/
+/-- The manifest directory barrier follows the returned rename. -/
+theorem prefixBeforeManifestDirectory {count : Nat} {done remaining : List Step}
+    (ordered : steps count = done ++ .manifest .syncDirectory :: remaining) :
+    done = (runSteps count ++ [.syncRunsDirectory, .manifest .writeStaged, .manifest .syncStaged]) ++
+      [.manifest .renameStaged] := by
+  apply samePrefix ordered (later := [])
+  simp [steps, Publication.steps, List.append_assoc]
+
+/-- A returned prefix ending in a step determines that step's entry heap. -/
 theorem returnedLastStep {image : Type} (perform : Step → ExceptT IO.Error (EStateM FilePath image) Unit)
     (priorSteps : List Step) (last : Step) {before after : image}
     (returned : ((priorSteps ++ [last]).forM perform).run before = .ok (.ok ()) after) :
@@ -226,5 +233,15 @@ theorem CheckpointFileCallbacks.performManifestWriteUntilSyncStop {image : Type}
       | .error cause after => .ok (.error cause) after := by
   simp only [performUntilSyncStop, performCheckpointFileStep, Publication.performReplacement, ExceptT.run, returned]
   cases calls.writeStaged (directory.file .stagedManifest) manifest before <;> rfl
+
+theorem CheckpointFileCallbacks.performManifestRenameUntilSyncStop {image : Type}
+    (calls : CheckpointFileCallbacks image) (sync : Array FilePath → ExceptT IO.Error (EStateM FilePath image) Unit)
+    (directory : DiskDirectory) (next : Installed) (manifest : ByteArray) (before : image) :
+    (calls.performUntilSyncStop sync directory next manifest (.manifest .renameStaged)).run before =
+      match calls.rename (directory.file .stagedManifest) (directory.file .manifest) before with
+      | .ok value after => .ok (.ok value) after
+      | .error cause after => .ok (.error cause) after := by
+  simp only [performUntilSyncStop, performCheckpointFileStep, Publication.performReplacement, ExceptT.run, returned]
+  cases calls.rename (directory.file .stagedManifest) (directory.file .manifest) before <;> rfl
 
 end Alvoki.Storage.DiskSession

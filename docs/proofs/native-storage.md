@@ -397,12 +397,12 @@ ledger from those raw acknowledgements. The same reached source stop and its
 protected storage also yield the chosen reboot observation. One bounded aligned
 interpreter follows a finalized MANIFEST stat rejection and opens at its actual
 cleanup heap with the same selected checkpoint and WAL bytes. This still takes
-the local reboot projection and aligned callback receipts. The first run-fsync
-pilot joins these steps through the recovered snapshot. Other checkpoint cuts
-still need the same composition.
+the local reboot projection and aligned callback receipts. The early checkpoint
+pilot joins both stops through the recovered snapshot. The later publication
+cuts still need the selected-file argument.
 [Fresh acknowledgement](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 · [Source checkpoint reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
-· [First run-fsync pilot](../../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
+· [Early checkpoint pilot](../../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
 
 Ordinary `IO.Error` and interruption must remain distinct even when they involve the same fsync.
 The first and final directory sync can also use the same path and descriptor with different
@@ -451,7 +451,7 @@ distinguishes durable child names from the root name in the parent.
 The physical result can feed a stopped ledger or an admitted reboot.
 [Runs-directory stop](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
 
-The integrated first run-fsync pilot starts with the justified fresh returned
+The integrated early checkpoint pilot starts with the justified fresh returned
 table and its settled storage. One confirmed nonempty write provides the exact
 heap and cache for the interpreted checkpoint call. The derived stop supplies
 both a terminal ledger and the physical bytes from which a single admitted
@@ -459,6 +459,8 @@ reboot is chosen. One fixed opener returns the MANIFEST lookup diagnostic and
 then the aligned table. The acquired token and snapshot on that exact table
 extend the original writer's ledger and agree with WAL replay. The theorem uses
 local primitive observations, a selected reboot and a successful aligned repair.
+The two early stops differ in their physical frames and share the rest of the
+argument.
 [Fresh checkpoint replay](../../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
 
 The quiet checkpoint continuation uses one fixed marked interpreter for
@@ -470,6 +472,14 @@ staging. The allocated cache and reference constructor identify the
 returned table and heap. The chosen reboot and each call's primitive
 effects are explicit.
 [Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+
+At the final manifest-directory stop, the source order determines the
+preceding successful replacement of MANIFEST. The returned prefix exposes
+its entry and return heaps and the cache used to resolve the directory of the
+stopped fsync. A returned rename error follows the ordinary error channel.
+The selection proof still needs the correlated manifest and run bindings
+with their physical bytes at the later stop.
+[Manifest-directory source order](../../lean/Alvoki/Storage/Disk/NativeOpenCheckpointScheduleStop.lean)
 
 At the first run fsync, the completed prefix contains the run write. The
 literal write determines the heap before sync and frames the selected files.
