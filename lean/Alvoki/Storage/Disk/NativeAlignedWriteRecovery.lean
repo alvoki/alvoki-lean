@@ -589,7 +589,7 @@ theorem NativeReadPosition.SelectedWritePlan.installsLiteralRepairedWriter
     (ownsSlot : (view.handle repaired lock).2.1 = owner)
     (cachePhase : CacheAllocationFrame view cache.directory cache.active cache.pending repaired allocation.afterPhase)
     (cacheToken : CacheAllocationFrame view cache.directory cache.active cache.pending allocation.afterPhase allocation.afterToken)
-    (rootInode : ∀ captured, (readyState).cache.directory = some (captured, directorySlot, 0) →
+    (rootCache : ∃ captured, (readyState).cache.directory = some (captured, directorySlot, 0) ∧
       captured.inode directorySlot.description = (readyState).census.inode directorySlot.description)
     (phaseEffects : OpenPhaseCellEffects view.phase get set)
     (tokenEqual : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
@@ -621,7 +621,7 @@ theorem NativeReadPosition.SelectedWritePlan.installsLiteralRepairedWriter
     sameHistory.symm ▸ plan.bounded
   obtain ⟨handle, start, nextCache, opened, reachedEq, _, _, history, submissions, stateEq, reads, _, writeEntry, _⟩ :=
     allocation.opensReadyWriter stateValid constructor cache returned phaseEffects tokenEqual init bounded observe visible settled live
-      rfl ownsSlot rfl cachePhase cacheToken rootInode phaseFrame tokenFrame phaseKeeper tokenKeeper
+      rfl ownsSlot rfl cachePhase cacheToken rootCache phaseFrame tokenFrame phaseKeeper tokenKeeper
   have selectedHistory := history.trans sameHistory
   obtain ⟨keptBatch, ledger⟩ := plan.ledgerAfterReopen start.current selectedHistory submissions reads request input cause
   exact ⟨handle, start, nextCache, keptBatch, opened, selectedHistory, ledger,
@@ -642,11 +642,9 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
     (ownsSlot : (view.handle repaired lock).2.1 = owner)
     (ownerLive : owner ∈ (view.descriptors repaired).slots)
     (directoryLive : directorySlot ∈ (view.descriptors repaired).slots)
-    (directoryCached : ∃ captured, (view.cacheAt repaired cache.directory cache.active cache.pending).directory =
-      some (captured, directorySlot, 0))
     (cachePhase : CacheAllocationFrame view cache.directory cache.active cache.pending repaired allocation.afterPhase)
     (cacheToken : CacheAllocationFrame view cache.directory cache.active cache.pending allocation.afterPhase allocation.afterToken)
-    (rootInode : ∀ captured, (readyState).cache.directory = some (captured, directorySlot, 0) →
+    (rootCache : ∃ captured, (readyState).cache.directory = some (captured, directorySlot, 0) ∧
       captured.inode directorySlot.description = (readyState).census.inode directorySlot.description)
     (phaseEffects : OpenPhaseCellEffects view.phase get set)
     (tokenEqual : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
@@ -733,6 +731,8 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
           visible start.reached inode = target.trimmed) ∧
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (observe start.reached) := by
+  have directoryCached : ∃ captured, (readyState).cache.directory = some (captured, directorySlot, 0) :=
+    rootCache.imp (fun _ bound => bound.1)
   have stateValid : (readyState).Valid := ⟨rfl, rfl, ownerLive, directoryLive, directoryCached, retained⟩
   obtain ⟨protectedFiles, marker, rootSettled⟩ := physical.forReopenedWriter current.readPrefix.refines.1 stateValid rfl
     selected manifest published kept rootBound lockBound
@@ -743,7 +743,7 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
     later beyond listed walEffects
   obtain ⟨handle, start, nextCache, keptBatch, opened, history, ledger, replay, writeEntry, stateEq, reachedEq⟩ :=
     plan.installsLiteralRepairedWriter request cause constructor stateValid sameHistory ownsSlot cachePhase cacheToken
-      rootInode phaseEffects tokenEqual returned observe visible settled live phaseFrame tokenFrame phaseKeeper tokenKeeper
+      rootCache phaseEffects tokenEqual returned observe visible settled live phaseFrame tokenFrame phaseKeeper tokenKeeper
   let keeperPath := (dir).file (.walSegment writer.wal.active.first)
   have keeperSelected : (readyState).crashPath keeperPath :=
     NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
@@ -797,6 +797,16 @@ structure LiteralOpenAuthority (view : OpenCloseHeapView heap FileImage) (direct
     (cache.captured.inode cache.owner.description) atHeap
   separate : cache.rootSlot.description ≠ cache.owner.description
   owned : (view.files atHeap).owners.Owns directory cache.owner.description
+
+/-- The literal cache cell identifies the same live root object in
+the current census, even if temporary reads changed other descriptors. -/
+theorem LiteralOpenAuthority.cacheRoot {directory : DiskDirectory} {cache : HeldOpenCache heap} {atHeap : heap}
+    (authority : LiteralOpenAuthority view directory cache atHeap) :
+    (view.cacheAt atHeap cache.directoryRef cache.activeRef cache.pendingRef).directory =
+      some (cache.captured, cache.rootSlot, 0) ∧
+    cache.captured.inode cache.rootSlot.description = (view.descriptors atHeap).inode cache.rootSlot.description := by
+  refine ⟨?_, authority.rootAttached.2.2.symm⟩
+  simp only [OpenCloseHeapView.cacheAt, authority.directoryCell, authority.rootHandle, Option.map_some]
 
 def managedPath (directory : DiskDirectory) (path : FilePath) : Prop :=
   path = directory.path ∨ ∃ file, path = directory.file file
@@ -946,18 +956,24 @@ abbrev literalOpenReadFrame (cache : HeldOpenCache heap)
   observedOpenReadFrame view dir current.state.selectedRetryPath cache observe before after
 
 /-- Effects of the two actual reference allocations on the existing cache,
-authority and storage. -/
+authority and crash footprint. The live-byte law follows the inode
+named by the selected keeper at each call. -/
 structure RawMarkedOpenInterpreter.LiteralAllocationEffects (source : RawMarkedOpenInterpreter heap stream)
     (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
-    (cache : HeldOpenCache heap) (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) where
+    (cache : HeldOpenCache heap) (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (keeper : Nat) where
   allocatesPhase : ∀ {installed before ref after}, source.allocatePhase (.ready installed) before = .ok ref after →
     view.phase after ref = some (.ready installed) ∧
     CacheAllocationFrame view cache.directoryRef cache.activeRef cache.pendingRef before after ∧
-    (observe before).Frames (managedPath directory) (observe after) ∧ visible after = visible before
+    (observe before).Frames (managedPath directory) (observe after) ∧
+    ∀ inode, (observe before).files.names (directory.file (.walSegment keeper)) = some inode →
+      visible after inode = visible before inode
   allocatesToken : ∀ {before ref after}, source.allocateToken () before = .ok ref after →
     (∀ phase, view.phase after phase = view.phase before phase) ∧
     CacheAllocationFrame view cache.directoryRef cache.activeRef cache.pendingRef before after ∧
-    (observe before).Frames (managedPath directory) (observe after) ∧ visible after = visible before
+    (observe before).Frames (managedPath directory) (observe after) ∧
+    ∀ inode, (observe before).files.names (directory.file (.walSegment keeper)) = some inode →
+      visible after inode = visible before inode
 
 variable (source) in
 /-- The selected reader and installer share the same heap projections. -/
@@ -965,7 +981,7 @@ structure RawMarkedOpenInterpreter.LiteralOpenEffects
     (cache : HeldOpenCache heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) extends
-    source.LiteralAllocationEffects view dir cache observe visible where
+    source.LiteralAllocationEffects view dir cache observe visible plan.layout.keeper.first where
   readEffects : source.AlignedReadEffects view dir cache.pendingRef (fun atHeap => (observe atHeap).files.names)
     visible namespaceView root (managedPath dir) (literalOpenReadFrame (current := current) (view := view) cache observe)
   child : ∀ start, plan.layout.first ≤ start →
@@ -1220,7 +1236,7 @@ theorem RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
     (suffixNames : ∀ ordinal ∈ (view.files entry).image.later.visible, layout.range.through < ordinal ∧
       ∃ object, namespaceView.child root (renderWalSegmentName ordinal) = some object)
     (effects : source.LiteralAlignedFinishEffects (view := view) cache directory layout entry observe)
-    (allocates : source.LiteralAllocationEffects view directory cache observe visible)
+    (allocates : source.LiteralAllocationEffects view directory cache observe visible layout.keeper.first)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat) :
     ∃ (repaired : heap) (writer : SegmentedWriterState)
       (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired),
@@ -1265,9 +1281,8 @@ theorem RawMarkedOpenInterpreter.retainsLiteralAlignedReturn
     ⟨phase, token, afterPhase, returnedAt, phaseReturn, phaseInitialized, tokenReturn, tokenKeepsPhase phase⟩
   let state := allocation.readyState writer directory cache.owner cache.rootSlot
     cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity
-  have cached : state.cache.directory = some (cache.captured, cache.rootSlot, 0) := by
-    change (view.cacheAt repaired cache.directoryRef cache.activeRef cache.pendingRef).directory = _
-    simp only [OpenCloseHeapView.cacheAt, repairedAuthority.directoryCell, Option.map_some, repairedAuthority.rootHandle]
+  have cached : state.cache.directory = some (cache.captured, cache.rootSlot, 0) :=
+    repairedAuthority.cacheRoot.1
   obtain ⟨usesCache, atDirectory⟩ := RawMarkedOpenInterpreter.cacheReferences directory
     cache.directoryRef cache.activeRef cache.pendingRef
   let refs : OpenSyncCacheRefs files directory.path :=
@@ -1436,10 +1451,6 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
     ⟨phase, token, afterPhase, returnedAt, phaseReturn, initialized, tokenReturn, keepsPhase phase⟩
   let state := allocation.readyState writer dir cache.owner cache.rootSlot refs.directory refs.active refs.pending
     phaseIdentity tokenIdentity
-  have dirCached (after : LiteralOpenAuthority view dir cache repaired) :
-      state.cache.directory = some (cache.captured, cache.rootSlot, 0) := by
-    change (view.cacheAt repaired cache.directoryRef cache.activeRef cache.pendingRef).directory = _
-    simp only [OpenCloseHeapView.cacheAt, after.directoryCell, after.rootHandle, Option.map_some]
   have protectedRoot : current.state.selectedRetryPath (dir).path := .inr (.inl rfl)
   have protectedLock : current.state.selectedRetryPath ((dir).file .lock) := .inr (.inr (.inl rfl))
   have atRoot (after : LiteralOpenAuthority view dir cache repaired) :=
@@ -1448,12 +1459,6 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
     (readFrame.1.visible _ protectedLock).1.trans (lockNamed.trans (congrArg some after.ownerAttached.2.2.symm))
   have preparedDurability := durable.frame readFrame.1.visible
     (readFrame.1.weaken (fun _ same => same.symm ▸ protectedRoot))
-  have compatible (after : LiteralOpenAuthority view dir cache repaired)
-      (captured : DescriptorInventory) (seen : state.cache.directory = some (captured, cache.rootSlot, 0)) :
-      captured.inode cache.rootSlot.description = state.census.inode cache.rootSlot.description := by
-    rw [dirCached after] at seen
-    obtain rfl := congrArg Prod.fst (Option.some.inj seen).symm
-    exact after.rootAttached.2.2.symm
   have exactReturn : source.openTable input reached =
       .ok (RawMarkedOpenInterpreter.assemble dir cache.lock files allocation.phase allocation.token) allocation.afterToken :=
     returned.trans (congrArg (fun value => EStateM.Result.ok value returnedAt) tableEq)
@@ -1470,7 +1475,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
         (fun kept _ => (kept preparedAuthority).owned) markerName decoded replay
     have repairedAuthority := repairFrame preparedAuthority
     have valid : state.Valid := ⟨rfl, rfl, repairedAuthority.ownerAttached.2.1, repairedAuthority.rootAttached.2.1,
-      ⟨_, dirCached repairedAuthority⟩, retained⟩
+      ⟨cache.captured, repairedAuthority.cacheRoot.1⟩, retained⟩
     have kept := retained.sealedFiles.trans current.readPrefix.refines.1.retained.sealedFiles.symm
     obtain ⟨protectedFiles, markerStorage, rootSettled⟩ :=
       preparedDurability.forReopenedWriter current.readPrefix.refines.1 valid rfl plan.targetEq entry.manifest rfl kept (atRoot repairedAuthority) (atLock repairedAuthority)
@@ -1512,10 +1517,11 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
     obtain ⟨handle, start, nextCache, keptBatch, opened, history, ledger, replay, nextStorage, stateEq, afterToken⟩ :=
       plan.installsLiteralRepairedWriter (allocation := allocation) (cache := refs) request cause
         (RawMarkedOpenInterpreter.assembles dir cache.lock files) valid rfl repairedAuthority.ownerAttached.1 phaseCache tokenCache
-        (compatible repairedAuthority) phaseEffects tokenEqual exactReturn observe visible settled live
+        ⟨cache.captured, repairedAuthority.cacheRoot⟩ phaseEffects tokenEqual exactReturn observe visible settled live
         (phaseStorage.weaken fun _ selected => NativeReadyState.crashPath_rootOrChild (state := state) selected)
         (tokenStorage.weaken fun _ selected => NativeReadyState.crashPath_rootOrChild (state := state) selected)
-        (fun other _ => congrFun phaseVisible other) (fun other _ => congrFun tokenVisible other)
+        (fun other named => phaseVisible other (by simpa only [keeperEq] using named))
+        (fun other named => tokenVisible other (by simpa only [keeperEq] using named))
     have sameDirectory : start.current.ready.state.session.directory = state.session.directory :=
       congrArg (fun next : NativeReadyState => next.session.directory) stateEq
     have lowerBound : ∀ offset ∈ state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset := by
@@ -1579,7 +1585,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       exact plan.layout.visible.symm.trans (exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm))
     have preparedBytes := (List.cons.inj (preservedBytes inode named)).1.trans exactBytes
     have valid : state.Valid := ⟨rfl, rfl, repairedAuthority.ownerAttached.2.1, repairedAuthority.rootAttached.2.1,
-      ⟨_, dirCached repairedAuthority⟩, retained⟩
+      ⟨cache.captured, repairedAuthority.cacheRoot.1⟩, retained⟩
     have noAlias (path : FilePath) (keep : path = (dir).file .walBoundary ∨ state.writeFramePath path) :
         (observe prepared).files.names path ≠ some inode := by
       have pathInDir : managedPath dir path :=
@@ -1598,7 +1604,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
       request cause (RawMarkedOpenInterpreter.assembles dir cache.lock files) retained rfl plan.targetEq entry.manifest rfl
       keepsSeals repairedAuthority.ownerAttached.1 repairedAuthority.ownerAttached.2.1 repairedAuthority.rootAttached.2.1
-      ⟨_, dirCached repairedAuthority⟩ phaseCache tokenCache (compatible repairedAuthority) phaseEffects tokenEqual exactReturn observe visible
+      phaseCache tokenCache ⟨cache.captured, repairedAuthority.cacheRoot⟩ phaseEffects tokenEqual exactReturn observe visible
       preparedDurability (atRoot repairedAuthority) (atLock repairedAuthority) (keeperInode := inode)
       (by simpa only [keeperPathEq] using keeperBound) (keeperEq.symm ▸ preparedBytes) keeperAtEntry
       ((congrArg WalSegment.bytes keeperEq).trans toTargetBytes) noAlias
@@ -1624,7 +1630,8 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       (fun _ => WalNamePresenceFrame.ofStorageFrame tokenStorage (fun start _ _ => .inr ⟨.walSegment start, rfl⟩))
       (phaseStorage.weaken (fun _ selected => NativeReadyState.crashPath_rootOrChild (state := state) selected))
       (tokenStorage.weaken (fun _ selected => NativeReadyState.crashPath_rootOrChild (state := state) selected))
-      (fun other _ => congrFun phaseVisible other) (fun other _ => congrFun tokenVisible other)
+      (fun other named => phaseVisible other (by simpa only [keeperEq] using named))
+      (fun other named => tokenVisible other (by simpa only [keeperEq] using named))
 
 /-- Carry the selected reboot entry through the failed opens, then
 interpret one literal successful open at the resulting heap. An earlier

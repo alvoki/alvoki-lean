@@ -39,7 +39,7 @@ theorem OpenReferenceAllocations.opensReadyWriter
     (cacheAtRepair : view.cacheAt repaired cache.directory cache.active cache.pending = state.cache)
     (cachePhase : CacheAllocationFrame view cache.directory cache.active cache.pending repaired allocation.afterPhase)
     (cacheToken : CacheAllocationFrame view cache.directory cache.active cache.pending allocation.afterPhase allocation.afterToken)
-    (rootInode : ∀ captured, state.cache.directory = some (captured, state.directorySlot, 0) →
+    (rootCache : ∃ captured, state.cache.directory = some (captured, state.directorySlot, 0) ∧
       captured.inode state.directorySlot.description = state.census.inode state.directorySlot.description)
     (phaseFrame : (observe repaired).Frames state.crashPath (observe allocation.afterPhase))
     (tokenFrame : (observe allocation.afterPhase).Frames state.crashPath (observe allocation.afterToken))
@@ -77,8 +77,8 @@ theorem OpenReferenceAllocations.opensReadyWriter
     ⟨census, cacheAt, physical, live, ?_⟩, rfl⟩
   intro literal found
   change view.directory allocation.afterToken cache.directory = some literal at found
-  obtain ⟨captured, atOpen⟩ := valid.captured
-  exact physical.bindsOpenCacheDirectory view cacheAt atOpen (rootInode captured atOpen) found
+  obtain ⟨_, atOpen, rootInode⟩ := rootCache
+  exact physical.bindsOpenCacheDirectory view cacheAt atOpen rootInode found
 
 /-- The old target fixes the previously committed history even when
 the keeper's physical bytes extend past its marker. -/

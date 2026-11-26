@@ -4219,6 +4219,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preservesWalNamesAfterAcknowledgement
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preservesWalNamesAfterCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.opensReadyWriter
+#check_axioms Alvoki.Storage.DiskSession.LiteralOpenAuthority.cacheRoot
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.samplesWal
 #check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selections.retryTargetAtReboot
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversAfterPublicationError

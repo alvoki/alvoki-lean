@@ -107,7 +107,8 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
       namespaceView root readScope entry repaired)
     (physical : source.ObservedAlignedRepairEffects (view := view) cache directory layout entry observe
       (fun atHeap => (inodes atHeap).visible))
-    (allocates : source.LiteralAllocationEffects view directory cache observe (fun atHeap => (inodes atHeap).visible))
+    (allocates : source.LiteralAllocationEffects view directory cache observe (fun atHeap => (inodes atHeap).visible)
+      layout.keeper.first)
     (protectedFiles : NativeReadyProtectedStorage
       (allocation.readyState writer directory cache.owner cache.rootSlot cache.directoryRef cache.activeRef cache.pendingRef
         phaseIdentity tokenIdentity) (observe seen.prepared).files)
@@ -132,14 +133,6 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
   let state := allocation.readyState writer directory cache.owner cache.rootSlot
     cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity
   obtain ⟨valid, authority, history, _, _, _, walEq, tableEq, _, tokenHeap, _, _, _, _, _, _⟩ := installed
-  have atRoot (captured : DescriptorInventory) (cached : state.cache.directory = some (captured, state.directorySlot, 0)) :
-      captured.inode state.directorySlot.description = state.census.inode state.directorySlot.description := by
-    have actual : state.cache.directory = some (cache.captured, cache.rootSlot, 0) := by
-      change (view.cacheAt repaired cache.directoryRef cache.activeRef cache.pendingRef).directory = _
-      simp only [OpenCloseHeapView.cacheAt, authority.directoryCell, Option.map_some, authority.rootHandle]
-    have same := congrArg Prod.fst (Option.some.inj (actual.symm.trans cached))
-    change cache.captured = captured at same
-    exact same ▸ authority.rootAttached.2.2.symm
   have activeKeeper : writer.wal.active = layout.keeper :=
     (congrArg WalSegmentImage.active walEq).trans keeper.symm
   have keeperBytes : (inodes entry).visible seen.inode = writer.wal.active.bytes := by
@@ -173,10 +166,11 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
     reads, _, writeEntry, emptyPins⟩ := allocation.opensReadyWriter valid
       (RawMarkedOpenInterpreter.assembles directory cache.lock files) refs exactReturn effects ptrEq
       replay bounded observe (fun atHeap => (inodes atHeap).visible) settled live rfl authority.ownerAttached.1 rfl
-      phaseCache tokenCache atRoot
+      phaseCache tokenCache ⟨cache.captured, authority.cacheRoot⟩
       (phaseFiles.weaken fun _ path => NativeReadyState.crashPath_rootOrChild (state := state) path)
       (tokenFiles.weaken fun _ path => NativeReadyState.crashPath_rootOrChild (state := state) path)
-      (fun inode _ => congrFun phaseVisible inode) (fun inode _ => congrFun tokenVisible inode)
+      (fun inode named => phaseVisible inode (by simpa only [OpenReferenceAllocations.readyState, activeKeeper] using named))
+      (fun inode named => tokenVisible inode (by simpa only [OpenReferenceAllocations.readyState, activeKeeper] using named))
   obtain ⟨sameTable, sameHeap⟩ := EStateM.Result.ok.inj (opened.symm.trans returned)
   have unchanged : previous.LedgerSuffix [] start.current :=
     ⟨by simpa using startHistory.trans carriedHistory, by simpa using submissions, by simpa using reads, by simp⟩
@@ -291,7 +285,7 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
         cache.ready view (fun atHeap => (observe atHeap).files.names) readBytes namespaceView root (managedPath dir)
         (observedOpenReadFrame view dir readScope cache observe) entry returnedAt table ∧
       (source.LiteralAlignedFinishEffects (view := view) cache dir layout entry observe →
-        source.LiteralAllocationEffects view dir cache observe readBytes →
+        source.LiteralAllocationEffects view dir cache observe readBytes layout.keeper.first →
         ∀ (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat),
         (view.files entry).image.directory.active = pair →
         (view.files entry).image.keeper.active = some wal.active.bytes →

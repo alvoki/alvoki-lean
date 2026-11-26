@@ -408,6 +408,9 @@ supply the observations used by the next open. For both errors, the first reboot
 old keeper’s accepted bytes. A frame on that single path carries them through earlier
 failed calls, cache admission, directory and seal reads, and the long keeper’s read and
 release. This argument requires each earlier failed call to preserve that keeper.
+The cache entry and the attached directory handle establish the root inode used by
+the returned writer. At phase and token allocation, only the named keeper needs a
+visible-byte frame. The durable managed-file frame is still required.
 The installation still uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
 [Recovery observations](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 · [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)

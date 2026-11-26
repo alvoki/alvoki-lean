@@ -36,9 +36,13 @@ entry and the recovery ledger. The same write and snapshot proof used by the
 grouped, late and checkpoint callers extends that ledger. It takes the next write’s
 observed return and local effects, and the snapshot token at that write’s return heap.
 
+For checkpoint and write recovery, the held directory handle identifies the
+cached root inode at installation. Allocating the phase and token needs to
+preserve visible bytes only for the inode named by the selected keeper.
+
 **Next obligation.** Supply the remaining read, cache and installation effects
 from the fixed production callbacks. The original write’s admitted old-or-whole
 target and incoming ledger must come from the same execution prefix. Further
 interrupted calls, mixed sessions and maintenance remain in the roadmap.
 
-**Verification baseline.** See commit `52dcba0a` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Verification baseline.** See commit `db6ba183` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
