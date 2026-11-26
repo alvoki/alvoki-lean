@@ -27,14 +27,16 @@ inode. An error before flock supplies the frame for this handoff.
 After a failed write or an interrupted recovery followed by power loss, the same
 rule constructs the retry entry from the files sampled in one namespace.
 
-For a public final directory fsync error, the second reboot can select the old or the
-replaced keeper. Under the scoped filesystem effects, both recover the same committed
-prefix and protected files. A failed keeper rename also preserves these disk choices.
+After a failed keeper rename or final directory fsync, the old or replacement inode
+can satisfy the same committed target at a second reboot. Under the local effects,
+the earlier successful root fsync after pruning settles the bounded WAL inventory,
+including gaps. The same sampled files now supply the observations used by both the
+successful and terminal open proofs.
 
-**Next obligation.** Carry the bounded WAL name inventory, including gaps, from the
-successful post-prune directory fsync through staging and cleanup to the second reboot.
-This supplies the scan's input on the chosen namespace. A successful scan also needs
-the local enumeration law covering every physically present later WAL name. The
+**Next obligation.** Carry the accepted durable bytes of the old keeper from the
+first reboot through the actual admission and read callbacks to the repair prefix.
+For an interruption before the post-prune barrier succeeds, determine which later
+WAL names can return on the next reboot. The
 remaining mixed sessions and maintenance cases are listed in the roadmap.
 
-**Verification baseline.** See commit `ed159f33` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Verification baseline.** See commit `c38806cd` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

@@ -321,36 +321,15 @@ variable {heap : Type} {view : OpenCloseHeapView heap FileImage} {directory : Di
 canonical name presence. A later rename may exchange the keeper inode
 without changing its membership in the selected namespace. -/
 theorem RawOpenRetryTrace.keepsCatalogAfterPruning
-    {entry beforeUnlinks afterUnlinks reached : heap} {first through : Nat}
-    (initial : wal.NamespaceWindow directory first through (names entry))
-    (firstCovered : first ≤ target.range.through) (cutoffCovered : target.range.through ≤ through)
+    {afterUnlinks reached : heap} {first through : Nat}
+    (pruned : ∀ upper, wal.NamespaceWindow directory first upper (names afterUnlinks))
+    (firstCovered : first ≤ target.range.through)
     (bounded : ∀ start ∈ wal.segments.map WalSegment.first, start ≤ target.range.through)
-    (beforePrune : ∀ start, first ≤ start → start ≤ target.range.through →
-      (names beforeUnlinks (directory.file (.walSegment start))).isSome =
-        (names entry (directory.file (.walSegment start))).isSome)
-    (later : ∀ start ∈ plan.newer, target.range.through < start)
-    (listed : ∀ start, target.range.through < start →
-      ((names beforeUnlinks (directory.file (.walSegment start))).isSome = true ↔ start ∈ plan.newer))
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (sync : Array FilePath → EStateM IO.Error heap Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (unlink : ∀ {ordinal before after result}, ordinal ∈ plan.newer →
-      remove (directory.file (.walSegment ordinal)) before = .ok result after →
-      RunCollection.ownedUnlinkResult result = .ok () →
-      names after (directory.file (.walSegment ordinal)) = none ∧
-      ∀ start, start ≠ ordinal → names after (directory.file (.walSegment start)) =
-        names before (directory.file (.walSegment start)))
-    (returned : ((plan.newer.map Step.unlink).forM
-      (performPaths directory plan remove throw write sync rename)) beforeUnlinks = .ok () afterUnlinks)
     (afterPrune : ∀ start, first ≤ start → (names reached (directory.file (.walSegment start))).isSome =
       (names afterUnlinks (directory.file (.walSegment start))).isSome)
     (laterEmpty : (view.files reached).image.later.visible = []) :
     wal.NamespaceWindow directory first through (names reached) ∧
       RawOpenRetryTrace.LaterWalAt view directory target names reached := by
-  have selected := (initial.restrict (Nat.le_refl first) cutoffCovered).frame beforePrune
-  have pruned := selected.afterAcceptedUnlinks bounded later (fun start beyond => (listed start beyond).mp)
-    remove write sync rename unlink returned
   have complete upper := (pruned upper).frame (fun start lower _ => afterPrune start lower)
   refine ⟨complete through, ?_⟩
   intro start
@@ -675,27 +654,45 @@ local notation "callbacks" => source.keeperCallbacks.withFileReads source.fileCa
 local notation "stageWrite" => LongKeeperStageCallbacks.stage source.stage seed.pendingRef (AlignedKeeperCacheCallbacks.modifyPending callbacks)
 local notation "groupSync" => AlignedKeeperCacheCallbacks.syncPaths callbacks (DiskDirectory.path dir) seed.directoryRef seed.activeRef seed.pendingRef
 
+local notation "unlinkLoop" => List.forM (List.map Step.unlink layout.boundedPlan.newer)
+  (performPaths dir layout.boundedPlan source.remove throw stageWrite groupSync source.rename)
+
 omit extents in
-/-- Move the selected catalog through the literal reader, the accepted
-suffix pass, and the common stage sync. Only the reached suffix error
-and the two cleanup paths can extend this name frame beyond that stage. -/
+private theorem settlesPrunedWindow {unlinked pruned : heap}
+    (live : catalog unlinked)
+    (namesKept : ∀ start, retryNames pruned ((dir).file (.walSegment start)) =
+      retryNames unlinked ((dir).file (.walSegment start)))
+    (settled : ∀ names ∈ (storage pruned).crashNames, ∀ file,
+      names ((dir).file file) = retryNames pruned ((dir).file file)) :
+    state.writer.wal.SettledNamespaceWindow dir firstOffset through (storage pruned) := by
+  have reached := live.frame (fun start _ _ => congrArg Option.isSome (namesKept start))
+  exact ⟨reached, fun names allowed =>
+    reached.frame (fun start _ _ => congrArg Option.isSome (settled names allowed (.walSegment start)))⟩
+
+/-- During repair, the directory slot belongs to the census of the
+actual open attempt. -/
+abbrev NativeReadyState.repairDirectoryScope (state : NativeReadyState) (current : DescriptorInventory)
+    (cached : DescriptorSlot) : NativeReadyState :=
+  { state with census := current, directorySlot := cached }
+
+omit extents in
+/-- Read and prune the live catalog once. The same accepted unlink loop
+supports the returned live catalog and settlement at the actual
+post-prune root barrier. -/
 private theorem MarkedDirectoryReadReport.carriesPrunedCatalog
     (listing : MarkedDirectoryReadReport prepared source.directoryCalls slotOf)
     {checkpoint : Option (PackedTable × UInt64)}
-    {beforeKeeper afterKeeper authorized pruned synced reached : heap}
+    {beforeKeeper afterKeeper authorized unlinked synced reached : heap}
     (seals : MarkedSealReadChain seed source.fileCalls chronology.seals listing.reached beforeKeeper)
     (selected : SelectedIntegrityCheckpoint published.durable (view.files entry).image.directory.active.manifest checkpoint)
-    (prune : ((layout.boundedPlan.newer.map Step.unlink ++ [Step.syncPruned]).forM
-      (performPaths dir layout.boundedPlan source.remove throw stageWrite groupSync source.rename)) authorized = .ok () pruned)
+    (unlinks : unlinkLoop authorized = .ok () unlinked)
     (dispose : RawOpenCacheDisposal (admitted := raw) seed reached)
     (finalized : RawOpenErrorLockFinalization view dir source.release raw.lock admission.owner dispose.reached)
     (readerNames : source.fileCalls.ScopeFrames walNameFrame)
     (listingNames : source.directoryCalls.ScopeFrames dir walNameFrame)
     (keeperNames : walNameFrame beforeKeeper afterKeeper)
     (authorizationNames : walNameFrame afterKeeper authorized)
-    (namesThroughStage : ∀ {unlinked}, ((layout.boundedPlan.newer.map Step.unlink).forM
-      (performPaths dir layout.boundedPlan source.remove throw stageWrite groupSync source.rename)) authorized = .ok () unlinked →
-      groupSync #[(dir).path] unlinked = .ok () pruned → walNameFrame unlinked synced)
+    (namesThroughStage : walNameFrame unlinked synced)
     (namesOfError : walNameFrame synced reached)
     (namesOfCleanup : dispose.ScopeFrames finalized walNameFrame)
     (firstCovered : firstOffset ≤ target.range.through)
@@ -711,9 +708,8 @@ private theorem MarkedDirectoryReadReport.carriesPrunedCatalog
       ∀ start, start ≠ ordinal →
         retryNames after ((dir).file (.walSegment start)) = retryNames before ((dir).file (.walSegment start)))
     (initial : catalog entry) (gone : (view.files finalized.reached).image.later.visible = []) :
-    catalog finalized.reached ∧ RawOpenRetryTrace.LaterWalAt view dir target retryNames finalized.reached := by
-  obtain ⟨unlinked, unlinks, suffixSync⟩ :=
-    returnedWalUnlinksAndBarrier dir layout.boundedPlan source.remove stageWrite groupSync source.rename prune
+    catalog finalized.reached ∧ RawOpenRetryTrace.LaterWalAt view dir target retryNames finalized.reached ∧
+    catalog unlinked := by
   have trans {first middle last : heap} (before : walNameFrame first middle)
       (after : walNameFrame middle last) : walNameFrame first last := fun start => (after start).trans (before start)
   obtain ⟨throughListing, throughSeals⟩ :=
@@ -721,17 +717,24 @@ private theorem MarkedDirectoryReadReport.carriesPrunedCatalog
   have admission := raw.framesThroughCache seed (frame := walNameFrame) trans namesOfCleanup.admission
   have beforePrune := trans (trans admission (trans throughListing throughSeals))
     (trans keeperNames authorizationNames)
-  have afterPrune := trans (namesThroughStage unlinks suffixSync)
+  have atAuthorization := (initial.restrict (Nat.le_refl firstOffset) cutoffCovered).frame
+    (fun start _ _ => beforePrune start)
+  have prunedWindow := atAuthorization.afterAcceptedUnlinks (names := retryNames) bounded later
+    (fun start beyond => (listed start beyond).mp)
+    source.remove stageWrite groupSync source.rename unlinkNames unlinks
+  have afterPrune := trans namesThroughStage
     (trans namesOfError (namesOfCleanup.afterWorker trans))
-  exact RawOpenRetryTrace.keepsCatalogAfterPruning (view := view) (target := target) (names := retryNames)
-    initial firstCovered cutoffCovered bounded (fun start _ _ => beforePrune start) later listed
-    source.remove stageWrite groupSync source.rename unlinkNames unlinks (fun start _ => afterPrune start) gone
+  obtain ⟨next, suffix⟩ := RawOpenRetryTrace.keepsCatalogAfterPruning (view := view) (target := target)
+    (names := retryNames) prunedWindow firstCovered bounded (fun start _ => afterPrune start) gone
+  exact ⟨next, suffix, prunedWindow through⟩
 
 set_option maxHeartbeats 1200000 in
 /-- Feed the actual repair stopped by the final directory fsync into
 the same fixed opener's cleanup and failed-call prefix. With the
 protected child frame, any later sampled reboot re-enters that same
-target, whether it names the old keeper or the trimmed replacement. -/
+target, whether it names the old keeper or the trimmed replacement.
+The scoped catalog frames preserve presence and absence through that
+same sample, starting at the returned post-prune root barrier. -/
 theorem MarkedWalExtentReports.extendsFinalSyncError
     {operations : MarkedRetryChunkOperations
       (SyncHandleRouting.Cache (DescriptorInventory × DescriptorSlot × Nat)) dir layout}
@@ -860,11 +863,30 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
             (fun path => path = (dir).file (.walSegment layout.keeper.first) ∨
               state.selectedRetryPath path ∧ path ≠ (dir).path) (storage after)) →
         RawOpenRetryTrace.KeeperCrashChoices dir target (storage finalized.reached) ∧
-        ∀ {rebooted}, RawWriteRebootEntry state view storage retryNames visible finalized.reached rebooted →
+        ∀ {rebooted} (seen : RawWriteRebootEntry state view storage retryNames visible finalized.reached rebooted),
           (view.files first).image.Valid target → selectedWal first →
           target.pair.manifest = state.writer.target.pair.manifest →
           RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
-            TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = []) := by
+            TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
+            (AlignedKeeperCacheCallbacks.CachedRootEffects callbacks
+                (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached)
+                view storage visible seed.directoryRef seed.handle →
+              (∀ {unlinked}, unlinkLoop authorized = .ok () unlinked →
+                CachedKeeperReplacementRoot (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached)
+                  view seed.directoryRef seed.handle unlinked ∧
+                retryNames unlinked (dir).path = some ((view.descriptors afterKeeper).inode admission.cached.description)) →
+              (∀ {before result issued}, (callbacks).getDirectory seed.directoryRef before = .ok result issued →
+                result = view.directory before seed.directoryRef) →
+              (stageWrite ((dir).file .stagedWal) layout.keeper.bytes pruned = .ok () recorded →
+                WalNamePresenceFrame dir firstOffset through (storage pruned) (storage recorded)) →
+              (groupSync #[((dir).file .stagedWal)] recorded = .ok () synced →
+                WalNamePresenceFrame dir firstOffset through (storage recorded) (storage synced)) →
+              ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some handle) issued →
+                WalNamePresenceFrame dir firstOffset through (storage renamedHeap) (storage issued)) →
+              dispose.ScopeFrames finalized (fun before after =>
+                WalNamePresenceFrame dir firstOffset through (storage before) (storage after)) →
+              seen.DurableReset →
+              RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset through rebooted)) := by
   have prunedFrame := framesReturnedPrune dir layout.boundedPlan source.remove stageWrite groupSync source.rename
     retryFrame (fun atHeap => NativeReadyState.SelectedRetryFrame.refl state (storage atHeap) (visible atHeap))
     (fun first last => first.trans last) (unlink := by
@@ -891,6 +913,15 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       ((namesOfLoad start).trans (namesOfRename start))
   have laterBound (ordinal : Nat) (member : ordinal ∈ layout.boundedPlan.newer) : target.range.through < ordinal :=
     sameTarget ▸ pruning.later ordinal member
+  obtain ⟨unlinked, unlinks, suffixSync⟩ :=
+    returnedWalUnlinksAndBarrier dir layout.boundedPlan source.remove stageWrite groupSync source.rename prune
+  have retainCatalog (atEntry : catalog entry)
+      (gone : (view.files finalized.reached).image.later.visible = []) :=
+    listing.carriesPrunedCatalog seals selected unlinks dispose finalized readerNames listingNames keeperNames
+      (namesOfDirectorySync authorize)
+      (fun start =>
+        (namesOfStageSync start).trans ((namesOfStageWrite start).trans ((namesOfDirectorySync suffixSync) start)))
+      errorNames namesOfCleanup firstCovered cutoffCovered bounded laterBound listed unlinkNames atEntry gone
   rw [startFiles] at trace
   obtain ⟨returned, selectedEffects, finalImage⟩ := extents.extendsFailedRepair before sameTarget seals selected valid following accepted ordered sameStat flat marked
     keeperRead readerFrames listingFrames keeperFrame repair trace carried (sameTarget ▸ kept) dispose sameDisposal owner
@@ -899,11 +930,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       have gone : (view.files finalized.reached).image.later.visible = [] := by
         rw [image, workerImage]
         exact (issue.visibleAfterRename effective).2.1
-      obtain ⟨nextWindow, nextSuffix⟩ := listing.carriesPrunedCatalog
-        seals selected prune dispose finalized readerNames listingNames keeperNames (namesOfDirectorySync authorize)
-        (fun _ sync start => (namesOfStageSync start).trans ((namesOfStageWrite start).trans ((namesOfDirectorySync sync) start)))
-        errorNames namesOfCleanup firstCovered cutoffCovered bounded
-        laterBound listed unlinkNames initial.1 gone
+      obtain ⟨nextWindow, nextSuffix, _⟩ := retainCatalog initial.1 gone
       exact ⟨nextWindow, finalKeeper, finalDurability, nextSuffix⟩)
   obtain ⟨sameName, sameBytes⟩ := keeperStorage _ rfl
   have afterCleanup := (keeperCleanup _ (congrArg (fun start => (dir).file (.walSegment start))
@@ -965,18 +992,27 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     cleanupChildren.settledFrom (fun prior possible path child => immutableAtError prior possible path child.1 child.2)
       _ seen.chosen path ⟨selectedPath, notRoot⟩
   have actualDurability := ((selectedEffects.preserves initial).2.2.2 priorStorage).2.2.1
-  exact seen.selectsRetryAfterRepair (sameTarget ▸ targetAtKeeper) sameManifest actualDurability
-    immutableAtReboot survivesCleanup
-
-/-- Maintain the prior writer's file footprint while identifying the
-cached descriptor allocated by this actual retry. -/
-private def repairRootScope (state : NativeReadyState) (current : DescriptorInventory) (cached : DescriptorSlot) :
-    NativeReadyState := { state with census := current, directorySlot := cached }
+  obtain ⟨nextEntry, vacant, empty⟩ := seen.selectsRetryAfterRepair (sameTarget ▸ targetAtKeeper)
+    sameManifest actualDurability immutableAtReboot survivesCleanup
+  refine ⟨nextEntry, vacant, empty, ?_⟩
+  intro rootEffects unlinkedRoot readsRoot stageWriteCatalog stageSyncCatalog loadCatalog cleanupCatalog reset
+  obtain ⟨heldRoot, namedRoot⟩ := unlinkedRoot unlinks
+  obtain ⟨_, _, _, liveNames, settledNames, _⟩ := rootEffects.framesRootSync namedRoot heldRoot readsRoot suffixSync
+  have atEntry := ((before.preserves initial).2.2.2 priorStorage).1
+  have atPrune := settlesPrunedWindow (retainCatalog atEntry later.1).2.2 liveNames settledNames
+  have throughStage := (stageWriteCatalog written).trans (stageSyncCatalog persisted)
+  have throughRename := throughStage.trans (inodeMove.walNames oldNamed settled firstOffset through)
+  have throughError := (throughRename.trans (loadCatalog loaded)).trans (WalNamePresenceFrame.ofRootSync errorEffect.2.1)
+  have throughCleanup := throughError.trans (cleanupCatalog.afterWorker (fun earlier later => earlier.trans later))
+  have window := (throughCleanup.preservesNamespaceWindow atPrune).2 _ seen.chosen
+  exact seen.startsRecoveryObservations reset nextEntry window
 
 /-- The actual failed replacement rename, including a reported move
 before EIO, enters the shared failed-call fold with the original
 selected catalog, the observed keeper, and the reached cleanup heap.
-The crash candidates at that heap can still name the old keeper. -/
+The crash candidates at that heap can still name the old keeper.
+The reboot can use the same bounded catalog as the final fsync
+failure, since either rename outcome preserves WAL name presence. -/
 theorem MarkedWalExtentReports.extendsLongRenameError
     (before : RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath selectedWal prior)
     (sameTarget : layout.target = target)
@@ -1026,9 +1062,9 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     (currentReady : state.Valid) (targetAtKeeper : target.first = state.writer.wal.active.first)
     (buffered : heap → IO.FS.Handle → ByteArray)
     (physical : source.stage.ReplacementPrefixStorageEffects callbacks
-      (repairRootScope state (view.descriptors afterKeeper) admission.cached) view storage visible buffered
+      (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible buffered
       seed.directoryRef seed.pendingRef seed.handle)
-    (root : CachedKeeperReplacementRoot (repairRootScope state (view.descriptors afterKeeper) admission.cached)
+    (root : CachedKeeperReplacementRoot (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached)
       view seed.directoryRef seed.handle afterKeeper)
     (rootNamed : retryNames afterKeeper (dir).path = some ((view.descriptors afterKeeper).inode admission.cached.description))
     (oldNamed : retryNames afterKeeper ((dir).file (.walSegment target.first)) = some old)
@@ -1036,9 +1072,9 @@ theorem MarkedWalExtentReports.extendsLongRenameError
       source.remove ((dir).file (.walSegment ordinal)) before = .ok result after →
       RunCollection.ownedUnlinkResult result = .ok () →
       (storage before).Frames state.crashPath (storage after) ∧
-      (CachedKeeperReplacementRoot (repairRootScope state (view.descriptors afterKeeper) admission.cached)
+      (CachedKeeperReplacementRoot (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached)
         view seed.directoryRef seed.handle before →
-        CachedKeeperReplacementRoot (repairRootScope state (view.descriptors afterKeeper) admission.cached)
+        CachedKeeperReplacementRoot (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached)
           view seed.directoryRef seed.handle after))
     (records : ∀ {file before after},
       (callbacks).modifyPending seed.pendingRef (pushPending ((dir).file .stagedWal) file) before = .ok () after →
@@ -1052,7 +1088,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     (listingPendingFrames : source.directoryCalls.ScopeFrames dir
       (fun before after => view.pending after seed.pendingRef = view.pending before seed.pendingRef))
     (liveEffects : source.stage.ReplacementPrefixLiveEffects callbacks
-      (repairRootScope state (view.descriptors afterKeeper) admission.cached) view storage visible
+      (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible
       seed.directoryRef seed.pendingRef seed.handle source.remove)
     (keeper : RawOpenRetryTrace.KeeperAt view (dir) target retryNames visible afterKeeper)
     (failed : source.rename ((dir).file .stagedWal)
@@ -1097,8 +1133,21 @@ theorem MarkedWalExtentReports.extendsLongRenameError
             (fun path => path = (dir).file (.walSegment target.first) ∨
               state.selectedRetryPath path ∧ path ≠ (dir).path) (storage after)) →
         RawOpenRetryTrace.KeeperCrashChoices dir target (storage finalized.reached) ∧
-        ∀ names ∈ (storage finalized.reached).crashNames, ∀ path, state.selectedRetryPath path → path ≠ (dir).path →
-          names path = retryNames finalized.reached path) := by
+        (∀ names ∈ (storage finalized.reached).crashNames, ∀ path, state.selectedRetryPath path → path ≠ (dir).path →
+          names path = retryNames finalized.reached path) ∧
+        ∀ {rebooted} (seen : RawWriteRebootEntry state view storage retryNames visible finalized.reached rebooted),
+          (view.files first).image.Valid target → selectedWal first →
+          target.pair.manifest = state.writer.target.pair.manifest →
+          RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
+            TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
+            ((stageWrite ((dir).file .stagedWal) layout.keeper.bytes pruned = .ok () recorded →
+                WalNamePresenceFrame dir firstOffset through (storage pruned) (storage recorded)) →
+              (groupSync #[((dir).file .stagedWal)] recorded = .ok () synced →
+                WalNamePresenceFrame dir firstOffset through (storage recorded) (storage synced)) →
+              dispose.ScopeFrames finalized (fun before after =>
+                WalNamePresenceFrame dir firstOffset through (storage before) (storage after)) →
+              seen.DurableReset →
+              RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset through rebooted)) := by
   have path : layout.boundedPlan.keeper = target.first := congrArg Target.first sameTarget
   have payload : layout.keeper.bytes = target.trimmed := congrArg Target.trimmed sameTarget
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
@@ -1126,15 +1175,15 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     rw [layout.boundedPlan_extractKeeper]
     exact written
   obtain ⟨durableFrame, rootFrame, _, authorizedScope, stageScope, oldAtRename, childrenSettled,
-    issued, file, slot, replacement, _, _, apart, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, protects⟩ :=
+    ⟨prunedNames, prunedSettled⟩, issued, file, slot, replacement, _, _, apart, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, protects⟩ :=
     source.stage.prunedAndSyncedReplacement callbacks
-      (repairRootScope state (view.descriptors afterKeeper) admission.cached) view storage visible buffered
+      (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible buffered
       seed.directoryRef seed.activeRef seed.pendingRef source.remove source.rename seed.handle physical
       layout.boundedPlan (path.trans targetAtKeeper) root rootNamed
-      (by simpa only [repairRootScope, path] using oldNamed) away unlinkStorage records readsPending readsRoot
+      (by simpa only [NativeReadyState.repairDirectoryScope, path] using oldNamed) away unlinkStorage records readsPending readsRoot
       authorize unlinks suffixSync writtenPrefix persisted
   have renamedOld : retryNames synced ((dir).file (.walSegment target.first)) = some old := by
-    simpa only [repairRootScope, path] using oldAtRename
+    simpa only [NativeReadyState.repairDirectoryScope, path] using oldAtRename
   have keeperPath : state.crashPath ((dir).file (.walSegment target.first)) :=
     NativeReadyState.crashPath_iff_write.mpr (.inr (.inl
       (congrArg (fun start => (dir).file (.walSegment start)) targetAtKeeper)))
@@ -1178,24 +1227,18 @@ theorem MarkedWalExtentReports.extendsLongRenameError
       apart stagedLive stagedDurable atRename failed observation
   rw [startFiles] at trace
   have errorNames : walNameFrame synced reached := fun start => (renameNames start start).live start (Nat.le_refl _) (Nat.le_refl _)
-  obtain ⟨returned, effects, _⟩ := extents.extendsFailedRepair before sameTarget seals selected valid following accepted ordered sameStat flat marked
+  have retainCatalog (atEntry : catalog entry)
+      (gone : (view.files finalized.reached).image.later.visible = []) :=
+    listing.carriesPrunedCatalog seals selected unlinks dispose finalized readerNames listingNames keeperNames
+      (fun start => congrArg Option.isSome (authorizedScope start))
+      (fun start => congrArg Option.isSome (stageScope start))
+      errorNames namesOfCleanup firstCovered cutoffCovered bounded later listed unlinkNames atEntry gone
+  obtain ⟨returned, effects, finalImage⟩ := extents.extendsFailedRepair before sameTarget seals selected valid following accepted ordered sameStat flat marked
     keeperRead readerFrames listingFrames keeperFrame repair (sameTarget.symm ▸ trace) framed liveKeeper dispose
     sameDisposal owner finalized scope keeperCleanup (fun initial => initial.2.2.1) (by
       intro image finalKeeper finalDurability initial
       have gone : (view.files finalized.reached).image.later.visible = [] := image.symm ▸ laterGone.1
-      obtain ⟨nextWindow, nextSuffix⟩ := listing.carriesPrunedCatalog
-        seals selected prune dispose finalized readerNames listingNames keeperNames
-        (fun start => congrArg Option.isSome (authorizedScope start))
-        (by
-          intro other loop _ start
-          have same : other = unlinked := by
-            rw [unlinks] at loop
-            cases loop
-            rfl
-          subst other
-          exact congrArg Option.isSome (stageScope start))
-        errorNames namesOfCleanup firstCovered cutoffCovered bounded
-        later listed unlinkNames initial.1 gone
+      obtain ⟨nextWindow, nextSuffix, _⟩ := retainCatalog initial.1 gone
       exact ⟨nextWindow, finalKeeper, finalDurability, nextSuffix⟩)
   refine ⟨returned, effects, ?_⟩
   intro acceptedBefore cleanupSurvivors
@@ -1205,7 +1248,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
   have renamedEffect := (observation failed stagedNamed renamedOld apart).1
   have atError := renamedEffect.acceptsKeeperSurvivors oldChoices stagedDurable acceptedReady
   have cleanup := cleanupSurvivors.afterWorker (fun earlier later => earlier.trans later)
-  refine ⟨atError.frame cleanup (.inl rfl), ?_⟩
+  have keeperAfterCleanup := atError.frame cleanup (.inl rfl)
   have immutableAtStage (names : FilePath → Option Nat) (possible : names ∈ (storage synced).crashNames)
       (path : FilePath) (protectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
       names path = retryNames synced path := by
@@ -1216,9 +1259,26 @@ theorem MarkedWalExtentReports.extendsLongRenameError
   have immutableAtError := renamedEffect.keepsSelectedChildren currentReady targetAtKeeper immutableAtStage
   let immutableChild : FilePath → Prop := fun path => state.selectedRetryPath path ∧ path ≠ (dir).path
   have cleanupChildren := cleanup.toFrames.weaken (scope := immutableChild) (fun _ child => .inr child)
-  intro names survives path selectedPath notRoot
-  exact cleanupChildren.settledFrom (fun prior possible path child => immutableAtError prior possible path child.1 child.2)
-    names survives path ⟨selectedPath, notRoot⟩
+  have immutableAfterCleanup (names : FilePath → Option Nat) (survives : names ∈ (storage finalized.reached).crashNames)
+      (path : FilePath) (selectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
+      names path = retryNames finalized.reached path :=
+    cleanupChildren.settledFrom (fun prior possible path child => immutableAtError prior possible path child.1 child.2)
+      names survives path ⟨selectedPath, notRoot⟩
+  refine ⟨keeperAfterCleanup, immutableAfterCleanup, ?_⟩
+  intro rebooted seen initial priorStorage sameManifest
+  have durableAtEnd := ((effects.preserves initial).2.2.2 priorStorage).2.2.1
+  obtain ⟨nextEntry, vacant, empty⟩ := seen.selectsRetryAfterRepair targetAtKeeper sameManifest durableAtEnd
+    (immutableAfterCleanup _ seen.chosen) keeperAfterCleanup
+  refine ⟨nextEntry, vacant, empty, ?_⟩
+  intro stageWriteCatalog stageSyncCatalog cleanupCatalog reset
+  have atEntry := ((before.preserves initial).2.2.2 priorStorage).1
+  have gone : (view.files finalized.reached).image.later.visible = [] := finalImage.symm ▸ laterGone.1
+  have atPrune := settlesPrunedWindow (retainCatalog atEntry gone).2.2 prunedNames prunedSettled
+  have throughStage := (stageWriteCatalog written).trans (stageSyncCatalog persisted)
+  have throughError := throughStage.trans (renameNames firstOffset through)
+  have throughCleanup := throughError.trans (cleanupCatalog.afterWorker (fun earlier later => earlier.trans later))
+  have window := (throughCleanup.preservesNamespaceWindow atPrune).2 _ seen.chosen
+  exact seen.startsRecoveryObservations reset nextEntry window
 
 end SelectedRetry
 

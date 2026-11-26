@@ -376,9 +376,12 @@ requires the selected immutable child names on that map to agree with the reache
 For the final directory fsync error, the proof takes the post-prune settlement and
 synced-stage bytes, follows the rename, and transports those facts through the reported
 descriptor load and cleanup. An effective final barrier settles the replacement. An
-ineffective one preserves a predecessor map, which may name the old keeper. Both feed
-the same retry entry. A subsequent literal scan also needs the presence or absence of
-each canonical WAL name throughout its bounded replay window.
+ineffective one preserves a predecessor map, which may name the old keeper. Both establish a retry entry for the same committed target.
+The earlier successful directory sync after pruning settles present and absent WAL names over
+the replay window. Scoped name-presence frames across staging, rename and cleanup carry
+that window to the same reboot sample. The failed rename and failed final sync now both
+supply the observations used by the next open. The repair prefix still needs accepted
+durable bytes for the old keeper when its read completes.
 The installation still uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
 [Recovery observations](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 · [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)

@@ -145,6 +145,29 @@ private theorem keepsKeeperStage.carries {state : NativeReadyState} {view : Open
   ⟨frame.attached, frame.scratch.trans stage.2.1, fun path selected present =>
     stage.2.2 path selected ((frame.storage.visible path selected).1.symm.trans present)⟩
 
+/-- A cached directory sync can settle child names only while its
+handle is still attached to the inode named by the database root. -/
+structure AlignedKeeperCacheCallbacks.CachedRootEffects
+    (calls : AlignedKeeperCacheCallbacks heap) (state : NativeReadyState)
+    (view : OpenCloseHeapView heap image) (observe : heap → CheckpointStorageObservation)
+    (visible : heap → Nat → ByteArray) (cached : IO.Ref (Option IO.FS.Handle)) (root : IO.FS.Handle) where
+  loadRoot : ∀ {before issued}, calls.getDirectory cached before = .ok (some root) issued →
+    CachedKeeperReplacementRoot state view cached root before →
+    CachedKeeperReplacementRoot state view cached root issued ∧
+    (observe before).Frames (fun path => state.crashPath path ∨ path = state.session.directory.file .stagedWal)
+      (observe issued) ∧
+    SameLiveWalNames state.session.directory (observe before) (observe issued) ∧
+    ∀ inode, (observe before).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+      some inode → visible issued inode = visible before inode
+  rootSync : ∀ {issued after}, calls.sync root issued = .ok () after →
+    CachedKeeperReplacementRoot state view cached root issued →
+    (observe issued).files.names state.session.directory.path = some (state.census.inode state.directorySlot.description) →
+    WalRootSyncEffect state.session.directory true (observe issued) (observe after) ∧
+      (observe issued).Frames (· = state.session.directory.path) (observe after) ∧
+      CachedKeeperReplacementRoot state view cached root after ∧
+      ∀ inode, (observe issued).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
+        some inode → visible after inode = visible issued inode
+
 /-- Local namespace, descriptor and byte laws through the synced
 replacement stage. Each premise is keyed to its own raw callback. -/
 structure LongKeeperStageCallbacks.ReplacementPrefixStorageEffects
@@ -153,7 +176,8 @@ structure LongKeeperStageCallbacks.ReplacementPrefixStorageEffects
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (buffered : heap → IO.FS.Handle → ByteArray)
     (cached : IO.Ref (Option IO.FS.Handle)) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
-    (root : IO.FS.Handle) where
+    (root : IO.FS.Handle)
+    extends calls.CachedRootEffects state view observe visible cached root where
   acquire : ∀ before, stage.AcquisitionFrames (state.session.directory.file .stagedWal) before
     (fun first last => (observe first).Frames state.crashPath (observe last) ∧
       (CachedKeeperReplacementRoot state view cached root first → CachedKeeperReplacementRoot state view cached root last) ∧
@@ -192,22 +216,6 @@ structure LongKeeperStageCallbacks.ReplacementPrefixStorageEffects
     RegularFileSyncEffect inode [visible before inode] (observe before) (observe after) ∧
       visible after inode = visible before inode ∧
       (CachedKeeperReplacementRoot state view cached root before → CachedKeeperReplacementRoot state view cached root after)
-  loadRoot : ∀ {before issued}, calls.getDirectory cached before = .ok (some root) issued →
-    CachedKeeperReplacementRoot state view cached root before →
-    CachedKeeperReplacementRoot state view cached root issued ∧
-    (observe before).Frames (fun path => state.crashPath path ∨ path = state.session.directory.file .stagedWal)
-      (observe issued) ∧
-    SameLiveWalNames state.session.directory (observe before) (observe issued) ∧
-    ∀ inode, (observe before).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
-      some inode → visible issued inode = visible before inode
-  rootSync : ∀ {issued after}, calls.sync root issued = .ok () after →
-    CachedKeeperReplacementRoot state view cached root issued →
-    (observe issued).files.names state.session.directory.path = some (state.census.inode state.directorySlot.description) →
-    WalRootSyncEffect state.session.directory true (observe issued) (observe after) ∧
-      (observe issued).Frames (· = state.session.directory.path) (observe after) ∧
-      CachedKeeperReplacementRoot state view cached root after ∧
-      ∀ inode, (observe issued).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
-        some inode → visible after inode = visible issued inode
 
 private abbrev replacementLiveFiles {heap : Type} (observe : heap → CheckpointStorageObservation)
     (visible : heap → Nat → ByteArray) (atHeap : heap) : CheckpointSurvivingFiles :=
@@ -310,14 +318,14 @@ structure LongKeeperStageCallbacks.ReplacementStorageEffects
 /-- A successful cached-root barrier frames the existing file bytes and
 names. Children may acquire new crash choices, so only the root's own
 parent binding uses a joint before-to-after crash frame. -/
-private theorem replacementRootFrame
-    {stage : LongKeeperStageCallbacks heap} {calls : AlignedKeeperCacheCallbacks heap}
+theorem AlignedKeeperCacheCallbacks.CachedRootEffects.framesRootSync
+    {calls : AlignedKeeperCacheCallbacks heap}
     {state : NativeReadyState} {view : OpenCloseHeapView heap image}
     {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
-    {buffered : heap → IO.FS.Handle → ByteArray} {cached : IO.Ref (Option IO.FS.Handle)}
+    {cached : IO.Ref (Option IO.FS.Handle)}
     {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
     {root : IO.FS.Handle}
-    (effects : stage.ReplacementPrefixStorageEffects calls state view observe visible buffered cached pending root)
+    (effects : calls.CachedRootEffects state view observe visible cached root)
     {active : IO.Ref (Option (FilePath × IO.FS.Handle))} {before after : heap}
     (rootNamed : (observe before).files.names state.session.directory.path =
       some (state.census.inode state.directorySlot.description))
@@ -406,6 +414,9 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     (observe synced).files.names (state.session.directory.file (.walSegment plan.keeper)) = some old ∧
     (∀ names ∈ (observe synced).crashNames, ∀ file, state.crashPath (state.session.directory.file file) →
       names (state.session.directory.file file) = (observe synced).files.names (state.session.directory.file file)) ∧
+    (SameLiveWalNames state.session.directory (observe unlinked) (observe pruned) ∧
+      ∀ names ∈ (observe pruned).crashNames, ∀ file,
+        names (state.session.directory.file file) = (observe pruned).files.names (state.session.directory.file file)) ∧
     ∃ (issued : heap) (file : IO.FS.Handle) (slot : DescriptorSlot) (replacement : Nat),
       calls.sync file issued = .ok () synced ∧
       attachedReadSlot view file slot replacement issued ∧ replacement ≠ old ∧
@@ -431,7 +442,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     rw [keeper]
     exact NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
   obtain ⟨authFiles, authParent, authRoot, authNames, _, _, authLoaded, authSynced⟩ :=
-    replacementRootFrame effects rootNamed heldRoot readsDirectory firstRoot
+    effects.toCachedRootEffects.framesRootSync rootNamed heldRoot readsDirectory firstRoot
   let frames (_ : Unit) (atHeap : heap) := (observe authorized).Frames state.crashPath (observe atHeap) ∧
     CachedKeeperReplacementRoot state view cached root atHeap
   have ⟨removes, unlinkedRoot⟩ : frames () unlinked := foldReturnedWalUnlinks dir plan remove write group rename frames
@@ -440,7 +451,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       exact ⟨before.1.trans unchanged, retained before.2⟩) unlinks
   have prunedRootName := (removes.visible _ rootScope).1.trans ((authFiles _ rootScope).1.trans rootNamed)
   obtain ⟨prunedFiles, prunedParent, prunedRoot, prunedNames, settled, _, pruneLoaded, pruneSynced⟩ :=
-    replacementRootFrame effects prunedRootName unlinkedRoot readsDirectory pruneRoot
+    effects.toCachedRootEffects.framesRootSync prunedRootName unlinkedRoot readsDirectory pruneRoot
   have prunedFootprint := authFiles.trans (removes.visible.trans prunedFiles)
   have prunedParentFrame := authParent.trans
     ((removes.weaken (scope := (· = dir.path)) (fun _ same => same.symm ▸ rootScope)).trans prunedParent)
@@ -493,7 +504,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
         congrFun fileSync.names (dir.file (.walSegment start)))))))))
   refine ⟨prunedFootprint.trans toSynced.visible, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
     oldAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
-    consumed, file, slot, replacement, stageSync, syncedStage.1, distinct, stagedBinding, stageBytes, fileSync,
+    ⟨prunedNames, settled⟩, consumed, file, slot, replacement, stageSync, syncedStage.1, distinct, stagedBinding, stageBytes, fileSync,
     syncedVisible, ?_⟩
   intro liveEffects pendingAtEntry
   obtain ⟨authReadLive, authReadPending⟩ := liveEffects.loadRoot authLoaded
@@ -610,7 +621,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
   obtain ⟨authorized, unlinked, pruned, staged, synced, renamed, firstRoot, unlinks, pruneRoot,
     wroteStage, syncedStage, moved, finalGroup⟩ :=
     finishBoundedMarkedOpen_replacementReached dir plan physicalSize remove write group rename longer returned
-  obtain ⟨atSync, parentAtSync, heldAtSync, authNames, stageNames, oldAtRename, _,
+  obtain ⟨atSync, parentAtSync, heldAtSync, authNames, stageNames, oldAtRename, _, _,
     issued, _, _, replacement, _, _, distinct, stagedBinding, stagedBytes, fileSync, syncedVisible, _⟩ :=
     stage.prunedAndSyncedReplacement calls state view observe visible buffered cached active pending remove rename
       root effects.toReplacementPrefixStorageEffects plan keeper heldRoot protectedFiles.directoryBound oldNamed laterOutside unlink records readsPending
