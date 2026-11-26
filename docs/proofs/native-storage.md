@@ -381,6 +381,13 @@ through the public error carries checkpoint durability to the next sample.
 `startsRecoveryAfterFailedPrune` composes those facts under the local file effects.
 [Prune scope](../../lean/Alvoki/Storage/Disk/NativeMarkedFirstUnlinkError.lean) · [Two-reboot theorem](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
+For an immediate successful open after that sample, the named directory observation
+supplies its root and canonical WAL bindings. The common open proof derives the
+returned handle, storage entry and recovery ledger. The shared write and snapshot
+proof extends that ledger given the next write’s observed return and local effects
+and the snapshot token at that return heap.
+[Literal open](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) · [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
+
 An independent failure before flock also exposes its local file frame, including the keeper
 binding in place when the call began. For a second power loss after a replacement, one surviving
 directory map can still name the old inode. Its live bytes before the rename and the synced

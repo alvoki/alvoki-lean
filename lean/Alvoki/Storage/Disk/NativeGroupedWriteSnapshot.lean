@@ -310,10 +310,11 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     obtain ⟨write, token⟩ := nextCall handle reopened refs opened old physical
     obtain ⟨schedules, writeReturn, nextBatch, _, written, last, reference, afterEvents, _, _, reachedWrite, snapshots,
       wrote, replay, agrees, sourceCalls⟩ :=
-      reopened.acknowledgesAndReadsLatest writes.appender writes.stager writes.syncer view refs inodes runs storage
-        inode buffered nextRequest writes.lookup writes.rename nextNonempty physical write read token
-    exact ⟨handle, reopened, written, last, refs, nextBatch, afterEvents, reference, opened, physical, coversNext, retainedKeeper,
-      nextWindow, schedules, writeReturn, reachedWrite, snapshots, through.append (recoveredLedger.append wrote),
-      old ▸ replay, agrees, sourceCalls⟩
+      reopened.acknowledgesAndReadsLatest (through.append recoveredLedger) writes.appender writes.stager
+        writes.syncer view refs inodes runs storage inode buffered nextRequest writes.lookup writes.rename
+        nextNonempty physical write read token
+    refine ⟨handle, reopened, written, last, refs, nextBatch, afterEvents, reference, opened, physical, coversNext, retainedKeeper,
+      nextWindow, schedules, writeReturn, reachedWrite, snapshots, ?_, old ▸ replay, agrees, sourceCalls⟩
+    simpa only [List.append_assoc, List.singleton_append] using wrote
 
 end Alvoki.Storage.DiskSession

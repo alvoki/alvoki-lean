@@ -304,10 +304,10 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
   intro α inodes runs inode buffered nextRequest sequence writeHeap sameVisible nextNonempty seen read token
   obtain ⟨_, writeReturn, nextBatch, _, written, last, reference, events, _, _, writtenAt, snapshots, wrote,
     nextReplay, agrees, _⟩ :=
-    start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
+    start.acknowledgesAndReadsLatest ledger appender stager syncer view nextCache inodes runs storage inode buffered
       nextRequest lookup rename nextNonempty (sameVisible ▸ physical) seen read token
   exact ⟨writeReturn, nextBatch, written, last, events, reference, writtenAt, snapshots,
-    ledger.append wrote, history ▸ nextReplay, agrees⟩
+    wrote, history ▸ nextReplay, agrees⟩
 
 /-- After the late error, a nonempty sequence of actual failed opens
 may end the execution. The marker selected at reboot fixes the committed

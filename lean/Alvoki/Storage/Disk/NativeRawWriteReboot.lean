@@ -93,6 +93,22 @@ private theorem DirectoryReadNamespace.mem_laterWalStarts
   · rintro ⟨beyond, named⟩
     exact ⟨⟨_, (namespaceView.namesExact _ _).mpr named, parseWalSegmentName_render start⟩, beyond⟩
 
+/-- The reboot image with the directory observer fixed. The next
+literal open can use this observer for its directory stream. -/
+abbrev RawWriteRebootImage {heap : Type} (state : NativeReadyState) (view : OpenCloseHeapView heap FileImage)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray) (rebooted : heap)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) : Prop :=
+  let directory := state.session.directory
+  let pair := rebootBindings directory (names rebooted) (visible rebooted)
+  ∃ later : List Nat,
+    names rebooted directory.path = some (namespaceView.modelObject root) ∧
+    (∀ start, (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
+      names rebooted (directory.file (.walSegment start))) ∧
+    (∀ range, pair.walRange = some range → later = namespaceView.laterWalStarts root range.through) ∧
+    (view.files rebooted).image = state.writer.files.crash pair
+      ((names rebooted (directory.file (.walSegment state.writer.wal.active.first))).map (visible rebooted))
+      later
+
 /-- One reported reboot selects a joint durable map at the reached failed
 write. The new observations are made at the rebooted heap. The file
 projection records the settled pair, keeper and visible later names, with
@@ -103,16 +119,8 @@ structure RawWriteRebootEntry {heap : Type} (state : NativeReadyState) (view : O
   chosen : names rebooted ∈ (storage failed).crashNames
   sampled : ∀ path, checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest path →
     ∀ inode, names rebooted path = some inode → visible rebooted inode ∈ (storage failed).files.bytes inode
-  image : let directory := state.session.directory
-    let pair := rebootBindings directory (names rebooted) (visible rebooted)
-    ∃ (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (later : List Nat),
-      names rebooted directory.path = some (namespaceView.modelObject root) ∧
-      (∀ start, (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        names rebooted (directory.file (.walSegment start))) ∧
-      (∀ range, pair.walRange = some range → later = namespaceView.laterWalStarts root range.through) ∧
-      (view.files rebooted).image = state.writer.files.crash pair
-        ((names rebooted (directory.file (.walSegment state.writer.wal.active.first))).map (visible rebooted))
-        later
+  image : ∃ (namespaceView : DirectoryReadNamespace) (root : DeviceInode),
+    RawWriteRebootImage state view names visible rebooted namespaceView root
   noDescriptors : (view.descriptors rebooted).slots = []
   released : (view.files rebooted).owners = (view.files failed).owners.set (state.session.directory.file .lock) none
 
@@ -120,15 +128,23 @@ variable {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap
   {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
   {visible : heap → Nat → ByteArray} {entry failed rebooted : heap}
 
+theorem RawWriteRebootImage.activePair {namespaceView : DirectoryReadNamespace} {root : DeviceInode}
+    (sample : RawWriteRebootImage state view names visible rebooted namespaceView root) :
+    (view.files rebooted).image.directory.active =
+      ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
+        (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)⟩ := by
+  obtain ⟨_, _, _, _, image⟩ := sample
+  rw [image]
+  rfl
+
 /-- Both selected bindings come from the same reboot namespace. -/
 theorem RawWriteRebootEntry.activePair
     (seen : RawWriteRebootEntry state view storage names visible failed rebooted) :
     (view.files rebooted).image.directory.active =
       ⟨(names rebooted (state.session.directory.file .manifest)).map (visible rebooted),
         (names rebooted (state.session.directory.file .walBoundary)).map (visible rebooted)⟩ := by
-  obtain ⟨_, _, _, _, _, _, image⟩ := seen.image
-  rw [image]
-  rfl
+  obtain ⟨_, _, sample⟩ := seen.image
+  exact sample.activePair
 
 /-- The later list contains exactly the canonical WAL names in the sampled
 namespace whose starts exceed the marker of the selected retry. -/
@@ -138,9 +154,10 @@ theorem RawWriteRebootEntry.laterNames
     start ∈ (view.files rebooted).image.later.visible ↔
       target.range.through < start ∧
       ∃ inode, names rebooted (state.session.directory.file (.walSegment start)) = some inode := by
-  obtain ⟨namespaceView, root, later, _, children, projected, image⟩ := seen.image
+  obtain ⟨namespaceView, root, sample⟩ := seen.image
   let pair := rebootBindings state.session.directory (names rebooted) (visible rebooted)
-  have exactPair : target.pair = pair := selected.trans seen.activePair
+  have exactPair : target.pair = pair := selected.trans sample.activePair
+  obtain ⟨later, _, children, projected, image⟩ := sample
   have range : pair.walRange = some target.range := by
     rw [← exactPair]
     exact target.decoded
@@ -217,8 +234,9 @@ theorem RawWriteRebootEntry.selectsSampledRetry
     RawOpenRetryTrace.SelectedEntry view state target names visible rebooted ∧
     TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
     (view.descriptors rebooted).slots = [] := by
-  obtain ⟨_, _, _, _, _, _, image⟩ := seen.image
-  have selected : (view.files rebooted).image.directory.active = target.pair := seen.activePair.trans pair.symm
+  obtain ⟨_, _, sample⟩ := seen.image
+  have selected : (view.files rebooted).image.directory.active = target.pair := sample.activePair.trans pair.symm
+  obtain ⟨_, _, _, _, image⟩ := sample
   have settled : (view.files rebooted).image.directory.crashImages = [target.pair] := by
     rw [image]
     exact congrArg (fun pair => [pair]) pair.symm

@@ -30,10 +30,15 @@ at the next reboot. Both paths use the same successful post-prune fsync and
 staged-file sync. A subsequent successful open that observes the repaired
 binding and exact trimmed bytes retains that inode.
 
-**Next obligation.** Join the second reboot to a successful literal open, the
-next acknowledged write and its snapshot, carrying the pending write’s original
-history through both reboots. Each reboot still requires its physical sample and
-reset laws. Mixed sessions, maintenance and the remaining interruption points are
-in the roadmap.
+An immediate successful open can use the second sample’s selected entry and
+bounded catalog. The common open proof supplies the returned table, its storage
+entry and the recovery ledger. The same write and snapshot proof used by the
+grouped, late and checkpoint callers extends that ledger. It takes the next write’s
+observed return and local effects, and the snapshot token at that write’s return heap.
+
+**Next obligation.** Supply the remaining read, cache and installation effects
+from the fixed production callbacks. The original write’s admitted old-or-whole
+target and incoming ledger must come from the same execution prefix. Further
+interrupted calls, mixed sessions and maintenance remain in the roadmap.
 
 **Verification baseline.** See commit `52dcba0a` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
