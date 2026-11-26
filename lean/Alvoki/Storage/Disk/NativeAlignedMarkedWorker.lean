@@ -24,12 +24,13 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {fileCalls : MarkedTemporaryReadCalls heap} {directoryCalls : MarkedDirectoryReadCalls heap stream}
   {prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls}
   {slotOf : heap → stream → DescriptorSlot} {listing : MarkedDirectoryReadReport prepared directoryCalls slotOf}
-  {beforeKeeper afterKeeper reached : heap}
+  {beforeKeeper afterKeeper : heap}
 
 /-- Run the guarded marked worker on the opened cache. The keeper
 callback and the chosen repair start at their actual reached heaps.
 Both the raw worker and the read-only comparison use the same prepared
-checkpoint and WAL payloads. -/
+checkpoint and WAL payloads. The selected finisher determines the outward
+result and reached heap on both success and failure. -/
 theorem MarkedWalExtentReports.recoversFromOpenedCacheWith
     (extents : MarkedWalExtentReports prepared listing)
     (seals : MarkedSealReadChain seed fileCalls chronology.seals listing.reached beforeKeeper)
@@ -51,8 +52,9 @@ theorem MarkedWalExtentReports.recoversFromOpenedCacheWith
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (sync : Array FilePath → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {result : EStateM.Result IO.Error heap Unit}
     (repaired : finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
-      remove write sync rename afterKeeper = .ok () reached)
+      remove write sync rename afterKeeper = result)
     (bootstrap : EStateM IO.Error heap Reopened) :
     ∃ opened,
       recoverSegmentedWalWith
@@ -61,7 +63,9 @@ theorem MarkedWalExtentReports.recoversFromOpenedCacheWith
         (reopenMarkedBoundedWithCachedExtents directory (fileCalls.readOptional directory)
           fileCalls.runSize fileCalls.runPrefix directoryCalls.run (MarkedWalExtentReports.inspect fileCalls)
           fileCalls.seal readKeeper remove write sync rename)
-        bootstrap seed.afterPending = .ok opened reached ∧
+        bootstrap seed.afterPending = (match result with
+          | .ok () ended => .ok opened ended
+          | .error cause ended => .error cause ended) ∧
       reads.walReads.prepare reads.reads.readPrefix (admission.reached, admission.held) =
         .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) := by
   let readWal := fun watermark length =>
@@ -101,7 +105,12 @@ theorem MarkedWalExtentReports.recoversFromOpenedCacheWith
   rw [guarded]
   simp only [Bind.bind, EStateM.bind, actual]
   dsimp only [settle]
-  simp only [Bind.bind, EStateM.bind, repaired, Pure.pure, EStateM.pure]
+  cases result with
+  | ok value ended =>
+    cases value
+    simp only [Bind.bind, EStateM.bind, repaired, Pure.pure, EStateM.pure]
+  | error cause ended =>
+    simp only [Bind.bind, EStateM.bind, repaired]
 
 end
 

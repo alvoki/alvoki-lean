@@ -59,9 +59,9 @@ def errorScope (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
 
 /-- Project the direct unlock return with the cache's directory slot
 disposed and the acquired lock still live. -/
-def Returned (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
+def ReturnedAt (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
     (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
-    (cause : IO.Error) : Prop :=
+    (cause : IO.Error) (workerImage : FileImage) : Prop :=
     ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
@@ -77,22 +77,28 @@ def Returned (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
       (view.handle seen.afterDisposal admitted.lock).2.1 = admission.owner ∧
       view.descriptors seen.reached = (view.descriptors before).afterDrops [admission.cached.closeEvent] ∧
       admission.cached ∈ (view.descriptors before).slots ∧ admission.owner ∈ (view.descriptors seen.reached).slots ∧
-      (view.files seen.reached).image = retry.image ∧
+      (view.files seen.reached).image = workerImage ∧
       (TryLockObserves (view.files seen.reached).owners directory (.ok true) ↔ seen.unlockResult = .ok ()) ∧
       (view.files seen.reached).owners (directory.file .lock) = match seen.unlockResult with
         | .ok () => none
         | .error _ => some admission.owner.description
 
+/-- In the read-only case the worker retains the input image. -/
+abbrev Returned (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
+    (cause : IO.Error) : Prop := seen.ReturnedAt recover cause retry.image
+
 /-- The report and fixed held schedule determine the error at the
 outer unlock return. The final lock-handle drop is a later effect. -/
-theorem returns (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
+theorem returnsAt (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
     (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
     (cause : IO.Error)
     (failed : ∀ cache, recover directory admitted.lock cache seed.afterPending = .error cause before)
-    (held : view.files before = admission.held) : seen.Returned recover cause := by
+    {workerImage : FileImage} (image : (view.files before).image = workerImage)
+    (held : (view.files before).owners = admission.held.owners) : seen.ReturnedAt recover cause workerImage := by
   obtain ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, _⟩ := seed.installs
   have rawLock := congrArg Prod.fst (seen.lock.trans (congrArg Prod.snd (admitted.sameLock.trans admitted.appendHandle)))
-  have files := seen.files.trans held
+  have owner := (congrArg LockedFileState.owners seen.files).trans held
   refine ⟨cacheOpen, makeCache, cache, isOpen, source, initialized, uses, ?_, rawLock,
     seen.returnedCensus.trans seen.census, seen.cacheLive, seen.returnedCensus.symm ▸ seen.ownerLive, ?_, ?_, ?_⟩
   · rw [admitted.startsHeldWorker init seed initialized (seen.errorScope recover)]
@@ -104,12 +110,21 @@ theorem returns (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
     | ok value =>
       cases value
       simp only [reported, diagnostic]
-  · rw [seen.returnedFiles, files]
-    cases seen.unlockResult <;> simp [filesAfterUnlock, CensusOpenAdmissionReports.held]
-  · rw [seen.returnedFiles, files]
-    cases seen.unlockResult <;> simp [filesAfterUnlock, TryLockObserves, CensusOpenAdmissionReports.held, LockOwners.set]
-  · rw [seen.returnedFiles, files]
-    cases seen.unlockResult <;> simp [filesAfterUnlock, CensusOpenAdmissionReports.held, LockOwners.set]
+  · rw [seen.returnedFiles]
+    cases seen.unlockResult <;> simp [filesAfterUnlock, seen.files, image]
+  · rw [seen.returnedFiles]
+    cases seen.unlockResult <;> simp [filesAfterUnlock, TryLockObserves, owner, CensusOpenAdmissionReports.held, LockOwners.set]
+  · rw [seen.returnedFiles]
+    cases seen.unlockResult <;> simp [filesAfterUnlock, owner, CensusOpenAdmissionReports.held, LockOwners.set]
+
+/-- A failed read-only worker retains the admitted file image. -/
+theorem returns (seen : RawOpenCacheDisposal (admitted := admitted) seed before)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap α)
+    (cause : IO.Error)
+    (failed : ∀ cache, recover directory admitted.lock cache seed.afterPending = .error cause before)
+    (held : view.files before = admission.held) : seen.Returned recover cause :=
+  seen.returnsAt recover cause failed (by simpa [CensusOpenAdmissionReports.held] using congrArg LockedFileState.image held)
+    (congrArg LockedFileState.owners held)
 
 end RawOpenCacheDisposal
 

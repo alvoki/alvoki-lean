@@ -301,6 +301,61 @@ variable {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : Na
 
 local notation "state" => current.state
 
+/-- The selected repair input and replay derived from one admitted
+history. Both a newly selected reboot and a reached repair retry can
+supply the file image for this plan. -/
+def NativeReadPosition.SelectedWriteLayout (batch : List WAL.Write) (target : Target) (image : FileImage) : Prop :=
+    ∃ history, (history = prior ∨ history = prior ++ batch) ∧
+      let wal := (state).writer.wal.appendSelectedView image.directory.active history
+      wal.ReadLayout history ∧ wal.Valid history ∧
+      ∃ layout : CanonicalKeeperLayout image history,
+        layout.target = target ∧ layout.target.first = (state).writer.wal.active.first ∧ layout.keeper = wal.active ∧
+        layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark ∧
+        selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
+          some (layout.first, (wal.readDescriptors layout.range.watermark).map WalSegment.first) ∧
+        Prepared image layout.target layout.plan ∧
+        SelectedIntegrityCheckpoint (state).writer.published.durable image.directory.active.manifest (state).writer.checkpoint ∧
+        (state).writer.published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+          image.directory.active.manifest ∧ WAL.OrdinalsFrom 1 history ∧
+        PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads history ∧
+        ∀ read ∈ current.reads, read.BoundedBy history.length
+
+/-- Rebuild the bounded reader and replay at an image that implements
+an already selected target. Repair may change the keeper and later names. -/
+theorem NativeReadPosition.preparesSelectedWrite
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch (state).writer.installed.table rows = some (batch, table))
+    (fits : (state).writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {target : Target} (admitted : BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target)
+    {image : FileImage} (observed : image.Valid target)
+    (manifest : target.pair.manifest = (state).writer.target.pair.manifest) :
+    current.SelectedWriteLayout batch target image := by
+  have imageManifest := (congrArg DirectoryPublication.Bindings.manifest observed.selected).trans manifest
+  obtain ⟨valid, priorHistory, replay⟩ := current.readPrefix.refines
+  let ready := valid.retained
+  have oldRange : (state).writer.wal.directory.active.walRange =
+      some ⟨(state).writer.target.range.watermark, (state).writer.history.length⟩ := by
+    rw [ready.walPair, (state).writer.target.decoded, ← ready.resumed.through]
+  have sameManifest : target.pair.manifest = (state).writer.wal.directory.active.manifest := by
+    rw [ready.walPair]
+    exact manifest
+  have checkpoint : (state).writer.published.AcceptsVersioned (state).writer.history.length.toUInt64
+      (WAL.Boundary.CheckpointRepresentsPrefix (state).writer.history) (state).writer.wal.directory.active.manifest := by
+    rw [ready.walPair]
+    exact ready.resumed.accepted
+  obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
+  have committed : (state).writer.history.length = (state).writer.installed.table.committed.toNat :=
+    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
+  have count := NativeReadyState.preparedWalCount valid prepared
+  obtain ⟨history, allowed, _, layoutValid, walValid, layout, targetEq, _, first, exactKeeper,
+    descriptors, offsets, plan, accepted, ordered, _⟩ :=
+    selectedBatchReopenLayout ready.layout ready.valid oldRange ready.resumed.ordered committed prepared
+      (count.symm ▸ fits) checkpoint admitted sameManifest observed.selected observed.keeper observed.later
+  have selectedHistory := allowed.imp (·.trans priorHistory) (·.trans (congrArg (· ++ batch) priorHistory))
+  obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded selectedHistory ordered
+  exact ⟨history, selectedHistory, layoutValid, walValid, layout, targetEq, first, exactKeeper, descriptors, offsets, plan,
+    imageManifest.symm ▸ ready.resumed.selected, accepted, ordered, pending, bounded⟩
+
 /-- Project the chosen durable manifest, marker and keeper into the
 bounded reader's file image. The logical image keeps the immutable
 sealed files, and the raw reader separately checks their names and
@@ -323,39 +378,11 @@ theorem NativeReadPosition.preparesWriteReboot
     let image := (state).writer.files.crash
       ⟨(names (directory.file .manifest)).map contents, (names (directory.file .walBoundary)).map contents⟩
       ((names (directory.file (.walSegment (state).writer.wal.active.first))).map contents) later
-    ∃ history, (history = prior ∨ history = prior ++ batch) ∧
-      let wal := (state).writer.wal.appendSelectedView image.directory.active history
-      wal.ReadLayout history ∧ wal.Valid history ∧
-      ∃ layout : CanonicalKeeperLayout image history,
-        layout.target = target ∧ layout.target.first = (state).writer.wal.active.first ∧ layout.keeper = wal.active ∧
-        layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark ∧
-        selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
-          some (layout.first, (wal.readDescriptors layout.range.watermark).map WalSegment.first) ∧
-        Prepared image layout.target layout.plan ∧
-        SelectedIntegrityCheckpoint (state).writer.published.durable image.directory.active.manifest (state).writer.checkpoint ∧
-        (state).writer.published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
-          image.directory.active.manifest ∧ WAL.OrdinalsFrom 1 history ∧
-        PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads history ∧
-        ∀ read ∈ current.reads, read.BoundedBy history.length := by
+    current.SelectedWriteLayout batch target image := by
   intro directory image
   have pair : image.directory.active = target.pair := selectedPair.symm
   have manifest := old.selectedWriteManifest frame names chosen contents manifestBytes
   have imageManifest : image.directory.active.manifest = (state).writer.target.pair.manifest := manifest
-  obtain ⟨valid, priorHistory, replay⟩ := current.readPrefix.refines
-  let ready := valid.retained
-  have oldRange : (state).writer.wal.directory.active.walRange =
-      some ⟨(state).writer.target.range.watermark, (state).writer.history.length⟩ := by
-    rw [ready.walPair, (state).writer.target.decoded, ← ready.resumed.through]
-  have sameManifest : target.pair.manifest = (state).writer.wal.directory.active.manifest := by
-    rw [ready.walPair, ← pair]
-    exact imageManifest
-  have checkpoint : (state).writer.published.AcceptsVersioned (state).writer.history.length.toUInt64
-      (WAL.Boundary.CheckpointRepresentsPrefix (state).writer.history) (state).writer.wal.directory.active.manifest := by
-    rw [ready.walPair]
-    exact ready.resumed.accepted
-  obtain ⟨_, refined, represented⟩ := ready.resumed.canonical
-  have committed : (state).writer.history.length = (state).writer.installed.table.committed.toNat :=
-    represented.committed_count.symm.trans (congrArg UInt64.toNat refined.committed).symm
   have keeperValid : image.keeper.Valid target.Accepts := by
     refine ⟨by simp [image, FileImage.crash, Publication.Image.settled], keeper, ?_⟩
     intro bytes member
@@ -365,15 +392,9 @@ theorem NativeReadPosition.preparesWriteReboot
     intro listed member first present
     have same : listed = later := by simpa [image, FileImage.crash, LaterNames.settled] using member
     exact beyond first (same ▸ present)
-  have count := NativeReadyState.preparedWalCount valid prepared
-  obtain ⟨history, allowed, _, layoutValid, walValid, layout, targetEq, _, first, exactKeeper,
-    descriptors, offsets, plan, accepted, ordered, _⟩ :=
-    selectedBatchReopenLayout ready.layout ready.valid oldRange ready.resumed.ordered committed prepared
-      (count.symm ▸ fits) checkpoint admitted sameManifest pair keeperValid laterValid
-  have selectedHistory := allowed.imp (·.trans priorHistory) (·.trans (congrArg (· ++ batch) priorHistory))
-  obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded selectedHistory ordered
-  exact ⟨history, selectedHistory, layoutValid, walValid, layout, targetEq, first, exactKeeper, descriptors, offsets, plan,
-    imageManifest.symm ▸ ready.resumed.selected, accepted, ordered, pending, bounded⟩
+  have observed : image.Valid target := ⟨pair, congrArg (fun chosen => [chosen]) pair, keeperValid, laterValid⟩
+  exact current.preparesSelectedWrite prepared fits admitted observed
+    ((congrArg DirectoryPublication.Bindings.manifest pair.symm).trans imageManifest)
 
 end
 

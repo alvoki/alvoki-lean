@@ -9,11 +9,12 @@ variable {heap : Type} {view : OpenCloseHeapView heap FileImage} {directory : Di
   {calls : RawOpenAdmissionCallbacks heap} {init : OpenSyncCacheCallbacks heap}
   {release : IO.FS.Handle → heap → heap} {input : FilePath} {entry : heap}
 
-/-- A held read-only rejection whose caller sees the finalized result.
-The entry census and files are those at this actual raw heap. -/
+/-- A held rejection whose caller sees the finalized result. The
+worker image defaults to the input image for a read-only attempt. -/
 structure RawFinalizedOpenAttempt (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
     (calls : RawOpenAdmissionCallbacks heap) (init : OpenSyncCacheCallbacks heap)
-    (release : IO.FS.Handle → heap → heap) (input : FilePath) (entry : heap) where
+    (release : IO.FS.Handle → heap → heap) (input : FilePath) (entry : heap)
+    (workerImage : FileImage := (view.files entry).image) where
   admission : CensusOpenAdmissionReports input directory (view.descriptors entry) (view.files entry)
   admitted : RawOpenAdmissionReport admission view calls entry
   seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock
@@ -21,13 +22,14 @@ structure RawFinalizedOpenAttempt (view : OpenCloseHeapView heap FileImage) (dir
   disposed : RawOpenCacheDisposal (admitted := admitted) seed beforeCleanup
   recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap DiskTable
   cause : IO.Error
-  rejected : disposed.Returned recover cause
+  rejected : disposed.ReturnedAt recover cause workerImage
   workerInodes : (view.descriptors beforeCleanup).inode = (view.descriptors entry).inode
   finalized : RawOpenErrorLockFinalization view directory release admitted.lock admission.owner disposed.reached
 
 namespace RawFinalizedOpenAttempt
 
-variable (seen : RawFinalizedOpenAttempt view directory calls init release input entry)
+variable {workerImage : FileImage}
+  (seen : RawFinalizedOpenAttempt view directory calls init release input entry workerImage)
 
 def diagnostic : IO.Error := seen.disposed.diagnostic seen.cause
 
@@ -46,18 +48,35 @@ theorem returns :
       finishFailedOpen (calls.runOpen input init makeCache (seen.disposed.errorScope seen.recover))
         release seen.admitted.lock entry = .error seen.diagnostic seen.reached ∧
       (view.descriptors seen.reached).inode = (view.descriptors entry).inode ∧
-      (view.files seen.reached).image = (view.files entry).image ∧
+      (view.files seen.reached).image = workerImage ∧
       (TryLockObserves (view.files seen.reached).owners directory (.ok true) ↔
         seen.disposed.unlockResult = .ok () ∨
           (view.descriptors seen.reached).references seen.admission.owner.description = []) := by
   obtain ⟨cacheOpen, makeCache, _, isOpen, source, _, _, ran, census, files, vacant⟩ :=
-    seen.disposed.returnsAfterLockFinalization seen.recover seen.cause seen.rejected seen.finalized
+    seen.disposed.returnsAfterLockFinalizationAt seen.recover seen.cause seen.rejected seen.finalized
   refine ⟨cacheOpen, makeCache, isOpen, source, ran, ?_, files, vacant⟩
   change (view.descriptors seen.finalized.reached).inode = (view.descriptors entry).inode
   rw [census]
   exact seen.workerInodes
 
 end RawFinalizedOpenAttempt
+
+/-- Classify the exact failed worker return, then let the same cache and
+lock finalizers expose the worker's reached file image to the caller. -/
+def RawFinalizedOpenAttempt.fromWorkerError
+    {admission : CensusOpenAdmissionReports input directory (view.descriptors entry) (view.files entry)}
+    (admitted : RawOpenAdmissionReport admission view calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view init admitted.afterFlock) {before : heap}
+    (disposed : RawOpenCacheDisposal (admitted := admitted) seed before)
+    (recover : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → EStateM IO.Error heap DiskTable)
+    (cause : IO.Error)
+    (failed : ∀ cache, recover directory admitted.lock cache seed.afterPending = .error cause before)
+    (owner : (view.files before).owners = admission.held.owners)
+    (workerInodes : (view.descriptors before).inode = (view.descriptors entry).inode)
+    (finalized : RawOpenErrorLockFinalization view directory release admitted.lock admission.owner disposed.reached) :
+    RawFinalizedOpenAttempt view directory calls init release input entry (view.files before).image :=
+  ⟨admission, admitted, seed, before, disposed, recover, cause, disposed.returnsAt recover cause failed rfl owner,
+    workerInodes, finalized⟩
 
 /-- An ordinary admission error before a lock handle is returned.
 This route records failures whose local effects leave the tracked file
