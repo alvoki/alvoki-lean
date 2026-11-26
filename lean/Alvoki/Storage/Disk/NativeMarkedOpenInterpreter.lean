@@ -116,6 +116,208 @@ theorem FailedCalls.append {source : RawMarkedOpenInterpreter heap stream} {firs
 
 end RawMarkedOpenInterpreter
 
+/-- The admissible part of the managed namespace is chosen by the actual
+successful calls. The prefix retains the heap of every primitive. -/
+theorem _root_.Alvoki.Storage.DiskTable.withOpenAdmission_reachedSuccess
+    {heap handle result : Type} {input : FilePath} {entry reached : heap} {value : result}
+    (realPath : FilePath → EStateM IO.Error heap FilePath)
+    (lookup : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    (openAppend : FilePath → EStateM IO.Error heap handle)
+    (acquire : DiskDirectory → handle → EStateM IO.Error heap result)
+    (returned : DiskTable.withOpenAdmission input realPath lookup openAppend acquire entry = .ok value reached) :
+    ∃ (directory : DiskDirectory) (lock : handle) (lockMetadata : Option IO.FS.Metadata)
+      (resolved checked probed locked : heap),
+      DiskDirectory.openWith realPath input entry = .ok directory resolved ∧
+      optionalMetadataWith (lookup (directory.file .wal)) resolved = .ok none checked ∧
+      optionalMetadataWith (lookup (directory.file .lock)) checked = .ok lockMetadata probed ∧
+      (∀ metadata, lockMetadata = some metadata → (metadata.type == .file && metadata.numLinks == 1) = true) ∧
+      openAppend (directory.file .lock) probed = .ok lock locked ∧ acquire directory lock locked = .ok value reached := by
+  simp only [DiskTable.withOpenAdmission, Bind.bind, EStateM.bind, rejectFlatWalWith] at returned
+  cases resolved : DiskDirectory.openWith realPath input entry with
+  | error cause failed => simp [resolved] at returned
+  | ok directory afterPath =>
+    cases flat : optionalMetadataWith (lookup (directory.file .wal)) afterPath with
+    | error cause failed => simp [resolved, flat] at returned
+    | ok existing afterFlat =>
+      cases existing with
+      | some metadata =>
+        simp [resolved, flat, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+      | none =>
+        cases lockProbe : optionalMetadataWith (lookup (directory.file .lock)) afterFlat with
+        | error cause failed => simp [resolved, flat, lockProbe, Pure.pure, EStateM.pure] at returned
+        | ok lockMetadata afterProbe =>
+          have safe : ∀ metadata, lockMetadata = some metadata →
+              (metadata.type == .file && metadata.numLinks == 1) = true := by
+            intro metadata supplied
+            rw [supplied] at lockProbe
+            cases checked : (metadata.type == .file && metadata.numLinks == 1)
+            · simp [resolved, flat, lockProbe, checkPrivateRegularWith, checked, Pure.pure, EStateM.pure,
+                throw, throwThe, MonadExceptOf.throw, EStateM.throw, EStateM.bind] at returned
+            · rfl
+          cases opened : openAppend (directory.file .lock) afterProbe with
+          | error cause failed =>
+            cases lockMetadata with
+            | none => simp [resolved, flat, lockProbe, opened, Pure.pure, EStateM.pure, EStateM.bind] at returned
+            | some metadata =>
+              have regular := safe metadata rfl
+              simp [resolved, flat, lockProbe, opened, checkPrivateRegularWith, regular,
+                Pure.pure, EStateM.pure, EStateM.bind] at returned
+          | ok lock afterOpen =>
+            have ran : acquire directory lock afterOpen = .ok value reached := by
+              cases lockMetadata with
+              | none =>
+                simpa [resolved, flat, lockProbe, opened, Pure.pure, EStateM.pure, EStateM.bind] using returned
+              | some metadata =>
+                have regular := safe metadata rfl
+                simpa [resolved, flat, lockProbe, opened, checkPrivateRegularWith, regular,
+                  Pure.pure, EStateM.pure, EStateM.bind] using returned
+            exact ⟨directory, lock, lockMetadata, afterPath, afterFlat, afterProbe, afterOpen, rfl, flat, lockProbe,
+              safe, opened, ran⟩
+
+/-- A failure of locking or of the held computation always returns an
+error. A successful return thus retains both issued heaps. -/
+theorem openWithLock_reachedSuccess {heap value : Type}
+    (flock : EStateM IO.Error heap Bool) (already : Unit → IO.Error)
+    (unlock : Unit → EStateM IO.Error heap Unit) (run : Unit → EStateM IO.Error heap value)
+    {entry reached : heap} {answer : value}
+    (returned : openWithLock flock already unlock run entry = .ok answer reached) :
+    ∃ locked, flock entry = .ok true locked ∧ run () locked = .ok answer reached := by
+  simp only [openWithLock, Bind.bind, EStateM.bind] at returned
+  cases acquired : flock entry with
+  | error cause failed => simp [acquired] at returned
+  | ok result locked =>
+    cases result with
+    | false => simp [acquired, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+    | true =>
+      cases held : run () locked with
+      | ok table after =>
+        exact ⟨locked, rfl, by
+          simpa [acquired, Pure.pure, EStateM.pure, EStateM.bind, MonadExcept.tryCatch,
+            tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, held]
+            using returned⟩
+      | error cause failed =>
+        cases dropped : unlock () failed <;>
+          simp [acquired, EStateM.bind, MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch,
+            EStateM.Backtrackable.restore, EStateM.dummyRestore, held, dropped, throw, throwThe,
+            MonadExceptOf.throw, EStateM.throw] at returned
+
+/-- A successful initializer gives the exact newly opened directory
+handle and the successive three reference allocation receipts. -/
+theorem OpenSyncCacheCallbacks.reachedSuccess {heap result : Type}
+    (init : OpenSyncCacheCallbacks heap) (directory : DiskDirectory)
+    (assemble : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
+      IO.Ref (List (FilePath × IO.FS.Handle)) → result)
+    {entry reached : heap} {value : result}
+    (returned : openSyncFilesWith (init.openDirectory directory.path) init.newRef init.newRef init.newRef
+      assemble entry = .ok value reached) :
+    ∃ (root : IO.FS.Handle) (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+      (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (opened setDirectory setActive : heap),
+      init.openDirectory directory.path entry = .ok root opened ∧
+      init.newRef (some root) opened = .ok cached setDirectory ∧
+      init.newRef none setDirectory = .ok active setActive ∧ init.newRef [] setActive = .ok pending reached ∧
+      value = assemble cached active pending := by
+  simp only [openSyncFilesWith, Bind.bind, EStateM.bind] at returned
+  cases opened : init.openDirectory directory.path entry with
+  | error cause failed => simp [opened] at returned
+  | ok root afterOpen =>
+    cases cached : init.newRef (some root) afterOpen with
+    | error cause failed => simp [opened, cached] at returned
+    | ok directoryCell afterDirectory =>
+      cases active : init.newRef (none : Option (FilePath × IO.FS.Handle)) afterDirectory with
+      | error cause failed => simp [opened, cached, active] at returned
+      | ok activeCell afterActive =>
+        cases pending : init.newRef ([] : List (FilePath × IO.FS.Handle)) afterActive with
+        | error cause failed => simp [opened, cached, active, pending] at returned
+        | ok pendingCell afterPending =>
+          simp only [opened, cached, active, pending, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
+          obtain ⟨rfl, rfl⟩ := returned
+          exact ⟨root, directoryCell, activeCell, pendingCell, afterOpen, afterDirectory, afterActive,
+            rfl, cached, active, pending, rfl⟩
+
+
+/-- Follow the actual successful interpreter through admission and cache
+allocation. No descriptor census or recovery evidence is needed to find
+the issue and return heaps of those calls. -/
+theorem RawMarkedOpenInterpreter.reachesHeldCache
+    {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream) (input : FilePath)
+    {entry reached : heap} {table : DiskTable}
+    (returned : source.openTable input entry = .ok table reached) :
+    ∃ (directory : DiskDirectory) (lock : IO.FS.Handle) (lockMetadata : Option IO.FS.Metadata)
+      (resolved checked probed appended locked : heap)
+      (root : IO.FS.Handle) (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+      (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (opened setDirectory setActive prepared : heap),
+      DiskDirectory.openWith source.calls.realPath input entry = .ok directory resolved ∧
+      optionalMetadataWith (source.calls.lookup (directory.file .wal)) resolved = .ok none checked ∧
+      optionalMetadataWith (source.calls.lookup (directory.file .lock)) checked = .ok lockMetadata probed ∧
+      (∀ metadata, lockMetadata = some metadata → (metadata.type == .file && metadata.numLinks == 1) = true) ∧
+      source.calls.openAppend (directory.file .lock) probed = .ok lock appended ∧
+      source.calls.flock lock appended = .ok true locked ∧
+      source.init.openDirectory directory.path locked = .ok root opened ∧
+      source.init.newRef (some root) opened = .ok cached setDirectory ∧
+      source.init.newRef none setDirectory = .ok active setActive ∧
+      source.init.newRef [] setActive = .ok pending prepared ∧
+      source.worker cached active pending directory lock
+        (RawMarkedOpenInterpreter.makeCache directory cached active pending) prepared = .ok table reached := by
+  let initCache (directory : DiskDirectory) :=
+    openSyncFilesWith (source.init.openDirectory directory.path) source.init.newRef source.init.newRef source.init.newRef
+      (fun cached active pending =>
+        (RawMarkedOpenInterpreter.makeCache directory cached active pending, cached, active, pending))
+  let recover (directory : DiskDirectory) (lock : IO.FS.Handle) (_ : Unit) :
+      EStateM IO.Error heap DiskTable := do
+    let (cache, cached, active, pending) ← initCache directory
+    tryCatchThe IO.Error (source.worker cached active pending directory lock cache) fun cause => do
+      source.dispose cache
+      throw cause
+  let acquire (directory : DiskDirectory) (lock : IO.FS.Handle) :=
+    openWithLock (source.calls.flock lock) (fun _ => IO.userError s!"database already open: {directory.path}")
+      (fun _ => source.calls.unlock lock) (recover directory lock)
+  change DiskTable.withOpenAdmission input source.calls.realPath source.calls.lookup source.calls.openAppend
+    (fun directory lock => finishFailedOpen (acquire directory lock) source.release lock) entry = .ok table reached at returned
+  obtain ⟨directory, lock, lockMetadata, resolved, checked, probed, appended, path, flat, probe, safe, lockOpen, held⟩ :=
+    DiskTable.withOpenAdmission_reachedSuccess _ _ _ _ returned
+  have locked : acquire directory lock appended = .ok table reached := by
+    cases observed : acquire directory lock appended with
+    | ok value after => simpa only [finishFailedOpen, observed] using held
+    | error cause failed => simp [finishFailedOpen, observed] at held
+  obtain ⟨lockedAt, flock, initialized⟩ := openWithLock_reachedSuccess _ _ _ _ locked
+  change recover directory lock () lockedAt = .ok table reached at initialized
+  unfold recover at initialized
+  cases initializedCache : initCache directory lockedAt with
+  | error cause failed => simp [Bind.bind, EStateM.bind, initializedCache] at initialized
+  | ok references prepared =>
+    obtain ⟨cache, cached, active, pending⟩ := references
+    have physicalCache : openSyncFilesWith (source.init.openDirectory directory.path) source.init.newRef source.init.newRef
+        source.init.newRef
+        (fun cached active pending =>
+          (RawMarkedOpenInterpreter.makeCache directory cached active pending, cached, active, pending)) lockedAt =
+      .ok (cache, cached, active, pending) prepared := initializedCache
+    obtain ⟨root, actualDirectory, actualActive, actualPending, opened, setDirectory, setActive,
+      openRoot, directoryRef, activeRef, pendingRef, exactCache⟩ :=
+      source.init.reachedSuccess directory _ physicalCache
+    have identities : cache = RawMarkedOpenInterpreter.makeCache directory actualDirectory actualActive actualPending ∧
+        cached = actualDirectory ∧ active = actualActive ∧ pending = actualPending := by
+      simpa only [Prod.mk.injEq] using exactCache
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := identities
+    let worker := source.worker cached active pending directory lock
+      (RawMarkedOpenInterpreter.makeCache directory cached active pending)
+    have workerRan : worker prepared = .ok table reached := by
+      simp only [Bind.bind, EStateM.bind, initializedCache] at initialized
+      change (tryCatchThe IO.Error worker fun cause => do
+        source.dispose (RawMarkedOpenInterpreter.makeCache directory cached active pending)
+        throw cause) prepared = .ok table reached at initialized
+      cases success : worker prepared with
+      | ok value after =>
+        simpa only [tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, success] using initialized
+      | error error failed =>
+        cases disposed : source.dispose
+            (RawMarkedOpenInterpreter.makeCache directory cached active pending) failed <;>
+          simp [tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, success, EStateM.Backtrackable.restore,
+            EStateM.dummyRestore, Bind.bind, EStateM.bind, disposed, throw, throwThe, MonadExceptOf.throw,
+            EStateM.throw] at initialized
+    exact ⟨directory, lock, lockMetadata, resolved, checked, probed, appended, lockedAt, root, cached,
+      active, pending, opened, setDirectory, setActive, prepared, path, flat, probe, safe, lockOpen,
+      flock, openRoot, directoryRef, activeRef, pendingRef, workerRan⟩
+
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {view : OpenCloseHeapView heap FileImage} {entry : heap}
   {admission : CensusOpenAdmissionReports input directory inventory retry}
@@ -205,6 +407,90 @@ theorem RawOpenAdmissionReport.reachesMarkedInstallation
       | ok token afterToken =>
         simp only [tokenReturn, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at worker
         exact ⟨opened, repaired, phase, afterPhase, token, prepared, phaseReturn, worker.2 ▸ tokenReturn, worker.1.symm⟩
+
+private theorem optionalMetadata_absenceLookup
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) {before after : heap}
+    (returned : optionalMetadataWith lookup before = .ok none after) :
+    ∃ name message, lookup before = .ok (.error (.noFileOrDirectory name 2 message)) after := by
+  simp only [optionalMetadataWith, Bind.bind, EStateM.bind] at returned
+  cases issued : lookup before with
+  | error cause failed => simp [issued] at returned
+  | ok outcome reached =>
+    cases outcome with
+    | ok metadata => simp [issued, Pure.pure, EStateM.pure] at returned
+    | error cause =>
+      cases cause <;> simp [issued, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+      rename_i name code message
+      by_cases missing : code = 2
+      · subst code
+        have same : reached = after := by simpa [Pure.pure, EStateM.pure] using returned
+        exact ⟨name, message, same ▸ rfl⟩
+      · simp [missing, EStateM.throw] at returned
+
+private theorem flatGuard_absenceLookup (directory : DiskDirectory)
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) {before after : heap}
+    (returned : rejectFlatWalWith directory (optionalMetadataWith lookup) before = .ok () after) :
+    ∃ name message, lookup before = .ok (.error (.noFileOrDirectory name 2 message)) after := by
+  simp only [rejectFlatWalWith, Bind.bind, EStateM.bind] at returned
+  cases tested : optionalMetadataWith lookup before with
+  | error cause reached => simp [tested] at returned
+  | ok metadata reached =>
+    cases metadata with
+    | none =>
+      have same : reached = after := by simpa [tested, Pure.pure, EStateM.pure] using returned
+      exact optionalMetadata_absenceLookup lookup (same ▸ tested)
+    | some _ => simp [tested, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+
+private theorem recoverSegmentedWal_successfulGuards (rejectFlat : EStateM IO.Error heap Unit)
+    (marker : EStateM IO.Error heap (Option IO.FS.Metadata)) (marked bootstrap : EStateM IO.Error heap Reopened)
+    {before after : heap} {opened : Reopened}
+    (returned : recoverSegmentedWalWith rejectFlat marker marked bootstrap before = .ok opened after) :
+    ∃ checked probed metadata, rejectFlat before = .ok () checked ∧ marker checked = .ok metadata probed := by
+  simp only [recoverSegmentedWalWith, Bind.bind, EStateM.bind] at returned
+  cases flat : rejectFlat before with
+  | error cause failed => simp [flat] at returned
+  | ok result checked =>
+    cases result
+    simp only [flat] at returned
+    cases markerReturn : marker checked with
+    | error cause failed => simp [markerReturn] at returned
+    | ok metadata probed => exact ⟨checked, probed, metadata, rfl, markerReturn⟩
+
+/-- A healthy return from the fixed worker executes both probes. If the
+selected marker binding survives the flat-WAL probe, truthful no-follow
+lookup rules out the markerless dispatch at that reached heap. -/
+theorem RawOpenAdmissionReport.reachesMarkedGuards
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (names : heap → FilePath → Option Nat) {inode : Nat}
+    (presentAtCache : names seed.afterPending (directory.file .walBoundary) = some inode)
+    (flatKeepsMarker : ∀ {checked name message},
+      source.calls.lookup (directory.file .wal) seed.afterPending =
+        .ok (.error (.noFileOrDirectory name 2 message)) checked →
+      names checked (directory.file .walBoundary) = names seed.afterPending (directory.file .walBoundary))
+    (lookupMissing : ∀ {before after name message},
+      source.calls.lookup (directory.file .walBoundary) before =
+        .ok (.error (.noFileOrDirectory name 2 message)) after →
+      names before (directory.file .walBoundary) = none)
+    {table : DiskTable} {reached : heap}
+    (returned : source.openTable input entry = .ok table reached) :
+    ∃ checked marked metadata,
+      rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+        seed.afterPending = .ok () checked ∧
+      optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+        .ok (some metadata) marked := by
+  obtain ⟨_, _, _, _, _, recovered, _, _, _⟩ := raw.reachesMarkedInstallation source seed returned
+  unfold recoverHealthyMarkedWithRefs at recovered
+  obtain ⟨checked, marked, found, flat, probe⟩ := recoverSegmentedWal_successfulGuards _ _ _ _ recovered
+  cases found with
+  | some metadata => exact ⟨checked, marked, metadata, flat, probe⟩
+  | none =>
+    obtain ⟨_, _, marker⟩ := optionalMetadata_absenceLookup _ probe
+    obtain ⟨_, _, absentFlat⟩ := flatGuard_absenceLookup directory _ flat
+    have impossible : (none : Option Nat) = some inode :=
+      (lookupMissing marker).symm.trans ((flatKeepsMarker absentFlat).trans presentAtCache)
+    cases impossible
 
 /-- The actual marked success fixes the checkpoint, marker and WAL
 returns at adjoining heaps. Replay determines the plan passed to the

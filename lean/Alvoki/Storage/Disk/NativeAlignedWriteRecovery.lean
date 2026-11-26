@@ -36,6 +36,9 @@ structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} 
   admissionFrame : raw.CacheFrames seed (alignedReadFrame names visible scope keeps)
   guard : ∀ path before,
     alignedReadFrame names visible scope keeps before (reachedState (source.calls.lookup path before))
+  markerMissing : ∀ {before after name message},
+    source.calls.lookup (directory.file .walBoundary) before = .ok (.error (.noFileOrDirectory name 2 message)) after →
+    names before (directory.file .walBoundary) = none
   opens : source.fileCalls.OpensReadSlot view names visible
   reads : source.fileCalls.ReadsAtCursor view visible
   fileFrames : source.fileCalls.ScopeFrames (alignedReadFrame names visible scope keeps)
@@ -99,10 +102,7 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     (exactKeeper : (view.files reached).image.keeper.active = some target.trimmed)
     (noLater : ∀ start, plan.layout.range.through < start →
       namespaceView.child root (renderWalSegmentName start) = none)
-    {checked marked returnedAt : heap} {metadata : IO.FS.Metadata} {table : DiskTable}
-    (flat : rejectFlatWalWith dir
-      (optionalMetadataWith (source.calls.lookup ((dir).file .wal))) seed.afterPending = .ok () checked)
-    (marker : optionalMetadataWith (source.calls.lookup ((dir).file .walBoundary)) checked = .ok (some metadata) marked)
+    {returnedAt : heap} {table : DiskTable}
     (returned : source.openTable input reached = .ok table returnedAt) :
     let keeperCalls := source.keeperCallbacks.withFileReads source.fileCalls
     let segment := plan.layout.keeper
@@ -153,6 +153,19 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
     ⟨fun ran => (effects.admissionFrame.lockOpen ran).1, fun ran => (effects.admissionFrame.flock ran).1,
       fun ran => (effects.admissionFrame.openDirectory ran).1, fun ran => (effects.admissionFrame.directoryRef ran).1,
       fun ran => (effects.admissionFrame.activeRef ran).1, fun ran => (effects.admissionFrame.pendingRef ran).1⟩
+  have markerScoped : scope ((dir).file .walBoundary) := includes _ (.inl rfl)
+  obtain ⟨markerInode, markerNamed, _⟩ := markerStored _ markerName
+  have atCache := raw.framesThroughCache seed (frame := visibleFrame)
+    CheckpointSurvivingFiles.Frames.trans admissionVisible
+  have markerAtCache : names seed.afterPending ((dir).file .walBoundary) = some markerInode :=
+    (atCache _ markerScoped).1.trans markerNamed
+  have flatKeepsMarker {checked name message}
+      (ran : source.calls.lookup ((dir).file .wal) seed.afterPending =
+        .ok (.error (.noFileOrDirectory name 2 message)) checked) :
+      names checked ((dir).file .walBoundary) = names seed.afterPending ((dir).file .walBoundary) := by
+    simpa only [ran, reachedState] using ((effects.guard ((dir).file .wal) seed.afterPending).1 _ markerScoped).1
+  obtain ⟨checked, marked, metadata, flat, marker⟩ :=
+    raw.reachesMarkedGuards source seed names markerAtCache flatKeepsMarker effects.markerMissing returned
   have readsVisible : source.fileCalls.ScopeFrames visibleFrame :=
     effects.fileFrames.map (fun framed => framed.1)
   have listingVisible : source.directoryCalls.ScopeFrames dir visibleFrame :=
@@ -578,10 +591,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (phaseEffects : OpenPhaseCellEffects view.phase get set)
     (tokenEqual : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
-    {checked marked returnedAt : heap} {metadata : IO.FS.Metadata} {table : DiskTable}
-    (flat : rejectFlatWalWith dir
-      (optionalMetadataWith (source.calls.lookup ((dir).file .wal))) seed.afterPending = .ok () checked)
-    (marker : optionalMetadataWith (source.calls.lookup ((dir).file .walBoundary)) checked = .ok (some metadata) marked)
+    {returnedAt : heap} {table : DiskTable}
     (returned : source.openTable input reached = .ok table returnedAt) :
     ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
       (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
@@ -618,7 +628,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
     plan.readsLiteralAlignedOpen raw seed (fun atHeap => (observe atHeap).files.names) visible admission.view admission.root
       (managedPath dir) (literalReadFrame_refl seed observe) literalReadFrame_trans effects.readEffects entry.protectedFiles
       entry.manifest markerLive scope (fun first _ _ => .inr ⟨.walSegment first, rfl⟩) effects.child physical exactKeeper later
-      flat marker returned
+      returned
   have authority := RawOpenAdmissionReport.literalAuthorityAtCache seed effects.openKeepsLock effects.newRefKeepsLock
   have preparedAuthority := cacheFrame.2.2 authority
   obtain ⟨retained, repairFrame, rootIssued, afterDirectory, entries, loaded, consumed,
@@ -732,10 +742,7 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (phaseEffects : OpenPhaseCellEffects view.phase get set)
     (tokenEqual : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
-    {checked marked returnedAt : heap} {metadata : IO.FS.Metadata} {returnedTable : DiskTable}
-    (flat : rejectFlatWalWith dir
-      (optionalMetadataWith (source.calls.lookup ((dir).file .wal))) seed.afterPending = .ok () checked)
-    (marker : optionalMetadataWith (source.calls.lookup ((dir).file .walBoundary)) checked = .ok (some metadata) marked)
+    {returnedAt : heap} {returnedTable : DiskTable}
     (returned : source.openTable input reached = .ok returnedTable returnedAt) :
     ∃ (plan : current.SelectedWritePlan batch target (view.files reached).image)
       (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
@@ -752,7 +759,7 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
     observe visible covers initial window durable retryEffects
   obtain ⟨handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry⟩ :=
     plan.returnsLiteralAlignedWriter seed request cause observe visible (effects plan) entry physical exactKeeper
-      noLater settled phaseIdentity tokenIdentity phaseEffects tokenEqual flat marker returned
+      noLater settled phaseIdentity tokenIdentity phaseEffects tokenEqual returned
   exact ⟨plan, handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry⟩
 
 end LiteralContinuation

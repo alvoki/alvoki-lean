@@ -64,10 +64,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     {admission : CensusOpenAdmissionReports input current.current.ready.state.session.directory inventory (view.files reached)}
     (raw : RawOpenAdmissionReport admission view source.calls reached)
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    {checked marked returnedAt : heap} {metadata : IO.FS.Metadata} {reopened : DiskTable}
-    (flat : rejectFlatWalWith dir
-      (optionalMetadataWith (source.calls.lookup ((dir).file .wal))) seed.afterPending = .ok () checked)
-    (marker : optionalMetadataWith (source.calls.lookup ((dir).file .walBoundary)) checked = .ok (some metadata) marked)
+    {returnedAt : heap} {reopened : DiskTable}
     (openedTable : source.openTable input reached = .ok reopened returnedAt)
     (exactKeeper : (view.files reached).image.keeper.active = some (state).writer.target.trimmed)
     (noLater : (view.files reached).image.later.visible = [])
@@ -138,7 +135,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
       (ready).opensLiteralAlignedAfterWriteRetries (raw := raw) seed storage visible request cause prepared fits admitted
         covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
         (by simpa only [upper] using retryEffects) (effects prepared) exactKeeper noLater phaseIdentity tokenIdentity
-        phase ptrEq flat marker openedTable
+        phase ptrEq openedTable
     have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by
       simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using

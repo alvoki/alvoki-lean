@@ -189,10 +189,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     {admission : CensusOpenAdmissionReports input current.current.ready.state.session.directory inventory (view.files reached)}
     (raw : RawOpenAdmissionReport admission view source.calls reached)
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    {checked marked returnedAt : heap} {metadata : IO.FS.Metadata} {reopened : DiskTable}
-    (flat : rejectFlatWalWith dir
-      (optionalMetadataWith (source.calls.lookup ((dir).file .wal))) seed.afterPending = .ok () checked)
-    (marker : optionalMetadataWith (source.calls.lookup ((dir).file .walBoundary)) checked = .ok (some metadata) marked)
+    {returnedAt : heap} {reopened : DiskTable}
     (openedTable : source.openTable input reached = .ok reopened returnedAt)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (later : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
@@ -266,7 +263,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (ready).opensLiteralAlignedAfterWriteRetries (raw := raw) seed storage visible request cause prepared fits admitted
       covers selected window (reboot.startsDurableRetry reset selected).2 (retryEffects target admitted active)
       (openEffects target admitted active) (exactKeeper target admitted active) noLater
-      phaseIdentity tokenIdentity phase ptrEq flat marker openedTable
+      phaseIdentity tokenIdentity phase ptrEq openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
   refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
     active, opened, history, whole, ledger, replay, physical, ?_⟩

@@ -243,9 +243,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   and literal open, then chain a write and snapshot on its returned
   table. The grouped error omits its batch. The late error keeps the
   batch whole or omits it according to the selected marker. The older
-  aligned report adapter was removed. Derive the remaining admission
-  evidence from the fixed open and connect long and pruned recoveries
-  to the same reached-state execution.
+  aligned report adapter was removed. The literal return now determines
+  the primitive admission, lock and cache-allocation receipts. The
+  aligned consumers derive the guarded marker probe from the selected
+  binding and local no-follow effects. Use those receipts to derive
+  the admitted census and cache projections from local effects.
+  Connect long and pruned recoveries to the same reached-state execution.
   [Literal aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
   [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)

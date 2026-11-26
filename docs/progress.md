@@ -1,5 +1,16 @@
 # Current handoff
 
+A successful fixed open now determines its resolved directory, flat-WAL
+and lock probes, append-open, acquired lock, directory handle, three
+cache allocations and held worker return. The same aligned consumers
+derive the later guarded marker lookup from the literal successful open.
+They transport the selected marker binding to that lookup and exclude
+absence using the local no-follow ENOENT contract. The census and cache
+projections still enter through the existing raw admission and
+allocation observations. Construct those observations from the derived
+primitive receipts and local effects next.
+[Literal admission and guards](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+
 The grouped-sync error and late-publication error now share one aligned
 retry proof. Each write selects its own reboot entry. The same failed-open
 fold preserves the WAL window, keeper and durable checkpoint for the

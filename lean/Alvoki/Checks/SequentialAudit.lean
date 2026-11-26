@@ -4132,6 +4132,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preservesDurability
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.framesAfter
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnlyWithDurability
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.reachesMarkedGuards
+#check_axioms Alvoki.Storage.DiskTable.withOpenAdmission_reachedSuccess
+#check_axioms Alvoki.Storage.DiskSession.openWithLock_reachedSuccess
+#check_axioms Alvoki.Storage.DiskSession.OpenSyncCacheCallbacks.reachedSuccess
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.reachesHeldCache
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
