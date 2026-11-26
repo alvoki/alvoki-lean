@@ -288,6 +288,11 @@ private theorem keeperTailEmpty (finish : CapturedAlignedFinish calls report vac
   rw [ByteArray.size_append] at measured
   exact ByteArray.size_eq_zero_iff.mp (by omega)
 
+/-- The checked aligned extent covers the keeper's entire payload. -/
+theorem keeperPayload (finish : CapturedAlignedFinish calls report vacant selected) :
+    layout.keeper.bytes ++ layout.tail = layout.keeper.bytes := by
+  rw [finish.keeperTailEmpty, ByteArray.append_empty]
+
 /-- Derive the cache-bearing keeper read and the two reached syncs from
 the aligned installation's existing primitive observations. The pending
 entry comes from that read and is consumed by the keeper sync. -/
@@ -620,7 +625,7 @@ theorem installsAfterVacancy (finish : CapturedAlignedFinish calls report vacant
   let after := retry.image.syncDirectory.syncKeeper
   have visible : retry.image.syncDirectory.keeper.active = some layout.target.trimmed := by
     change retry.image.keeper.active = some layout.keeper.bytes
-    simpa only [finish.keeperTailEmpty, ByteArray.append_empty] using layout.visible
+    simpa only [finish.keeperPayload] using layout.visible
   have emptyNames : retry.image.syncDirectory.later.DurablyEmpty := by
     simp [FileImage.syncDirectory, LaterNames.syncDirectory, LaterNames.DurablyEmpty, LaterNames.settled,
       finish.repair.noLater]

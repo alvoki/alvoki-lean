@@ -413,6 +413,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativeDurableWriteReboot
 lake env leanchecker Alvoki.Storage.Disk.NativeRetainedOpenStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenAdmissionStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedScanFrame
+lake env leanchecker Alvoki.Storage.Disk.NativeMarkedKeeperLinks
 lake env leanchecker Alvoki.Storage.Disk.NativePrunedKeeperStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedMarkedReady
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedUncertainWrite

@@ -452,8 +452,12 @@ from the cached directory and keeper fsyncs and the allocation frames. The longe
 path derives readiness before allocation from the staged-file fsync, the rename of that
 inode and the final directory fsync. These local steps assume scoped effects of the reached
 callbacks, durable protected files, a durable marker and settlement of the root name in
-its parent. The final returned writer and subsequent acknowledged write still need to
-consume the remaining repair paths.
+its parent. The aligned retry consumes the durable selected footprint, matches the actual
+root and lock, and frames the exact keeper through its bounded read and cache updates.
+The one-link stat and a link census at that heap rule out protected names aliasing the
+keeper. The successful open supplies the same physical entry consumed by the next
+acknowledged write. The next operation still has its own primitive effect laws. The
+other repair paths need to supply the same entry.
 [Late publication recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 · [Ready allocations](../../lean/Alvoki/Storage/Disk/NativeOpenReadyStorage.lean)
 · [Aligned returned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)

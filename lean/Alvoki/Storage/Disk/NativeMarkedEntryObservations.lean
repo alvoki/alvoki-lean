@@ -42,6 +42,22 @@ theorem entryAuthority
   · rw [seen.raw.sameLock, seen.raw.appendHandle]
     exact lock.trans bound.2.1
 
+/-- Framing the physical bindings through the read prefix identifies
+the new writer's directory and lock using its own census. -/
+theorem reopenedAuthority {atHeap : heap}
+    (root : (files entry).names directory.path = some ((view.handle seen.seed.afterPending seen.seed.handle).1.inode
+      (view.handle seen.seed.afterPending seen.seed.handle).2.1.description))
+    (lock : (files entry).names (directory.file .lock) = some ((view.handle seen.raw.afterFlock seen.raw.lock).1.inode
+      (view.handle seen.raw.afterFlock seen.raw.lock).2.1.description))
+    (frame : (files entry).Frames (fun path => path = directory.path ∨ path = directory.file .lock) (files atHeap))
+    (sameObjects : opening.finish.census.inode = opening.admission.reached.inode) :
+    (files atHeap).names directory.path = some (opening.finish.census.inode opening.admission.cached.description) ∧
+    (files atHeap).names (directory.file .lock) = some (opening.finish.census.inode opening.admission.owner.description) := by
+  rw [seen.seed.sameHandle, seen.seed.openedHandle] at root
+  rw [seen.raw.sameLock, seen.raw.appendHandle] at lock
+  rw [sameObjects]
+  exact ⟨((frame _ (.inl rfl)).1).trans root, ((frame _ (.inr rfl)).1).trans lock⟩
+
 end RawHealthyMarkedOpenEffects
 
 /-- A stat tied to the actual entry cannot attribute the read to a

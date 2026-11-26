@@ -16,6 +16,31 @@ theorem SegmentedWriterState.RetainedReady.keptSeal {state : SegmentedWriterStat
   rw [WalSegment.findSealedStart ordered member]
   rfl
 
+/-- The guarded keeper's path is outside the immutable footprint:
+distinct WAL starts and file kinds give distinct canonical paths. -/
+theorem NativeReadyState.protectedPathNeKeeper {state : NativeReadyState} (ready : state.Valid)
+    {path : FilePath}
+    (selected : state.selectedRetryPath path) :
+    path ≠ state.session.directory.file (.walSegment state.writer.wal.active.first) := by
+  rcases selected with marker | protectedPath
+  · intro equal
+    obtain ⟨_, collision⟩ := DiskDirectory.walSegment_exclusive (marker.symm.trans equal)
+    cases collision
+  · rcases protectedPath with rfl | rfl | rfl | ⟨segment, member, rfl⟩ | ⟨_, metadata, index, _, _, _, rfl⟩
+    · exact (SyncHandleRouting.file_ne_directory _ _).symm
+    · intro equal
+      obtain ⟨_, collision⟩ := DiskDirectory.walSegment_exclusive equal
+      cases collision
+    · intro equal
+      obtain ⟨_, collision⟩ := DiskDirectory.walSegment_exclusive equal
+      cases collision
+    · have ordered := (List.pairwise_append.mp ready.retained.layout.ordered).2.2 _ member
+          state.writer.wal.active (List.mem_singleton_self _)
+      exact fun same => Nat.ne_of_lt ordered.1 (state.session.directory.walSegment_path_injective same)
+    · intro equal
+      obtain ⟨_, collision⟩ := DiskDirectory.walSegment_exclusive equal
+      cases collision
+
 /-- Reindex the durable immutable footprint to the reopened writer. The
 root and lock are checked against the new descriptions. Manifest, runs
 and all retained seals use the same exact contents. -/

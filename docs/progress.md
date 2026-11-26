@@ -1,5 +1,15 @@
 # Current handoff
 
+The aligned retry without pruning now carries the durable checkpoint and marker to the
+actual returned table. The root and lock use the reopened descriptor census. The
+keeper's one-link check and the scoped name frames rule out aliases with the protected
+files. Live read and cache frames identify the committed bytes and inode at the final
+keeper fsync. The returned table, heap and three actual cache references supply the
+same physical entry that the acknowledged-write proof uses. The aligned adapter now
+uses the shared returned-writer proof directly.
+[Aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
+· [Write entry](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean)
+
 The exact marked-open prefix now carries independently framed file observations through
 admission and the read-only worker. The lock and directory receipts and the three cache
 allocations share one frame composition with failed open cleanup. The manifest, ordered

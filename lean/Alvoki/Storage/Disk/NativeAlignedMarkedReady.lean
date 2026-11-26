@@ -1,9 +1,12 @@
 import Alvoki.Storage.Disk.NativeAlignedKeeperStorage
 import Alvoki.Storage.Disk.NativeSelectedWriteReopen
+import Alvoki.Storage.Disk.NativeRetainedOpenStorage
+import Alvoki.Storage.Disk.NativeReadyWriteStorage
+import Alvoki.Storage.Disk.NativeMarkedKeeperLinks
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair
+open System WalSegmentRepair CheckpointPublication
 
 variable {heap stream : Type} {prior : NativeReadyState} {input : FilePath}
   {inventory : DescriptorInventory} {retry : LockedFileState FileImage}
@@ -36,22 +39,15 @@ def RawHealthyMarkedOpenEffects.ReadyWriterReturn
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) : Prop :=
     ∃ (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
       IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
+      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (cache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
       execute makeCache = .ok handle.table start.reached ∧
       start.current.history = history ∧ start.current.submissions = log ∧ start.current.ready.reads = reads ∧
-      handle.lock = raw.raw.lock ∧ handle.files.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef
-        raw.seed.directoryRef ∧ handle.files.AtDirectory (dir).path ∧ handle.get = get ∧ handle.set = set ∧
-      view.descriptors start.reached = start.current.ready.state.census ∧
-      view.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef = start.current.ready.state.cache ∧
+      handle.lock = raw.raw.lock ∧ handle.get = get ∧ handle.set = set ∧
+      cache.directory = raw.seed.directoryRef ∧ cache.active = raw.seed.activeRef ∧ cache.pending = raw.seed.pendingRef ∧
       start.current.ready.state.cache = opening.admission.cache ∧
       start.current.ready.state.session.directory = dir ∧ start.current.ready.state.directorySlot = opening.admission.cached ∧
-      (∀ literal, view.directory start.reached raw.seed.directoryRef = some literal →
-        (observe start.reached).files.names start.current.ready.state.session.directory.path =
-          some ((view.handle start.reached literal).1.inode (view.handle start.reached literal).2.1.description)) ∧
-      NativeReadyStorage start.current.ready.state (observe start.reached) ∧
-      ∀ inode, (observe start.reached).files.names (start.current.ready.state.session.directory.file
-        (.walSegment start.current.ready.state.writer.wal.active.first)) = some inode →
-        visible start.reached inode = start.current.ready.state.writer.wal.active.bytes
+      start.WriteStorageEntry view cache (observe start.reached) (visible start.reached)
 
 /-- Physical facts for the selected writer arise at the actual repair heap.
 The same installation transports them through both reference allocations. -/
@@ -95,9 +91,13 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
     phaseFrame tokenFrame (fun inode _ => congrFun phaseKeeps inode) (fun inode _ => congrFun tokenKeeps inode)
   have reached : start.reached = allocation.afterToken := congrArg (fun result => result.2.2) returnedAt
   have returnedState : start.current.ready.state = next.state := congrArg (fun position => position.ready.state) position
-  refine ⟨makeCache, handle, start, ran, ?_, ?_, ?_, lock, refs, atDirectory, sameGet, sameSet,
-    census.trans (congrArg NativeReadyState.census returnedState.symm),
-    cache.trans (congrArg NativeReadyState.cache returnedState.symm), ?_, ?_, ?_, ?_, ?_⟩
+  have returnedDirectory : start.current.ready.state.session.directory = dir := by
+    rw [returnedState]
+    exact directory
+  let cacheRefs : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path :=
+    ⟨raw.seed.directoryRef, raw.seed.activeRef, raw.seed.pendingRef, refs, by rw [returnedDirectory]; exact atDirectory⟩
+  refine ⟨makeCache, handle, start, cacheRefs, ran, ?_, ?_, ?_, lock, sameGet, sameSet,
+    rfl, rfl, rfl, ?_, returnedDirectory, ?_, ?_⟩
   · rw [position]
   · rw [position]
   · rw [position]
@@ -105,21 +105,24 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
   · rw [returnedState]
     exact capturedCache
   · rw [returnedState]
-    exact directory
-  · rw [returnedState]
     exact slot
-  · intro literal found
-    rw [returnedState]
-    have physical : NativeReadyStorage next.state (observe start.reached) := reached.symm ▸ final.1
-    exact physical.bindsOpenCacheDirectory view cache (by rw [capturedCache, slot]; rfl)
-      (sameObjects.symm.trans (congrArg DescriptorInventory.inode modeledCensus).symm) found
-  · rw [returnedState, reached]
-    exact final
+  · have physical : NativeReadyStorage start.current.ready.state (observe start.reached) := by
+      rw [returnedState, reached]
+      exact final.1
+    refine ⟨census.trans (congrArg NativeReadyState.census returnedState.symm),
+      cache.trans (congrArg NativeReadyState.cache returnedState.symm), physical, ?_, ?_⟩
+    · rw [returnedState, reached]
+      exact final.2
+    · intro literal found
+      rw [returnedState]
+      have atStart : NativeReadyStorage next.state (observe start.reached) := reached.symm ▸ final.1
+      exact atStart.bindsOpenCacheDirectory view cache (by rw [capturedCache, slot]; rfl)
+        (sameObjects.symm.trans (congrArg DescriptorInventory.inode modeledCensus).symm) found
 
-/-- The selected aligned repair supplies physical readiness to the very
-writer installed by the original successful open. The two reference
-allocations carry it to that call's returned heap. -/
-theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRepair
+/-- Recover the selected, durable retry footprint as the physical
+footprint of the actual returned writer. The remembered keeper is the
+one whose committed bytes are issued to the final file sync. -/
+theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
     {raw : RawHealthyMarkedOpenEffects opening view calls init entry phaseIdentity tokenIdentity
       allocatePhase allocateToken stream remove stage rename}
     {log : List DatabaseSubmissions} {reads : List RecordedSnapshotRead}
@@ -137,22 +140,33 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRepair
         NativeHealthyMarkedKeeperReport raw.seed raw.fileCalls raw.callbacks raw.beforeKeeper remove stage rename finish reached) =
       ⟨.aligned finish, seen.reached, .aligned seen⟩)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (before : ∀ next : NativeReadPosition history log,
-      next.state.session.directory = dir → next.state.census = finish.census →
-      next.state.owner = opening.admission.owner → next.state.directorySlot = opening.admission.cached →
-      next.state.writer.target = layout.target → next.state.files.image.kept = retry.image.kept →
-      next.state.writer.published.durable = prior.writer.published.durable →
-      NativeReadyProtectedStorage next.state (observe seen.remembered).files ∧
-      ∀ path, path = (dir).file .walBoundary ∨ next.state.writeFramePath path →
-        (observe seen.consumed).files.names path ≠
-          some (opening.reads.wal.keeper.calls.inventory.inode opening.reads.wal.keeper.calls.slot.description))
-    (marker : (observe seen.remembered).files.Stored ((dir).file .walBoundary)
-      (WAL.Boundary.encode (WAL.encode history).size.toUInt64))
-    (rootSettled : ∀ names ∈ (observe seen.remembered).crashNames,
-      names (dir).path = (observe seen.remembered).files.names (dir).path)
+    (priorReady : prior.Valid) (durable : prior.SelectedRetryDurability layout.target (observe entry))
+    (kept : retry.image.kept = prior.writer.files.kept)
+    (manifest : layout.target.pair.manifest = prior.writer.target.pair.manifest)
+    (root : (observe entry).files.names (dir).path = some ((view.handle raw.seed.afterPending raw.seed.handle).1.inode
+      (view.handle raw.seed.afterPending raw.seed.handle).2.1.description))
+    (lock : (observe entry).files.names ((dir).file .lock) = some ((view.handle raw.raw.afterFlock raw.raw.lock).1.inode
+      (view.handle raw.raw.afterFlock raw.raw.lock).2.1.description))
+    (frames : (observe entry).Frames prior.selectedRetryPath (observe seen.remembered))
     (effects : ∀ state : NativeReadyState, state.session.directory = dir → seen.StorageEffects observe visible state)
-    (keeperLive : visible seen.consumed
-      (opening.reads.wal.keeper.calls.inventory.inode opening.reads.wal.keeper.calls.slot.description) = layout.keeper.bytes)
+    (keeperRead :
+      let path := (dir).file (.walSegment layout.keeper.first)
+      let inode := opening.reads.wal.keeper.observesFile.object
+      let live (atHeap : heap) : CheckpointSurvivingFiles :=
+        ⟨(observe atHeap).files.names, fun file => [visible atHeap file]⟩
+      (live raw.beforeKeeper).names path = some inode ∧
+      visible raw.beforeKeeper inode = layout.keeper.bytes ++ layout.tail ∧
+      (live raw.beforeKeeper).Frames (· = path) (live seen.remembered) ∧
+      ((raw.callbacks.withFileReads raw.fileCalls).sync raw.seed.handle seen.remembered = .ok () seen.authorized →
+        (live seen.remembered).Frames (· = path) (live seen.authorized)) ∧
+      ((raw.callbacks.withFileReads raw.fileCalls).setPending raw.seed.pendingRef [] seen.authorized =
+        .ok () seen.consumed → (live seen.authorized).Frames (· = path) (live seen.consumed)))
+    (links : RunOpenLinkCensus (path := (dir).file (.walSegment layout.keeper.first))
+      (before := raw.listing.reached) raw.fileCalls.stat (observe raw.listing.reached).files.names
+      opening.reads.wal.keeper.observesFile.object)
+    (readFrame : (observe raw.listing.reached).files.Frames
+      (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
+      (observe seen.remembered).files)
     (phaseFrames : ∀ (state : NativeReadyState) ref reached,
       allocatePhase (.ready state.writer.installed) raw.repaired = .ok ref reached →
       (observe raw.repaired).Frames state.crashPath (observe reached) ∧ visible reached = visible raw.repaired)
@@ -160,20 +174,47 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRepair
       allocateToken () before = .ok ref reached →
       (observe before).Frames state.crashPath (observe reached) ∧ visible reached = visible before) :
     raw.ReadyWriterReturn log reads execute get set observe visible := by
+  have reached := durable.frame frames.visible (frames.weaken fun path same => .inr (.inl same))
   have alignedFinish : opening.finish = .aligned finish := congrArg Sigma.fst aligned
+  have sameObjects : opening.finish.census.inode = opening.admission.reached.inode := by
+    simpa only [alignedFinish, CapturedKeeperFinish.census] using finish.sameCensusObjects
+  have ⟨rootAtRepair, lockAtRepair⟩ := raw.reopenedAuthority (fun heap => (observe heap).files) root lock
+    (fun path used => frames.visible path (.inr (used.imp id (fun equal => .inl equal)))) sameObjects
+  rw [alignedFinish, CapturedKeeperFinish.census] at rootAtRepair lockAtRepair
+  obtain ⟨bound, payload, keeperFrame, dirFrame, consumeFrame⟩ := keeperRead
+  have keeperAtIssue := seen.keeperAtIssue (fun heap => (observe heap).files.names) visible
+    bound payload keeperFrame dirFrame consumeFrame
+  rw [seen.keeperIssueInode, ← opening.reads.wal.keeper.observesFile.sameObject] at keeperAtIssue
   have repairHeap : raw.repaired = seen.reached := congrArg (fun route => route.2.1) aligned
-  refine returned.readyAfterRepair observe visible ?_ ?_ phaseFrames tokenFrames
-  · simpa only [alignedFinish, CapturedKeeperFinish.census] using finish.sameCensusObjects
-  · intro next directory modeledCensus owner slot target kept durable first bytes
-    have chosenCensus : next.state.census = finish.census := by
-      simpa only [alignedFinish, CapturedKeeperFinish.census] using modeledCensus
-    obtain ⟨protectedFiles, apart⟩ := before next directory chosenCensus owner slot target kept durable
-    have exactHistory := next.readPrefix.refines.2.1
-    obtain ⟨_, ready, issuedKeeper⟩ := seen.readyStorage observe visible directory chosenCensus slot first bytes protectedFiles
-      (by simpa only [directory, exactHistory] using marker)
-      (by simpa only [directory] using rootSettled)
-      (effects next.state directory) keeperLive
-      (by simpa only [directory] using apart)
-    exact ⟨repairHeap.symm ▸ ready, repairHeap.symm ▸ issuedKeeper⟩
+  refine returned.readyAfterRepair observe visible sameObjects ?_ phaseFrames tokenFrames
+  intro next directory modeledCensus owner slot target retained published first bytes
+  have census : next.state.census = finish.census := by
+    simpa only [alignedFinish, CapturedKeeperFinish.census] using modeledCensus
+  have valid := next.readPrefix.refines.1
+  have authority : (observe seen.remembered).files.names next.state.session.directory.path =
+      some (next.state.census.inode next.state.directorySlot.description) := by
+    rw [directory, census, slot]
+    exact rootAtRepair
+  have owns : (observe seen.remembered).files.names (next.state.session.directory.file .lock) =
+      some (next.state.census.inode next.state.owner.description) := by
+    rw [directory, census, owner]
+    exact lockAtRepair
+  obtain ⟨protectedFiles, marker, parent⟩ :=
+    reached.forReopenedWriter priorReady valid directory target manifest published (retained.trans kept) authority owns
+  have apart : ∀ path, next.state.selectedRetryPath path →
+      (observe seen.remembered).files.names path ≠
+        some (opening.reads.wal.keeper.calls.inventory.inode opening.reads.wal.keeper.calls.slot.description) := by
+    intro path selectedPath bound
+    have crashPath : next.state.crashPath path := NativeReadyState.crashPath_iff_write.mpr
+      (selectedPath.imp id Or.inr)
+    have framedPath := NativeReadyState.crashPath_rootOrChild crashPath
+    rw [directory] at framedPath
+    have privateAtListing := raw.keeperPrivateBinding (names := fun heap => (observe heap).files.names) links
+    have canonical := readFrame.privateBindingOn privateAtListing path framedPath
+      (bound.trans (congrArg some opening.reads.wal.keeper.observesFile.sameObject))
+    exact NativeReadyState.protectedPathNeKeeper valid selectedPath (by rw [directory, first]; exact canonical)
+  obtain ⟨_, ready, issuedKeeper⟩ := seen.readyStorage observe visible directory census slot first bytes protectedFiles
+    marker parent (effects next.state directory) keeperAtIssue apart
+  exact ⟨repairHeap.symm ▸ ready, repairHeap.symm ▸ issuedKeeper⟩
 
 end Alvoki.Storage.DiskSession

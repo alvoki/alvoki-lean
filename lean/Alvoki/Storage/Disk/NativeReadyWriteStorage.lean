@@ -68,6 +68,22 @@ theorem NativeReadyStorage.afterPublishedWrite {before : NativeReadyState} {writ
         before.session.directory.file (.walSegment first)) sameKeeper)))
     · exact .inr (.inr ((paths path).mp kept))
 
+/-- The shared physical entry of a raw write on an already opened
+handle. Each field refers to the same reached heap and actual cache. -/
+structure NativeOpenedPosition.WriteStorageEntry {heap image : Type} {opened : NativeOpenedHandle heap}
+    (current : NativeOpenedPosition opened) (view : OpenCloseHeapView heap image)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (storage : CheckpointStorageObservation) (visible : Nat → ByteArray) : Prop where
+  census : view.descriptors current.reached = current.current.ready.state.census
+  cacheAt : view.cacheAt current.reached cache.directory cache.active cache.pending = current.current.ready.state.cache
+  physical : NativeReadyStorage current.current.ready.state storage
+  keeper : ∀ inode, storage.files.names (current.current.ready.state.session.directory.file
+    (.walSegment current.current.ready.state.writer.wal.active.first)) = some inode →
+    visible inode = current.current.ready.state.writer.wal.active.bytes
+  root : ∀ literal, view.directory current.reached cache.directory = some literal →
+    storage.files.names current.current.ready.state.session.directory.path =
+      some ((view.handle current.reached literal).1.inode (view.handle current.reached literal).2.1.description)
+
 private def observedStorage {heap : Type} {directory : DiskDirectory}
     {inodes : heap → WalInodeImage} {runs : heap → RunUnlinkImage}
     (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
@@ -118,14 +134,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (fits : (oldInstalled).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
     (returned : request.runOnRawOpenPhase dir lookup append stage sync rename
       opened.phase opened.get opened.set current.reached = .ok sequence reached)
-    (entryCensus : view.descriptors current.reached = (before).census)
-    (entryCache : view.cacheAt current.reached cache.directory cache.active cache.pending = (before).cache)
-    (old : NativeReadyStorage before (storage current.reached))
-    (keeperLive : ∀ inode, (observe current.reached).visible keeperPath = some inode →
-      (inodes current.reached).visible inode = (before).writer.wal.active.bytes)
-    (root : ∀ literal, view.directory current.reached cache.directory = some literal →
-      (storage current.reached).files.names (dir).path = some ((view.handle current.reached literal).1.inode
-        (view.handle current.reached literal).2.1.description))
+    (entry : current.WriteStorageEntry view cache (storage current.reached) (inodes current.reached).visible)
     (guardEffect : ∀ {after}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () after →
       (storage current.reached).Frames (before).crashPath (storage after) ∧
         view.writeAuthorityAt before cache.directory after = view.writeAuthorityAt before cache.directory current.reached ∧
@@ -204,6 +213,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
       ∀ inode, (observe reached).visible ((dir).file (.walSegment next.current.ready.state.writer.installed.activeFirst)) =
         some inode →
         (inodes reached).visible inode = next.current.ready.state.writer.wal.active.bytes := by
+  obtain ⟨entryCensus, entryCache, old, entryKeeper, root⟩ := entry
   obtain ⟨valid, history, _⟩ := current.current.ready.readPrefix.refines
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
   obtain ⟨guarded, poisoned, settled, guard, excluded, committed, installed, number, _, _⟩ :=
@@ -216,6 +226,9 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     valid.retained.resumed.keeper.trans valid.retained.active
   have selectedKeeper : keeperPath = (dir).file (.walSegment (before).writer.wal.active.first) :=
     congrArg (dir).file (congrArg DiskFile.walSegment first)
+  have keeperLive : ∀ inode, (observe current.reached).visible keeperPath = some inode →
+      (inodes current.reached).visible inode = (before).writer.wal.active.bytes := by
+    simpa only [observedStorage, RunDirectoryInodeView.storageObservation, selectedKeeper] using entryKeeper
   have selectedPath : (before).crashPath keeperPath :=
     NativeReadyState.crashPath_iff_write.mpr (.inr (.inl selectedKeeper))
   obtain ⟨keeperInode, keeperBound, _⟩ := old.keeper

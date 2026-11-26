@@ -1,9 +1,9 @@
-import Alvoki.Storage.Disk.NativeAlignedKeeperCache
+import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair
+open System WalSegmentRepair SyncHandleRouting
 
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
@@ -15,6 +15,59 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {finish : CapturedAlignedFinish calls reads vacant selected} {heap : Type}
   {view : OpenCloseHeapView heap FileImage} {init : OpenSyncCacheCallbacks heap} {cacheEntry entry : heap}
   {seed : OpenSyncCacheAllocations admission.opened view init cacheEntry} {callbacks : AlignedKeeperCacheCallbacks heap}
+
+/-- Frame the actual keeper open, bounded reads, and pending insertion.
+The bounded read uses the same chunk frame theorem as temporary reads. -/
+theorem AlignedKeeperCacheReport.framesRemembered
+    (seen : AlignedKeeperCacheReport finish view init cacheEntry seed callbacks entry) {frame : heap → heap → Prop}
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (openFrame : callbacks.openRead (directory.file (.walSegment layout.keeper.first)) entry =
+      .ok seen.keeper seen.opened → frame entry seen.opened)
+    (chunkFrame : ∀ count atHeap, frame atHeap (reachedState (callbacks.readChunk seen.keeper count atHeap)))
+    (rememberFrame : callbacks.modifyPending seed.pendingRef
+      (pushPending (directory.file (.walSegment layout.keeper.first)) seen.keeper) seen.read =
+      .ok () seen.remembered → frame seen.read seen.remembered) :
+    frame entry seen.remembered := by
+  have read := exactReadFrames refl trans (IO.userError "short or oversized WAL keeper read")
+    (callbacks.readChunk seen.keeper) chunkFrame layout.keeper.bytes.size ByteArray.empty seen.opened
+  rw [seen.rawRead] at read
+  exact trans (openFrame seen.rawOpen) (trans read (rememberFrame seen.rawRemember))
+
+/-- The descriptor issued to the final sync still identifies the inode
+opened for the exact selected keeper. -/
+theorem AlignedKeeperCacheReport.keeperIssueInode
+    (seen : AlignedKeeperCacheReport finish view init cacheEntry seed callbacks entry) :
+    (view.descriptors seen.consumed).inode (view.handle seen.consumed seen.keeper).2.1.description =
+      reads.wal.keeper.observesFile.object := by
+  rw [seen.sameKeeper, seen.rawKeeper, seen.consumeFrame.2, seen.authorizedCensus]
+  exact reads.wal.keeper.observesFile.sameObject
+
+/-- The full payload observed under the canonical name survives the
+read, directory barrier and pending removal. The checked extent leaves
+exactly the committed bytes at the actual keeper sync issue heap. -/
+theorem AlignedKeeperCacheReport.keeperAtIssue
+    (seen : AlignedKeeperCacheReport finish view init cacheEntry seed callbacks entry)
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray) :
+    let path := directory.file (.walSegment layout.keeper.first)
+    let live (atHeap : heap) : CheckpointSurvivingFiles := ⟨names atHeap, fun inode => [visible atHeap inode]⟩
+    let object := reads.wal.keeper.observesFile.object
+    names entry path = some object →
+    visible entry object = layout.keeper.bytes ++ layout.tail →
+    (live entry).Frames (· = path) (live seen.remembered) →
+    (callbacks.sync seed.handle seen.remembered = .ok () seen.authorized →
+      (live seen.remembered).Frames (· = path) (live seen.authorized)) →
+    (callbacks.setPending seed.pendingRef [] seen.authorized = .ok () seen.consumed →
+      (live seen.authorized).Frames (· = path) (live seen.consumed)) →
+    let inode := (view.descriptors seen.consumed).inode (view.handle seen.consumed seen.keeper).2.1.description
+    names seen.consumed path = some inode ∧ visible seen.consumed inode = layout.keeper.bytes := by
+  intro path live object bound payload read directoryFrame consumeFrame inode
+  have frames := read.trans ((directoryFrame seen.directorySync).trans (consumeFrame seen.consume))
+  obtain ⟨sameName, sameBytes⟩ := frames path rfl
+  have kept : [visible seen.consumed object] = [visible entry object] := sameBytes object bound
+  have issued : inode = object := seen.keeperIssueInode
+  rw [issued]
+  exact ⟨sameName.trans bound, (List.cons.inj kept).1.trans (payload.trans finish.keeperPayload)⟩
 
 /-- Physical laws for the three actual callbacks of an aligned repair.
 Each law is local to its issue and return heaps. -/
@@ -36,7 +89,6 @@ structure AlignedKeeperCacheReport.StorageEffects
   keeperSync : callbacks.sync seen.keeper seen.consumed = .ok () seen.reached →
     (view.handle seen.consumed seen.keeper).2.1 ∈ (view.descriptors seen.consumed).slots →
     let inode := (view.descriptors seen.consumed).inode (view.handle seen.consumed seen.keeper).2.1.description
-    (observe seen.consumed).files.names (directory.file (.walSegment layout.keeper.first)) = some inode ∧
     RegularFileSyncEffect inode [visible seen.consumed inode] (observe seen.consumed) (observe seen.reached) ∧
     visible seen.reached inode = visible seen.consumed inode
 
@@ -66,10 +118,12 @@ theorem AlignedKeeperCacheReport.readyStorage
     (rootSettled : ∀ names ∈ (observe seen.remembered).crashNames,
       names state.session.directory.path = (observe seen.remembered).files.names state.session.directory.path)
     (effects : seen.StorageEffects observe visible state)
-    (keeperLive : visible seen.consumed (reads.wal.keeper.calls.inventory.inode reads.wal.keeper.calls.slot.description) =
-      layout.keeper.bytes)
+    (keeperAtIssue :
+      let inode := reads.wal.keeper.calls.inventory.inode reads.wal.keeper.calls.slot.description
+      (observe seen.consumed).files.names (directory.file (.walSegment layout.keeper.first)) = some inode ∧
+      visible seen.consumed inode = layout.keeper.bytes)
     (apart : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
-      (observe seen.consumed).files.names path ≠
+      (observe seen.remembered).files.names path ≠
         some (reads.wal.keeper.calls.inventory.inode reads.wal.keeper.calls.slot.description)) :
     view.descriptors seen.reached = state.census ∧ NativeReadyStorage state (observe seen.reached) ∧
     ∀ inode, (observe seen.reached).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
@@ -101,8 +155,9 @@ theorem AlignedKeeperCacheReport.readyStorage
   have issuing : (view.handle seen.consumed seen.keeper).2.1 ∈ (view.descriptors seen.consumed).slots := by
     rw [keeperHandle, keeperCensus]
     exact keeperRetained
-  obtain ⟨bound, synced, live⟩ := effects.keeperSync seen.keeperSync issuing
-  rw [keeperHandle, keeperCensus] at bound synced live
+  obtain ⟨bound, keeperLive⟩ := keeperAtIssue
+  obtain ⟨synced, live⟩ := effects.keeperSync seen.keeperSync issuing
+  rw [seen.keeperIssueInode, ← reads.wal.keeper.observesFile.sameObject] at synced live
   let keeperInode := reads.wal.keeper.calls.inventory.inode reads.wal.keeper.calls.slot.description
   change _ = some keeperInode at bound
   change RegularFileSyncEffect keeperInode [visible seen.consumed keeperInode] _ _ at synced
@@ -111,8 +166,14 @@ theorem AlignedKeeperCacheReport.readyStorage
       (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some keeperInode := by
     rw [sameDirectory, sameFirst]
     exact bound
+  have apartAtIssue : ∀ path, path = state.session.directory.file .walBoundary ∨ state.writeFramePath path →
+      (observe seen.consumed).files.names path ≠ some keeperInode := by
+    intro path kept atIssue
+    have inScope : state.crashPath path := NativeReadyState.crashPath_iff_write.mpr (kept.imp id Or.inr)
+    have sameName := (toKeeperSync path inScope).1
+    exact apart path kept (sameName.symm.trans atIssue)
   refine ⟨seen.reachedCensus.trans sameCensus.symm, NativeReadyStorage.afterKeeperSync synced initialKeeper
-    protectedAtIssue markerAtIssue apart
+    protectedAtIssue markerAtIssue apartAtIssue
       (consumedFrame.settledFrom (NativeReadyState.settledByDirectory parentFrame rootSettled children)),
     ?_⟩
   intro inode after

@@ -69,7 +69,7 @@ theorem NativeReadPosition.SelectedWriteRecovery.replaysSelectedLedger
     ∃ (plan : current.SelectedWritePlan batch target (view.files reached).image)
       (retained : List WAL.Write),
       current.ReopenedLedger plan.history batch retained request input cause (source.openTable input reached) := by
-  obtain ⟨_, _, plan, opening, raw, _, _, _, _, _, _, _, returned⟩ := recovered
+  obtain ⟨_, _, _, _, plan, opening, raw, _, _, _, _, _, _, _, _, _, _, returned⟩ := recovered
   obtain ⟨_, next, _, handle, start, _, _, success, atStart, reads, _⟩ := returned
   obtain ⟨retained, ledger⟩ := plan.ledgerAfterReopen next reads request input cause
   exact ⟨plan, retained, next, handle, start, success, atStart, atStart.symm ▸ ledger,
