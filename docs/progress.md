@@ -1,5 +1,13 @@
 # Current handoff
 
+One source-level pilot joins a nonempty write's grouped error, the selected durable
+reboot, at least one actual failed open, the aligned returned writer, and the next
+observed acknowledged write and snapshot. The same storage and inode observations
+apply at every heap. The prepared batch and bound of the second write follow from
+its fixed successful return. The ledger omits the failed batch at the old marker
+and records the confirmed batch and replay-checked snapshot.
+[Grouped retry and snapshot](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
+
 The actual uncertain write return now classifies the failing publication stage once.
 The grouped-error proof uses those same append, stage and sync receipts to select the
 old marker and the exact source open. The failed-call fold can carry the durable

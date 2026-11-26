@@ -55,6 +55,31 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
   exact ⟨schedule, number, written, last, reference, _, reachedWrite, calls,
     wrote.append calls.common.ledgerSuffix, history ▸ replay, agrees⟩
 
+/-- A particular observed success and the local laws of its callbacks.
+The storage view is a projection of the same observation at every heap. -/
+def NativeOpenedPosition.ObservesPublishedWrite
+    {heap image : Type} {opened : NativeOpenedHandle heap} (start : NativeOpenedPosition opened)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (view : OpenCloseHeapView heap image)
+    (cache : OpenSyncCacheRefs opened.files start.current.ready.state.session.directory.path)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation)
+    (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit) (sequence : UInt64) (reached : heap) : Prop :=
+  let dir := start.current.ready.state.session.directory
+  ∃ files : ∀ atHeap, RunDirectoryInodeView dir (inodes atHeap) (runs atHeap),
+    (∀ atHeap, (files atHeap).storageObservation = observe atHeap) ∧
+    request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
+      (syncer.group dir.path cache.directory cache.active cache.pending)
+      rename opened.phase opened.get opened.set start.reached = .ok sequence reached ∧
+    (∀ {batch table}, prepareBatch start.current.ready.state.writer.installed.table request.rows = some (batch, table) →
+      start.PublishedWriteEffects appender stager syncer view cache inodes runs files
+        inode buffered request lookup rename batch) ∧
+    ∀ (written : NativeOpenedPosition opened), written.reached = reached →
+      ∀ {event after}, (NativeOpenedReport.acquire (start := written)).Reached event after →
+        opened.ptrEq opened.token opened.token after.reached = .ok true after.reached
+
 /-- Compose the old-target open ledger with the actual observed write
 and reads on its returned handle. The next-call assumptions describe
 the return and physical effects at the native callbacks. -/
@@ -81,36 +106,25 @@ theorem NativeReadPosition.SelectedWritePlan.acknowledgesAndReadsAfterOldTarget
     (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {writtenBatch : List WAL.Write} (nonempty : request.rows ≠ [])
+    (sequence : UInt64) (writeHeap : heap) (nonempty : request.rows ≠ [])
     (read : SnapshotReadRequest α)
     (nextCall : ∀ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
       (cache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
       source.openTable input entry = .ok handle.table start.reached →
       start.current.history = history →
       start.WriteStorageEntry view cache (observe start.reached) (inodes start.reached).visible →
-      let dir := start.current.ready.state.session.directory
-      ∃ (files : ∀ atHeap, RunDirectoryInodeView dir (inodes atHeap) (runs atHeap))
-        (table : PackedTable) (reached : heap),
-        (files start.reached).storageObservation = observe start.reached ∧
-        prepareBatch start.current.ready.state.writer.installed.table request.rows = some (writtenBatch, table) ∧
-        start.current.ready.state.writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
-        request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
-          (syncer.group dir.path cache.directory cache.active cache.pending)
-          rename handle.phase handle.get handle.set start.reached = .ok table.committed reached ∧
-        start.PublishedWriteEffects appender stager syncer view cache inodes runs files
-          inode buffered request lookup rename writtenBatch ∧
-        ∀ (written : NativeOpenedPosition handle), written.reached = reached →
-          ∀ {event after}, (NativeOpenedReport.acquire (start := written)).Reached event after →
-            handle.ptrEq handle.token handle.token after.reached = .ok true after.reached) :
+      start.ObservesPublishedWrite appender stager syncer view cache inodes runs observe
+        inode buffered request lookup rename sequence writeHeap) :
     ∃ (handle : NativeOpenedHandle heap) (start written last : NativeOpenedPosition handle)
       (cache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
-      (sequence : UInt64) (events : List NativeExecutionEvent) (reference : SnapshotTable UInt64),
+      (writtenBatch : List WAL.Write) (events : List NativeExecutionEvent) (reference : SnapshotTable UInt64),
       let dir := start.current.ready.state.session.directory
       source.openTable input entry = .ok handle.table start.reached ∧
       handle.table.UsesOpenWriteSchedules dir handle.files handle.phase ∧
       request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
         (syncer.group dir.path cache.directory cache.active cache.pending)
-        rename handle.phase handle.get handle.set start.reached = .ok sequence written.reached ∧
+        rename handle.phase handle.get handle.set start.reached = .ok sequence writeHeap ∧
+      written.reached = writeHeap ∧
       NativeOpenedTrace written [.acquire, .readAt written.pins.length read] events last ∧
       (⟨history, log, current⟩ : NativeExecutionPosition).LedgerSuffix
         (.uncertainWriteCrashRecovered first input cause batch [] :: .acknowledged request writtenBatch :: events)
@@ -124,18 +138,25 @@ theorem NativeReadPosition.SelectedWritePlan.acknowledgesAndReadsAfterOldTarget
     simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using recovered.history
   have omitted : retained = [] := List.append_cancel_left (by
     simpa only [List.append_nil] using appended.symm.trans old)
-  obtain ⟨files, table, reached, sameStorage, prepared, fits, writeReturn, effects, token⟩ :=
-    nextCall handle start cache returned old physical
+  obtain ⟨files, sameStorage, writeReturn, effects, token⟩ := nextCall handle start cache returned old physical
+  have valid := start.current.ready.readPrefix.refines.1
+  have loaded := handle.phaseEffects.reads start.reached handle.phase _
+    (start.stored.trans (congrArg some valid.phase))
+  let directory := start.current.ready.state.session.directory
+  obtain ⟨writtenBatch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared directory lookup
+    (appender.run cache.active) (stager.run cache.pending)
+    (syncer.group directory.path cache.directory cache.active cache.pending)
+    rename handle.phase handle.get handle.set loaded nonempty (by rw [writeReturn]; trivial)
   have atWrite : start.WriteStorageEntry view cache
       (files start.reached).storageObservation (inodes start.reached).visible := by
-    rw [sameStorage]
+    rw [sameStorage start.reached]
     exact physical
   obtain ⟨schedules, _, written, last, reference, events, reachedWrite, snapshots, wrote, replay, agrees⟩ :=
     start.acknowledgesAndReadsLatest appender stager syncer view cache inodes runs files inode buffered
-      request lookup rename nonempty prepared fits writeReturn atWrite effects read token
+      request lookup rename nonempty prepared fits writeReturn atWrite (effects prepared) read token
   have ledger := recovered.append wrote
   rw [omitted] at ledger
-  exact ⟨handle, start, written, last, cache, table.committed, events, reference, returned, schedules,
-    reachedWrite.symm ▸ writeReturn, snapshots, ledger, old ▸ replay, agrees⟩
+  exact ⟨handle, start, written, last, cache, writtenBatch, events, reference, returned, schedules,
+    writeReturn, reachedWrite, snapshots, ledger, old ▸ replay, agrees⟩
 
 end Alvoki.Storage.DiskSession

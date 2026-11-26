@@ -496,6 +496,7 @@ import Alvoki.Storage.Disk.NativePrunedKeeperStorage
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
+import Alvoki.Storage.Disk.NativeGroupedWriteSnapshot
 import Alvoki.Storage.Disk.NativeLongMarkedReady
 import Alvoki.Storage.Disk.NativePrunedMarkedReady
 import Alvoki.Storage.Disk.NativeRawWriteCustody
@@ -3883,6 +3884,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesPublishedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.acknowledgesAndReadsAfterOldTarget
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.groupedRetryAndReads
+#check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.finalizesWithFrames
 #check_axioms Alvoki.Storage.DiskSession.checkActiveSegmentWith_rawResult
 #check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofRawChecked
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_afterPreparation

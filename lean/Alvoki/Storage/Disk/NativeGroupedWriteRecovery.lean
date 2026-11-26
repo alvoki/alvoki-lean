@@ -33,6 +33,24 @@ local notation "writeMarker" => fun rows => stage stagedPath
   (WAL.Boundary.encode (Nat.toUInt64 (Installed.walBytes installed + WAL.frameSize * List.length rows)))
 local notation "syncFiles" => sync #[keeperPath, stagedPath]
 
+/-- Local effect law for the exact source receipts on the group-error
+branch. The preparation and reported call results are executable values. -/
+def NativeOpenedPosition.GroupedErrorEffects
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (failed : heap) (cause : IO.Error) : Prop :=
+  ∀ {batch table guarded poisoned appended staged},
+      prepareBatch (installed).table request.rows = some (batch, table) →
+      checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded →
+      opened.set opened.phase .poisoned guarded = .ok () poisoned →
+      appendBatch batch poisoned = .ok () appended → writeMarker request.rows appended = .ok () staged →
+      syncFiles staged = .error cause failed →
+      (storage current.reached).Frames (state).writeFramePath (storage poisoned) ∧
+      (storage poisoned).Frames (state).writeFramePath (storage appended) ∧
+      (storage appended).Frames (state).writeFramePath (storage staged) ∧
+      (storage staged).Frames (state).writeFramePath (storage failed) ∧
+      syncer.GroupFailureEffects cache view appender stager inodes observe inode buffered
+        request.rows batch current.reached poisoned appended staged
+
 /-- Classify the actual uncertain return before selecting a reboot.
 When the reached group failed, its literal returns supply the original
 target and exact later source open. Other stops retain their own cause
@@ -45,18 +63,8 @@ theorem NativeOpenedPosition.recoversGroupedWriteError
     (returned : request.runOnRawOpenPhase dir lookup append stage sync rename opened.phase opened.get opened.set current.reached =
       .error (.commitUnknown cause) failed)
     (initial : NativeReadyStorage state (storage current.reached))
-    (groupEffects : ∀ {batch table guarded poisoned appended staged},
-      prepareBatch (installed).table request.rows = some (batch, table) →
-      checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded →
-      opened.set opened.phase .poisoned guarded = .ok () poisoned →
-      appendBatch batch poisoned = .ok () appended → writeMarker request.rows appended = .ok () staged →
-      syncFiles staged = .error cause failed →
-      (storage current.reached).Frames (state).writeFramePath (storage poisoned) ∧
-      (storage poisoned).Frames (state).writeFramePath (storage appended) ∧
-      (storage appended).Frames (state).writeFramePath (storage staged) ∧
-      (storage staged).Frames (state).writeFramePath (storage failed) ∧
-      syncer.GroupFailureEffects cache view appender stager inodes observe inode buffered
-        request.rows batch current.reached poisoned appended staged)
+    (groupEffects : current.GroupedErrorEffects view cache appender stager syncer inodes observe inode buffered
+      request lookup failed cause)
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)

@@ -16,17 +16,11 @@ variable {heap stream : Type} {input : FilePath} {view : OpenCloseHeapView heap 
 
 local notation "dir" => current.state.session.directory
 
-/-- Reuse the plan, reader and raw successful return selected by the
-retry proof. The durable footprint is at the last retry heap. The
-remaining laws are local effects of the selected aligned open. -/
-theorem NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
-    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (recovered : current.SelectedWriteRecovery (returns := returns) (input := input) (view := view)
-      (batch := batch) (target := target) (reached := reached)
-      (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-      source (fun heap => (observe heap).files.names) visible first vacant get set ptrEq)
-    (durable : current.state.SelectedRetryDurability target (observe reached))
-    (laws : ∀ (plan : current.SelectedWritePlan batch target (view.files reached).image)
+/-- Local effects scoped to the actual aligned branch of the selected
+mark reader and repair. Each return is from the fixed interpreter. -/
+def NativeReadPosition.AlignedRetryEffects
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) : Prop :=
+  ∀ (plan : current.SelectedWritePlan batch target (view.files reached).image)
       (opening : MarkedReadyOpenObservations input dir (view.descriptors reached) (view.files reached) plan.layout
         current.state.writer.published vacant plan.selected)
       (raw : RawHealthyMarkedOpenEffects opening view source.calls source.init reached phaseIdentity tokenIdentity
@@ -61,7 +55,21 @@ theorem NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
           (observe raw.repaired).Frames state.crashPath (observe heap) ∧ visible heap = visible raw.repaired) ∧
         (∀ (state : NativeReadyState) before ref heap,
           source.allocateToken () before = .ok ref heap →
-          (observe before).Frames state.crashPath (observe heap) ∧ visible heap = visible before)) :
+          (observe before).Frames state.crashPath (observe heap) ∧ visible heap = visible before)
+
+/-- Reuse the plan, reader and raw successful return selected by the
+retry proof. The durable footprint is at the last retry heap. The
+remaining laws are local effects of the selected aligned open. -/
+theorem NativeReadPosition.SelectedWriteRecovery.readyAlignedWriter
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (recovered : current.SelectedWriteRecovery (returns := returns) (input := input) (view := view)
+      (batch := batch) (target := target) (reached := reached)
+      (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
+      source (fun heap => (observe heap).files.names) visible first vacant get set ptrEq)
+    (durable : current.state.SelectedRetryDurability target (observe reached))
+    (laws : NativeReadPosition.AlignedRetryEffects (current := current) (batch := batch) (target := target) (input := input)
+      (view := view) (reached := reached) (vacant := vacant) (source := source)
+      (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) observe visible) :
     ∃ (plan : current.SelectedWritePlan batch target (view.files reached).image)
       (opening : MarkedReadyOpenObservations input dir (view.descriptors reached) (view.files reached) plan.layout
         current.state.writer.published vacant plan.selected)

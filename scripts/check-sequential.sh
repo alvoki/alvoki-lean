@@ -418,6 +418,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativePrunedKeeperStorage
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedMarkedReady
 lake env leanchecker Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativePublishedWriteSnapshot
+lake env leanchecker Alvoki.Storage.Disk.NativeGroupedWriteSnapshot
 lake env leanchecker Alvoki.Storage.Disk.NativeLongMarkedReady
 lake env leanchecker Alvoki.Storage.Disk.NativePrunedMarkedReady
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedUncertainWrite

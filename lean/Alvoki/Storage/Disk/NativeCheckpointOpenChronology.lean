@@ -146,6 +146,48 @@ theorem RawManifestStatError.FileFrames.preserves
 
 end
 
+section FinalizedManifestLookup
+
+variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
+  {view : OpenCloseHeapView heap FileImage} {entry : heap}
+  {admission : CensusOpenAdmissionReports input directory (view.descriptors entry) (view.files entry)}
+  {source : RawMarkedOpenInterpreter heap stream}
+  {raw : RawOpenAdmissionReport admission view source.calls entry}
+  {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+
+/-- Compose the same held lookup and cleanup receipts for any scoped
+observation, including the live files and the parent crash maps. -/
+theorem RawManifestStatError.finalizesWithFrames
+    (seen : RawManifestStatError (admitted := raw) allocation source.fileCalls)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation seen.reached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view directory source.release raw.lock admission.owner disposal.reached)
+    {frame : heap → heap → Prop}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (admitFrames : raw.CacheFrames allocation frame)
+    (stat : source.calls.lookup (directory.file .manifest) allocation.afterPending = .ok (.error seen.cause) seen.reached →
+      frame allocation.afterPending seen.reached)
+    (dispose : let cache :=
+        RawMarkedOpenInterpreter.makeCache directory allocation.directoryRef allocation.activeRef allocation.pendingRef
+      source.dispose cache seen.reached = .ok () disposal.afterDisposal → frame seen.reached disposal.afterDisposal)
+    (unlock : source.calls.unlock raw.lock disposal.afterDisposal = (match disposal.unlockResult with
+        | .ok () => .ok () disposal.reached
+        | .error cause => .error cause disposal.reached) →
+      frame disposal.afterDisposal disposal.reached)
+    (release : source.release raw.lock disposal.reached = finalized.reached → frame disposal.reached finalized.reached) :
+    ∃ failed : RawFinalizedOpenAttempt view directory source.calls source.init source.release input entry,
+      source.openTable input entry = .error failed.diagnostic failed.reached ∧
+      failed.diagnostic = disposal.diagnostic seen.cause ∧ failed.reached = finalized.reached ∧
+      frame entry finalized.reached := by
+  obtain ⟨failed, returned, cause, reached⟩ := seen.finalizesWithInterpreter source disposal sameDisposal finalized
+  have uses := (RawMarkedOpenInterpreter.cacheReferences directory allocation.directoryRef allocation.activeRef
+    allocation.pendingRef).1
+  have dropped := dispose (sameDisposal.symm ▸ disposal.disposed _ uses)
+  exact ⟨failed, returned, cause, reached, trans (raw.framesThroughCache allocation trans admitFrames)
+    (trans (stat seen.stat) (trans dropped (trans (unlock disposal.unlocked) (release finalized.finalized))))⟩
+
+end FinalizedManifestLookup
+
 section
 
 variable {heap : Type} {state : NativeReadyState} {crash : NativeReadyQuietCrash state}

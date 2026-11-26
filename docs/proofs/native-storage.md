@@ -430,6 +430,16 @@ comparison. These lemmas supply the individual transitions for a combined execut
 · [Aligned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 · [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
+The grouped retry pilot composes these steps at their exact reached heaps. It requires
+a nonempty sequence of literal failed opens and derives the next batch and byte bound
+from the fixed successful write. It uses the same physical observation throughout.
+It begins at a ready writer with one admitted durable reset and local primitive
+effects, including frames for the failed calls. The MANIFEST lookup failure proof
+can derive those frames from the actual admission, lookup, cache disposal, unlock
+and release. Fresh initialization, checkpoint stops and full dispatch coverage remain
+open in the broader execution proof.
+[Grouped retry and snapshot](../../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
+
 The selected batch target supplies the same repair plan after a reported reboot or live retry.
 The reboot bridge uses one joint map and the bytes sampled at its actual heap. In the grouped
 file-sync error branch this map admits the old marker and a keeper that may include an
