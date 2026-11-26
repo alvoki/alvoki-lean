@@ -4,11 +4,42 @@ import Alvoki.Storage.Disk.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.AppendGroupedReports
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.WalSegmentRepairCheckpointBytes
+import Alvoki.Storage.Disk.NativeWalPublicationTail
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair SyncHandleRouting
+open System WalSegmentRepair SyncHandleRouting CheckpointPublication
 open WAL.Boundary (WalInodeImage)
+
+private theorem NativeReadyState.selectedRetryPath_rootOrChild {state : NativeReadyState} {path : FilePath}
+    (retained : state.selectedRetryPath path) :
+    path = state.session.directory.path ∨ ∃ file, path = state.session.directory.file file := by
+  rcases retained with marker | held
+  · exact .inr ⟨.walBoundary, marker⟩
+  rcases held with root | lock | manifest | sealedPath | runPath
+  · exact .inl root
+  · exact .inr ⟨.lock, lock⟩
+  · exact .inr ⟨.manifest, manifest⟩
+  · obtain ⟨segment, _, same⟩ := sealedPath
+    exact .inr ⟨.walSegment segment.first, same⟩
+  · obtain ⟨_, metadata, index, _, _, _, same⟩ := runPath
+    exact .inr ⟨.run metadata.header.generation index, same⟩
+
+/-- A directory fsync frames the protected child bytes for either
+reported effect. Parent binding continuity is a separate effect law. -/
+private theorem WalRootSyncEffect.framesSelectedRetry {state : NativeReadyState} {effective : Bool}
+    {entry reached : CheckpointStorageObservation} {before after : Nat → ByteArray}
+    (effect : WalRootSyncEffect state.session.directory effective entry reached)
+    (parent : entry.Frames (· = state.session.directory.path) reached) (live : after = before) :
+    state.SelectedRetryFrame entry reached before after := by
+  have durable : entry.files.Frames state.selectedRetryPath reached.files := by
+    intro path retained
+    rcases NativeReadyState.selectedRetryPath_rootOrChild retained with atRoot | ⟨file, rfl⟩
+    · exact parent.visible path atRoot
+    · exact ⟨effect.visible file, fun inode bound =>
+        effect.bytes reached.files.names (.inl rfl) file inode ((effect.visible file).trans bound)⟩
+  exact ⟨fun path held => ⟨(durable path held).1, by rw [live]; intros; rfl⟩, durable, parent⟩
+
 
 section DirectorySync
 
@@ -60,6 +91,60 @@ theorem ListedLongKeeperDirectoryIssue.observesFinalSyncError
       WalInodeImage.renameSynced, WalInodeImage.settleBinding, CanonicalKeeperLayout.target]
   · rw [seen]
     exact (issue.stoppedBindings effective).2
+
+/-- At the failed final directory sync the replacement inode and its
+durable bytes remain available. Only the effective branch settles its
+binding. Parent settlement follows its own frame. -/
+theorem ListedLongKeeperDirectoryIssue.keepsSelectedAtFinalError
+    (issue : ListedLongKeeperDirectoryIssue renamed) (view : OpenCloseHeapView heap FileImage)
+    (state : NativeReadyState) (sameDirectory : state.session.directory = directory)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observation : ∀ atHeap, RunDirectoryInodeView directory (inodes atHeap) (runs atHeap))
+    (callbacks : AlignedKeeperCacheCallbacks heap)
+    {handle : IO.FS.Handle} {issued reached : heap} {cause : IO.Error} {effective : Bool}
+    (fileImage : view.files issued = issue.files)
+    (keeperInodes : inodes issued = issue.stoppedInodes false)
+    (named : (observation issued).visible (directory.file (.walSegment layout.keeper.first)) =
+      some (stage.inventory.inode stage.slot.description))
+    (failed : callbacks.sync handle issued = .error cause reached)
+    (observed : FsyncResult (view.files issued, inodes issued)
+      (issue.stopped true, (inodes issued).settleBinding) effective
+      (projectResult (fun heap => (view.files heap, inodes heap)) (callbacks.sync handle issued)))
+    (fsync : callbacks.sync handle issued = .error cause reached →
+      WalRootSyncEffect directory effective (observation issued).storageObservation (observation reached).storageObservation ∧
+      (observation issued).storageObservation.Frames (· = directory.path) (observation reached).storageObservation) :
+    let replacement := stage.inventory.inode stage.slot.description
+    state.SelectedRetryFrame (observation issued).storageObservation (observation reached).storageObservation
+      (inodes issued).visible (inodes reached).visible ∧
+    (view.files reached).image.keeper.active = some layout.target.trimmed ∧
+    (observation reached).visible (directory.file (.walSegment layout.keeper.first)) = some replacement ∧
+    (inodes reached).visible replacement = layout.target.trimmed ∧
+    (inodes reached).crashBytes replacement = [layout.target.trimmed] ∧
+    (effective = true → ∀ names ∈ (observation reached).crashBindings,
+      names (directory.file (.walSegment layout.keeper.first)) = some replacement) := by
+  intro replacement
+  obtain ⟨afterFiles, afterInodes, _, live, durable, _⟩ :=
+    issue.observesFinalSyncError view inodes callbacks fileImage keeperInodes failed observed
+  have selectedKeeper : (view.files reached).image.keeper.active = some layout.target.trimmed := by
+    rw [afterFiles]
+    cases effective <;> rfl
+  have sameContents : (inodes reached).visible = (inodes issued).visible := by
+    rw [afterInodes, keeperInodes]
+    cases effective <;> rfl
+  obtain ⟨children, parent⟩ := fsync failed
+  have reachedName := (children.visible (.walSegment layout.keeper.first)).trans named
+  have childScope : WalRootSyncEffect state.session.directory effective
+      (observation issued).storageObservation (observation reached).storageObservation := by
+    rw [sameDirectory]
+    exact children
+  have parentScope : (observation issued).storageObservation.Frames (· = state.session.directory.path)
+      (observation reached).storageObservation := by
+    rw [sameDirectory]
+    exact parent
+  refine ⟨childScope.framesSelectedRetry parentScope sameContents,
+    selectedKeeper, reachedName, live, durable, ?_⟩
+  intro applied names admissible
+  exact (children.settled applied names admissible (.walSegment layout.keeper.first)).trans reachedName
 
 end DirectorySync
 

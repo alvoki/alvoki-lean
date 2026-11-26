@@ -14,8 +14,11 @@ with an empty buffer and payload. Write and flush establish the selected
 bytes on the same description. The pending cell carries it to the actual
 fsync, which stores those bytes durably. The protected live and durable
 files and parent binding survive under the local Linux effects. The
-result still needs to be carried through rename and the failed final
-directory fsync into the selected retry.
+rename carries the same synced inode and bytes from the staging name to
+the keeper name. A final directory-fsync error retains those live and
+durable bytes under either effect. Only the effective fsync establishes
+settlement of the keeper name in every crash map. These results still
+need to be joined to the finalized raw retry and the subsequent open.
 [Staged keeper storage](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 A failed marked open can extend the same retry prefix after changing its

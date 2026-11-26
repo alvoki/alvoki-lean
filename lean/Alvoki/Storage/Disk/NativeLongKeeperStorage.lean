@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeWalPublicationTail
-import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 
 namespace Alvoki.Storage.DiskSession
 
@@ -141,7 +141,8 @@ theorem NativeLongKeeperStagedSyncHeap.preservesSelectedStage
       (inodes seen.reached).visible = (inodes seen.consumed).visible) :
     state.SelectedRetryFrame (observation suffix.reached).storageObservation (observation seen.reached).storageObservation
         (inodes suffix.reached).visible (inodes seen.reached).visible ∧
-      (observation seen.reached).storageObservation.files.Stored (directory.file .stagedWal) layout.keeper.bytes ∧
+      (observation seen.reached).visible (directory.file .stagedWal) = some replacement ∧
+      (inodes seen.reached).crashBytes replacement = [layout.keeper.bytes] ∧
       (inodes seen.reached).visible replacement = layout.keeper.bytes := by
   have opened := acquisition.keeps (fun atHeap => .refl _ _ _) NativeReadyState.SelectedRetryFrame.trans
   rw [staged.acquired] at opened
@@ -173,7 +174,56 @@ theorem NativeLongKeeperStagedSyncHeap.preservesSelectedStage
   have kept : state.SelectedRetryFrame (observation seen.consumed).storageObservation
       (observation seen.reached).storageObservation (inodes seen.consumed).visible (inodes seen.reached).visible :=
     ⟨fun path held => ⟨(durable.visible path held).1, by rw [sameContents]; intros; rfl⟩, durable.visible, parent⟩
-  exact ⟨opened.trans (inPending.trans kept), effect.stored named, sameContents ▸ bytes⟩
+  exact ⟨opened.trans (inPending.trans kept), (congrFun effect.names _).trans named,
+    by simpa [RunDirectoryInodeView.storageObservation] using effect.bytes replacement,
+    sameContents ▸ bytes⟩
+
+/-- The actual rename transfers the synced staging inode to the keeper
+name. The old keeper and scratch names are outside the immutable paths. -/
+theorem NativeLongKeeperRenameHeap.preservesSelectedReplacement
+    (state : NativeReadyState) (valid : state.Valid) (sameDirectory : state.session.directory = directory)
+    (keeperStart : state.writer.wal.active.first ≤ layout.keeper.first)
+    (seen : NativeLongKeeperRenameHeap synced rename)
+    (stagedBytes : (observe synced.reached).files.bytes replacement = [layout.keeper.bytes])
+    (stagedVisible : visible synced.reached replacement = layout.keeper.bytes)
+    (frame : rename (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first)) synced.reached =
+      .ok () seen.reached →
+      (∀ path, path ≠ directory.file .stagedWal → path ≠ directory.file (.walSegment layout.keeper.first) →
+        (observe seen.reached).files.names path = (observe synced.reached).files.names path) ∧
+      (∀ names ∈ (observe seen.reached).crashNames, ∃ prior ∈ (observe synced.reached).crashNames,
+        ∀ path, path ≠ directory.file .stagedWal → path ≠ directory.file (.walSegment layout.keeper.first) →
+          names path = prior path) ∧
+      (∀ path, state.selectedRetryPath path ∨ path = directory.file .stagedWal →
+        ∀ inode, (observe synced.reached).files.names path = some inode →
+          (observe seen.reached).files.bytes inode = (observe synced.reached).files.bytes inode ∧
+          visible seen.reached inode = visible synced.reached inode)) :
+    state.SelectedRetryFrame (observe synced.reached) (observe seen.reached) (visible synced.reached) (visible seen.reached) ∧
+      (observe seen.reached).files.names (directory.file (.walSegment layout.keeper.first)) = some replacement ∧
+      (observe seen.reached).files.bytes replacement = [layout.keeper.bytes] ∧
+      visible seen.reached replacement = layout.keeper.bytes := by
+  obtain ⟨unchanged, survivors, payload⟩ := frame seen.renamed
+  have offStage {path} (kept : state.selectedRetryPath path) : path ≠ directory.file .stagedWal := by
+    rw [← sameDirectory]
+    exact state.stagedWalOutsideRetryFootprint path kept
+  have offKeeper {path} (kept : state.selectedRetryPath path) : path ≠ directory.file (.walSegment layout.keeper.first) := by
+    rw [← sameDirectory]
+    exact NativeReadyState.protectedPathNeWalFromActive valid kept keeperStart
+  have durable : (observe synced.reached).Frames state.selectedRetryPath (observe seen.reached) := by
+    refine ⟨?_, ?_⟩
+    · intro path kept
+      exact ⟨unchanged path (offStage kept) (offKeeper kept), fun inode named => (payload path (.inl kept) inode named).1⟩
+    · intro names allowed
+      obtain ⟨prior, admitted, stays⟩ := survivors names allowed
+      exact ⟨prior, admitted, fun path kept => stays path (offStage kept) (offKeeper kept)⟩
+  have live : (⟨(observe synced.reached).files.names, fun inode => [visible synced.reached inode]⟩ :
+      CheckpointSurvivingFiles).Frames state.selectedRetryPath
+      ⟨(observe seen.reached).files.names, fun inode => [visible seen.reached inode]⟩ :=
+    fun path kept => ⟨(durable.visible path kept).1, fun inode named =>
+      congrArg (fun bytes => [bytes]) (payload path (.inl kept) inode named).2⟩
+  obtain ⟨source, _, _, _, moved, _⟩ := seen.movesStagedInode
+  obtain ⟨durableStage, liveStage⟩ := payload (directory.file .stagedWal) (.inr rfl) replacement source
+  exact ⟨⟨live, durable.visible, durable.weaken (fun _ root => .inr (.inl root))⟩,
+    moved, durableStage.trans stagedBytes, liveStage.trans stagedVisible⟩
 
 /-- The literal staged-file fsync stores the selected prefix. The
 rename moves the same inode, and the final directory fsync settles

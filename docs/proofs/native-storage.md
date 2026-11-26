@@ -448,8 +448,11 @@ create supplies the disjoint inode and empty contents. The reached
 write and flush establish the bytes on that inode, and the pending
 descriptor identifies the file fsync. Its local effect makes those
 bytes durable and frames all protected files and the root in its parent.
-The selected retry still needs the subsequent rename and directory
-effects.
+The rename keeps the same inode and its durable bytes while moving its
+visible binding. A final directory-fsync error carries that binding and
+payload under either effect. Only the effective branch settles the new
+keeper name in every crash map. The local frames still need to meet at
+the finalized raw retry and the subsequent open.
 [Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached

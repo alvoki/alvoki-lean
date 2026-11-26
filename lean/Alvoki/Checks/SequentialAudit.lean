@@ -3988,6 +3988,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.keepsVisibleKeeper
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.keepsObservedKeeper
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.observesFinalSyncError
+#check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.keepsSelectedAtFinalError
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.opensWithSelectedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensAfterWriteRetries
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsGroupErrorRetry
@@ -4028,6 +4029,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSettlementHeap.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.preservesSelectedStage
+#check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.preservesSelectedReplacement
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterLongerRetry
