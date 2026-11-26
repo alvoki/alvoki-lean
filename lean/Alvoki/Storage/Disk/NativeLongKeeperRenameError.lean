@@ -164,8 +164,6 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
     (stagedDurable : (storage synced).files.bytes replacement = [target.trimmed])
     (keeper : RawOpenRetryTrace.KeeperAt view state.session.directory target
       (fun atHeap => (storage atHeap).files.names) visible synced)
-    (later : RawOpenRetryTrace.LaterWalAt view state.session.directory target
-      (fun atHeap => (storage atHeap).files.names) synced)
     (failed : rename (state.session.directory.file .stagedWal)
       (state.session.directory.file (.walSegment target.first)) synced = .error cause reached)
     (observation : rename (state.session.directory.file .stagedWal)
@@ -182,8 +180,10 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
     state.SelectedRetryFrame (storage entry) (storage reached) (visible entry) (visible reached) ∧
     RawOpenRetryTrace.KeeperAt view state.session.directory target
       (fun atHeap => (storage atHeap).files.names) visible reached ∧
-    RawOpenRetryTrace.LaterWalAt view state.session.directory target
-      (fun atHeap => (storage atHeap).files.names) reached ∧
+    (RawOpenRetryTrace.LaterWalAt view state.session.directory target
+      (fun atHeap => (storage atHeap).files.names) synced →
+      RawOpenRetryTrace.LaterWalAt view state.session.directory target
+        (fun atHeap => (storage atHeap).files.names) reached) ∧
     (∀ lower upper, WalNamePresenceFrame state.session.directory lower upper (storage synced) (storage reached)) ∧
     (storage reached).files.names (state.session.directory.file (.walSegment target.first)) =
       some (if effective then replacement else old) ∧
@@ -225,8 +225,9 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
   have sameLater : (view.files reached).image.later.visible = (view.files synced).image.later.visible := by
     rw [imageAfter, syncedImage]
     cases effective <;> rfl
-  have laterAt : RawOpenRetryTrace.LaterWalAt view directory target
-      (fun atHeap => (storage atHeap).files.names) reached := by
+  have laterAt (later : RawOpenRetryTrace.LaterWalAt view directory target
+      (fun atHeap => (storage atHeap).files.names) synced) :
+      RawOpenRetryTrace.LaterWalAt view directory target (fun atHeap => (storage atHeap).files.names) reached := by
     apply later.frame sameLater
     intro start past
     apply effect.keepsName (.inr ⟨.walSegment start, rfl⟩)

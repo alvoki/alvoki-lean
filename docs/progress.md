@@ -23,9 +23,15 @@ longer keeper live. After the move, the new inode is live with the synced
 prefix. Each crash map selecting the new inode also excludes `WAL.next`.
 The actual accepted unlink loop and scoped name effects through cleanup
 give the next attempt the same selected WAL catalog and no later names.
-The shared repair prefix derives the staged descriptor, synced bytes and
-old keeper's settled name before either rename result. The reported
-effect of the exact rename call remains a local input.
+The longer read releases its keeper before staging. The pending list is
+then empty. After staging, it contains only the new file handle. The
+actual lookup and filtered cache update select that handle for fsync.
+This derives the old keeper's live bytes and the new inode's durable
+prefix under the local rule that dropping this reference preserves other
+inodes' bytes. The failed open uses its actual cache disposal and unlock.
+On the next aligned attempt, a successful directory fsync can eliminate
+the old keeper from the crash choices while preserving the live bytes.
+The keeper fsync then establishes the returned writer's durable bytes.
 [Rename effect](../lean/Alvoki/Storage/Disk/NativeLongKeeperRenameError.lean) ·
 [Failed repair and catalog](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 

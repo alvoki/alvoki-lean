@@ -347,6 +347,7 @@ import Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
 import Alvoki.Storage.Disk.NativeMarkedAdmissionRejections
 import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
 import Alvoki.Storage.Disk.NativeLongKeeperRenameError
+import Alvoki.Storage.Disk.NativeLongKeeperPending
 import Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncObservation
@@ -4149,6 +4150,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.failedLongKeeperRename
 #check_axioms Alvoki.Storage.DiskSession.longKeeperSyncPrefix
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.prunedAndSyncedReplacement
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.longKeeperReadFrames
+#check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.emptyPendingAfterLongKeeper
+#check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.clearsOnlyStagedKeeper
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
 #check_axioms Alvoki.Storage.DiskSession.filesAndFrameOfReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.LiteralKeeperReplacementEffects.readyAfterReturn

@@ -222,21 +222,29 @@ end LiteralRead
 
 section LiteralRepair
 
-/-- Interpret the file image of the reached callbacks. An independent
-frame can carry the held authority across the same effects. -/
+/-- Interpret the reached aligned repair callbacks. A rooted barrier can
+settle an earlier replacement's binding while keeping its visible bytes.
+The file sync settles the selected keeper after that barrier. -/
 structure AlignedRepairImageEffects (view : OpenCloseHeapView heap FileImage)
     (calls : AlignedKeeperCacheCallbacks heap) (root keeper : IO.FS.Handle)
-    (keeps : heap → heap → Prop) where
+    (keeperPath : FilePath) (keeps : heap → heap → Prop) where
   rootLoad : ∀ {cached before after}, calls.getDirectory cached before = .ok (some root) after →
     (view.files after).image = (view.files before).image ∧ keeps before after
-  rootSync : ∀ {before after}, calls.sync root before = .ok () after →
-    (view.files after).image = (view.files before).image.syncDirectory ∧ keeps before after
+  rootSync : ∀ {cached before issued after}, calls.getDirectory cached before = .ok (some root) issued →
+    calls.sync root issued = .ok () after →
+    (view.files after).image = { (view.files issued).image.syncDirectory with keeper := (view.files after).image.keeper } ∧
+    (view.files after).image.keeper.active = (view.files issued).image.keeper.active ∧ keeps issued after
   pendingLoad : ∀ {pending before after entries}, calls.getPending pending before = .ok entries after →
     (view.files after).image = (view.files before).image ∧ keeps before after
   pendingClear : ∀ {pending before after entries}, calls.setPending pending entries before = .ok () after →
     (view.files after).image = (view.files before).image ∧ keeps before after
-  keeperSync : ∀ {before after}, calls.sync keeper before = .ok () after →
-    (view.files after).image = (view.files before).image.syncKeeper ∧ keeps before after
+  keeperSync : ∀ {pending rootIssued authorized loaded consumed after entries},
+    calls.sync root rootIssued = .ok () authorized →
+    calls.getPending pending authorized = .ok entries loaded →
+    entries.find? (fun item => item.1 == keeperPath) = some (keeperPath, keeper) →
+    calls.setPending pending (entries.filter (fun item => item.1 != keeperPath)) loaded = .ok () consumed →
+    calls.sync keeper consumed = .ok () after →
+    (view.files after).image = (view.files consumed).image.syncKeeper ∧ keeps consumed after
 
 /-- Interpret the exact aligned finisher at the heap reached by the
 remembered WAL read. Its actual unlinks and barriers supply the file
@@ -253,7 +261,7 @@ theorem NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
     {readHeap prepared repaired : heap} {root keeper : IO.FS.Handle}
     {keeps : heap → heap → Prop}
     (keepsTrans : ∀ {before middle after}, keeps before middle → keeps middle after → keeps before after)
-    (model : AlignedRepairImageEffects view calls root keeper keeps)
+    (model : AlignedRepairImageEffects view calls root keeper ((dir).file (.walSegment plan.layout.keeper.first)) keeps)
     (cachedRoot : view.directory prepared cached = some root)
     (remembered : calls.modifyPending pending (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
       readHeap = .ok () prepared)
@@ -319,13 +327,19 @@ theorem NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
     calls.alignedRepairSyncsWithSuffix view dir repairPlan plan.layout.keeper.bytes.size cached active pending remove write rename
       size cachedRoot remembered recordsKeeper readsRoot syncKeepsPending readsPending suffix finished
   obtain ⟨getRootImage, getRootFrame⟩ := model.rootLoad getRoot
-  obtain ⟨syncRootImage, syncRootFrame⟩ := model.rootSync syncRoot
+  obtain ⟨syncRootImage, syncRootKeeper, syncRootFrame⟩ := model.rootSync getRoot syncRoot
   have authorityFrame := keepsTrans getRootFrame syncRootFrame
-  have authorizationImage : (view.files authorized).image = (view.files reached).image.syncDirectory :=
-    syncRootImage.trans (congrArg FileImage.syncDirectory (getRootImage.trans readOnly))
+  have authorizationImage : (view.files authorized).image =
+      { (view.files reached).image.syncDirectory with keeper := (view.files authorized).image.keeper } := by
+    rw [← readOnly, ← getRootImage]
+    exact syncRootImage
+  have authorizationKeeper := syncRootKeeper.trans
+    (congrArg (fun image : FileImage => image.keeper.active) (getRootImage.trans readOnly))
   have suffixReady :
-      (view.files keeperEntry).image = { (view.files reached).image.syncDirectory with later := LaterNames.settled [] } ∧
-      keeps prepared keeperEntry := by
+      (view.files keeperEntry).image = { (view.files reached).image.syncDirectory with
+        later := LaterNames.settled [], keeper := (view.files keeperEntry).image.keeper } ∧
+      (view.files keeperEntry).image.keeper.active = (view.files reached).image.keeper.active ∧
+      keeps prepared keeperEntry ∧ ∃ lastIssued, calls.sync root lastIssued = .ok () keeperEntry := by
     by_cases empty : newer = []
     · have immediate : keeperEntry = authorized := by simpa only [repairPlan, empty, ite_true] using pruned
       subst keeperEntry
@@ -333,7 +347,7 @@ theorem NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
         apply List.eq_nil_iff_forall_not_mem.mpr
         intro ordinal present
         exact List.not_mem_nil (empty ▸ covers ordinal present)
-      refine ⟨?_, authorityFrame⟩
+      refine ⟨?_, authorizationKeeper, authorityFrame, rootIssued, syncRoot⟩
       rw [authorizationImage]
       simp only [FileImage.syncDirectory, LaterNames.syncDirectory, noLater]
     · have later : repairPlan.newer ≠ [] := empty
@@ -343,26 +357,37 @@ theorem NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
         filesAndFrameOfReturnedWalUnlinks dir repairPlan remove write sync rename
           (fun atHeap => (view.files atHeap).image) keeps keepsTrans authorityFrame unlink removed
       obtain ⟨getSuffixImage, getSuffixFrame⟩ := model.rootLoad getSuffix
-      obtain ⟨syncSuffixImage, syncSuffixFrame⟩ := model.rootSync syncSuffix
+      obtain ⟨syncSuffixImage, syncSuffixKeeper, syncSuffixFrame⟩ := model.rootSync getSuffix syncSuffix
       have covered : ∀ ordinal ∈ (view.files authorized).image.later.visible, ordinal ∈ repairPlan.newer := by
         rw [authorizationImage]
         exact covers
-      refine ⟨?_, keepsTrans unlinkedFrame (keepsTrans getSuffixFrame syncSuffixFrame)⟩
-      rw [syncSuffixImage, getSuffixImage, unlinkedImage, FileImage.syncAfterCoveringUnlinks _ _ covered, authorizationImage]
+      have settledPrune := FileImage.syncAfterCoveringUnlinks _ _ covered
+      have prunedKeeper := congrArg (fun image : FileImage => image.keeper.active) settledPrune
+      have unlinksKeepKeeper : (view.files unlinked).image.keeper.active =
+          (view.files authorized).image.keeper.active := by
+        rw [unlinkedImage]
+        exact prunedKeeper
+      have keeperActive := syncSuffixKeeper.trans
+        ((congrArg (fun image : FileImage => image.keeper.active) getSuffixImage).trans
+          (unlinksKeepKeeper.trans authorizationKeeper))
+      refine ⟨?_, keeperActive, keepsTrans unlinkedFrame (keepsTrans getSuffixFrame syncSuffixFrame),
+        suffixIssued, syncSuffix⟩
+      rw [syncSuffixImage, getSuffixImage, unlinkedImage, settledPrune, authorizationImage]
       rfl
+  obtain ⟨suffixImage, suffixKeeper, suffixFrame, lastIssued, lastRoot⟩ := suffixReady
   obtain ⟨getPendingImage, getPendingFrame⟩ := model.pendingLoad getPending
   obtain ⟨clearImage, clearFrame⟩ := model.pendingClear clear
-  obtain ⟨syncKeeperImage, syncKeeperFrame⟩ := model.keeperSync syncKeeper
-  have framed := keepsTrans suffixReady.2 (keepsTrans getPendingFrame (keepsTrans clearFrame syncKeeperFrame))
+  obtain ⟨syncKeeperImage, syncKeeperFrame⟩ := model.keeperSync lastRoot getPending found clear syncKeeper
+  have framed := keepsTrans suffixFrame (keepsTrans getPendingFrame (keepsTrans clearFrame syncKeeperFrame))
   have keeperEffect : (view.files repaired).image = (view.files keeperEntry).image.syncKeeper :=
     syncKeeperImage.trans (congrArg FileImage.syncKeeper (clearImage.trans getPendingImage))
   have ready : (view.files repaired).image.Ready plan.layout.target := by
-    rw [keeperEffect, suffixReady.1]
+    rw [keeperEffect, suffixImage]
     apply FileImage.readyAfterKeeperSync rfl rfl
-    · exact exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm)
+    · exact suffixKeeper.trans (exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm))
     · exact ⟨rfl, rfl⟩
   have keptBySync : (view.files repaired).image.kept = (view.files reached).image.kept := by
-    rw [keeperEffect, suffixReady.1]
+    rw [keeperEffect, suffixImage]
     rfl
   have keptByLayout : (view.files repaired).image.kept = (wal.checkpointReopenFiles wal.directory none).kept :=
     keptBySync.trans (kept.trans current.readPrefix.refines.1.retained.sealedFiles)
@@ -397,7 +422,8 @@ structure LiteralKeeperReplacementEffects (view : OpenCloseHeapView heap FileIma
   renameStage : ∀ {staged before after}, sync #[directory.file .stagedWal] staged = .ok () before →
     rename (directory.file .stagedWal) (directory.file (.walSegment plan.keeper)) before = .ok () after →
     (view.files before).image.effect target (.replace .renameStaged) = some (view.files after).image ∧ keeps before after
-  settleKeeper : ∀ {before renamed after},
+  settleKeeper : ∀ {staged before renamed after},
+    sync #[directory.file .stagedWal] staged = .ok () before →
     rename (directory.file .stagedWal) (directory.file (.walSegment plan.keeper)) before = .ok () renamed →
     sync #[directory.path] renamed = .ok () after →
     (view.files renamed).image.keeper.step target.trimmed .syncDirectory = some (view.files after).image.keeper
@@ -459,7 +485,7 @@ theorem LiteralKeeperReplacementEffects.readyAfterReturn
   obtain ⟨lastImage, lastFrame⟩ := effects.rootSync lastRoot
   have settle : (view.files renamed).image.effect target (.replace .syncDirectory) =
       some (view.files repaired).image := by
-    simp only [FileImage.effect, ite_true, effects.settleKeeper renameStage lastRoot, Option.map_some, ← lastImage]
+    simp only [FileImage.effect, ite_true, effects.settleKeeper syncStage renameStage lastRoot, Option.map_some, ← lastImage]
   have image := FileImage.replacementImageOfEffects written persisted moved settle
   have ready : (view.files repaired).image.Ready target := by
     rw [image, prunedImage]
@@ -982,7 +1008,7 @@ structure RawMarkedOpenInterpreter.LiteralAlignedRepairEffects
     (observe reached).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode →
     (keeperCalls).modifyPending cache.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
       readHeap = .ok () prepared →
-    AlignedRepairImageEffects view keeperCalls cache.handle keeper
+    AlignedRepairImageEffects view keeperCalls cache.handle keeper ((dir).file (.walSegment plan.layout.keeper.first))
       (fun before after => LiteralOpenAuthority view dir cache before → LiteralOpenAuthority view dir cache after)
   recordsKeeper : ∀ {path keeper before after}, (keeperCalls).modifyPending cache.pendingRef (pushPending path keeper)
     before = .ok () after → view.pending after cache.pendingRef = pushPending path keeper (view.pending before cache.pendingRef)

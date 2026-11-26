@@ -1,4 +1,5 @@
 import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
+import Alvoki.Storage.Disk.NativeLongKeeperPending
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeWalPublicationTail
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
@@ -208,6 +209,78 @@ structure LongKeeperStageCallbacks.ReplacementPrefixStorageEffects
       ∀ inode, (observe issued).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
         some inode → visible after inode = visible issued inode
 
+private abbrev replacementLiveFiles {heap : Type} (observe : heap → CheckpointStorageObservation)
+    (visible : heap → Nat → ByteArray) (atHeap : heap) : CheckpointSurvivingFiles :=
+  ⟨(observe atHeap).files.names, fun inode => [visible atHeap inode]⟩
+
+section LivePrefix
+
+variable {stage : LongKeeperStageCallbacks heap} {calls : AlignedKeeperCacheCallbacks heap}
+  {state : NativeReadyState} {view : OpenCloseHeapView heap image}
+  {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+  {cached : IO.Ref (Option IO.FS.Handle)} {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+  {root : IO.FS.Handle}
+
+private abbrev replacementLiveFrame (state : NativeReadyState) (observe : heap → CheckpointStorageObservation)
+    (visible : heap → Nat → ByteArray) (before after : heap) : Prop :=
+  (replacementLiveFiles observe visible before).Frames state.crashPath (replacementLiveFiles observe visible after)
+
+private abbrev replacementPendingFrame (view : OpenCloseHeapView heap image)
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (before after : heap) : Prop :=
+  view.pending after pending = view.pending before pending
+
+private def ignoresReplacementStage (state : NativeReadyState) (observe : heap → CheckpointStorageObservation)
+    (visible : heap → Nat → ByteArray) (staged : Nat) (before after : heap) : Prop :=
+  ∀ path, state.crashPath path → ∀ inode, (observe before).files.names path = some inode →
+    inode ≠ staged → visible after inode = visible before inode
+
+/-- Each reached primitive supplies a live-byte law on protected names.
+The pending setter applies only to the actual singleton. -/
+structure LongKeeperStageCallbacks.ReplacementPrefixLiveEffects
+    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
+    (state : NativeReadyState) (view : OpenCloseHeapView heap image)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (cached : IO.Ref (Option IO.FS.Handle)) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (root : IO.FS.Handle) (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)) where
+  loadRoot : ∀ {before after}, calls.getDirectory cached before = .ok (some root) after →
+    replacementLiveFrame state observe visible before after ∧ replacementPendingFrame view pending before after
+  syncRoot : ∀ {before after}, calls.sync root before = .ok () after →
+    replacementLiveFrame state observe visible before after ∧ replacementPendingFrame view pending before after
+  unlink : ∀ {ordinal before after result}, ¬ state.crashPath (state.session.directory.file (.walSegment ordinal)) →
+    remove (state.session.directory.file (.walSegment ordinal)) before = .ok result after →
+    RunCollection.ownedUnlinkResult result = .ok () → replacementLiveFrame state observe visible before after ∧ replacementPendingFrame view pending before after
+  acquire : ∀ before, stage.AcquisitionFrames (state.session.directory.file .stagedWal) before
+    (fun first last => replacementLiveFrame state observe visible first last ∧ replacementPendingFrame view pending first last)
+  write : ∀ {before after file slot inode bytes}, stage.write file bytes before = .ok () after →
+    attachedReadSlot view file slot inode before →
+    ignoresReplacementStage state observe visible inode before after ∧ replacementPendingFrame view pending before after
+  flush : ∀ {before after file slot inode}, stage.flush file before = .ok () after →
+    attachedReadSlot view file slot inode before →
+    ignoresReplacementStage state observe visible inode before after ∧ replacementPendingFrame view pending before after
+  record : ∀ {before after file},
+    calls.modifyPending pending (pushPending (state.session.directory.file .stagedWal) file) before = .ok () after →
+    view.pending before pending = [] → replacementLiveFrame state observe visible before after
+  loadPending : ∀ {before after entries}, calls.getPending pending before = .ok entries after →
+    replacementLiveFrame state observe visible before after ∧ replacementPendingFrame view pending before after
+  clearPending : ∀ {before after file slot inode},
+    view.pending before pending = [(state.session.directory.file .stagedWal, file)] →
+    attachedReadSlot view file slot inode before → calls.setPending pending [] before = .ok () after →
+    ignoresReplacementStage state observe visible inode before after
+  syncFile : ∀ {before after file slot inode}, calls.sync file before = .ok () after →
+    attachedReadSlot view file slot inode before → ignoresReplacementStage state observe visible inode before after
+
+private theorem replacementLive_offStage {before after : heap} {staged : Nat}
+    (frames : (observe before).files.Frames state.crashPath (observe after).files)
+    (bytes : ignoresReplacementStage state observe visible staged before after)
+    (privateStage : ∀ path, state.crashPath path → (observe before).files.names path ≠ some staged) :
+    replacementLiveFrame state observe visible before after := by
+  intro path selected
+  refine ⟨(frames path selected).1, fun inode bound => ?_⟩
+  have apart : inode ≠ staged := fun same => privateStage path selected (same ▸ bound)
+  exact congrArg (fun bytes => [bytes]) (bytes path selected inode bound apart)
+
+end LivePrefix
+
 /-- A successful replacement also supplies the effect of moving the
 synced inode. The same cached-root law applies to its final barrier. -/
 structure LongKeeperStageCallbacks.ReplacementStorageEffects
@@ -257,8 +330,9 @@ private theorem replacementRootFrame
       (observe before).Frames (· = state.session.directory.path) (observe after) ∧
       CachedKeeperReplacementRoot state view cached root after ∧
       SameLiveWalNames state.session.directory (observe before) (observe after) ∧
-    ∀ names ∈ (observe after).crashNames, ∀ file,
-      names (state.session.directory.file file) = (observe after).files.names (state.session.directory.file file) := by
+    (∀ names ∈ (observe after).crashNames, ∀ file,
+      names (state.session.directory.file file) = (observe after).files.names (state.session.directory.file file)) ∧
+    ∃ issued, calls.getDirectory cached before = .ok (some root) issued ∧ calls.sync root issued = .ok () after := by
   let dir := state.session.directory
   let syncer : RawSyncCalls heap := ⟨⟨calls.getDirectory, calls.getPending, calls.setPending, calls.getActive, calls.openRead⟩, calls.sync⟩
   change syncer.group dir.path cached active pending #[dir.path] before = .ok () after at returned
@@ -271,7 +345,7 @@ private theorem replacementRootFrame
     (((loadFrame.visible _ (.inl rootScope)).1).trans rootNamed)
   have rootLoad := loadFrame.weaken (scope := (· = dir.path)) (fun path same => .inl (same.symm ▸ rootScope))
   refine ⟨?_, rootLoad.trans parent, reachedRoot, fun start =>
-    (children.visible (.walSegment start)).trans (loadNames start), children.settled rfl⟩
+    (children.visible (.walSegment start)).trans (loadNames start), children.settled rfl, _, loaded, synced⟩
   intro path tracked
   rcases NativeReadyState.crashPath_rootOrChild tracked with atRoot | ⟨file, rfl⟩
   · exact (rootLoad.trans parent).visible path atRoot
@@ -338,7 +412,10 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       (observe issued).files.names (state.session.directory.file .stagedWal) = some replacement ∧
       visible issued replacement = plan.keeperBytes.extract 0 plan.keeperSize ∧
       RegularFileSyncEffect replacement [visible issued replacement] (observe issued) (observe synced) ∧
-      visible synced replacement = visible issued replacement := by
+      visible synced replacement = visible issued replacement ∧
+      (stage.ReplacementPrefixLiveEffects calls state view observe visible cached pending root remove →
+        view.pending entry pending = [] →
+        (replacementLiveFiles observe visible entry).Frames state.crashPath (replacementLiveFiles observe visible synced)) := by
   let dir := state.session.directory
   let path := dir.file .stagedWal
   let keeperPath := dir.file (.walSegment plan.keeper)
@@ -353,7 +430,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     change state.crashPath (dir.file (.walSegment plan.keeper))
     rw [keeper]
     exact NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
-  obtain ⟨authFiles, authParent, authRoot, authNames, _⟩ :=
+  obtain ⟨authFiles, authParent, authRoot, authNames, _, _, authLoaded, authSynced⟩ :=
     replacementRootFrame effects rootNamed heldRoot readsDirectory firstRoot
   let frames (_ : Unit) (atHeap : heap) := (observe authorized).Frames state.crashPath (observe atHeap) ∧
     CachedKeeperReplacementRoot state view cached root atHeap
@@ -362,7 +439,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       obtain ⟨unchanged, retained⟩ := unlink (laterOutside _ member) called accepted
       exact ⟨before.1.trans unchanged, retained before.2⟩) unlinks
   have prunedRootName := (removes.visible _ rootScope).1.trans ((authFiles _ rootScope).1.trans rootNamed)
-  obtain ⟨prunedFiles, prunedParent, prunedRoot, prunedNames, settled⟩ :=
+  obtain ⟨prunedFiles, prunedParent, prunedRoot, prunedNames, settled, _, pruneLoaded, pruneSynced⟩ :=
     replacementRootFrame effects prunedRootName unlinkedRoot readsDirectory pruneRoot
   have prunedFootprint := authFiles.trans (removes.visible.trans prunedFiles)
   have prunedParentFrame := authParent.trans
@@ -410,9 +487,51 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     (writeFrame.walNames.trans (flushFrame.walNames.trans (recordFrame.walNames.trans
       (loadFrame.walNames.trans (clearFrame.walNames.trans (fun start =>
         congrFun fileSync.names (dir.file (.walSegment start)))))))))
-  exact ⟨prunedFootprint.trans toSynced.visible, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
+  refine ⟨prunedFootprint.trans toSynced.visible, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
     oldAtRename, fun names possible => (keeperSettled names possible _ rfl).trans oldAtRename,
-    consumed, file, slot, replacement, stageSync, syncedStage.1, distinct, stagedBinding, stageBytes, fileSync, syncedVisible⟩
+    consumed, file, slot, replacement, stageSync, syncedStage.1, distinct, stagedBinding, stageBytes, fileSync,
+    syncedVisible, ?_⟩
+  intro liveEffects pendingAtEntry
+  obtain ⟨authReadLive, authReadPending⟩ := liveEffects.loadRoot authLoaded
+  obtain ⟨authSyncLive, authSyncPending⟩ := liveEffects.syncRoot authSynced
+  let liveThroughPrune (_ : Unit) (atHeap : heap) :=
+    (replacementLiveFiles observe visible entry).Frames state.crashPath (replacementLiveFiles observe visible atHeap) ∧
+    view.pending atHeap pending = []
+  have atAuthorization : liveThroughPrune () authorized :=
+    ⟨authReadLive.trans authSyncLive, authSyncPending.trans (authReadPending.trans pendingAtEntry)⟩
+  have unlinkedLive : liveThroughPrune () unlinked := by
+    refine foldReturnedWalUnlinks dir plan remove write group rename liveThroughPrune (fun _ _ => ()) (initial := ()) atAuthorization
+      ?_ unlinks
+    intro ordinal before after result _ member called accepted previous
+    obtain ⟨keepsLive, keepsPending⟩ := liveEffects.unlink (laterOutside ordinal member) called accepted
+    exact ⟨previous.1.trans keepsLive, keepsPending.trans previous.2⟩
+  obtain ⟨pruneReadLive, pruneReadPending⟩ := liveEffects.loadRoot pruneLoaded
+  obtain ⟨pruneSyncLive, pruneSyncPending⟩ := liveEffects.syncRoot pruneSynced
+  have prunedLive := unlinkedLive.1.trans (pruneReadLive.trans pruneSyncLive)
+  have prunedPending := pruneSyncPending.trans (pruneReadPending.trans unlinkedLive.2)
+  have openedFrame := (liveEffects.acquire pruned).keeps
+    (fun _ => ⟨fun _ _ => ⟨rfl, fun _ _ => rfl⟩, rfl⟩)
+    (fun first second => ⟨first.1.trans second.1, second.2.trans first.2⟩)
+  rw [show stage.acquire (dir.file .stagedWal) pruned = .ok file opened from acquired,
+    NativeFileEffectProjection.reached] at openedFrame
+  obtain ⟨openedLive, openedPending⟩ := openedFrame
+  obtain ⟨writeLive, writePending⟩ := liveEffects.write wrote openedStage.1
+  obtain ⟨flushLive, flushPending⟩ := liveEffects.flush didFlush writtenStage.1
+  have emptyAtFlush := flushPending.trans (writePending.trans (openedPending.trans prunedPending))
+  have onlyFresh : view.pending staged pending = [(path, file)] := by
+    simpa only [emptyAtFlush, pushPending, List.filter_nil] using records recorded
+  have recordedLive := liveEffects.record recorded emptyAtFlush
+  obtain ⟨loadLive, loadPending⟩ := liveEffects.loadPending got
+  have clearLive := calls.clearsOnlyStagedKeeper view pending
+    (fun atHeap => (observe atHeap).files.names) visible onlyFresh got (fun read => ⟨readsPending read, loadPending⟩)
+    cleared loadedStage.1 liveEffects.clearPending
+    (fun path selected => (clearFrame.storage.visible path selected).1) loadedStage.2.2
+  have fileLive := replacementLive_offStage (fileSync.frames noAlias).visible
+    (liveEffects.syncFile stageSync syncedStage.1) syncedStage.2.2
+  exact prunedLive.trans (openedLive.trans
+    ((replacementLive_offStage writeFrame.storage.visible writeLive openedStage.2.2).trans
+      ((replacementLive_offStage flushFrame.storage.visible flushLive writtenStage.2.2).trans
+        (recordedLive.trans (loadLive.trans (clearLive.trans fileLive))))))
 
 /-- The actual successful long repair builds physical readiness. Its
 accepted unlink pass is framed locally; a fresh stage descriptor supplies
@@ -488,7 +607,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
     wroteStage, syncedStage, moved, finalGroup⟩ :=
     finishBoundedMarkedOpen_replacementReached dir plan physicalSize remove write group rename longer returned
   obtain ⟨atSync, parentAtSync, heldAtSync, authNames, stageNames, oldAtRename, _,
-    issued, _, _, replacement, _, _, distinct, stagedBinding, stagedBytes, fileSync, syncedVisible⟩ :=
+    issued, _, _, replacement, _, _, distinct, stagedBinding, stagedBytes, fileSync, syncedVisible, _⟩ :=
     stage.prunedAndSyncedReplacement calls state view observe visible buffered cached active pending remove rename
       root effects.toReplacementPrefixStorageEffects plan keeper heldRoot protectedFiles.directoryBound oldNamed laterOutside unlink records readsPending
       readsDirectory firstRoot unlinks pruneRoot wroteStage syncedStage
@@ -573,7 +692,7 @@ variable {staged : NativeLongKeeperFreshStageHeap suffix stage}
 
 local notation "replacement" => finish.stage.inventory.inode finish.stage.slot.description
 
-private theorem NativeReadyState.stagedWalOutsideRetryFootprint (state : NativeReadyState) :
+theorem NativeReadyState.stagedWalOutsideRetryFootprint (state : NativeReadyState) :
     ∀ path, state.selectedRetryPath path → path ≠ state.session.directory.file .stagedWal := by
   let directory := state.session.directory
   have basename {left right : DiskFile} (same : directory.file left = directory.file right) :=
