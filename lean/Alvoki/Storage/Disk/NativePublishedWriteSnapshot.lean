@@ -134,6 +134,24 @@ theorem NativeReturnedCalls.append {heap : Type} {opened : NativeOpenedHandle he
   | empty => exact second
   | cons returned _ ih => exact .cons returned (ih second)
 
+/-- Splitting a source run retains the actual intervening heap and
+the pins passed to the next public call. -/
+theorem NativeReturnedCalls.splitAppend {heap : Type} {opened : NativeOpenedHandle heap}
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {entry reached : heap} {pins : List DiskSnapshotPin}
+    {earlier later : List (NativeReturnedCall opened)}
+    (executed : NativeReturnedCalls writes issuer entry pins (earlier ++ later) reached) :
+    ∃ middle, NativeReturnedCalls writes issuer entry pins earlier middle ∧
+      NativeReturnedCalls writes issuer middle
+        (earlier.foldl (fun known call => call.pinsAfter known) pins) later reached := by
+  induction earlier generalizing entry pins with
+  | nil => exact ⟨entry, .empty, executed⟩
+  | cons _ _ ih =>
+    cases executed with
+    | cons returned remainder =>
+      obtain ⟨middle, before, after⟩ := ih remainder
+      exact ⟨middle, .cons returned before, after⟩
+
 /-- Follow the already prescribed public calls with a latest acquisition
 and a read of precisely that return, on the same opened handle. -/
 def NativeOpenedHandle.ReturnsLatestAfter {heap : Type} (opened : NativeOpenedHandle heap)

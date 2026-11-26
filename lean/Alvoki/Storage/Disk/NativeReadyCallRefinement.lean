@@ -537,4 +537,46 @@ theorem NativeReturnedCalls.refinesReady
     executed.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
   exact ⟨last, events, reached, pins, physical, length, records, ledger⟩
 
+/-- A supported ready prefix and its next observed write share the
+same handle, pin list and intermediate heap. The request row budget
+bounds the WAL window independently of the write's response. -/
+theorem NativeReturnedCalls.refinesReadyBeforeWrite
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {entry reached : heap} {known : List DiskSnapshotPin} {prefixCalls : List (NativeReturnedCall opened)}
+    {request : WriteRequest} {response : Except DiskWriteError UInt64}
+    (executed : NativeReturnedCalls writes issuer entry known
+      (prefixCalls ++ [.write request response]) reached)
+    (covered : NativeReturnedCalls.ReadyFrom writes issuer entry known prefixCalls)
+    (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (storage : heap → CheckpointStorageObservation) (inode : IO.FS.Handle → Nat)
+    (buffered : heap → IO.FS.Handle → ByteArray)
+    (effects : writes.ReturnEffects view inodes runs storage inode buffered)
+    (start : NativeOpenedPosition opened) (sameEntry : start.reached = entry)
+    (samePins : start.pins.map NativeOpenedPin.raw = known)
+    (initial : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) start)
+    {first : Nat}
+    (names : writes.WalWindowEffects storage first
+      (start.current.history.length + (prefixCalls.map NativeReturnedCall.requestedRows).sum + request.rows.length))
+    (window : start.WalWindowAt storage first
+      (start.current.history.length + (prefixCalls.map NativeReturnedCall.requestedRows).sum + request.rows.length)) :
+    ∃ (last : NativeOpenedPosition opened) (events : List NativeExecutionEvent),
+      NativeReturnedCalls writes issuer entry known prefixCalls last.reached ∧
+      last.pins.map NativeOpenedPin.raw = prefixCalls.foldl (fun pins call => call.pinsAfter pins) known ∧
+      writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) last ∧
+      events.length = prefixCalls.length ∧ (∀ pair ∈ prefixCalls.zip events, pair.1.Records pair.2) ∧
+      start.current.LedgerSuffix events last.current ∧
+      last.WalWindowAt storage first (last.current.history.length + request.rows.length) ∧
+      (NativeReturnedCall.write request response).Reaches
+        writes issuer (last.pins.map NativeOpenedPin.raw) last.reached reached := by
+  obtain ⟨middle, ran, pending⟩ := executed.splitAppend
+  obtain ⟨last, events, atMiddle, pins, physical, length, records, ledger, budget, frames⟩ :=
+    ran.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
+  refine ⟨last, events, atMiddle.symm ▸ ran, pins, physical, length, records, ledger,
+    (frames names window).restrictUpper (Nat.add_le_add_right budget _), ?_⟩
+  cases pending with
+  | cons returned tail =>
+    cases tail
+    rw [atMiddle, pins]
+    exact returned
+
 end Alvoki.Storage.DiskSession

@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeFailedOpenTerminalLedger
 import Alvoki.Storage.Disk.NativeGroupedWriteRecovery
+import Alvoki.Storage.Disk.NativeReadyCallRefinement
 
 namespace Alvoki.Storage.DiskSession
 
@@ -10,8 +11,7 @@ section Grouped
 
 variable {heap stream : Type} {opened : NativeOpenedHandle heap}
   (current : NativeOpenedPosition opened) (view : OpenCloseHeapView heap FileImage)
-  (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
-  (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+  (writes : NativeReadyWriteCalls opened) (issuer : opened.LatestIssuer)
   (inodes : heap → WalInodeImage) {runs : heap → RunUnlinkImage}
   (observe : ∀ atHeap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes atHeap) (runs atHeap))
 
@@ -21,6 +21,12 @@ local notation "installed" => current.current.ready.state.writer.installed
 local notation "storage" => fun atHeap => RunDirectoryInodeView.storageObservation (observe atHeap)
 local notation "names" => fun atHeap => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage atHeap))
 local notation "visible" => fun atHeap => WalInodeImage.visible (inodes atHeap)
+local notation "cache" => writes.cacheAtPosition current
+local notation "appender" => writes.appender
+local notation "stager" => writes.stager
+local notation "syncer" => writes.syncer
+local notation "lookup" => writes.lookup
+local notation "rename" => writes.rename
 
 /-- A literal grouped write error can end with the last rejected open
 after its sampled reboot. The earlier table's pending submission is
@@ -29,12 +35,10 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
     {origin : NativeExecutionPosition} {events : List NativeExecutionEvent}
     (prior : origin.LedgerSuffix events current.current)
     (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
-    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (request : WriteRequest)
     {failed rebooted reached : heap} {cause : IO.Error} (nonempty : request.rows ≠ [])
-    (returned : request.runOnRawOpenPhase dir lookup (appender.run cache.active) (stager.run cache.pending)
-      (syncer.group (dir).path cache.directory cache.active cache.pending) rename opened.phase opened.get opened.set
-      current.reached = .error (.commitUnknown cause) failed)
+    (observed : (NativeReturnedCall.write request (.error (.commitUnknown cause))).Reaches
+      writes issuer (current.pins.map NativeOpenedPin.raw) current.reached failed)
     (initial : NativeReadyStorage state (storage current.reached))
     (groupEffects : current.GroupedErrorEffects view cache appender stager syncer inodes observe inode buffered
       request lookup failed cause)
@@ -61,10 +65,11 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
       let keeper := (dir).file (.walSegment (installed).activeFirst)
       let staging := (dir).file .stagedWalBoundary
       let groupFailed := ∃ appended staged,
-        appender.run cache.active keeper (WAL.encodeBatch batch) poisoned = .ok () appended ∧
-        stager.run cache.pending staging
+        writes.appender.run (cache).active keeper (WAL.encodeBatch batch) poisoned = .ok () appended ∧
+        writes.stager.run (cache).pending staging
           (WAL.Boundary.encode ((installed).walBytes + WAL.frameSize * request.rows.length).toUInt64) appended = .ok () staged ∧
-        syncer.group (dir).path cache.directory cache.active cache.pending #[keeper, staging] staged = .error cause failed
+        writes.syncer.group (dir).path (cache).directory (cache).active (cache).pending #[keeper, staging] staged =
+          .error cause failed
       ¬ groupFailed ∨ (groupFailed ∧ ∃ earlier input diagnostic issued,
         returns = earlier ++ [(input, diagnostic)] ∧ source.FailedCalls rebooted earlier issued ∧
         source.openTable input issued = .error diagnostic reached ∧
@@ -74,6 +79,7 @@ theorem NativeOpenedPosition.stopsAfterGroupedWriteRetries
         let submissions := (origin.submissions ++ events.flatMap NativeExecutionEvent.submissions) ++ [.uncertainBatch batch]
         let reads := origin.ready.reads ++ events.flatMap NativeExecutionEvent.reads
         PendingClientReplay submissions reads history ∧ ∀ read ∈ reads, read.BoundedBy history.length) := by
+  have returned := writes.returnedWriteAt current observed
   obtain ⟨_, batch, table, guarded, poisoned, prepared, fits, guard, assigned, classified⟩ :=
     current.selectsAfterGroupedError view cache appender stager syncer inodes observe inode buffered
       request lookup rename nonempty returned initial groupEffects reboot

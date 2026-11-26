@@ -374,6 +374,30 @@ theorem writeStorageEntry {input : FilePath} {directory : DiskDirectory}
   intro literal found
   exact settled.1.bindsOpenCacheDirectory view cacheAt (by rw [captured, slot]; rfl) (congrFun sameObjects _) found
 
+/-- The fixed public write dispatcher uses the initialized references
+at the actual fresh return heap. -/
+theorem readyCallStorage {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
+    (resolved : opened.handle.directory = directory)
+    (writes : NativeReadyWriteCalls opened.handle)
+    {image : Type} (view : OpenCloseHeapView heap image)
+    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
+    (cacheAt : view.cacheAt opened.start.reached writes.cache.directory writes.cache.active writes.cache.pending =
+      opened.start.current.ready.state.cache)
+    (settled : let state := opened.start.current.ready.state
+      NativeReadyStorage state (storage opened.start.reached) ∧
+      ∀ inode, (storage opened.start.reached).files.names
+        (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some inode →
+        visible opened.start.reached inode = state.writer.wal.active.bytes) :
+    writes.StorageAt view storage visible opened.start := by
+  have atRoot := (congrArg DiskDirectory.path resolved) ▸ writes.cache.atRoot
+  obtain ⟨cache, directory, active, pending, first⟩ :=
+    opened.writeStorageEntry used view resolved writes.cache.references atRoot census cacheAt settled
+  exact ⟨first.census, by rw [← directory, ← active, ← pending]; exact first.cacheAt,
+    first.physical, first.keeper, fun literal named => first.root literal (directory ▸ named)⟩
+
 /-- Consume a fixed sequence of observed public calls directly on the
 fresh returned table. The actual bootstrap cache supplies the first
 physical write entry and its empty ledgers supply the replay origin. -/
@@ -413,12 +437,8 @@ theorem refinesReadyCallsFramed {input : FilePath} {directory : DiskDirectory}
       last.current.history.length ≤ (calls.map NativeReturnedCall.requestedRows).sum ∧
       (∀ {first through}, writes.WalWindowEffects storage first through →
         opened.start.WalWindowAt storage first through → last.WalWindowAt storage first through) := by
-  have atRoot := (congrArg DiskDirectory.path resolved) ▸ writes.cache.atRoot
-  obtain ⟨cache, directory, active, pending, first⟩ :=
-    opened.writeStorageEntry used view resolved writes.cache.references atRoot census cacheAt settled
-  have physical : writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) opened.start := by
-    exact ⟨first.census, by rw [← directory, ← active, ← pending]; exact first.cacheAt,
-      first.physical, first.keeper, fun literal named => first.root literal (directory ▸ named)⟩
+  have physical := opened.readyCallStorage used resolved writes view storage (fun atHeap => (inodes atHeap).visible)
+    census cacheAt settled
   obtain ⟨last, events, heap, pins, stored, length, records, ledger, budget, names⟩ :=
     executed.refinesReadyFramed covered view inodes runs storage inode buffered effects opened.start rfl
       (by rw [opened.emptyPins]; rfl) physical
