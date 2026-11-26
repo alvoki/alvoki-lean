@@ -302,26 +302,40 @@ theorem selects (seen : MarkedWalExtentReports prepared listing)
 
 end MarkedWalExtentReports
 
-/-- The guarded inventory callback returns the exact no-follow report.
-An ENOENT can come only from that actual stat. -/
-theorem MarkedWalExtentReports.inspectReturned {heap : Type}
+private theorem inspectReturnedGuard {heap : Type}
     (fileCalls : MarkedTemporaryReadCalls heap) (path : FilePath)
     {before reached : heap} {report : Except IO.Error IO.FS.Metadata}
-    (returned : inspect fileCalls path before = .ok report reached) :
-    fileCalls.stat path before = .ok report reached := by
+    (returned : MarkedWalExtentReports.inspect fileCalls path before = .ok report reached) :
+    fileCalls.stat path before = .ok report reached ∧
+      ∀ metadata, report = .ok metadata → metadata.numLinks = 1 := by
   change inspectWalSegmentWith path (fileCalls.stat path) before = _ at returned
   unfold inspectWalSegmentWith at returned
   cases stat : fileCalls.stat path before with
   | error cause after => simp [Bind.bind, EStateM.bind, stat] at returned
   | ok called after =>
     cases called with
-    | error cause => simpa only [Bind.bind, EStateM.bind, stat, Pure.pure, EStateM.pure] using returned
+    | error cause =>
+      simp only [Bind.bind, EStateM.bind, stat, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
+      obtain ⟨rfl, rfl⟩ := returned
+      exact ⟨rfl, fun _ equality => by cases equality⟩
     | ok metadata =>
       cases checked : (metadata.type == .file && metadata.numLinks == 1) <;>
         simp [Bind.bind, EStateM.bind, stat, checkPrivateRegularWith, checked, Pure.pure, EStateM.pure,
           throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
       obtain ⟨rfl, rfl⟩ := returned
-      rfl
+      have oneLink : metadata.numLinks = 1 := by
+        simp only [Bool.and_eq_true, beq_iff_eq] at checked
+        exact checked.2
+      exact ⟨rfl, fun _ equality => (Except.ok.inj equality) ▸ oneLink⟩
+
+/-- The guarded inventory callback returns the exact no-follow report.
+An ENOENT can come only from that actual stat. -/
+theorem MarkedWalExtentReports.inspectReturned {heap : Type}
+    (fileCalls : MarkedTemporaryReadCalls heap) (path : FilePath)
+    {before reached : heap} {report : Except IO.Error IO.FS.Metadata}
+    (returned : inspect fileCalls path before = .ok report reached) :
+    fileCalls.stat path before = .ok report reached :=
+  (inspectReturnedGuard fileCalls path returned).1
 
 /-- Each required seal or keeper keeps the absolute extent reported by
 its actual no-follow stat. Before the stat, the worker has processed
@@ -338,12 +352,14 @@ theorem MarkedWalExtentReports.selectedStat {heap : Type}
       names = earlier ++ renderWalSegmentName first :: rest ∧
       (earlier.filterMapM (readWalSegmentExtentWith directory (inspect fileCalls))) listed = .ok collected issued ∧
       inspect fileCalls (directory.file (.walSegment first)) issued = .ok (.ok metadata) after ∧
-      fileCalls.stat (directory.file (.walSegment first)) issued = .ok (.ok metadata) after := by
+      fileCalls.stat (directory.file (.walSegment first)) issued = .ok (.ok metadata) after ∧
+      metadata.numLinks = 1 := by
   obtain ⟨earlier, name, rest, collected, issued, after, order, parsed, steps, guarded⟩ :=
     readWalSegmentExtentsWith_memberStat directory (inspect fileCalls) names scan
       (selectWalExtentsThrough_required_subset selected member)
   rw [parseWalSegmentName_eq_some_iff.mp parsed] at order
-  exact ⟨earlier, rest, collected, issued, after, order, steps, guarded, inspectReturned fileCalls _ guarded⟩
+  obtain ⟨raw, checked⟩ := inspectReturnedGuard fileCalls _ guarded
+  exact ⟨earlier, rest, collected, issued, after, order, steps, guarded, raw, checked metadata rfl⟩
 
 end Alvoki.Storage.DiskSession
 

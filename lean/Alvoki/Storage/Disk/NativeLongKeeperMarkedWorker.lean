@@ -101,8 +101,7 @@ theorem MarkedTemporaryReadCalls.readSealKeepsFrame (calls : MarkedTemporaryRead
     (returned : calls.seal path count entry = .ok bytes reached) : frame entry reached := by
   have kept := calls.readWithFrames laws trans path
     (fun file => readExactPrefixWith selectedWalSpanError (calls.readChunk file) count .empty)
-    (fun file => exactReadFrames refl trans selectedWalSpanError (calls.readChunk file)
-      (laws.readChunk file) count .empty) entry
+    (calls.exactPrefixFrames refl trans selectedWalSpanError count) entry
   change frame entry (reachedState (calls.seal path count entry)) at kept
   simpa only [returned, reachedState] using kept
 
@@ -118,16 +117,21 @@ theorem MarkedTemporaryReadCalls.readKeeperKeepsFrame (calls : MarkedTemporaryRe
     frame before reached := by
   obtain ⟨file, opened, readHeap, _, _, acquired, payload, finished⟩ :=
     calls.readKeeperWithRelease_ok remember path count physical returned
-  have openFrame := laws.openRead path before
+  obtain ⟨temporary, guarded⟩ := laws
+  have openFrame := guarded.openRead path before
   rw [acquired, reachedState] at openFrame
-  have readFrame := exactReadFrames refl trans (IO.userError "short or oversized WAL keeper read")
-    (calls.readChunk file) (laws.readChunk file) count .empty opened
+  have readFrame := calls.exactPrefixFrames refl trans (IO.userError "short or oversized WAL keeper read") count
+    temporary file (guarded.readChunk file) opened
+  change GuardedReadFrame frame temporary file opened
+    (reachedState (readExactPrefixWith (IO.userError "short or oversized WAL keeper read")
+      (calls.readChunk file) count ByteArray.empty opened)) at readFrame
   rw [payload, reachedState] at readFrame
   have finalFrame : frame readHeap reached := by
     rcases finished with ⟨_, retained⟩ | ⟨_, released⟩
     · exact remembers retained
-    · simpa only [dataErrorDropState, released] using laws.release file readHeap
-  exact trans openFrame (trans readFrame finalFrame)
+    · have live := readFrame.2 (guarded.opensTemporary acquired)
+      simpa only [dataErrorDropState, released] using guarded.release file readHeap live
+  exact trans openFrame (trans readFrame.1 finalFrame)
 
 /-- The accepted payload traversal composes the frame through its actual
 seal releases and the final keeper callback, in observed heap order. -/

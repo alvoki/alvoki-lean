@@ -53,13 +53,14 @@ structure AlignedRepairHandleEffects (calls : AlignedKeeperCacheCallbacks heap)
     (view : OpenCloseHeapView heap image) (path : FilePath) (root keeper : IO.FS.Handle) : Prop where
   remember : ∀ {pending readHeap remembered},
     calls.modifyPending pending (SyncHandleRouting.pushPending path keeper) readHeap = .ok () remembered →
-    ReadSlotDrops view root readHeap remembered ∧ ReadSlotDrops view keeper readHeap remembered
+    ReadSlotDrops view keeper readHeap remembered
   loadRoot : ∀ {cached remembered issued}, calls.getDirectory cached remembered = .ok (some root) issued →
     ReadSlotDrops view root remembered issued ∧ ReadSlotDrops view keeper remembered issued
   syncRoot : ∀ {issued reached}, calls.sync root issued = .ok () reached → ReadSlotDrops view keeper issued reached
   loadPending : ∀ {pending entries entry loaded}, calls.getPending pending entry = .ok entries loaded →
     ReadSlotDrops view keeper entry loaded
-  clearPending : ∀ {pending} {entries : List (FilePath × IO.FS.Handle)} {loaded consumed},
+  clearPending : ∀ {pending} {entries : List (FilePath × IO.FS.Handle)} {before loaded consumed},
+    calls.getPending pending before = .ok entries loaded →
     entries.find? (fun item => item.1 == path) = some (path, keeper) →
     calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed →
     ReadSlotDrops view keeper loaded consumed
@@ -73,7 +74,7 @@ theorem AlignedRepairHandleEffects.issuedAttachments
     {cached : IO.Ref (Option IO.FS.Handle)} {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
     {rootSlot keeperSlot : DescriptorSlot} {rootInode keeperInode : Nat} {entries : List (FilePath × IO.FS.Handle)}
     {readHeap remembered rootIssued afterDirectory loaded consumed : heap}
-    (rootAtRead : attachedReadSlot view root rootSlot rootInode readHeap)
+    (rootAtCache : attachedReadSlot view root rootSlot rootInode remembered)
     (keeperAtRead : attachedReadSlot view keeper keeperSlot keeperInode readHeap)
     (rememberedKeeper : calls.modifyPending pending (SyncHandleRouting.pushPending path keeper) readHeap = .ok () remembered)
     (readRoot : calls.getDirectory cached remembered = .ok (some root) rootIssued)
@@ -83,12 +84,12 @@ theorem AlignedRepairHandleEffects.issuedAttachments
     (clearPending : calls.setPending pending (entries.filter (fun item => item.1 != path)) loaded = .ok () consumed) :
     attachedReadSlot view root rootSlot rootInode rootIssued ∧
     attachedReadSlot view keeper keeperSlot keeperInode consumed := by
-  obtain ⟨rootRemembered, keeperRemembered⟩ := effects.remember rememberedKeeper
+  have keeperRemembered := effects.remember rememberedKeeper
   obtain ⟨rootLoaded, keeperWithRoot⟩ := effects.loadRoot readRoot
   have keeperAfterRoot := (effects.syncRoot syncRoot).keepsAttachment
     (keeperWithRoot.keepsAttachment (keeperRemembered.keepsAttachment keeperAtRead))
-  exact ⟨rootLoaded.keepsAttachment (rootRemembered.keepsAttachment rootAtRead),
-    (effects.clearPending selected clearPending).keepsAttachment
+  exact ⟨rootLoaded.keepsAttachment rootAtCache,
+    (effects.clearPending readPending selected clearPending).keepsAttachment
       ((effects.loadPending readPending).keepsAttachment keeperAfterRoot)⟩
 
 /-- Report effects only at the actual cache reads, pending update, and

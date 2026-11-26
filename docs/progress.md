@@ -1,5 +1,22 @@
 # Current handoff
 
+One successful aligned marked open now supplies the exact replay, both
+repair barriers and the next write entry on its returned table. The same
+proof uses the admitted root, acquired lock, original cache cells and
+the keeper opened by the actual read. The one-link guard excludes a
+second managed name for that inode under the local link-count contract.
+Read frames preserve held authority through the lifetime of the actual
+temporary handle, including its release. The cache update uses the
+locally retained keeper as the operand of the next sync. A single failed-open fold
+carries the visible WAL window, live keeper and durable checkpoint
+through the earlier retries. The aligned proof uses local callback
+effects and starts from an observed selected retry entry with an exact
+keeper and no later WAL files. The grouped and late write consumers
+still need to supply this entry and the local open effects from their
+production traces.
+[Literal aligned return](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
+[Retry fold](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean)
+
 The literal aligned reader now carries a caller-chosen frame from admission
 to the heap where the keeper is remembered. The same proof can track
 durable storage and the root and lock alongside the visible read bytes.

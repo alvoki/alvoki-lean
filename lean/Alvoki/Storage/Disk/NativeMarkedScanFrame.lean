@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
 import Alvoki.Storage.Disk.RetainedWriterReopen
-import Alvoki.Storage.Disk.NativeRawWriteReboot
+import Alvoki.Storage.Disk.NativeDurableWriteReboot
 
 namespace Alvoki.Storage.DiskSession
 
@@ -37,8 +37,11 @@ structure MarkedDirectoryReadCalls.ScopeFrames {heap stream : Type}
     (calls : MarkedDirectoryReadCalls heap stream) (directory : DiskDirectory)
     (frame : heap → heap → Prop) : Prop where
   openDir : ∀ {entry reached handle}, calls.openDir directory.path entry = .ok handle reached → frame entry reached
-  readDir : ∀ handle entry, frame entry (calls.readDir handle entry).2
-  closeDir : ∀ {entry reached handle}, calls.closeDir handle entry = .ok () reached → frame entry reached
+  readDir : ∀ {entry opened handle}, calls.openDir directory.path entry = .ok handle opened →
+    frame opened (calls.readDir handle opened).2
+  closeDir : ∀ {entry opened scanned reached handle report}, calls.openDir directory.path entry = .ok handle opened →
+    calls.readDir handle opened = (report, scanned) → calls.closeDir handle scanned = .ok () reached →
+    frame scanned reached
 
 section Listing
 
@@ -60,9 +63,9 @@ theorem MarkedDirectoryReadReport.framesScan
     (frame : heap → heap → Prop) (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
     (effects : directoryCalls.ScopeFrames directory frame) :
     frame prepared.atScan seen.reached := by
-  have scan := effects.readDir seen.descriptor seen.opened
+  have scan := effects.readDir seen.openedRaw
   rw [seen.readRaw] at scan
-  exact trans (trans (effects.openDir seen.openedRaw) scan) (effects.closeDir seen.closedRaw)
+  exact trans (trans (effects.openDir seen.openedRaw) scan) (effects.closeDir seen.openedRaw seen.readRaw seen.closedRaw)
 
 /-- Each selected seal read carries the same scope through its actual
 returned heap, including the release. The keeper is still unread. -/
@@ -141,9 +144,9 @@ theorem MarkedDirectoryReadCalls.successKeepsFrame {stream : Type} (calls : Mark
     (returned : calls.run directory.path before = .ok entries after) : frame before after := by
   obtain ⟨file, opened, scanned, names, openedCall, readCall, closed, returnedEntries⟩ :=
     calls.returnedScan directory.path returned
-  have readFrame := laws.readDir file opened
+  have readFrame := laws.readDir openedCall
   rw [readCall] at readFrame
-  exact trans (laws.openDir openedCall) (trans readFrame (laws.closeDir closed))
+  exact trans (laws.openDir openedCall) (trans readFrame (laws.closeDir openedCall readCall closed))
 
 private theorem filterMapM_success_frames {α β : Type} (run : α → EStateM IO.Error heap (Option β))
     (items : List α) (refl : ∀ before, frame before before)
@@ -259,9 +262,11 @@ theorem MarkedWalExtentReports.selectedPhysicalExtent (fileCalls : MarkedTempora
       fileCalls.stat path issued = .ok (.ok metadata) statHeap ∧
       statObject path issued statHeap = some inode ∧ names origin path = some inode ∧
       names scanned path = some inode ∧ metadata.byteSize.toNat = (visible origin inode).size ∧
+      names issued path = some inode ∧ metadata.numLinks = 1 ∧
+      (visibleImage names visible origin).Frames scope (visibleImage names visible issued) ∧
       (visibleImage names visible origin).Frames scope (visibleImage names visible scanned) := by
   intro path
-  obtain ⟨earlier, _, _, issued, statHeap, _, priorReports, _, raw⟩ :=
+  obtain ⟨earlier, _, _, issued, statHeap, _, priorReports, _, raw, oneLink⟩ :=
     selectedStat fileCalls directory namesInOrder scan selected member
   let framed (before after : heap) :=
     (visibleImage names visible before).Frames scope (visibleImage names visible after)
@@ -275,7 +280,8 @@ theorem MarkedWalExtentReports.selectedPhysicalExtent (fileCalls : MarkedTempora
   have original : names origin path = some inode := sameName.symm.trans bound
   have contentEq : visible issued inode = visible origin inode := (List.cons.inj (sameBytes inode original)).1
   exact ⟨issued, statHeap, inode, raw, exactObject, original,
-    ((starts.trans full path inScope).1).trans original, trueSize.trans (congrArg ByteArray.size contentEq), starts.trans full⟩
+    ((starts.trans full path inScope).1).trans original, trueSize.trans (congrArg ByteArray.size contentEq),
+    bound, oneLink, starts.trans prior, starts.trans full⟩
 
 /-- The full keeper extent comes from the same inode that supplied the
 bounded prefix. The reached cache callback or release is selected by the
@@ -335,7 +341,7 @@ theorem MarkedTemporaryReadCalls.readsMarkedKeeperWithPhysicalExtent
     fileCalls.restoresSelectedWalBytes view names visible scope opens reads scopedReads remember remembers
       (fun extent _ => inScope extent.1) (listedFrame.trans statFrames) observedFiles rfl
   have selectedKeeper : (keeper, metadata) ∈ required := List.mem_of_getLast? last
-  obtain ⟨issued, statHeap, inode, stat, measured, original, _, trueSize, _⟩ :=
+  obtain ⟨issued, statHeap, inode, stat, measured, original, _, trueSize, _, _, _, _⟩ :=
     MarkedWalExtentReports.selectedPhysicalExtent fileCalls directory names visible scope statObject statTruth
       statFrame _ listedFrame scan selected selectedKeeper (inScope keeper)
   have sameInode := Option.some.inj (original.symm.trans named)
@@ -528,6 +534,45 @@ theorem NativeReadPosition.SelectedWritePlan.visibleWal
     rw [sameFirst]
     exact keeper.symm.trans plan.layout.visible
 
+private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
+    {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
+    {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : NativeReadPosition prior log)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
+    (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {target : Target} (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
+    {view : OpenCloseHeapView heap FileImage} {start reached : heap}
+    (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    {first : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, first ≤ offset)
+    (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible start)
+    {returns : List (FilePath × IO.Error)} {attempts : source.FailedCalls start returns reached} {keep : heap → Prop}
+    (effects : RawOpenRetryTrace.SelectedEffects view source start target (visibleImage names visible)
+      current.state.selectedRetryPath keep attempts)
+    (atEntry : keep start)
+    (atReached : keep reached →
+      current.state.writer.wal.NamespaceWindow current.state.session.directory first (prior ++ batch).length
+        (names reached) ∧ RawOpenRetryTrace.KeeperAt view current.state.session.directory target names visible reached) :
+    ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
+      plan.layout.VisibleWal current.state.session.directory (names reached) (visible reached) ∧
+      RawOpenRetryTrace.SelectedEntry view current.state target names visible reached ∧ keep reached := by
+  obtain ⟨valid, kept, protectedFrame, _, carries⟩ := effects.preserves initial.valid
+  obtain ⟨plan⟩ := current.preparesSelectedWrite prepared fits admitted valid initial.manifest
+  have preserved := carries atEntry
+  obtain ⟨reachedWindow, reachedKeeper⟩ := atReached preserved
+  obtain ⟨rest, firstRead⟩ := chainStarts plan.layout.chain (by simp)
+  have firstInWal := (plan.modeledWindow.1 plan.layout.first (Nat.le_refl _)).mpr
+    (firstRead ▸ List.mem_cons_self (a := plan.layout.first) (l := rest))
+  rw [appendSelectedView_starts] at firstInWal
+  have upper : plan.layout.range.through ≤ (prior ++ batch).length := by
+    rw [plan.layout.through]
+    rcases plan.allowed with old | complete
+    · simp [old]
+    · simp [complete]
+  have keptFiles := initial.protectedFiles.frame (fun path keep => protectedFrame path (.inr keep))
+  refine ⟨plan, plan.visibleWal names visible (reachedWindow.restrict (covers _ firstInWal) upper) keptFiles reachedKeeper,
+    ⟨valid, kept.trans initial.kept, initial.manifest, keptFiles, reachedKeeper, ?_⟩, preserved⟩
+  exact (protectedFrame.visiblePayload (.inl rfl)).trans initial.marker
+
 /-- Carry the WAL window and the live keeper through the same failed
 calls as the protected checkpoint. The initial name bound reaches as
 far as either marker after the uncertain batch. -/
@@ -552,24 +597,50 @@ theorem NativeReadPosition.preparesVisibleWriteRetry
       attempts) :
     ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
       plan.layout.VisibleWal current.state.session.directory (names reached) (visible reached) := by
-  obtain ⟨⟨plan⟩, _, protectedFrame, carries⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest
-    effects initial.valid
-  obtain ⟨reachedWindow, reachedKeeper⟩ := carries ⟨window, initial.keeper⟩
-  obtain ⟨rest, firstRead⟩ := chainStarts plan.layout.chain (by simp)
-  have firstInWal := (plan.modeledWindow.1 plan.layout.first (Nat.le_refl _)).mpr
-    (firstRead ▸ List.mem_cons_self (a := plan.layout.first) (l := rest))
-  rw [appendSelectedView_starts] at firstInWal
-  have upper : plan.layout.range.through ≤ (prior ++ batch).length := by
-    rw [plan.layout.through]
-    rcases plan.allowed with old | complete
-    · simp [old]
-    · simp [complete]
-  have keptFiles := initial.protectedFiles.frame (fun path keep => protectedFrame path (.inr keep))
-  exact ⟨plan, plan.visibleWal names visible (reachedWindow.restrict (covers _ firstInWal) upper) keptFiles reachedKeeper⟩
+  obtain ⟨plan, physical, _⟩ := current.preparesVisibleWriteRetryFromEffects prepared fits admitted names visible
+    covers initial effects ⟨window, initial.keeper⟩ id
+  exact ⟨plan, physical⟩
+
+/-- The exact failed opens carry the live WAL, protected checkpoint and
+marker, and durable storage to the same heap for the next reader. -/
+theorem NativeReadPosition.preparesDurableVisibleWriteRetry
+    {stream : Type} {source : RawMarkedOpenInterpreter heap stream}
+    {prior : List WAL.Write} {log : List DatabaseSubmissions} (current : NativeReadPosition prior log)
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
+    (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
+    {target : Target}
+    (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
+    {view : OpenCloseHeapView heap FileImage} {start reached : heap}
+    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    {first : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, first ≤ offset)
+    (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible start)
+    (window : current.state.writer.wal.NamespaceWindow current.state.session.directory first
+      (prior ++ batch).length (storage start).files.names)
+    (durable : current.state.SelectedRetryDurability target (storage start))
+    {returns : List (FilePath × IO.Error)} {attempts : source.FailedCalls start returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view source start target
+      (visibleImage (fun heap => (storage heap).files.names) visible) current.state.selectedRetryPath
+      (fun atHeap =>
+        current.state.writer.wal.NamespaceWindow current.state.session.directory first (prior ++ batch).length
+          (storage atHeap).files.names ∧
+        RawOpenRetryTrace.KeeperAt view current.state.session.directory target
+          (fun heap => (storage heap).files.names) visible atHeap ∧
+        current.state.SelectedRetryDurability target (storage atHeap)) attempts) :
+    ∃ plan : current.SelectedWritePlan batch target (view.files reached).image,
+      plan.layout.VisibleWal current.state.session.directory (storage reached).files.names (visible reached) ∧
+      RawOpenRetryTrace.SelectedEntry view current.state target (fun heap => (storage heap).files.names) visible reached ∧
+      current.state.SelectedRetryDurability target (storage reached) := by
+  obtain ⟨plan, physical, selected, _, _, settled⟩ :=
+    current.preparesVisibleWriteRetryFromEffects prepared fits admitted (fun heap => (storage heap).files.names) visible
+      covers initial effects ⟨window, initial.keeper, durable⟩ (fun kept => ⟨kept.1, kept.2.1⟩)
+  exact ⟨plan, physical, selected, settled⟩
 
 /-- Refine the actual WAL return using only the held recovery window
 and reached file effects. Both the canonical replay bytes and the
-actual keeper route come from the same payload traversal. -/
+actual keeper route come from the same payload traversal. The keeper's
+one-link guard excludes a distinct managed binding when such bindings
+count as separate links at the actual stat. -/
 theorem MarkedTemporaryReadCalls.readsCanonicalWal
     {stream image : Type} (fileCalls : MarkedTemporaryReadCalls heap)
     (directoryCalls : MarkedDirectoryReadCalls heap stream)
@@ -623,7 +694,13 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
       fileCalls.openRead path beforeKeeper = .ok file opened ∧ attachedReadSlot view file slot inode readHeap ∧
       ((layout.keeper.bytes.size = extent ∧ remember path file readHeap = .ok () reached) ∨
         (layout.keeper.bytes.size < extent ∧ fileCalls.release file readHeap = .ok () reached)) ∧
-      (visibleImage names visible initial).Frames scope (visibleImage names visible reached) := by
+      (visibleImage names visible initial).Frames scope (visibleImage names visible reached) ∧
+      ((∀ {issued statHeap metadata other}, fileCalls.stat path issued = .ok (.ok metadata) statHeap →
+        statObject path issued statHeap = some inode → scope path → scope other →
+        (other = directory.path ∨ ∃ file, other = directory.file file) → other ≠ path →
+        names issued path = some inode → names issued other = some inode → 2 ≤ metadata.numLinks.toNat) →
+        ∀ other, scope other → (other = directory.path ∨ ∃ file, other = directory.file file) →
+          names reached other = some inode → other = path) := by
   have observed := SelectedWalReadReturn.classifies directory layout.range.watermark length directoryCalls.run
     (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal (fileCalls.readKeeperWithRelease remember) entry
   rw [returned] at observed
@@ -673,13 +750,14 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     sealReads, fileList, extentEq, named, acquired, held, exactPrefix, route, _, finalFrame⟩ :=
     fileCalls.restoresSelectedWalBytes view names visible scope opens reads scopedReads remember remembers
       protectedExtent (listedFrame.trans scannedFrame) orderedReads rfl
+  have selectedExtent {offset metadata} (member : (offset, metadata) ∈ required) :=
+    MarkedWalExtentReports.selectedPhysicalExtent fileCalls directory names visible scope statObject statTruth statFrame
+      _ listedFrame scan selected member (protectedExtent (offset, metadata) member)
   let atName := fun start => names initial (directory.file (.walSegment start))
   have truthfulExtent : ∀ extent ∈ required, ∀ inode, atName extent.1 = some inode →
       extent.2.byteSize.toNat = (visible initial inode).size := by
     rintro ⟨offset, metadata⟩ member inode name
-    obtain ⟨_, _, measuredInode, _, _, same, _, size, _⟩ :=
-      MarkedWalExtentReports.selectedPhysicalExtent fileCalls directory names visible scope statObject statTruth statFrame
-        _ listedFrame scan selected member (protectedExtent (offset, metadata) member)
+    obtain ⟨_, _, measuredInode, _, _, same, _, size, _, _, _, _⟩ := selectedExtent member
     exact (Option.some.inj (same.symm.trans name)) ▸ size
   obtain ⟨sameFiles, sameExtent⟩ := layout.matchesSelectedWalPayloads atName (visible initial) offsets last
     sealReads truthfulExtent physical.sealed named physical.keeper exactPrefix
@@ -689,11 +767,27 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
   have count : layout.keeper.bytes.size = (layout.range.through - keeper) * WAL.frameSize := by
     simpa [keeperFirst, CanonicalKeeperLayout.target] using layout.target.trimmedSize
   refine ⟨fileList.trans sameFiles, extentEq.trans sameExtent, laterNames,
-    file, slot, inode, beforeKeeper, opened, readHeap, ?_, ?_, held, ?_, finalFrame⟩
+    file, slot, inode, beforeKeeper, opened, readHeap, ?_, ?_, held, ?_, finalFrame, ?_⟩
   · simpa only [keeperFirst] using named
   · simpa only [keeperFirst] using acquired
   · rw [count]
     simpa only [keeperFirst] using route
+  · intro countLinks other inside managed aliased
+    by_cases samePath : other = directory.file (.walSegment layout.keeper.first)
+    · exact samePath
+    · exfalso
+      have member := List.mem_of_getLast? last
+      obtain ⟨issued, statHeap, statInode, called, object, original, _, _, bound, oneLink, prior, _⟩ :=
+        selectedExtent member
+      have same := Option.some.inj (original.symm.trans named)
+      subst statInode
+      have aliasAtStat : names issued other = some inode :=
+        (prior other inside).1.trans ((finalFrame other inside).1.symm.trans aliased)
+      have two := countLinks (keeperFirst ▸ called) (keeperFirst ▸ object)
+        (keeperFirst ▸ protectedExtent (keeper, metadata) member) inside managed samePath (keeperFirst ▸ bound) aliasAtStat
+      rw [oneLink] at two
+      change 2 ≤ 1 at two
+      omega
 
 end ActualWalStat
 

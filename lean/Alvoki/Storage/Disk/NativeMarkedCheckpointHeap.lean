@@ -428,13 +428,70 @@ theorem MarkedTemporaryReadCalls.readSelectedMarker (calls : MarkedTemporaryRead
     (WAL.Boundary.decode_reencode actualAccepted)
   exact ⟨file, slot, inode, afterStat, opened, readHeap, beforeName, openedRaw, held.1, exactBytes, dropped⟩
 
-/-- Local effects at the actual open, bounded read, and scope release.
-The same relation can track any filesystem projection left intact by these callbacks. -/
-structure MarkedTemporaryReadCalls.ScopeFrames (calls : MarkedTemporaryReadCalls heap)
-    (frame : heap → heap → Prop) : Prop where
+/-- Frames for a scoped read whose finalizer preserves this particular frame
+only for temporary handles. The invariant follows the returned handle from
+its successful open through the raw chunk reads, including any failed read. -/
+structure MarkedTemporaryReadCalls.GuardedScopeFrames (calls : MarkedTemporaryReadCalls heap)
+    (frame : heap → heap → Prop) (temporary : IO.FS.Handle → heap → Prop) : Prop where
   openRead : ∀ path entry, frame entry (reachedState (calls.openRead path entry))
-  readChunk : ∀ file count entry, frame entry (reachedState (calls.readChunk file count entry))
-  release : ∀ file entry, frame entry (dataErrorDropState calls.release file entry)
+  opensTemporary : ∀ {path entry file opened}, calls.openRead path entry = .ok file opened →
+    temporary file opened
+  readChunk : ∀ file count entry, frame entry (reachedState (calls.readChunk file count entry)) ∧
+    (temporary file entry → temporary file (reachedState (calls.readChunk file count entry)))
+  release : ∀ file entry, temporary file entry → frame entry (dataErrorDropState calls.release file entry)
+
+/-- The chunk loop carries the ordinary frame and transports temporary-handle
+authority from its entry to its literal returned heap. -/
+def GuardedReadFrame {heap : Type} (frame : heap → heap → Prop) (temporary : IO.FS.Handle → heap → Prop)
+    (file : IO.FS.Handle) (before after : heap) : Prop :=
+  frame before after ∧ (temporary file before → temporary file after)
+
+theorem GuardedReadFrame.refl {frame : heap → heap → Prop} {temporary : IO.FS.Handle → heap → Prop} (refl : ∀ heap, frame heap heap) (file : IO.FS.Handle) (atHeap : heap) :
+    GuardedReadFrame frame temporary file atHeap atHeap :=
+  ⟨refl atHeap, id⟩
+
+theorem GuardedReadFrame.trans {frame : heap → heap → Prop} {temporary : IO.FS.Handle → heap → Prop}
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    {file : IO.FS.Handle} {before middle after : heap}
+    (first : GuardedReadFrame frame temporary file before middle)
+    (second : GuardedReadFrame frame temporary file middle after) :
+    GuardedReadFrame frame temporary file before after :=
+  ⟨trans first.1 second.1, second.2 ∘ first.2⟩
+
+/-- Scope effects carry their own temporary-handle predicate. The
+directory and lock need not satisfy it. -/
+def MarkedTemporaryReadCalls.ScopeFrames (calls : MarkedTemporaryReadCalls heap)
+    (frame : heap → heap → Prop) : Prop :=
+  ∃ temporary, calls.GuardedScopeFrames frame temporary
+
+theorem MarkedTemporaryReadCalls.ScopeFrames.map {calls : MarkedTemporaryReadCalls heap}
+    {first second : heap → heap → Prop} (laws : calls.ScopeFrames first)
+    (project : ∀ {before after}, first before after → second before after) : calls.ScopeFrames second := by
+  obtain ⟨temporary, guarded⟩ := laws
+  exact ⟨temporary, ⟨fun path entry => project (guarded.openRead path entry),
+    guarded.opensTemporary, fun file count entry =>
+      ⟨project (guarded.readChunk file count entry).1, (guarded.readChunk file count entry).2⟩,
+    fun file entry used => project (guarded.release file entry used)⟩⟩
+
+theorem MarkedTemporaryReadCalls.ScopeFrames.openRead {calls : MarkedTemporaryReadCalls heap}
+    {frame : heap → heap → Prop} (laws : calls.ScopeFrames frame) (path : FilePath) (entry : heap) :
+    frame entry (reachedState (calls.openRead path entry)) := by
+  obtain ⟨_, guarded⟩ := laws
+  exact guarded.openRead path entry
+
+theorem MarkedTemporaryReadCalls.ScopeFrames.readChunk {calls : MarkedTemporaryReadCalls heap}
+    {frame : heap → heap → Prop} (laws : calls.ScopeFrames frame) (file : IO.FS.Handle) (count : USize) (entry : heap) :
+    frame entry (reachedState (calls.readChunk file count entry)) := by
+  obtain ⟨_, guarded⟩ := laws
+  exact (guarded.readChunk file count entry).1
+
+/-- A read body inherits any temporary-handle predicate satisfied by
+its chunk callbacks, in addition to the caller's heap frame. -/
+def MarkedTemporaryReadCalls.BodyPreservesFrames (calls : MarkedTemporaryReadCalls heap)
+    (frame : heap → heap → Prop) (read : IO.FS.Handle → EStateM IO.Error heap ByteArray) : Prop :=
+  ∀ (temporary : IO.FS.Handle → heap → Prop) file,
+    (∀ count entry, GuardedReadFrame frame temporary file entry (reachedState (calls.readChunk file count entry))) →
+    ∀ entry, GuardedReadFrame frame temporary file entry (reachedState (read file entry))
 
 section ReadScopeFrames
 
@@ -497,10 +554,11 @@ theorem MarkedTemporaryReadCalls.readWithFrames (calls : MarkedTemporaryReadCall
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
     (path : FilePath)
     (read : IO.FS.Handle → EStateM IO.Error heap ByteArray)
-    (keeps : ∀ file entry, frame entry (reachedState (read file entry)))
+    (keeps : calls.BodyPreservesFrames frame read)
     (entry : heap) :
     frame entry (reachedState (calls.readWith path read entry)) := by
-  have opened := laws.openRead path entry
+  obtain ⟨temporary, guarded⟩ := laws
+  have opened := guarded.openRead path entry
   cases ran : calls.openRead path entry with
   | error =>
     simpa only [MarkedTemporaryReadCalls.readWith, ran, reachedState] using opened
@@ -511,7 +569,9 @@ theorem MarkedTemporaryReadCalls.readWithFrames (calls : MarkedTemporaryReadCall
       cases returned : read file openedAt <;> simp [returned, reachedState]
     rw [same]
     rw [ran] at opened
-    exact trans (trans opened (keeps file openedAt)) (laws.release file _)
+    have readFrame := keeps temporary file (guarded.readChunk file) openedAt
+    have live := readFrame.2 (guarded.opensTemporary ran)
+    exact trans (trans opened readFrame.1) (guarded.release file _ live)
 
 private theorem prefixUntilEofFrames (refl : ∀ atHeap, frame atHeap atHeap)
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
@@ -543,15 +603,28 @@ termination_by remaining
 decreasing_by omega
 
 private theorem MarkedTemporaryReadCalls.metadataReadFrames (calls : MarkedTemporaryReadCalls heap)
-    (laws : calls.ScopeFrames frame) (refl : ∀ atHeap, frame atHeap atHeap)
+    (refl : ∀ atHeap, frame atHeap atHeap)
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
-    (directory : DiskDirectory) (path : FilePath) (metadata : IO.FS.Metadata)
-    (file : IO.FS.Handle) (entry : heap) :
-    frame entry (reachedState (calls.readMetadata directory path metadata file entry)) := by
+    (directory : DiskDirectory) (path : FilePath) (metadata : IO.FS.Metadata) :
+    calls.BodyPreservesFrames frame (calls.readMetadata directory path metadata) := by
+  intro temporary file chunks entry
   unfold MarkedTemporaryReadCalls.readMetadata
   split
-  · exact prefixUntilEofFrames refl trans _ _ (laws.readChunk file) _ _ _
-  · exact manifestReadFrames refl trans _ (laws.readChunk file) _ _
+  · exact prefixUntilEofFrames (GuardedReadFrame.refl refl file) (GuardedReadFrame.trans (frame := frame) trans)
+      _ _ chunks _ _ _
+  · exact manifestReadFrames (GuardedReadFrame.refl refl file) (GuardedReadFrame.trans (frame := frame) trans)
+      _ chunks _ _
+
+/-- Exact byte reads preserve the temporary scope of the chunk loop. -/
+theorem MarkedTemporaryReadCalls.exactPrefixFrames (calls : MarkedTemporaryReadCalls heap)
+    (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    (mismatch : IO.Error) (count : Nat) :
+    calls.BodyPreservesFrames frame
+      (fun file => readExactPrefixWith mismatch (calls.readChunk file) count ByteArray.empty) := by
+  intro temporary file chunks entry
+  exact exactReadFrames (GuardedReadFrame.refl refl file) (GuardedReadFrame.trans (frame := frame) trans)
+    mismatch (calls.readChunk file) chunks count ByteArray.empty entry
 
 /-- The optional read composes the reached no-follow stat with the
 temporary descriptor scope, on either result of the actual dispatcher. -/
@@ -576,7 +649,7 @@ theorem MarkedTemporaryReadCalls.readOptionalFrames (calls : MarkedTemporaryRead
       cases regular : metadata.type == .file
       · simpa [regular, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState] using first
       · have scope := calls.readWithFrames laws trans path (calls.readMetadata directory path metadata)
-          (calls.metadataReadFrames laws refl trans directory path metadata) afterStat
+          (calls.metadataReadFrames refl trans directory path metadata) afterStat
         cases returned : calls.readWith path (calls.readMetadata directory path metadata) afterStat <;>
           simpa [regular, EStateM.bind, returned, Pure.pure, EStateM.pure, reachedState] using trans first scope
 
@@ -586,7 +659,7 @@ theorem MarkedTemporaryReadCalls.runPrefixFrames (calls : MarkedTemporaryReadCal
     (path : FilePath) (count : Nat) (entry : heap) :
     frame entry (reachedState (calls.runPrefix path count entry)) :=
   calls.readWithFrames laws trans path _
-    (fun file => exactReadFrames refl trans _ _ (laws.readChunk file) count ByteArray.empty) entry
+    (calls.exactPrefixFrames refl trans _ count) entry
 
 end ReadScopeFrames
 
@@ -657,7 +730,7 @@ private theorem RawTemporaryReadReport.frames {observations : CheckpointRunChunk
     {frame : heap → heap → Prop} (raw : RawTemporaryReadReport observations seed calls path drops read bytes before after)
     (laws : calls.ScopeFrames frame)
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
-    (keeps : ∀ file entry, frame entry (reachedState (read file entry))) : frame before after := by
+    (keeps : calls.BodyPreservesFrames frame read) : frame before after := by
   simpa only [raw.returns.1, reachedState] using calls.readWithFrames laws trans path read keeps before
 
 theorem RawTemporaryReadReport.censusAfter {observations : CheckpointRunChunkReads} {calls : MarkedTemporaryReadCalls heap}
@@ -815,14 +888,13 @@ theorem framesScan (report : NativeMarkedCheckpointReadHeap seed chronology call
     · rw [report.noManifest bound]
       exact refl seed.afterPending
     · obtain ⟨raw⟩ := report.manifestRead bytes bound file
-      exact raw.frames laws trans (calls.metadataReadFrames laws refl trans directory _ _)
+      exact raw.frames laws trans (calls.metadataReadFrames refl trans directory _ _)
   have runs := throughSelectedRuns selected (invariant := fun index => frame seed.afterPending (report.atRun index))
     first (fun bound decoded member stored earlier => by
       obtain ⟨raw⟩ := report.runRead _ _ bound decoded _ member _ stored
-      exact trans earlier (raw.frames laws trans (fun file =>
-        exactReadFrames refl trans _ _ (laws.readChunk file) _ ByteArray.empty)))
+      exact trans earlier (raw.frames laws trans (calls.exactPrefixFrames refl trans _ _)))
   exact trans (runs _ (Nat.le_refl _))
-    (report.markerRead.frames laws trans (calls.metadataReadFrames laws refl trans directory _ _))
+    (report.markerRead.frames laws trans (calls.metadataReadFrames refl trans directory _ _))
 
 /-- The actual selected checkpoint and bounded marker reads thread the
 opened heap into the WAL scan, with the same cache and held file image.

@@ -232,10 +232,15 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   the next write entry and ledger on the returned phase and token.
   The literal reader frames a caller-chosen projection over the same
   admission, checkpoint, marker and WAL callbacks. The checkpoint byte
-  proof shares its run induction with this frame. Instantiate the frame
-  for durable bytes and the held root and lock. Feed the exact repair
-  and allocation witnesses into the next writer proof, then migrate the
-  grouped and late write consumers.
+  proof shares its run induction with this frame. For a selected retry
+  with an exact keeper and no later names, one literal open now carries
+  durable storage and the held authority through the actual reads and
+  repair. Its allocated references receive the replay and the resulting
+  table supplies the next write entry and client ledger. Temporary
+  release uses the guard from its actual read scope. The failed-open
+  fold supplies the reached WAL window, live keeper and durable files
+  together. Connect that fold and the local open effects at the grouped
+  and late write consumers, then remove their older aligned adapter.
   [Literal aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
   [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)

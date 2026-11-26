@@ -499,9 +499,12 @@ theorem RawCheckpointRunPrefix.preservesSelectedFiles {stop : Manifest.Integrity
   | zero =>
     have frame := fileCalls.readWithFrames laws CheckpointSurvivingFiles.Frames.trans (directory.file .manifest)
       (fun file => readIntegrityManifestPrefixWith (fileCalls.readChunk file) seen.file.calls.metadata.byteSize.toNat)
-      (fun file => manifestReadFrames (frame := fun before after => (files before).Frames selectedPath (files after))
-        frameRefl CheckpointSurvivingFiles.Frames.trans (fileCalls.readChunk file) (laws.readChunk file)
-        seen.file.calls.metadata.byteSize.toNat) seed.afterPending
+      (fun temporary file chunks => manifestReadFrames (frame := GuardedReadFrame
+        (fun before after => (files before).Frames selectedPath (files after)) temporary file)
+        (GuardedReadFrame.refl (frame := fun before after => (files before).Frames selectedPath (files after))
+          frameRefl file) (GuardedReadFrame.trans (frame := fun before after => (files before).Frames selectedPath (files after))
+          CheckpointSurvivingFiles.Frames.trans)
+        (fileCalls.readChunk file) chunks seen.file.calls.metadata.byteSize.toNat) seed.afterPending
     simpa only [seen.manifestRead.returns.1, reachedState] using frame
   | succ index prior =>
     have inside := Nat.lt_of_succ_le within
