@@ -191,7 +191,7 @@ structure RawOpenAdmissionReport.AlignedReadEffects {directory : DiskDirectory} 
       ⟨names after, fun inode => [visible after inode]⟩
 
 /-- Match the actual checkpoint, marker and selected WAL read of one
-open. The aligned finisher gets the same pending handle as the reader.
+open. The reader passes its exact handle to the pending callback.
 The phase installed after that repair contains the exact replay. -/
 theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory : DescriptorInventory}
     {admission : CensusOpenAdmissionReports input current.state.session.directory inventory (view.files reached)}
@@ -307,5 +307,206 @@ theorem NativeReadPosition.SelectedWritePlan.readsLiteralAlignedOpen {inventory 
   · simpa only [size, suffix, through] using finish
 
 end LiteralRead
+
+section LiteralRepair
+
+/-- Interpret only the file-image projection of the reached callbacks.
+Ownership and durable physical bytes have separate projections. -/
+structure AlignedRepairImageEffects (view : OpenCloseHeapView heap FileImage)
+    (calls : AlignedKeeperCacheCallbacks heap) (root keeper : IO.FS.Handle) where
+  rootLoad : ∀ {cached before after}, calls.getDirectory cached before = .ok (some root) after →
+    (view.files after).image = (view.files before).image
+  rootSync : ∀ {before after}, calls.sync root before = .ok () after →
+    (view.files after).image = (view.files before).image.syncDirectory
+  pendingLoad : ∀ {pending before after entries}, calls.getPending pending before = .ok entries after →
+    (view.files after).image = (view.files before).image
+  pendingClear : ∀ {pending before after entries}, calls.setPending pending entries before = .ok () after →
+    (view.files after).image = (view.files before).image
+  keeperSync : ∀ {before after}, calls.sync keeper before = .ok () after →
+    (view.files after).image = (view.files before).image.syncKeeper
+
+/-- Interpret the exact aligned finisher at the heap reached by the
+remembered WAL read. Its two real barriers supply the file image needed
+by the retained writer, and expose the root and keeper receipts. -/
+theorem NativeReadPosition.SelectedWritePlan.retainsLiteralAlignedRepair
+    (plan : current.SelectedWritePlan batch target (view.files reached).image)
+    (calls : AlignedKeeperCacheCallbacks heap)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {readHeap prepared repaired : heap} {root keeper : IO.FS.Handle}
+    (model : AlignedRepairImageEffects view calls root keeper)
+    (cachedRoot : view.directory prepared cached = some root)
+    (remembered : calls.modifyPending pending (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
+      readHeap = .ok () prepared)
+    (recordsKeeper : calls.modifyPending pending (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
+      readHeap = .ok () prepared →
+      view.pending prepared pending = pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper
+        (view.pending readHeap pending))
+    (readsRoot : ∀ {result issued}, calls.getDirectory cached prepared = .ok result issued →
+      result = view.directory prepared cached ∧ view.pending issued pending = view.pending prepared pending)
+    (syncKeepsPending : ∀ {issued after}, calls.sync root issued = .ok () after →
+      view.pending after pending = view.pending issued pending)
+    (readsPending : ∀ {before entries loaded}, calls.getPending pending before = .ok entries loaded →
+      entries = view.pending before pending)
+    (finished : finishBoundedMarkedOpen dir ⟨plan.layout.range.through, plan.layout.keeper.first, [], plan.layout.keeper.bytes⟩
+      plan.layout.keeper.bytes.size remove write (calls.syncPaths (dir).path cached active pending) rename prepared =
+        .ok () repaired)
+    (readOnly : (view.files prepared).image = (view.files reached).image)
+    (exactKeeper : (view.files reached).image.keeper.active = some target.trimmed)
+    (noLater : (view.files reached).image.later.visible = [])
+    (kept : (view.files reached).image.kept = current.state.writer.files.kept)
+    {owner : DescriptorSlot} (held : (view.files repaired).owners.Owns dir owner.description)
+    {count : UInt64} {markerBytes patched : ByteArray} {logical : PackedTable}
+    (marker : (view.files reached).image.directory.active.walBoundary = some markerBytes)
+    (decoded : WAL.Boundary.decode markerBytes = .ok count)
+    (replayed : recoverMarkedWalSegments (current.state.writer.checkpoint.getD (.empty, 0)).1 count
+      ((plan.layout.sealed ++ [plan.layout.keeper]).map fun segment => (segment.first, segment.bytes)) =
+        .ok (patched, logical)) :
+    let installed := Reopened.installed ⟨logical, (current.state.writer.checkpoint.getD (.empty, 0)).2, count,
+      plan.layout.keeper.first⟩
+    let wal := current.state.writer.wal.appendSelectedView (view.files reached).image.directory.active plan.history
+    let writer := SegmentedWriterState.ofReopen installed wal plan.history current.state.writer.published
+      plan.layout.target current.state.writer.checkpoint (view.files repaired)
+    writer.RetainedReady dir owner.description ∧
+    ∃ (rootIssued afterDirectory : heap) (entries : List (FilePath × IO.FS.Handle)) (loaded consumed : heap),
+      calls.getDirectory cached prepared = .ok (some root) rootIssued ∧
+      calls.sync root rootIssued = .ok () afterDirectory ∧
+      calls.getPending pending afterDirectory = .ok entries loaded ∧
+      entries.find? (fun item => item.1 == (dir).file (.walSegment plan.layout.keeper.first)) =
+        some ((dir).file (.walSegment plan.layout.keeper.first), keeper) ∧
+      calls.setPending pending (entries.filter (fun item => item.1 != (dir).file (.walSegment plan.layout.keeper.first)))
+        loaded = .ok () consumed ∧
+      calls.sync keeper consumed = .ok () repaired := by
+  intro installed wal writer
+  let repairPlan : Plan := ⟨plan.layout.range.through, plan.layout.keeper.first, [], plan.layout.keeper.bytes⟩
+  have size : repairPlan.keeperBytes.size = repairPlan.keeperSize := plan.layout.target.trimmedSize
+  have valid : repairPlan.valid = true := (Plan.valid_iff repairPlan).mpr
+    ⟨plan.layout.target.firstCovered, Nat.le_of_eq size.symm, by simp [repairPlan]⟩
+  obtain ⟨rootIssued, afterDirectory, entries, loaded, consumed, getRoot, syncRoot, getPending, found, clear, syncKeeper⟩ :=
+    calls.alignedRepairSyncs view dir repairPlan plan.layout.keeper.bytes.size cached active pending remove write rename
+      valid size size rfl cachedRoot remembered recordsKeeper readsRoot syncKeepsPending readsPending finished
+  have directoryEffect : (view.files afterDirectory).image = (view.files reached).image.syncDirectory :=
+    (model.rootSync syncRoot).trans (congrArg FileImage.syncDirectory ((model.rootLoad getRoot).trans readOnly))
+  have keeperEffect : (view.files repaired).image = (view.files afterDirectory).image.syncKeeper :=
+    (model.keeperSync syncKeeper).trans
+      (congrArg FileImage.syncKeeper ((model.pendingClear clear).trans (model.pendingLoad getPending)))
+  have tail : plan.layout.tail = ByteArray.empty := by
+    have bytes : plan.layout.keeper.bytes ++ plan.layout.tail = plan.layout.keeper.bytes :=
+      Option.some.inj (plan.layout.visible.symm.trans
+        (exactKeeper.trans (congrArg some (congrArg Target.trimmed plan.targetEq).symm)))
+    have counts := congrArg ByteArray.size bytes
+    rw [ByteArray.size_append] at counts
+    exact ByteArray.size_eq_zero_iff.mp (by omega)
+  have ready := plan.layout.readyAfterAlignedEffects tail noLater directoryEffect keeperEffect
+  have keptBySync : (view.files repaired).image.kept = (view.files reached).image.kept := by
+    rw [keeperEffect, directoryEffect]
+    rfl
+  have keptByLayout : (view.files repaired).image.kept = (wal.checkpointReopenFiles wal.directory none).kept :=
+    keptBySync.trans (kept.trans current.readPrefix.refines.1.retained.sealedFiles)
+  have keeperEq : plan.layout.keeper.first = wal.active.first := congrArg WalSegment.first plan.keeper
+  obtain ⟨retained, _, _, _⟩ := plan.layout.retainedFromActualReplay plan.selected plan.accepted plan.ordered marker decoded rfl
+    replayed plan.walLayout plan.walValid current.readPrefix.refines.1.retained.spans rfl keeperEq ready keptByLayout held
+  exact ⟨retained, rootIssued, afterDirectory, entries, loaded, consumed, getRoot, syncRoot, getPending, found, clear, syncKeeper⟩
+
+end LiteralRepair
+
+section LiteralInstall
+
+variable {calls : AlignedKeeperCacheCallbacks heap} {readHeap prepared repaired : heap}
+  {root keeper lock : IO.FS.Handle} {owner directorySlot keeperSlot : DescriptorSlot}
+  {writer : SegmentedWriterState}
+  {allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired}
+  {syncFiles : DiskTable.OpenSyncFiles} {cache : OpenSyncCacheRefs syncFiles current.state.session.directory.path}
+  {assemble : IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+
+local notation "readyState" => allocation.readyState writer dir owner directorySlot
+  cache.directory cache.active cache.pending phaseIdentity tokenIdentity
+
+/-- Transport the settled storage and client ledger from the actual
+aligned repair through the two allocations of the literal returned
+table. The retained writer is the replay at this repair's reached heap. -/
+theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
+    (plan : current.SelectedWritePlan batch target (view.files reached).image)
+    (request : WriteRequest) (cause : IO.Error)
+    (constructor : DiskTable.OpenReferenceAssembly dir lock syncFiles assemble)
+    (retained : writer.RetainedReady dir owner.description)
+    (sameHistory : writer.history = plan.history)
+    (selected : writer.target = target) (manifest : target.pair.manifest = current.state.writer.target.pair.manifest)
+    (published : writer.published.durable = current.state.writer.published.durable)
+    (kept : writer.files.kept = current.state.writer.files.kept)
+    (ownsSlot : (view.handle repaired lock).2.1 = owner)
+    (ownerLive : owner ∈ (view.descriptors repaired).slots)
+    (directoryLive : directorySlot ∈ (view.descriptors repaired).slots)
+    (directoryCached : ∃ captured, (view.cacheAt repaired cache.directory cache.active cache.pending).directory =
+      some (captured, directorySlot, 0))
+    (cachePhase : CacheAllocationFrame view cache.directory cache.active cache.pending repaired allocation.afterPhase)
+    (cacheToken : CacheAllocationFrame view cache.directory cache.active cache.pending allocation.afterPhase allocation.afterToken)
+    (rootInode : ∀ captured, (readyState).cache.directory = some (captured, directorySlot, 0) →
+      captured.inode directorySlot.description = (readyState).census.inode directorySlot.description)
+    (phaseEffects : OpenPhaseCellEffects view.phase get set)
+    (tokenEqual : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (returned : source.openTable input reached = .ok (assemble allocation.phase allocation.token) allocation.afterToken)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (physical : current.state.SelectedRetryDurability target (observe prepared))
+    (rootBound : (observe prepared).files.names (dir).path = some ((readyState).census.inode directorySlot.description))
+    (lockBound : (observe prepared).files.names ((dir).file .lock) = some ((readyState).census.inode owner.description))
+    {keeperInode : Nat} (keeperBound : (observe prepared).files.names ((dir).file (.walSegment writer.wal.active.first)) =
+      some keeperInode)
+    (keeperBytes : visible prepared keeperInode = writer.wal.active.bytes)
+    (apart : ∀ path, path = (dir).file .walBoundary ∨ (readyState).writeFramePath path →
+      (observe prepared).files.names path ≠ some keeperInode)
+    (physicalSyncs : AlignedRepairStorageEffects calls view readyState observe visible keeperInode)
+    (handleEffects : AlignedRepairHandleEffects calls view ((dir).file (.walSegment writer.wal.active.first)) root keeper)
+    (rootAtRead : attachedReadSlot view root directorySlot ((readyState).census.inode directorySlot.description) readHeap)
+    (keeperAtRead : attachedReadSlot view keeper keeperSlot keeperInode readHeap)
+    (remembered : calls.modifyPending cache.pending (pushPending ((dir).file (.walSegment writer.wal.active.first)) keeper)
+      readHeap = .ok () prepared)
+    {rootIssued afterDirectory loaded consumed : heap} {entries : List (FilePath × IO.FS.Handle)}
+    (getRoot : calls.getDirectory cache.directory prepared = .ok (some root) rootIssued)
+    (syncRoot : calls.sync root rootIssued = .ok () afterDirectory)
+    (getPending : calls.getPending cache.pending afterDirectory = .ok entries loaded)
+    (findKeeper : entries.find? (fun item => item.1 == (dir).file (.walSegment writer.wal.active.first)) =
+      some ((dir).file (.walSegment writer.wal.active.first), keeper))
+    (clear : calls.setPending cache.pending
+      (entries.filter (fun item => item.1 != (dir).file (.walSegment writer.wal.active.first))) loaded = .ok () consumed)
+    (syncKeeper : calls.sync keeper consumed = .ok () repaired)
+    (phaseFrame : (observe repaired).Frames (readyState).crashPath (observe allocation.afterPhase))
+    (tokenFrame : (observe allocation.afterPhase).Frames (readyState).crashPath (observe allocation.afterToken))
+    (phaseKeeper : ∀ inode, (observe repaired).files.names ((dir).file (.walSegment writer.wal.active.first)) = some inode →
+      visible allocation.afterPhase inode = visible repaired inode)
+    (tokenKeeper : ∀ inode, (observe allocation.afterPhase).files.names ((dir).file (.walSegment writer.wal.active.first)) = some inode →
+      visible allocation.afterToken inode = visible allocation.afterPhase inode) :
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
+      (keptBatch : List WAL.Write),
+      source.openTable input reached = .ok handle.table start.reached ∧
+      start.current.history = plan.history ∧
+      (⟨prior, log, current⟩ : NativeExecutionPosition).LedgerSuffix
+        [.uncertainWriteCrashRecovered request input cause batch keptBatch] start.current ∧
+      InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
+        start.current.ready.state.writer.installed start.current.ready.state.session ∧
+      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) := by
+  have stateValid : (readyState).Valid := ⟨rfl, rfl, ownerLive, directoryLive, directoryCached, retained⟩
+  obtain ⟨protectedFiles, marker, rootSettled⟩ := physical.forReopenedWriter current.readPrefix.refines.1 stateValid rfl
+    selected manifest published kept rootBound lockBound
+  obtain ⟨rootAttached, keeperAttached⟩ := handleEffects.issuedAttachments rootAtRead keeperAtRead remembered getRoot
+    syncRoot getPending findKeeper clear
+  obtain ⟨settled, live⟩ := physicalSyncs.readyAfterSyncs getRoot syncRoot getPending clear syncKeeper rootAttached
+    keeperAttached protectedFiles marker rootSettled keeperBound keeperBytes apart
+  have init : PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads (readyState).writer.history :=
+    sameHistory.symm ▸ plan.pending
+  have bounded : ∀ read ∈ current.reads, read.BoundedBy (readyState).writer.history.length :=
+    sameHistory.symm ▸ plan.bounded
+  obtain ⟨handle, start, nextCache, opened, _, _, _, history, submissions, _, reads, _, writeEntry⟩ :=
+    allocation.opensReadyWriter stateValid constructor cache returned phaseEffects tokenEqual init bounded observe visible settled live
+      rfl ownsSlot rfl cachePhase cacheToken rootInode phaseFrame tokenFrame phaseKeeper tokenKeeper
+  have selectedHistory := history.trans sameHistory
+  obtain ⟨keptBatch, ledger⟩ := plan.ledgerAfterReopen start.current selectedHistory submissions reads request input cause
+  exact ⟨handle, start, nextCache, keptBatch, opened, selectedHistory, ledger, start.current.ready.readPrefix.guardedReplay, writeEntry⟩
+
+end LiteralInstall
 
 end Alvoki.Storage.DiskSession

@@ -226,9 +226,12 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   The literal aligned open now identifies the selected checkpoint,
   canonical WAL bytes, remembered keeper and actual table allocations
   from one return. Grouped and late publication errors can select the
-  reboot before requesting a successful reopen. Connect the exact
-  repair calls to both the file-image and physical storage projections
-  on that call and use the next writer on the returned references.
+  reboot before requesting a successful reopen. The aligned finisher
+  yields the retained replay writer and the root and keeper sync calls.
+  Those calls, under local descriptor and storage effects, can supply
+  the next write entry and ledger on the returned phase and token.
+  Feed the literal reader's repair and allocation witnesses into this
+  proof and migrate the grouped and late write consumers.
   [Literal aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
   [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)

@@ -1,5 +1,16 @@
 # Current handoff
 
+The aligned finisher now supplies the two reached sync calls and the
+retained writer built from the exact decoded checkpoint and WAL replay.
+The file image is projected from those calls. A separate proof uses the
+root and keeper descriptor effects to settle physical storage and the
+allocation effects to carry it into the next write entry on the returned
+table. The same next position carries the old-or-whole history and the
+earlier read ledger. The remaining connection is to instantiate both
+proofs from the read and allocation witnesses of one literal open in the
+grouped and late write consumers.
+[Aligned repair and installation](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+
 The literal aligned open now identifies the actual checkpoint and
 marker reads, the canonical WAL payload and the remembered keeper on
 one execution. Its repair and exact table allocation follow the same
