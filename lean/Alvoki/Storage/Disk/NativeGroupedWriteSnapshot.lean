@@ -167,12 +167,9 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
   · exact .inl elsewhere
 
 /-- Interpret the reported group error and retry calls on the same physical
-observation, then extend the earlier ledger with a write and snapshot
-on the table returned by recovery. A different fault stage is classified
-separately. -/
+observation, then derive a ledger through the write and snapshot on the
+table returned by recovery. A different fault stage is classified separately. -/
 theorem NativeOpenedPosition.groupedRetryAndReads
-    {origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent}
-    (priorLedger : origin.LedgerSuffix earlier current.current)
     (retry : ∃ attempts : source.FailedCalls rebooted returns reached, returns ≠ [] ∧
       retryEffectsFor current view inodes runs observe request source (firstOffset := firstOffset) attempts)
     (nextRequest : WriteRequest) (nextSequence : UInt64) (writeHeap : heap) (nextNonempty : nextRequest.rows ≠ [])
@@ -209,8 +206,8 @@ theorem NativeOpenedPosition.groupedRetryAndReads
             rename handle.phase handle.get handle.set start.reached = .ok nextSequence writeHeap ∧
           written.reached = writeHeap ∧
           NativeOpenedTrace written [.acquire, .readAt written.pins.length read] events last ∧
-          origin.LedgerSuffix
-            (earlier ++ .uncertainWriteCrashRecovered request input cause batch [] :: .acknowledged nextRequest nextBatch :: events)
+          current.current.LedgerSuffix
+            (.uncertainWriteCrashRecovered request input cause batch [] :: .acknowledged nextRequest nextBatch :: events)
             last.current ∧
           SnapshotWalReplay .empty (current.current.history ++ nextBatch) reference ∧
           (∀ observation ∈ last.current.ready.reads, observation.agrees reference)) := by
@@ -229,13 +226,9 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     obtain ⟨schedules, writeReturn, nextBatch, _, written, last, reference, events, _, _, reachedWrite, snapshots,
       wrote, replay, agrees⟩ :=
       start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
-        nextRequest lookup rename (priorLedger.append recoveredLedger) nextNonempty physical write read token
-    have ledger : origin.LedgerSuffix
-        (earlier ++ .uncertainWriteCrashRecovered request input cause batch [] :: .acknowledged nextRequest nextBatch :: events)
-        last.current := by
-      simpa only [List.append_assoc, List.singleton_append] using wrote
+        nextRequest lookup rename nextNonempty physical write read token
     exact ⟨handle, start, written, last, nextCache, nextBatch, events, reference, opened, coversNext, nextWindow, schedules,
-      writeReturn, reachedWrite, snapshots, ledger, old ▸ replay, agrees⟩
+      writeReturn, reachedWrite, snapshots, recoveredLedger.append wrote, old ▸ replay, agrees⟩
 
 end
 

@@ -56,6 +56,13 @@ whether the history at the final failed open contains the whole pending
 batch or omits it. Both terminal proofs allow execution to end at that error.
 [Late publication recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
+The confirmed write, snapshot acquisition and read now produce their own
+ledger suffix from the calls on the returned writer. The checkpoint and
+late-error recovery proofs append that suffix to the history they recovered.
+The grouped-error proof likewise returns a suffix that a caller can append
+to any compatible prior history.
+[Write and snapshot composition](../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
+
 A returned checkpoint error identifies a preflight rejection, the first
 failed publication step, or failure to restore the ready phase after publication.
 For a failed manifest rename, the returned prefix identifies the prior staged

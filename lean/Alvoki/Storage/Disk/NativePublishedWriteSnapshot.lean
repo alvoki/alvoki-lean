@@ -7,9 +7,9 @@ open System CheckpointPublication SyncHandleRouting WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 open Sequential (SnapshotTable)
 
-/-- Extend an existing client ledger with an observed write and snapshot
-on the same table. The write's reached position supplies the phase and
-token that the snapshot calls actually use. -/
+/-- Derive the client ledger of an observed write and snapshot on the same
+table. The write's reached position supplies the phase and token that the
+snapshot calls actually use. -/
 theorem NativeOpenedPosition.acknowledgesAndReadsLatest
     {heap image : Type} {opened : NativeOpenedHandle heap} (current : NativeOpenedPosition opened)
     (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
@@ -21,8 +21,6 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     {sequence : UInt64} {reached : heap}
-    {before : NativeExecutionPosition} {priorEvents : List NativeExecutionEvent}
-    (prior : before.LedgerSuffix priorEvents current.current)
     (nonempty : request.rows ≠ [])
     (entry : current.WriteStorageEntry view cache (observe current.reached) (inodes current.reached).visible)
     (seen : current.ObservesPublishedWrite appender stager syncer view cache inodes runs observe
@@ -41,7 +39,7 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
       prepareBatch current.current.ready.state.writer.installed.table request.rows = some (batch, table) ∧
       sequence = table.committed ∧ written.reached = reached ∧
       NativeOpenedTrace written [.acquire, .readAt written.pins.length read] events last ∧
-      before.LedgerSuffix (priorEvents ++ .acknowledged request batch :: events) last.current ∧
+      current.current.LedgerSuffix (.acknowledged request batch :: events) last.current ∧
       SnapshotWalReplay .empty (current.current.history ++ batch) reference ∧
       (∀ observation ∈ last.current.ready.reads, observation.agrees reference) := by
   obtain ⟨schedule, returned, batch, table, written, _, prepared, number, reachedWrite, _, wrote, _, _⟩ :=
@@ -52,7 +50,7 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
   have history : written.current.history = current.current.history ++ batch := by
     simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using wrote.history
   exact ⟨schedule, returned, batch, table, written, last, reference, _, prepared, number, reachedWrite, calls,
-    prior.append (wrote.append calls.common.ledgerSuffix), history ▸ replay, agrees⟩
+    wrote.append calls.common.ledgerSuffix, history ▸ replay, agrees⟩
 
 /-- The snapshot uses the returned handle's own token at the heap
 reached by its acquire call. -/
