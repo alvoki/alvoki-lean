@@ -185,8 +185,10 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   in both the direct and guarded collision branches. Its stage frame
   follows only the reached stat, unlink, retry, write, flush and pending
   store. The staged-fsync error proof uses the same returned descriptor.
-  The physical inode and byte effects still need to be carried through
-  replacement into the selected retry.
+  A successful staged fsync establishes the exact durable replacement
+  bytes and the protected footprint from the reached create, write,
+  flush and sync effects. The next proof must carry those facts through
+  rename and the final directory-fsync error into the selected retry.
   [Long-keeper stage](../lean/Alvoki/Storage/Disk/NativeLongKeeperSuffixStageHeap.lean)
 
   The same marked worker exposes its actual error heap after the measured repair. Finalization carries that image through the cache drop and unlock, including when it differs from the admitted image. One mixed retry fold preserves the selected repair target and the unaffected file footprint across read-only errors and repair effects. It derives the next read plan using the reached keeper and later names. Local stage and final sync proofs derive those repair effects directly from their reached callbacks. The healthy reader now consumes the changed live keeper and its replay plan at that exact heap. The fold carries the keeper observation independently of the unchanged checkpoint frame. A projected final fsync can expose a replacement while retaining the old name as a crash alternative. The fixed interpreter's failed-call sequence is the retry trace. One proof fold applies the local read-only and repair effects at those exact endpoints. The same interpreter returns the successful installation. The grouped file-sync route supplies one preceding write and reboot. Full integration still needs the fixed primitive schedules to supply the local recovery effects for the remaining routes. [Mutating repair retries](../lean/Alvoki/Storage/Disk/NativeMutatingOpenRetries.lean) · [Live keeper after final sync error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)

@@ -1,10 +1,12 @@
 import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeWalPublicationTail
+import Alvoki.Storage.Disk.NativeDurableWriteReboot
 
 namespace Alvoki.Storage.DiskSession
 
-open System SyncHandleRouting WalSegmentRepair
+open System SyncHandleRouting WalSegmentRepair CheckpointPublication
+open WAL.Boundary (WalInodeImage)
 
 variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write}
@@ -29,6 +31,149 @@ variable {staged : NativeLongKeeperFreshStageHeap suffix stage}
   {renamed : NativeLongKeeperRenameHeap synced rename}
 
 local notation "replacement" => finish.stage.inventory.inode finish.stage.slot.description
+
+private theorem NativeReadyState.stagedWalOutsideRetryFootprint (state : NativeReadyState) :
+    ∀ path, state.selectedRetryPath path → path ≠ state.session.directory.file .stagedWal := by
+  let directory := state.session.directory
+  have basename {left right : DiskFile} (same : directory.file left = directory.file right) :=
+    (String.append_right_inj (directory.path.toString ++ "/")).mp (congrArg FilePath.toString same)
+  intro path retained same
+  rcases retained with marker | held
+  · have equal := basename (marker.symm.trans same)
+    change "WAL.commit" = "WAL.next" at equal
+    exact (by decide : "WAL.commit" ≠ "WAL.next") equal
+  rcases held with root | lock | manifest | sealedPath | runPath
+  · exact file_ne_directory directory .stagedWal (root.symm.trans same).symm
+  · have equal := basename (lock.symm.trans same)
+    change "LOCK" = "WAL.next" at equal
+    exact (by decide : "LOCK" ≠ "WAL.next") equal
+  · have equal := basename (manifest.symm.trans same)
+    change "MANIFEST" = "WAL.next" at equal
+    exact (by decide : "MANIFEST" ≠ "WAL.next") equal
+  · obtain ⟨segment, _, equal⟩ := sealedPath
+    obtain ⟨_, impossible⟩ := DiskDirectory.walSegment_exclusive (equal.symm.trans same).symm
+    cases impossible
+  · obtain ⟨_, metadata, index, _, _, _, equal⟩ := runPath
+    have samePrefix := congrArg (fun name : String => name.toList.take 4) (basename (equal.symm.trans same))
+    change ("run-" ++ metadata.header.generation.toNat.repr ++ "-" ++ index.repr ++ ".v3").toList.take 4 =
+      "WAL.next".toList.take 4 at samePrefix
+    simp [String.toList_append] at samePrefix
+
+
+/-- A captured staging write can change its own inode, while its name
+and every protected binding are disjoint. Project those local effects
+to the selected retry footprint. -/
+private theorem RunWriteInodeFrame.framesSelectedStage
+    {state : NativeReadyState} {dir : DiskDirectory} {before after : WalInodeImage}
+    {oldRuns newRuns : RunUnlinkImage} {inode : Nat}
+    {entry : RunDirectoryInodeView dir before oldRuns} {reached : RunDirectoryInodeView dir after newRuns}
+    (effect : RunWriteInodeFrame (dir.file .stagedWal) inode after entry reached)
+    (sameDirectory : state.session.directory = dir)
+    (apart : ∀ path, state.selectedRetryPath path → entry.visible path ≠ some inode) :
+    state.SelectedRetryFrame entry.storageObservation reached.storageObservation before.visible after.visible := by
+  have separate (path : FilePath) (held : state.selectedRetryPath path) : path ≠ dir.file .stagedWal := by
+    rw [← sameDirectory]
+    exact state.stagedWalOutsideRetryFootprint path held
+  have distinct (path : FilePath) (held : state.selectedRetryPath path)
+      (object : Nat) (bound : entry.visible path = some object) : object ≠ inode := by
+    intro same
+    exact apart path held (same ▸ bound)
+  refine ⟨?_, ?_, ?_⟩
+  · intro path held
+    exact ⟨effect.visibleNames path (separate path held),
+      fun object bound => congrArg (fun bytes => [bytes]) (effect.visibleBytes object (distinct path held object bound))⟩
+  · intro path held
+    exact ⟨effect.visibleNames path (separate path held), fun object bound => effect.crashBytes object (distinct path held object bound)⟩
+  · have root : state.selectedRetryPath state.session.directory.path := .inr (.inl rfl)
+    refine ⟨?_, ?_⟩
+    · intro path same
+      subst path
+      exact ⟨effect.visibleNames _ (separate _ root),
+        fun object bound => effect.crashBytes object (distinct _ root object bound)⟩
+    · intro names chosen
+      obtain ⟨prior, available, keeps⟩ := effect.crashNames names chosen
+      exact ⟨prior, available, fun path same => keeps path (same.symm ▸ separate _ root)⟩
+
+/-- On the actual staging path the winning exclusive create supplies the
+new, disjoint inode. Its write and flush preserve the selected files.
+The real fsync uses that same descriptor and makes its payload durable. -/
+theorem NativeLongKeeperStagedSyncHeap.preservesSelectedStage
+    (state : NativeReadyState) (sameDirectory : state.session.directory = directory)
+    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (buffered : heap → IO.FS.Handle → ByteArray)
+    (observation : ∀ atHeap, RunDirectoryInodeView directory (inodes atHeap) (runs atHeap))
+    (seen : NativeLongKeeperStagedSyncHeap staged (fun atHeap => (observation atHeap).visible))
+    (acquisition : stage.AcquisitionFrames (directory.file .stagedWal) suffix.reached
+      (fun before after => state.SelectedRetryFrame (observation before).storageObservation
+        (observation after).storageObservation (inodes before).visible (inodes after).visible))
+    (freshFirst : ∀ {file opened}, stage.tryCreate (directory.file .stagedWal) suffix.reached = .ok (.ok file) opened →
+      let inode := (view.descriptors opened).inode (view.handle opened file).2.1.description
+      (∀ path, state.selectedRetryPath path → (observation opened).visible path ≠ some inode) ∧
+      (inodes opened).visible inode = ByteArray.empty ∧ buffered opened file = ByteArray.empty)
+    (freshRetry : ∀ {file before opened}, stage.create (directory.file .stagedWal) before = .ok file opened →
+      let inode := (view.descriptors opened).inode (view.handle opened file).2.1.description
+      (∀ path, state.selectedRetryPath path → (observation opened).visible path ≠ some inode) ∧
+      (inodes opened).visible inode = ByteArray.empty ∧ buffered opened file = ByteArray.empty)
+    (wrote : stage.write staged.descriptor layout.keeper.bytes staged.created = .ok () staged.written →
+      stage.flush staged.descriptor staged.written = .ok () staged.flushed →
+      RunWriteInodeFrame (directory.file .stagedWal) replacement (inodes staged.flushed)
+        (observation staged.created) (observation staged.flushed))
+    (writePayload : stage.write staged.descriptor layout.keeper.bytes staged.created = .ok () staged.written →
+      (inodes staged.written).visible replacement ++ buffered staged.written staged.descriptor =
+        ((inodes staged.created).visible replacement ++ buffered staged.created staged.descriptor) ++ layout.keeper.bytes)
+    (flushPayload : stage.flush staged.descriptor staged.written = .ok () staged.flushed →
+      (inodes staged.flushed).visible replacement =
+        (inodes staged.written).visible replacement ++ buffered staged.written staged.descriptor)
+    (stored : sync.modifyPending seed.pendingRef (pushPending (directory.file .stagedWal) staged.descriptor) staged.flushed =
+      .ok () staged.recorded →
+      state.SelectedRetryFrame (observation staged.flushed).storageObservation (observation staged.recorded).storageObservation
+        (inodes staged.flushed).visible (inodes staged.recorded).visible ∧
+      (inodes staged.recorded).visible replacement = (inodes staged.flushed).visible replacement)
+    (consumed : sync.setPending seed.pendingRef [] staged.recorded = .ok () seen.consumed →
+      state.SelectedRetryFrame (observation staged.recorded).storageObservation (observation seen.consumed).storageObservation
+        (inodes staged.recorded).visible (inodes seen.consumed).visible ∧
+      (inodes seen.consumed).visible replacement = (inodes staged.recorded).visible replacement)
+    (fsync : sync.sync staged.descriptor seen.consumed = .ok () seen.reached →
+      (view.handle seen.consumed staged.descriptor).2.1 ∈ (view.descriptors seen.consumed).slots →
+      RegularFileSyncEffect ((view.handle seen.consumed staged.descriptor).1.inode
+        (view.handle seen.consumed staged.descriptor).2.1.description) [(inodes seen.consumed).visible replacement]
+        (observation seen.consumed).storageObservation (observation seen.reached).storageObservation ∧
+      (inodes seen.reached).visible = (inodes seen.consumed).visible) :
+    state.SelectedRetryFrame (observation suffix.reached).storageObservation (observation seen.reached).storageObservation
+        (inodes suffix.reached).visible (inodes seen.reached).visible ∧
+      (observation seen.reached).storageObservation.files.Stored (directory.file .stagedWal) layout.keeper.bytes ∧
+      (inodes seen.reached).visible replacement = layout.keeper.bytes := by
+  have opened := acquisition.keeps (fun atHeap => .refl _ _ _) NativeReadyState.SelectedRetryFrame.trans
+  rw [staged.acquired] at opened
+  have fresh := withFreshStaging_acquireProvides stage.tryCreate stage.detachStale stage.create
+    (directory.file .stagedWal) (fun file atHeap =>
+      let inode := (view.descriptors atHeap).inode (view.handle atHeap file).2.1.description
+      (∀ path, state.selectedRetryPath path → (observation atHeap).visible path ≠ some inode) ∧
+      (inodes atHeap).visible inode = ByteArray.empty ∧ buffered atHeap file = ByteArray.empty)
+    staged.acquired freshFirst freshRetry
+  obtain ⟨distinct, empty, noBuffered⟩ := fresh
+  rw [staged.openedCensus, staged.openedSlot] at distinct empty
+  have stageWritten := RunWriteInodeFrame.framesSelectedStage (wrote staged.wrote staged.flush) sameDirectory distinct
+  obtain ⟨remembered, stagedVisible⟩ := stored staged.record
+  obtain ⟨cleared, consumedVisible⟩ := consumed seen.cleared
+  have inPending := stageWritten.trans (remembered.trans cleared)
+  have bytes := consumedVisible.trans (stagedVisible.trans ((flushPayload staged.flush).trans (writePayload staged.wrote)))
+  rw [empty, noBuffered, ByteArray.append_empty, ByteArray.empty_append] at bytes
+  have apart (path : FilePath) (held : state.selectedRetryPath path)
+      (object : Nat) (bound : (observation seen.consumed).visible path = some object) : object ≠ replacement := by
+    intro same
+    have preserved := (inPending.live path held).1
+    exact distinct path held (preserved.symm.trans (same ▸ bound))
+  obtain ⟨_, handleAtSync, live, named, _⟩ := seen.syncs
+  obtain ⟨effect, sameContents⟩ := fsync seen.synced (by rw [handleAtSync]; exact live)
+  rw [handleAtSync, bytes] at effect
+  rw [seen.consumeCensus, staged.atSync] at named
+  have durable := effect.frames (footprint := state.selectedRetryPath) apart
+  have parent := durable.weaken (fun path equal => .inr (.inl equal))
+  have kept : state.SelectedRetryFrame (observation seen.consumed).storageObservation
+      (observation seen.reached).storageObservation (inodes seen.consumed).visible (inodes seen.reached).visible :=
+    ⟨fun path held => ⟨(durable.visible path held).1, by rw [sameContents]; intros; rfl⟩, durable.visible, parent⟩
+  exact ⟨opened.trans (inPending.trans kept), effect.stored named, sameContents ▸ bytes⟩
 
 /-- The literal staged-file fsync stores the selected prefix. The
 rename moves the same inode, and the final directory fsync settles

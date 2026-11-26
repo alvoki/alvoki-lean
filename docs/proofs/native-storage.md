@@ -443,6 +443,15 @@ description. The Linux proof still needs the namespace and inode
 effects of those callbacks to establish the selected physical footprint.
 [Staging proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperSuffixStageHeap.lean)
 
+For a completed staged-file fsync, the observed successful exclusive
+create supplies the disjoint inode and empty contents. The reached
+write and flush establish the bytes on that inode, and the pending
+descriptor identifies the file fsync. Its local effect makes those
+bytes durable and frames all protected files and the root in its parent.
+The selected retry still needs the subsequent rename and directory
+effects.
+[Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
+
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached
 publication outcome. The grouped failure producer follows both literal fsyncs and preserves
 the old marker and keeper prefix. After a successful file group, the local rename and

@@ -1988,6 +1988,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.returns
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.stageReturns
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.stageKeeps
+#check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.AcquisitionFrames.keeps
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperFreshStageHeap.reachesStageSync
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.syncs
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.movesStagedInode
@@ -4026,6 +4027,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.keeperAtIssue
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheReport.readyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperSettlementHeap.readyStorage
+#check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.preservesSelectedStage
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterRepair
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterLongerRetry

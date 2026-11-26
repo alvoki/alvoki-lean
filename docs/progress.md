@@ -1,13 +1,22 @@
 # Current handoff
 
 Keeper staging now follows the same acquisition for a direct exclusive
-create and a create retried after `EEXIST`. The collided name must pass
-the no-follow stat and guarded detach before retry. The common proof
+create and a create retried after `EEXIST`. The no-follow check allows a
+missing name or detaches a regular file before retry. The common proof
 follows the returned descriptor through write, flush and the pending
 store, including reached errors. The healthy keeper and staged-fsync
-error proofs use that acquisition. Physical inode and byte effects of
-the reached callbacks remain explicit.
+error proofs use that acquisition.
 [Staging acquisition](../lean/Alvoki/Storage/Disk/NativeStagingAcquisition.lean)
+
+For a completed staged-file fsync, the exclusive create's observed
+inode supplies disjointness from the protected bindings and starts
+with an empty buffer and payload. Write and flush establish the selected
+bytes on the same description. The pending cell carries it to the actual
+fsync, which stores those bytes durably. The protected live and durable
+files and parent binding survive under the local Linux effects. The
+result still needs to be carried through rename and the failed final
+directory fsync into the selected retry.
+[Staged keeper storage](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 A failed marked open can extend the same retry prefix after changing its
 keeper. The bounded finisher carries the selected files through its

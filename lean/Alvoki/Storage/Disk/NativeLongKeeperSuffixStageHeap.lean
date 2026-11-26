@@ -141,7 +141,40 @@ theorem LongKeeperStageCallbacks.stageReturns (calls : LongKeeperStageCallbacks 
   simp only [Bind.bind, EStateM.bind, acquired, written, flushed, Pure.pure, EStateM.pure]
   exact recorded
 
-open NativeFileEffectProjection (reached) in
+section StageFrames
+
+open NativeFileEffectProjection (reached)
+
+/-- The namespace effects required only when the client actually
+tries or retries creation of this staging name. -/
+structure LongKeeperStageCallbacks.AcquisitionFrames (calls : LongKeeperStageCallbacks heap)
+    (path : FilePath) (atEntry : heap) (frame : heap → heap → Prop) where
+  stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)
+  unlink : FilePath → EStateM IO.Error heap (Except IO.Error Unit)
+  tried : frame atEntry (reached (calls.tryCreate path atEntry))
+  detach : ∀ {name details conflict}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+    calls.detachStale path conflict = removeStaleStagingWith stat unlink path conflict
+  lookedUp : ∀ {name details conflict}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+    frame conflict (reached (stat path conflict))
+  unlinked : ∀ {name details conflict metadata before},
+    calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+    stat path conflict = .ok (.ok metadata) before → (metadata.type == .file) = true →
+    frame before (reached (unlink path before))
+  created : ∀ {name details conflict before}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
+    calls.detachStale path conflict = .ok () before → frame before (reached (calls.create path before))
+
+theorem LongKeeperStageCallbacks.AcquisitionFrames.keeps
+    {calls : LongKeeperStageCallbacks heap} {path : FilePath} {atEntry : heap} {frame : heap → heap → Prop}
+    (frames : calls.AcquisitionFrames path atEntry frame)
+    (identity : ∀ atHeap, frame atHeap atHeap)
+    (compose : ∀ {a b c}, frame a b → frame b c → frame a c) :
+    frame atEntry (reached (calls.acquire path atEntry)) :=
+  withFreshStaging_acquireKeeps calls.tryCreate calls.detachStale calls.create path frame
+    identity compose atEntry frames.tried (fun {name details conflict} conflictAt => by
+      rw [frames.detach conflictAt]
+      exact removeStaleStagingWith_keeps frames.stat frames.unlink path frame identity compose conflict
+        (frames.lookedUp conflictAt) (frames.unlinked conflictAt)) frames.created
+
 /-- The actual stage preserves any frame established by its reached
 callbacks, including an error during detach, creation or data staging. -/
 theorem LongKeeperStageCallbacks.stageKeeps (calls : LongKeeperStageCallbacks heap)
@@ -149,21 +182,9 @@ theorem LongKeeperStageCallbacks.stageKeeps (calls : LongKeeperStageCallbacks he
     (modifyPending : IO.Ref (List (FilePath × IO.FS.Handle)) →
       (List (FilePath × IO.FS.Handle) → List (FilePath × IO.FS.Handle)) → EStateM IO.Error heap Unit)
     (path : FilePath) (bytes : ByteArray) (atEntry : heap)
-    (stat : FilePath → EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
-    (unlink : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
     (frame : heap → heap → Prop) (identity : ∀ atHeap, frame atHeap atHeap)
     (compose : ∀ {a b c}, frame a b → frame b c → frame a c)
-    (tried : frame atEntry (reached (calls.tryCreate path atEntry)))
-    (detach : ∀ {name details conflict}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
-      calls.detachStale path conflict = removeStaleStagingWith stat unlink path conflict)
-    (lookedUp : ∀ {name details conflict}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
-      frame conflict (reached (stat path conflict)))
-    (unlinked : ∀ {name details conflict metadata before},
-      calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
-      stat path conflict = .ok (.ok metadata) before → (metadata.type == .file) = true →
-      frame before (reached (unlink path before)))
-    (created : ∀ {name details conflict before}, calls.tryCreate path atEntry = .ok (.error (.alreadyExists name 17 details)) conflict →
-      calls.detachStale path conflict = .ok () before → frame before (reached (calls.create path before)))
+    (acquisition : calls.AcquisitionFrames path atEntry frame)
     (written : ∀ {file atOpen}, calls.acquire path atEntry = .ok file atOpen →
       frame atOpen (reached (calls.write file bytes atOpen)))
     (flushed : ∀ {file atOpen atWrite}, calls.acquire path atEntry = .ok file atOpen →
@@ -171,14 +192,12 @@ theorem LongKeeperStageCallbacks.stageKeeps (calls : LongKeeperStageCallbacks he
     (recorded : ∀ {file atOpen atWrite atFlush}, calls.acquire path atEntry = .ok file atOpen →
       calls.write file bytes atOpen = .ok () atWrite → calls.flush file atWrite = .ok () atFlush →
       frame atFlush (reached (modifyPending pending (pushPending path file) atFlush))) :
-    frame atEntry (reached (calls.stage pending modifyPending path bytes atEntry)) := by
-  have opened := withFreshStaging_acquireKeeps calls.tryCreate calls.detachStale calls.create path frame
-    identity compose atEntry tried (fun {name details conflict} conflictAt => by
-      rw [detach conflictAt]
-      exact removeStaleStagingWith_keeps stat unlink path frame identity compose conflict
-        (lookedUp conflictAt) (unlinked conflictAt)) created
-  exact writeFreshStagedWith_keeps calls.tryCreate calls.detachStale calls.create calls.write calls.flush path bytes
-    (fun file => modifyPending pending (pushPending path file)) frame compose atEntry opened written flushed recorded
+    frame atEntry (reached (calls.stage pending modifyPending path bytes atEntry)) :=
+  writeFreshStagedWith_keeps calls.tryCreate calls.detachStale calls.create calls.write calls.flush path bytes
+    (fun file => modifyPending pending (pushPending path file)) frame compose atEntry
+    (acquisition.keeps identity compose) written flushed recorded
+
+end StageFrames
 
 /-- A successful exclusive create supplies the descriptor subsequently
 written, flushed and inserted into the original pending cell. -/
