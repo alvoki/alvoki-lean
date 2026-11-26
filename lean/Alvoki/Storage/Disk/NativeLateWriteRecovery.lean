@@ -173,11 +173,8 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     {firstOffset : Nat} (covers : ∀ offset ∈ (state).writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename storage firstOffset
       ((current.current.history ++ batch).length))
-    (initialWindow : (state).writer.wal.NamespaceWindow dir firstOffset ((current.current.history ++ batch).length) (storage current.reached).files.names)
-    (settledWindow : ∀ prior ∈ (storage current.reached).crashNames, ∀ offset, firstOffset ≤ offset →
-      offset ≤ (current.current.history ++ batch).length →
-      (prior ((dir).file (.walSegment offset))).isSome =
-        ((storage current.reached).files.names ((dir).file (.walSegment offset))).isSome)
+    (initialWindow : (state).writer.wal.SettledNamespaceWindow dir firstOffset
+      ((current.current.history ++ batch).length) (storage current.reached))
     (admission : source.AlignedAdmissionEffects view state input reached storage visible)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (rootBinding : (storageNames reached) (dir).path = some (namespaceView.modelObject root))
@@ -249,7 +246,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       nonempty prepared fits guard assigned initial prefixFrame publishFrame publication reboot
   have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
     nonempty returned nameEffects
-  have window := reboot.walNamespace nameFrame initialWindow settledWindow
+  have window := reboot.walNamespace nameFrame initialWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical⟩ :=
     (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
       covers selected window (reboot.startsDurableRetry reset selected).2

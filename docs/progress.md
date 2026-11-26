@@ -24,7 +24,9 @@ Grouped-sync and late-publication recovery share this proof.
 A subsequent crash needs an additional namespace guarantee. The returned
 write entry protects the active keeper and checkpoint footprint. For a
 later batch crossing a removed segment boundary, recovery also needs
-agreement on that name in **every** jointly selectable crash map.
+agreement throughout the next write’s interval, including gaps, in every
+jointly selectable crash map. Fresh bootstrap supplies that exact contract
+(`SettledNamespaceWindow`), and grouped and late write recovery consume it.
 Derive this from the complete reached listing, the last directory barrier,
 and the frames through allocation. The older pruned installer already
 carries durable absence for the explicitly removed names.

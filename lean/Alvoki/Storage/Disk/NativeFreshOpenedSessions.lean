@@ -139,9 +139,7 @@ theorem walNamespace {input : FilePath} {directory : DiskDirectory}
     (tokenFrame : WalNamePresenceFrame directory 0 through (observe allocation.afterPhase)
       (observe allocation.afterToken)) :
     let state := opened.start.current.ready.state
-    state.writer.wal.NamespaceWindow state.session.directory 0 through (observe opened.start.reached).files.names ∧
-    ∀ names ∈ (observe opened.start.reached).crashNames,
-      state.writer.wal.NamespaceWindow state.session.directory 0 through names := by
+    state.writer.wal.SettledNamespaceWindow state.session.directory 0 through (observe opened.start.reached) := by
   let state := opened.start.current.ready.state
   let stored := observe raw.markerDirectory.reached
   have directoryEq : state.session.directory = directory := opened.start.directory.trans resolved
@@ -183,7 +181,7 @@ theorem walNamespace {input : FilePath} {directory : DiskDirectory}
   have reached : opened.start.reached = allocation.afterToken := congrArg (fun result => result.2.2) returnedAt
   rw [directoryEq, reached]
   have allocated := phaseFrame.trans tokenFrame
-  exact ⟨catalog.frame allocated.live, fun names survives => catalog.frame (allocated.chosen settled survives)⟩
+  exact allocated.preservesNamespaceWindow ⟨catalog, fun names survives => catalog.frame (settled names survives)⟩
 
 /-- The fresh public open starts with settled storage and visible empty
 keeper bytes on its returned heap. The keeper create frames the listed

@@ -46,11 +46,8 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     {firstOffset : Nat} (covers : ∀ offset ∈ (state).writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (nameEffects : current.WalNameEffects appender stager syncer cache request lookup rename storage firstOffset
       (current.current.history.length + request.rows.length))
-    (initialWindow : (state).writer.wal.NamespaceWindow dir firstOffset (current.current.history.length + request.rows.length) (storage current.reached).files.names)
-    (settledWindow : ∀ prior ∈ (storage current.reached).crashNames, ∀ offset, firstOffset ≤ offset →
-      offset ≤ current.current.history.length + request.rows.length →
-      (prior ((dir).file (.walSegment offset))).isSome =
-        ((storage current.reached).files.names ((dir).file (.walSegment offset))).isSome)
+    (initialWindow : (state).writer.wal.SettledNamespaceWindow dir firstOffset
+      (current.current.history.length + request.rows.length) (storage current.reached))
     (retry : ∃ attempts : source.FailedCalls rebooted returns reached,
       returns ≠ [] ∧
       RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
@@ -128,7 +125,7 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   · refine .inr ⟨group, ?_⟩
     have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
       nonempty returned nameEffects
-    have window := reboot.walNamespace nameFrame initialWindow settledWindow
+    have window := reboot.walNamespace nameFrame initialWindow
     have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
       simp only [List.length_append, (prepareBatch_spec prepared).1]
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical⟩ :=

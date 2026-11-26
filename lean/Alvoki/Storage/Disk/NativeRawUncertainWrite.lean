@@ -38,21 +38,6 @@ theorem trans (earlier : WalNamePresenceFrame directory first through entry midd
   · obtain ⟨original, priorAllowed, kept⟩ := earlier.survivors prior survived
     exact ⟨original, priorAllowed, fun start low high => (same start low high).trans (kept start low high)⟩
 
-/-- If the earlier maps agree on this window, any one chosen later map
-agrees with the same original catalog there. -/
-theorem chosen (frame : WalNamePresenceFrame directory first through entry reached)
-    (settled : ∀ names ∈ entry.crashNames, ∀ start, first ≤ start → start ≤ through →
-      (names (directory.file (.walSegment start))).isSome =
-        (entry.files.names (directory.file (.walSegment start))).isSome)
-    {names : FilePath → Option Nat} (possible : names ∈ reached.crashNames) :
-    ∀ start, first ≤ start → start ≤ through →
-      (names (directory.file (.walSegment start))).isSome =
-        (entry.files.names (directory.file (.walSegment start))).isSome := by
-  obtain ⟨prior, earlier, same⟩ := frame.survivors names possible
-  rcases earlier with rfl | survived
-  · exact same
-  · exact fun start low high => (same start low high).trans (settled prior survived start low high)
-
 theorem ofStorageFrame {scope : FilePath → Prop} (frame : entry.Frames scope reached)
     (includes : ∀ start, first ≤ start → start ≤ through → scope (directory.file (.walSegment start))) :
     WalNamePresenceFrame directory first through entry reached := by

@@ -26,6 +26,26 @@ theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.restrict
     (starts : first ≤ lower) (ends : upper ≤ through) : wal.NamespaceWindow directory lower upper names :=
   fun start after before => initial start (Nat.le_trans starts after) (Nat.le_trans before ends)
 
+/-- In the requested interval, the live directory and every joint crash
+map name exactly the modeled WAL segments, including the gaps. -/
+abbrev _root_.Alvoki.Storage.WalSegmentImage.SettledNamespaceWindow
+    (wal : WalSegmentImage) (directory : DiskDirectory) (first through : Nat)
+    (storage : CheckpointStorageObservation) : Prop :=
+  wal.NamespaceWindow directory first through storage.files.names ∧
+    ∀ names ∈ storage.crashNames, wal.NamespaceWindow directory first through names
+
+theorem WalNamePresenceFrame.preservesNamespaceWindow
+    {wal : WalSegmentImage} {directory : DiskDirectory} {first through : Nat}
+    {entry reached : CheckpointStorageObservation}
+    (frame : WalNamePresenceFrame directory first through entry reached)
+    (initial : wal.SettledNamespaceWindow directory first through entry) :
+    wal.SettledNamespaceWindow directory first through reached := by
+  refine ⟨initial.1.frame frame.live, ?_⟩
+  intro names survives
+  obtain ⟨prior, fromLive | fromCrash, same⟩ := frame.survivors names survives
+  · exact initial.1.frame (fromLive ▸ same)
+  · exact (initial.2 prior fromCrash).frame same
+
 private def rebootBindings (directory : DiskDirectory) (names : FilePath → Option Nat)
     (visible : Nat → ByteArray) : DirectoryPublication.Bindings :=
   ⟨(names (directory.file .manifest)).map visible, (names (directory.file .walBoundary)).map visible⟩
@@ -115,12 +135,9 @@ theorem RawWriteRebootEntry.walNamespace
     (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
     {first through : Nat}
     (frame : WalNamePresenceFrame state.session.directory first through (storage entry) (storage failed))
-    (initial : state.writer.wal.NamespaceWindow state.session.directory first through (storage entry).files.names)
-    (settled : ∀ prior ∈ (storage entry).crashNames, ∀ start, first ≤ start → start ≤ through →
-      (prior (state.session.directory.file (.walSegment start))).isSome =
-        ((storage entry).files.names (state.session.directory.file (.walSegment start))).isSome) :
+    (initial : state.writer.wal.SettledNamespaceWindow state.session.directory first through (storage entry)) :
     state.writer.wal.NamespaceWindow state.session.directory first through (names rebooted) :=
-  initial.frame (frame.chosen settled seen.chosen)
+  (frame.preservesNamespaceWindow initial).2 _ seen.chosen
 
 /-- The manifest, marker and keeper are sampled through the same map.
 Recovery may also sample runs and seals without requiring byte choices
