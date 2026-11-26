@@ -104,17 +104,26 @@ def RawOpenRetryTrace.LaterWalAt (view : OpenCloseHeapView heap FileImage) (dire
   ∀ start, start ∈ (view.files atHeap).image.later.visible ↔
     target.range.through < start ∧ ∃ inode, names atHeap (directory.file (.walSegment start)) = some inode
 
+theorem RawOpenRetryTrace.LaterWalAt.framePresence {target : Target} {names : heap → FilePath → Option Nat}
+    {before after : heap} (initial : LaterWalAt view directory target names before)
+    (image : (view.files after).image.later.visible = (view.files before).image.later.visible)
+    (present : ∀ start, target.range.through < start →
+      (names after (directory.file (.walSegment start))).isSome =
+        (names before (directory.file (.walSegment start))).isSome) :
+    LaterWalAt view directory target names after := by
+  intro start
+  rw [image, initial start]
+  by_cases later : target.range.through < start
+  · simp only [← Option.isSome_iff_exists, present start later]
+  · simp only [later, false_and]
+
 theorem RawOpenRetryTrace.LaterWalAt.frame {target : Target} {names : heap → FilePath → Option Nat}
     {before after : heap} (initial : LaterWalAt view directory target names before)
     (image : (view.files after).image.later.visible = (view.files before).image.later.visible)
     (binds : ∀ start, target.range.through < start →
       names after (directory.file (.walSegment start)) = names before (directory.file (.walSegment start))) :
-    LaterWalAt view directory target names after := by
-  intro start
-  rw [image, initial start]
-  by_cases later : target.range.through < start
-  · rw [binds start later]
-  · simp only [later, false_and]
+    LaterWalAt view directory target names after :=
+  initial.framePresence image (fun start later => congrArg Option.isSome (binds start later))
 
 /-- An unlink's realized effect removes one address from both
 representations. Other canonical names beyond the marker are framed. -/

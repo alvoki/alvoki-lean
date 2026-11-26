@@ -79,6 +79,11 @@ noncomputable def worker (cached : IO.Ref (Option IO.FS.Handle))
   installReady opened.installed source.allocatePhase source.allocateToken fun phase token =>
     pure (assemble directory lock cache phase token)
 
+/-- Open the directory and allocate the three references used by the held worker. -/
+noncomputable abbrev cacheInitialization (directory : DiskDirectory) :=
+  openSyncFilesWith (source.init.openDirectory directory.path) source.init.newRef source.init.newRef source.init.newRef
+    (fun cached active pending => (makeCache directory cached active pending, cached, active, pending))
+
 /-- Keep the cache initialization and the worker in one interpretation
 of the open schedule. The cache drop precedes unlock on a worker error,
 and the owning handle is released only on error. -/
@@ -87,9 +92,7 @@ noncomputable def openTable (input : FilePath) : EStateM IO.Error heap DiskTable
     finishFailedOpen
       (openWithLock (source.calls.flock lock) (fun _ => IO.userError s!"database already open: {directory.path}")
         (fun _ => source.calls.unlock lock) fun _ => do
-          let (cache, cached, active, pending) ← openSyncFilesWith
-            (source.init.openDirectory directory.path) source.init.newRef source.init.newRef source.init.newRef
-            (fun cached active pending => (makeCache directory cached active pending, cached, active, pending))
+          let (cache, cached, active, pending) ← source.cacheInitialization directory
           tryCatchThe IO.Error (source.worker cached active pending directory lock cache) fun cause => do
             source.dispose cache
             throw cause)
@@ -258,10 +261,7 @@ theorem RawMarkedOpenInterpreter.reachesHeldCache
       source.init.newRef [] setActive = .ok pending prepared ∧
       source.worker cached active pending directory lock
         (RawMarkedOpenInterpreter.makeCache directory cached active pending) prepared = .ok table reached := by
-  let initCache (directory : DiskDirectory) :=
-    openSyncFilesWith (source.init.openDirectory directory.path) source.init.newRef source.init.newRef source.init.newRef
-      (fun cached active pending =>
-        (RawMarkedOpenInterpreter.makeCache directory cached active pending, cached, active, pending))
+  let initCache := source.cacheInitialization
   let recover (directory : DiskDirectory) (lock : IO.FS.Handle) (_ : Unit) :
       EStateM IO.Error heap DiskTable := do
     let (cache, cached, active, pending) ← initCache directory
@@ -534,8 +534,8 @@ private theorem RawOpenAdmissionReport.markedInterpreterStarts
   rw [DiskTable.withOpenAdmission_lockOpen source.calls.realPath source.calls.lookup source.calls.openAppend _
       raw.resolved raw.flat raw.lockProbe admission.safe, raw.appended]
   simp only [finishFailedOpen, openWithLock, Bind.bind, EStateM.bind, raw.acquired, ↓reduceIte, MonadExcept.tryCatch,
-    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, openSyncFilesWith, seed.rawOpened, seed.directoryAllocated,
-    seed.activeAllocated, seed.pendingAllocated, Pure.pure, EStateM.pure]
+    tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch, RawMarkedOpenInterpreter.cacheInitialization, openSyncFilesWith,
+    seed.rawOpened, seed.directoryAllocated, seed.activeAllocated, seed.pendingAllocated, Pure.pure, EStateM.pure]
 
 /-- A healthy return transfers the original lock and cache to the
 table. The fixed worker is the only source of a successful result. -/

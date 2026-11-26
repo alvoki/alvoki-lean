@@ -27,8 +27,6 @@ and heap returned by the observed open schedule. An already observed trace from 
 `InstalledClientReplay` includes a replay from empty, ordered batch retention, acknowledged and
 submitted subsequences, and agreement with recorded reads and the ready table. [Raw fresh start](../../lean/Alvoki/Storage/Disk/NativeFreshTableOpen.lean) · [Composition from the empty ledger](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Key-value refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
 
-For a late write publication error, the observed prefix fixes the submitted batch and the reboot sample fixes the recovery target. Both retry continuations use this target. A final failed open preserves a pending replay. A successful open installs the literal returned table and extends the preceding ledger. The file and callback effects of those attempts remain premises. [Selected reboot and retry continuations](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
-
 The first-open theorem consumes raw admission, bootstrap and cache chronology, matching lock and
 metadata, and allocation reports that preserve inode and cache state. It joins the raw returned table,
 phase, cache and census. The later `FileImage` projection is supplied separately from the bootstrap
@@ -189,13 +187,13 @@ separate obligations. [Conditional recovery](../../lean/Alvoki/Storage/Disk/Cach
 ## Refinement boundaries
 
 Follow one write through a crash and reopen. Each row states what the next
-layer needs to know. The links point to declarations at `283de70b`. The
+layer needs to know. The links pin the declarations used at each boundary. The
 [public claims](../proof-architecture.md#system-claims) describe semantic
 obligations; a Lean theorem can discharge one obligation for several claims.
 
 | Boundary | What must remain true, and why | Who establishes it → who uses it |
 |---|---|---|
-| Filesystem effects | For the paths an operation must preserve, names still bind the same inodes and their allowed contents agree. Each later crash map has one earlier witness for the **whole footprint**. Otherwise a proof could combine a manifest from one outcome with a run from another. [Scoped frame][frame] | Local effects of reads, removals and barriers → retry proofs, which compose or restrict the frame. The protocol chooses the footprint. |
+| Filesystem effects | For the paths an operation must preserve, names still bind the same inodes and their allowed contents agree. Each later crash map has one earlier witness for the **whole footprint**. Otherwise a proof could combine a manifest from one outcome with a run from another. [Scoped frame][frame] | Local effects of reads, removals and barriers → retry proofs, which compose or restrict the frame. For a read-only retry, the selected files and keeper retain their bindings and bytes. Other canonical WAL names retain their presence. [Retry frame](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean#L394) |
 | Storage authority | The held lock and directory handle refer to the captured objects. A single surviving namespace and its bytes determine the selected manifest, run files, WAL marker and replay range. A missing segment inside that range matters just as much as a present one. [Held authority][authority] · [Sampled replay][sample] · [WAL window][window] | Admission establishes custody. For covered publication stops, the crash-selection proof establishes the recoverable file set → the held reader checks and replays those files. |
 | Installed session | The table returned by this `open` has the phase, token and cache allocated by this repair. Its active WAL bytes and directory descriptor agree with the storage at the return heap. This is what makes the next write safe on **that handle**. [Write entry][entry] | Successful repair and reference allocation → the next writer. A newly issued pin carries the returned token. The new handle starts with empty pins. |
 | Client history | Each call extends the incoming history, submissions and observations with its own events. One replay accounts for acknowledged writes, whole uncertain batches and recorded reads. [Ledger suffix][ledger] · [Installed replay][replay] | Local operation refinements → the finite-call induction → write and snapshot guarantees. Collection also needs an eligibility proof for the removed files. Progress needs availability and scheduling assumptions. [Reclamation](#reclamation) · [Progress](#progress-and-bounds) |
@@ -204,7 +202,10 @@ obligations; a Lean theorem can discharge one obligation for several claims.
 derives the repair and installation from the same successful call. Given the
 sampled reboot and the effects of the intervening failed opens, it establishes
 the next write entry. A finite sequence of supported writes and snapshot calls
-then extends the actual predecessor's ledger. [Checkpoint consumer][checkpoint] · [Finite induction][fold]
+then extends the actual predecessor's ledger. For a late write publication
+error, the submitted batch comes from the original write. The reboot fixes
+one recovery target. Both a final failed attempt and a successful open use it.
+Success extends the ledger on the literal returned table. [Checkpoint consumer][checkpoint] · [Finite induction][fold] · [Write reboot and continuations][write-reboot]
 
 **Where it is still conditional.** The native directory reader opens the path
 and returns entries only after clean EOF and successful close. Under the
@@ -220,6 +221,7 @@ selected checkpoint and bounded WAL range remain intact. The global
 induction must cover these outcomes from the actual source execution.
 [Premise provenance](#premise-provenance) · [Open obligations](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
 
+[write-reboot]: https://github.com/alvoki/alvoki-lean/blob/fd688e7a60e3c9eec108e987b43779216db7bcc4/lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean#L28
 [frame]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeCheckpointFsyncEffects.lean#L18
 [authority]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L775
 [sample]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean#L524

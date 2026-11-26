@@ -132,6 +132,24 @@ theorem RawMarkedOpenInterpreter.framesBeforeFlock (source : RawMarkedOpenInterp
   obtain ⟨returned, rejected⟩ := source.returnsBeforeFlock failed
   exact ⟨returned, rejected.framesRejected trans effects⟩
 
+private theorem RawOpenAdmissionCallbacks.framesBeforeFlockSuccess (calls : RawOpenAdmissionCallbacks heap)
+    {lock : IO.FS.Handle} {issued : heap}
+    (opened : calls.beforeFlock input entry = .ok (directory, lock) issued)
+    {frame : heap → heap → Prop} (trans : ∀ {a b c}, frame a b → frame b c → frame a c)
+    (resolve : frame entry (reachedState (calls.realPath input entry)))
+    (lookup : ∀ path atHeap, frame atHeap (reachedState (calls.lookup path atHeap)))
+    (append : ∀ {before}, calls.openAppend (directory.file .lock) before = .ok lock issued →
+      frame before issued) : frame entry issued := by
+  obtain ⟨r, f, g, resolved, flat, checked, appended⟩ := calls.beforeFlock_steps opened
+  have hr : frame entry r := by
+    rw [← openWith_reachedState, resolved] at resolve
+    exact resolve
+  have hf := lookup (directory.file .wal) r
+  have hg := lookup (directory.file .lock) f
+  rw [← rejectFlatWal_reachedState, flat] at hf
+  rw [← checkLock_reachedState, checked] at hg
+  exact trans hr (trans hf (trans hg (append appended)))
+
 /-- A non-granting flock returns after the lock handle's own scope
 finalizer. Both diagnostics bypass cache allocation and the held worker. -/
 theorem RawMarkedOpenInterpreter.returnsRefusedFlock (source : RawMarkedOpenInterpreter heap stream)
@@ -162,16 +180,66 @@ theorem RawMarkedOpenInterpreter.framesRefusedFlock (source : RawMarkedOpenInter
       frame before issued)
     (flock : frame issued refused) (release : frame refused (source.release lock refused)) :
     frame entry reached := by
-  obtain ⟨r, f, g, resolved, flat, checked, appended⟩ := source.calls.beforeFlock_steps opened
-  have hr : frame entry r := by
-    rw [← openWith_reachedState, resolved] at resolve
-    exact resolve
-  have hf := lookup (directory.file .wal) r
-  have hg := lookup (directory.file .lock) f
-  rw [← rejectFlatWal_reachedState, flat] at hf
-  rw [← checkLock_reachedState, checked] at hg
   obtain ⟨_, endpoint⟩ := EStateM.Result.error.inj ((source.returnsRefusedFlock opened outcome).symm.trans returned)
-  exact endpoint ▸ trans hr (trans hf (trans hg (trans (append appended) (trans flock release))))
+  exact endpoint ▸ trans (source.calls.framesBeforeFlockSuccess opened trans resolve lookup append) (trans flock release)
+
+/-- A directory-open failure ends initialization before any reference is allocated. -/
+theorem RawMarkedOpenInterpreter.cacheInitialization_error_of_directoryOpenError
+    (source : RawMarkedOpenInterpreter heap stream) {held failedHeap : heap} {cause : IO.Error}
+    (failed : source.init.openDirectory directory.path held = .error cause failedHeap) :
+    source.cacheInitialization directory held = .error cause failedHeap := by
+  simp only [RawMarkedOpenInterpreter.cacheInitialization, openSyncFilesWith, Bind.bind, EStateM.bind, failed]
+
+/-- Failure of the fixed initializer reaches unlock and lock release,
+including when unlock returns an error. The worker's cache finalizer
+requires an assembled cache. Any drop of a temporary directory handle
+during partial initialization belongs to the initializer observation. -/
+theorem RawMarkedOpenInterpreter.returnsCacheInitializationError (source : RawMarkedOpenInterpreter heap stream)
+    {lock : IO.FS.Handle} {issued held failedHeap : heap} {cause : IO.Error}
+    (opened : source.calls.beforeFlock input entry = .ok (directory, lock) issued)
+    (acquired : source.calls.flock lock issued = .ok true held)
+    (failed : source.cacheInitialization directory held = .error cause failedHeap) :
+    source.openTable input entry = match source.calls.unlock lock failedHeap with
+      | .ok () beforeRelease => .error cause (source.release lock beforeRelease)
+      | .error cleanup beforeRelease => .error cleanup (source.release lock beforeRelease) := by
+  unfold RawMarkedOpenInterpreter.openTable
+  rw [source.calls.withOpenAdmission_afterPrefix]
+  simp only [Bind.bind, EStateM.bind, opened, finishFailedOpen, openWithLock, acquired, ↓reduceIte,
+    failed, MonadExcept.tryCatch, tryCatchThe, MonadExceptOf.tryCatch, EStateM.tryCatch,
+    EStateM.Backtrackable.restore, EStateM.dummyRestore, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+  cases source.calls.unlock lock failedHeap with
+  | ok value beforeRelease => cases value; rfl
+  | error cleanup beforeRelease => rfl
+
+/-- Compose scoped frames at the reached initialization error and the
+two lock cleanup callbacks. The public error identifies the final heap. -/
+theorem RawMarkedOpenInterpreter.framesCacheInitializationError (source : RawMarkedOpenInterpreter heap stream)
+    {lock : IO.FS.Handle} {issued held failedHeap reached : heap} {cause publicCause : IO.Error}
+    (opened : source.calls.beforeFlock input entry = .ok (directory, lock) issued)
+    (acquired : source.calls.flock lock issued = .ok true held)
+    (failed : source.cacheInitialization directory held = .error cause failedHeap)
+    (returned : source.openTable input entry = .error publicCause reached)
+    {frame : heap → heap → Prop} (trans : ∀ {a b c}, frame a b → frame b c → frame a c)
+    (resolve : frame entry (reachedState (source.calls.realPath input entry)))
+    (lookup : ∀ path atHeap, frame atHeap (reachedState (source.calls.lookup path atHeap)))
+    (append : ∀ {before}, source.calls.openAppend (directory.file .lock) before = .ok lock issued →
+      frame before issued)
+    (flock : frame issued held) (initializer : frame held failedHeap)
+    (unlock : frame failedHeap (reachedState (source.calls.unlock lock failedHeap)))
+    (release : let beforeRelease := reachedState (source.calls.unlock lock failedHeap)
+      frame beforeRelease (source.release lock beforeRelease)) : frame entry reached := by
+  have actual := (source.returnsCacheInitializationError opened acquired failed).symm.trans returned
+  have endpoint : source.release lock (reachedState (source.calls.unlock lock failedHeap)) = reached := by
+    cases unlocked : source.calls.unlock lock failedHeap with
+    | ok value beforeRelease =>
+      cases value
+      rw [unlocked] at actual
+      exact (EStateM.Result.error.inj actual).2
+    | error cleanup beforeRelease =>
+      rw [unlocked] at actual
+      exact (EStateM.Result.error.inj actual).2
+  exact endpoint ▸ trans (source.calls.framesBeforeFlockSuccess opened trans resolve lookup append)
+    (trans flock (trans initializer (trans unlock release)))
 
 /-- A flock error on the actual append handle bypasses the held worker.
 The error reaches the caller after the interpreter releases that handle. -/

@@ -59,9 +59,16 @@ the protected children and the WAL names through the write bound. Given the
 pre-sync association of those names with the held root, both facts survive
 phase and token allocation and feed the first uncertain-write prefix.
 
-**Next obligation.** Derive the retry effects for the selected target from
-the callbacks reached by failed and successful opens. Read, cache and
-installation effects are still explicit premises.
+A failed MANIFEST stat after flock feeds the same selected recovery target
+as a rejection before flock. The stat, cache disposal, unlock and final lock
+drop supply its public error and return heap under local file frames. For
+WAL names outside the protected files and keeper, retry only needs presence.
+If cache initialization itself fails, the same public open runs unlock and
+releases its lock handle. A failed unlock supplies the public diagnostic.
+
+**Next obligation.** Carry a held failure with an aligned keeper still cached
+through its actual descriptor drops and into the next open. Successful repair
+and installation still require local file and allocation effects.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

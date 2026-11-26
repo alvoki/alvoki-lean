@@ -293,6 +293,45 @@ theorem RawMarkedOpenInterpreter.framesSelectedWalReadError
 
 end FailedOpen
 
+section ManifestRetry
+
+variable {heap stream : Type} {input : FilePath} {state : NativeReadyState} {target : Target}
+  {view : OpenCloseHeapView heap FileImage} {first entry : heap}
+  {earlier : List (FilePath × IO.Error)}
+  {admission : CensusOpenAdmissionReports input state.session.directory (view.descriptors entry) (view.files entry)}
+  {source : RawMarkedOpenInterpreter heap stream} {prior : source.FailedCalls first earlier entry}
+  {raw : RawOpenAdmissionReport admission view source.calls entry}
+  {allocation : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
+  {storage : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray} {firstOffset through : Nat}
+
+local notation "liveFiles" => fun atHeap =>
+  CheckpointSurvivingFiles.mk (CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage atHeap))) (fun inode => [visible atHeap inode])
+local notation "recovery" => RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset through
+local notation "scopedFiles" => RawOpenRetryTrace.ReadOnlyFilesFrame state target storage visible
+
+/-- Add the actual held MANIFEST stat error to the selected retry.
+The cache disposal, unlock and lock drop carry the scoped files to the
+public return. The already classified worker supplies the image frame. -/
+theorem RawManifestStatError.extendsSelectedRetry
+    (seen : RawManifestStatError (admitted := raw) allocation source.fileCalls)
+    (disposal : RawOpenCacheDisposal (admitted := raw) allocation seen.reached)
+    (sameDisposal : source.dispose = disposal.dispose)
+    (finalized : RawOpenErrorLockFinalization view state.session.directory source.release raw.lock admission.owner
+      disposal.reached)
+    (frames : seen.CallbackFrames disposal finalized scopedFiles)
+    (before : RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath recovery prior) :
+    ∃ returned : source.openTable input entry = .error (disposal.diagnostic seen.cause) finalized.reached,
+      RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath recovery
+        (prior.next input returned) := by
+  obtain ⟨failed, actual, diagnostic, reached, framed⟩ :=
+    seen.finalizesWithFrames disposal sameDisposal finalized RawOpenRetryTrace.ReadOnlyFilesFrame.trans frames
+  obtain ⟨_, _, _, _, _, _, image, _⟩ := failed.returns
+  have returned : source.openTable input entry = .error (disposal.diagnostic seen.cause) finalized.reached := by
+    simpa only [diagnostic, reached] using actual
+  exact ⟨returned, before.appendReadOnlyReturn returned (reached ▸ image) framed⟩
+
+end ManifestRetry
+
 theorem MarkedDirectoryReadCalls.successKeepsFrame {stream : Type} (calls : MarkedDirectoryReadCalls heap stream)
     (directory : DiskDirectory) (laws : calls.ScopeFrames directory frame)
     (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
