@@ -4015,6 +4015,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.samplesWal
 #check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selections.retryTargetAtReboot
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversAfterPublicationError
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.selectsAfterPublicationError
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.reopensReadyAfterPublicationError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWriteRecovery.replaysSelectedLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.ledgerAtReadyWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.oldHistory

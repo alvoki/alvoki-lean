@@ -448,6 +448,15 @@ and the physical entry used by later writes. Admission still depends
 on the observed lock state.
 [Ready writer from aligned retry](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
+The late WAL publication proof derives the public `commitUnknown`
+return from the actual prepared write and its failed commit callback.
+The reported reboot samples that exact failure heap. The selected
+history and ready replay follow through the same retry prefix, using
+the original write request and public diagnostic in the ledger. The
+source proof covers marker rename and final directory sync errors
+with one selected-recovery continuation.
+[Late write and ready recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+
 Read-only failures frame the keeper they enter with. A repair failure
 can supply a replacement to the same prefix. Both carry the protected
 files and parent settlement at each returned heap, so grouped recovery

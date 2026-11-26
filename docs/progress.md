@@ -1,5 +1,16 @@
 # Current handoff
 
+A returned marker rename or final directory-fsync error now supplies
+the exact public write error and its reached reboot entry in one
+proof. The selected marker determines the old history or the whole
+uncertain batch. The same failed-call prefix can carry a mutating
+repair and then reach the aligned opener. Its literal returned table,
+replay and physical write entry now follow with the actual write
+request and returned diagnostic. The reboot and local open effects
+remain explicit. The subsequent observed write and snapshot use this
+entry in the next composition.
+[Late publication and ready recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+
 Both timings of the final keeper directory-fsync error now leave the
 exact trimmed keeper and durably empty suffix at the returned error
 heap. The next healthy open uses the actual keeper extent and the
