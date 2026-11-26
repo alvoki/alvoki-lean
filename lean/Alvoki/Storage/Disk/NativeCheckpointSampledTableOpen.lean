@@ -310,7 +310,7 @@ theorem NativeCheckpointSourcePrefix.reopensSampledCheckpoint
     refine ⟨cache, dirRef, activeRef, pendingRef, readyWrite, ?_⟩
     intro α appender stager syncer inode buffered request lookup rename sequence writeReached nonempty observed read token
     obtain ⟨_, wrote, batch, table, written, last, reference, events, prepared, committed, atWrite, trace, suffix,
-      replay, reads⟩ := returned.start.acknowledgesAndReadsLatest appender stager syncer view cache inodes runs
+      replay, reads, _⟩ := returned.start.acknowledgesAndReadsLatest appender stager syncer view cache inodes runs
         physical inode buffered request lookup rename nonempty readyWrite observed read token
     have sameHistory : returned.start.current.history = current.current.history := by rw [returned.position]
     exact ⟨wrote, batch, table, written, last, reference, events, prepared, committed, atWrite, trace,

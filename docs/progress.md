@@ -63,6 +63,13 @@ The grouped-error proof likewise returns a suffix that a caller can append
 to any compatible prior history.
 [Write and snapshot composition](../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
 
+After grouped recovery the returned table supplies the exact phase and
+cache for the next confirmed write. The following acquisition returns a
+pin at that write's sequence. A point or range read uses that pin and
+returns the replay result. The three calls share their intermediate heaps.
+The general proof still needs to select each call from the public requests.
+[Source calls on the returned table](../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
+
 A returned checkpoint error identifies a preflight rejection, the first
 failed publication step, or failure to restore the ready phase after publication.
 For a failed manifest rename, the returned prefix identifies the prior staged

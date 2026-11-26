@@ -215,6 +215,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
       (sameDirectory : next.current.ready.state.session.directory = dir),
       prepareBatch (oldInstalled).table request.rows = some (batch, table) ∧
       sequence = table.committed ∧ next.reached = reached ∧ next.pins = current.pins ∧
+      next.current.ready.state.writer.installed.table = table ∧
       current.current.LedgerSuffix [.acknowledged request batch] next.current ∧
       next.WriteStorageEntry view
         ⟨cache.directory, cache.active, cache.pending, cache.references,
@@ -333,7 +334,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     · intro event member
       obtain rfl := List.mem_singleton.mp member
       trivial
-  refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, ledger, ?_, ?_⟩
+  refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, rfl, ledger, ?_, ?_⟩
   · refine ⟨rfl, rfl, afterStorage, ?_, ?_⟩
     · intro namedInode named
       change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
@@ -400,6 +401,7 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
       (sameDirectory : next.current.ready.state.session.directory = directory),
       prepareBatch start.current.ready.state.writer.installed.table request.rows = some (batch, table) ∧
       sequence = table.committed ∧ next.reached = reached ∧ next.pins = start.pins ∧
+      next.current.ready.state.writer.installed.table = table ∧
       start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
       next.WriteStorageEntry view
         ⟨cache.directory, cache.active, cache.pending, cache.references,
@@ -420,10 +422,10 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
     rw [sameStorage start.reached]
     exact entry
 
-  obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, physical, sameStarts⟩ :=
+  obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger, physical, sameStarts⟩ :=
     start.acknowledgesPublishedWrite appender stager syncer view cache inodes runs files inode buffered
       request lookup rename nonempty returned atWrite effects
-  refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, ledger, ?_, ?_⟩
+  refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger, ?_, ?_⟩
   · rwa [← sameStorage next.reached]
   · intro firstOffset through covers initial nameEffects restore
     refine ⟨sameStarts.symm ▸ covers, ?_⟩

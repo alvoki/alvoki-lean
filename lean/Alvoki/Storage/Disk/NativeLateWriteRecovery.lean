@@ -309,7 +309,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     active, opened, history, whole, ledger, replay, physical, sameDirectory, coversNext, nextWindow, ?_⟩
   intro α inodes runs inode buffered nextRequest sequence writeHeap sameVisible nextNonempty seen read token
   obtain ⟨_, writeReturn, nextBatch, _, written, last, reference, events, _, _, writtenAt, snapshots, wrote,
-    nextReplay, agrees⟩ :=
+    nextReplay, agrees, _⟩ :=
     start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
       nextRequest lookup rename nextNonempty (sameVisible ▸ physical) seen read token
   exact ⟨writeReturn, nextBatch, written, last, events, reference, writtenAt, snapshots,

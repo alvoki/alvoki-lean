@@ -210,7 +210,10 @@ theorem NativeOpenedPosition.groupedRetryAndReads
             (.uncertainWriteCrashRecovered request input cause batch [] :: .acknowledged nextRequest nextBatch :: events)
             last.current ∧
           SnapshotWalReplay .empty (current.current.history ++ nextBatch) reference ∧
-          (∀ observation ∈ last.current.ready.reads, observation.agrees reference)) := by
+          (∀ observation ∈ last.current.ready.reads, observation.agrees reference) ∧
+          handle.ReturnsLatestAfter
+            [.writeOnPhase handle directory nextCache appender stager syncer nextRequest lookup rename (.ok nextSequence)]
+            read nextSequence (some (read.replay reference nextSequence)) start.reached last.reached) := by
   obtain ⟨attempts, retried, retryEffects⟩ := retry
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, guard, assigned, classified⟩ :=
     current.reopensAfterGroupedError view cache appender stager syncer inodes runs observe inode buffered request lookup rename
@@ -224,11 +227,11 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   · refine .inr ⟨group, ?_⟩
     obtain ⟨write, token⟩ := nextCall handle start nextCache opened old physical
     obtain ⟨schedules, writeReturn, nextBatch, _, written, last, reference, events, _, _, reachedWrite, snapshots,
-      wrote, replay, agrees⟩ :=
+      wrote, replay, agrees, sourceCalls⟩ :=
       start.acknowledgesAndReadsLatest appender stager syncer view nextCache inodes runs storage inode buffered
         nextRequest lookup rename nextNonempty physical write read token
     exact ⟨handle, start, written, last, nextCache, nextBatch, events, reference, opened, coversNext, nextWindow, schedules,
-      writeReturn, reachedWrite, snapshots, recoveredLedger.append wrote, old ▸ replay, agrees⟩
+      writeReturn, reachedWrite, snapshots, recoveredLedger.append wrote, old ▸ replay, agrees, sourceCalls⟩
 
 end
 
