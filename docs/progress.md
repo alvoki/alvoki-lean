@@ -49,17 +49,19 @@ For a late publication error, the observed calls on the original handle
 determine the prior client history, reads and submissions. The final write's
 preparation identifies the attempted batch even when the old marker survives.
 Under the local write effects, the marker and keeper from one reboot select
-a replay of that history with zero or all of the batch. Both grouped-error
-continuations now use the same prefix proof.
+a replay of that history with zero or all of the batch. After this selection, failed attempts and a later successful
+open use the same target. The final failed attempt preserves its pending
+ledger. A successful open extends the incoming ledger and returns the exact
+table and heap for the next write.
 
 At fresh open, one successful fsync on the identified root descriptor settles
 the protected children and the WAL names through the write bound. Given the
 pre-sync association of those names with the held root, both facts survive
 phase and token allocation and feed the first uncertain-write prefix.
 
-**Next obligation.** Carry the late selection
-through the actual subsequent open attempts on that execution. Read, cache
-and installation effects still need to come from the reached callbacks.
+**Next obligation.** Derive the retry effects for the selected target from
+the callbacks reached by failed and successful opens. Read, cache and
+installation effects are still explicit premises.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

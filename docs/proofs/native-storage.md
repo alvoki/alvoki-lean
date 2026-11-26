@@ -27,6 +27,8 @@ and heap returned by the observed open schedule. An already observed trace from 
 `InstalledClientReplay` includes a replay from empty, ordered batch retention, acknowledged and
 submitted subsequences, and agreement with recorded reads and the ready table. [Raw fresh start](../../lean/Alvoki/Storage/Disk/NativeFreshTableOpen.lean) · [Composition from the empty ledger](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Key-value refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
 
+For a late write publication error, the observed prefix fixes the submitted batch and the reboot sample fixes the recovery target. Both retry continuations use this target. A final failed open preserves a pending replay. A successful open installs the literal returned table and extends the preceding ledger. The file and callback effects of those attempts remain premises. [Selected reboot and retry continuations](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+
 The first-open theorem consumes raw admission, bootstrap and cache chronology, matching lock and
 metadata, and allocation reports that preserve inode and cache state. It joins the raw returned table,
 phase, cache and census. The later `FileImage` projection is supplied separately from the bootstrap
