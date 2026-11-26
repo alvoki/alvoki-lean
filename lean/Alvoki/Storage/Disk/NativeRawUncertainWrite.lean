@@ -325,6 +325,25 @@ structure NativeReadPosition.SelectedWritePlan (batch : List WAL.Write) (target 
   pending : PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads history
   bounded : ∀ read ∈ current.reads, read.BoundedBy history.length
 
+/-- Every selected seal belongs to the original immutable seal set. -/
+theorem NativeReadPosition.SelectedWritePlan.retainsSeal {batch : List WAL.Write} {target : Target} {image : FileImage}
+    (plan : current.SelectedWritePlan batch target image) {segment : WalSegment} (chosen : segment ∈ plan.layout.sealed) :
+    segment ∈ (state).writer.wal.sealed := by
+  let wal := (state).writer.wal.appendSelectedView image.directory.active plan.history
+  have descriptors := plan.descriptors
+  change plan.layout.sealed ++ [plan.layout.keeper] = wal.readDescriptors plan.layout.range.watermark at descriptors
+  rw [WalSegmentImage.readDescriptors] at descriptors
+  split at descriptors
+  · rename_i covered
+    have fromSeals : plan.layout.sealed = wal.sealed.filter (fun s => decide (plan.layout.range.watermark < s.last)) :=
+      (List.append_singleton_inj.mp (by simpa [WalSegmentImage.afterWatermark, WalSegmentImage.segments,
+        List.filter_append, covered] using descriptors)).1
+    rw [fromSeals] at chosen
+    exact (List.mem_filter.mp chosen).1
+  · have empty := (List.append_singleton_inj.mp (show plan.layout.sealed ++ [plan.layout.keeper] = [] ++ [wal.active]
+      from descriptors)).1
+    simp [empty] at chosen
+
 /-- Rebuild the bounded reader and replay at an image that implements
 an already selected target. Repair may change the keeper and later names. -/
 theorem NativeReadPosition.preparesSelectedWrite
@@ -360,46 +379,6 @@ theorem NativeReadPosition.preparesSelectedWrite
   obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded selectedHistory ordered
   exact ⟨⟨history, selectedHistory, layout, targetEq, layoutValid, walValid, exactKeeper, descriptors, offsets, plan,
     imageManifest.symm ▸ ready.resumed.selected, accepted, ordered, pending, bounded⟩⟩
-
-/-- Project the chosen durable manifest, marker and keeper into the
-bounded reader's file image. The logical image keeps the immutable
-sealed files, and the raw reader separately checks their names and
-payloads. The observed later names remain available to repair. -/
-theorem NativeReadPosition.preparesWriteReboot
-    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
-    (prepared : prepareBatch (state).writer.installed.table rows = some (batch, table))
-    (fits : (state).writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
-    {entry reached : CheckpointStorageObservation}
-    (old : NativeReadyStorage state entry) (frame : entry.Frames (state).writeFramePath reached)
-    (names : FilePath → Option Nat) (chosen : names ∈ reached.crashNames) (contents : Nat → ByteArray)
-    (manifestBytes : ∀ inode, names ((state).session.directory.file .manifest) = some inode →
-      contents inode ∈ reached.files.bytes inode)
-    {target : Target} (admitted : BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target)
-    (selectedPair : target.pair = ⟨(names ((state).session.directory.file .manifest)).map contents,
-      (names ((state).session.directory.file .walBoundary)).map contents⟩)
-    (keeper : target.Accepts ((names ((state).session.directory.file (.walSegment (state).writer.wal.active.first))).map contents))
-    (later : List Nat) (beyond : ∀ first ∈ later, target.range.through < first) :
-    let directory := (state).session.directory
-    let image := (state).writer.files.crash
-      ⟨(names (directory.file .manifest)).map contents, (names (directory.file .walBoundary)).map contents⟩
-      ((names (directory.file (.walSegment (state).writer.wal.active.first))).map contents) later
-    Nonempty (current.SelectedWritePlan batch target image) := by
-  intro directory image
-  have pair : image.directory.active = target.pair := selectedPair.symm
-  have manifest := old.selectedWriteManifest frame names chosen contents manifestBytes
-  have imageManifest : image.directory.active.manifest = (state).writer.target.pair.manifest := manifest
-  have keeperValid : image.keeper.Valid target.Accepts := by
-    refine ⟨by simp [image, FileImage.crash, Publication.Image.settled], keeper, ?_⟩
-    intro bytes member
-    have same := List.mem_singleton.mp member
-    exact same.symm ▸ keeper
-  have laterValid : image.later.Beyond target.range.through := by
-    intro listed member first present
-    have same : listed = later := by simpa [image, FileImage.crash, LaterNames.settled] using member
-    exact beyond first (same ▸ present)
-  have observed : image.Valid target := ⟨pair, congrArg (fun chosen => [chosen]) pair, keeperValid, laterValid⟩
-  exact current.preparesSelectedWrite prepared fits admitted observed
-    ((congrArg DirectoryPublication.Bindings.manifest pair.symm).trans imageManifest)
 
 end
 

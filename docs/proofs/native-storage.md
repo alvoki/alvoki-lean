@@ -417,16 +417,18 @@ bytes. The post-group payload observations and native effect laws remain explici
 recovery worker must still consume the derived target and prove the exact returned table
 across all supported retries.
 
-The selected batch target can supply the same repair plan in an existing modeled retry or in a
-raw reboot projection of the observed manifest, marker and keeper. Its protected file frame
-tracks the root, lock, selected runs and seals in the same joint namespace. The shared proof
-appends one uncertain submission and keeps earlier snapshot observations for either selected
-history. The marked opener follows a selected layout through reported read-only failures and
-uses the reached healthy worker and measured repair to return its actual table and fresh
-references. The scope consists of the selected paths, so an unrelated staging name in the raw
-listing has no bearing on the selected bytes. The current bridge uses the existing drained reboot
-inventory and raw effects for the healthy attempt. Recovery that has already changed the
-keeper and admission with surviving ownership still need the general execution argument.
+The selected batch target supplies the same repair plan after a reported reboot or live retry.
+The reboot bridge uses one joint map and the bytes sampled at its actual heap. In the grouped
+file-sync error branch this map admits the old marker and a keeper that may include an
+unacknowledged suffix. The protected frame retains the root, lock, selected runs and seals.
+After selection the marker joins that frame, while a separate observation tracks any replacement
+of the writable keeper. The healthy opener uses its actual reached descriptor census and matches
+the root and lock handles and the selected marker, seals, keeper, manifest and runs to the
+observed namespace. The shared return appends one uncertain submission and keeps earlier
+snapshot observations for either selected history. The bridge still takes local primitive effects
+for the failed and healthy opens, with a vacant lock at the healthy entry.
+[Observed reboot](../../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean)
+· [Selected retry return](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
 
 A marked repair that fails after changing files supplies its reached image through the same
 worker and finalizers as the read-only error path. The local stage-sync and final-directory
@@ -435,6 +437,13 @@ original keeper with a durable scratch file or replace it with the trimmed keepe
 The retry fold retains the selected target and unchanged file footprint while the next reader
 plan uses the last returned keeper and later names. The kernel argument tracks reported
 Linux effects and distinguishes a returned error from whether its syscall took effect.
+
+One held marked interpreter now fixes primitive callbacks before admission and passes the actual
+new cache references to the worker. A successful worker result or a finalized worker error
+establishes an exact return of that same call. The worker result remains a local obligation of
+its read and repair evidence. The retry trace still needs to require this interpreter at each
+endpoint before replacing the legacy compound reports.
+[Fixed marked interpreter](../../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 
 ## Migration test
 

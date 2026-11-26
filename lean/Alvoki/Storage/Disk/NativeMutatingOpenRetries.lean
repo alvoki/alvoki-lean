@@ -118,6 +118,23 @@ def RawOpenRetryTrace.KeeperAt (view : OpenCloseHeapView heap FileImage) (direct
     (target : Target) (names : heap → FilePath → Option Nat) (bytes : heap → Nat → ByteArray) (atHeap : heap) : Prop :=
   (view.files atHeap).image.keeper.active = (names atHeap (directory.file (.walSegment target.first))).map (bytes atHeap)
 
+/-- The marker joins the immutable write footprint once a retry has
+selected a target. Repair gives the live keeper its own relation. -/
+def NativeReadyState.selectedRetryPath (state : NativeReadyState) (path : FilePath) : Prop :=
+  path = state.session.directory.file .walBoundary ∨ state.writeFramePath path
+
+/-- Facts established when entering a selected retry epoch. The actual
+open attempts and their local effects are indexed separately. -/
+structure RawOpenRetryTrace.SelectedEntry (view : OpenCloseHeapView heap FileImage)
+    (state : NativeReadyState) (target : Target) (names : heap → FilePath → Option Nat)
+    (visible : heap → Nat → ByteArray) (first : heap) : Prop where
+  valid : (view.files first).image.Valid target
+  kept : (view.files first).image.kept = state.writer.files.kept
+  manifest : target.pair.manifest = state.writer.target.pair.manifest
+  protectedFiles : NativeReadyProtectedStorage state ⟨names first, fun inode => [visible first inode]⟩
+  keeper : KeeperAt view state.session.directory target names visible first
+  marker : (names first (state.session.directory.file .walBoundary)).map (visible first) = target.pair.walBoundary
+
 /-- A read-only block carries the named keeper using the scoped live
 file frame, leaving repairs to establish their own local effect. -/
 theorem RawFinalizedOpenAttempts.keepsVisibleKeeper {target : Target}

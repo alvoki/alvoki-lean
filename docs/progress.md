@@ -1,5 +1,28 @@
 # Current handoff
 
+The chosen reboot now initializes the same selected retry state used after live repair failures.
+The proof samples one durable name map and its inode bytes at the actual reboot heap. It carries
+forward the protected checkpoint files, derives the live keeper and selected marker at that heap,
+and records the vacant lock and empty descriptor inventory. The grouped file-fsync error supplies
+the old target on every admitted joint survivor. Its keeper can still contain a prefix of the
+unacknowledged batch. The shared selected plan and installer retain only the history admitted by
+the marker. [Reboot entry](../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean)
+· [Grouped WAL error](../lean/Alvoki/Storage/Disk/NativeGroupedWalRetryTarget.lean)
+
+At the successful retry, the marker and selected seals now use the same stat and open identity
+proof as the manifest and runs. The common return also identifies the actual directory and lock
+objects, the source cache initializer and the exact table and session references. The marker joins
+the protected frame after selection. The keeper can still change during an earlier repair. The
+production execution still needs to derive the local callback reports and migrate the older
+compound uncertain-write events. [Exact entry identities](../lean/Alvoki/Storage/Disk/NativeMarkedEntryObservations.lean)
+· [Selected retry return](../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+
+The marked interpreter now fixes the callbacks for admission, cache allocation, repair and cleanup
+before the attempt. It passes the references allocated by this admission into the worker. The
+healthy result and finalized worker error are two results of that same interpreter. The current
+retry certificates must still export their exact worker results to use this boundary in the common
+execution. [Fixed marked open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+
 A single marked installation proof now serves both the reboot path and a live open after failed
 repairs. The next admission uses the last reached heap and its descriptor inventory. For an
 already selected uncertain batch, the same retry induction carries the valid repair plan, the

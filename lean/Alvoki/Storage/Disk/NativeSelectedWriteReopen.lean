@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
-import Alvoki.Storage.Disk.NativeMutatingOpenRetries
+import Alvoki.Storage.Disk.NativeRawWriteReboot
+import Alvoki.Storage.Disk.NativeMarkedEntryObservations
 import Alvoki.Storage.Disk.NativeWriteCrashReads
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 
@@ -60,6 +61,10 @@ def RawHealthyMarkedOpenEffects.SelectedReturn
       (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
         IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
       (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
+      (∃ action : IO DiskTable.OpenSyncFiles, DiskTable.OpenSyncFiles.IsOpenAction (dir).path action ∧
+        action = openSyncFilesWith (m := IO) (IO.FS.Handle.mk (dir).path .read)
+          (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
+          (fun value => liftM (IO.mkRef value)) makeCache) ∧
       raw.openTable bootstrap assemble makeCache = .ok handle.table start.reached ∧
       start.current = ⟨history, log, next⟩ ∧ next.reads = reads ∧ next.initial = next.state ∧
       next.state.writer.target = layout.target ∧ next.state.files.image.Ready layout.target ∧
@@ -134,7 +139,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
       prepared following accepted ordered walLayout walValid spans active keeper kept pending bounded
   let position : NativeReadPosition history log :=
     ⟨opening.finish.run opening.chronology, next, next, reads, seeded⟩
-  obtain ⟨measured, installed, _, makeCache, _, _, ran⟩ :=
+  obtain ⟨measured, installed, cacheOpen, makeCache, action, source, ran⟩ :=
     marked.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
       raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
   obtain ⟨handle, start, table, _, sameLock, sameCache, _, _, contents, sameGet, sameSet, sameCompare,
@@ -144,7 +149,7 @@ theorem RawHealthyMarkedOpenEffects.opensWithSelectedReplay
     fun same => freshRefs.1 ((phaseId.symm.trans same).symm ▸ previousTokens.1)
   have freshToken : tokenIdentity handle.token ≠ state.session.sessionRef :=
     fun same => freshRefs.2 ((tokenId.symm.trans same).symm ▸ previousTokens.2)
-  refine ⟨measured, position, makeCache, handle, start, ?_, positionEq, rfl, rfl, target,
+  refine ⟨measured, position, makeCache, handle, start, ⟨cacheOpen, action, source⟩, ?_, positionEq, rfl, rfl, target,
     target ▸ seeded.refines.1.retained.resumed.ready, checkpoint, durable, sameLock,
     sameCache.symm ▸ installed.cacheReferences, sameCache.symm ▸ installed.cacheDirectory,
     contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached⟩
@@ -254,17 +259,13 @@ theorem NativeReadPosition.opensAfterWriteRetries
     (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
     (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
     (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
-    (manifest : target.pair.manifest = current.state.writer.target.pair.manifest)
     {first : heap} (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
     {attempts : RawOpenRetryTrace view dir calls init release first returns reached}
     (effects : RawOpenRetryTrace.SelectedEffects view dir calls init release first target
-      (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.writeFramePath
+      (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.selectedRetryPath
       (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts)
-    (initialFiles : NativeReadyProtectedStorage current.state ⟨names first, fun inode => [visible first inode]⟩)
-    (valid : (view.files first).image.Valid target)
-    (seals : (view.files first).image.kept = current.state.writer.files.kept)
+    (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible first)
     (vacant : TryLockObserves (retryFiles).owners dir (.ok true))
-    (firstKeeper : RawOpenRetryTrace.KeeperAt view dir target names visible first)
     (observe : ∀ plan : current.SelectedWritePlan batch target (retryFiles).image,
       ∃ (opening : MarkedReadyOpenObservations input dir census retryFiles plan.layout
           current.state.writer.published vacant plan.selected)
@@ -272,6 +273,8 @@ theorem NativeReadPosition.opensAfterWriteRetries
           allocatePhase allocateToken stream remove stage rename),
         (current.state.session.phaseRef ∈ opening.callbacks.liveRefs ∧
           current.state.session.sessionRef ∈ opening.callbacks.liveRefs) ∧
+        names reached (dir).path = opening.reads.bindings (dir).path ∧
+        names reached ((dir).file .lock) = opening.reads.bindings ((dir).file .lock) ∧
         ∀ path metadata inode, plan.layout.selectedFilePath dir path →
           opening.reads.reads.stat path = .ok (metadata, inode) → names reached path = some inode)
     (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
@@ -288,6 +291,16 @@ theorem NativeReadPosition.opensAfterWriteRetries
         current.state.writer.published vacant plan.selected)
       (raw : RawHealthyMarkedOpenEffects opening view calls init reached phaseIdentity tokenIdentity
         allocatePhase allocateToken stream remove stage rename),
+      names reached (dir).path = some ((view.handle raw.seed.afterPending raw.seed.handle).1.inode
+        (view.handle raw.seed.afterPending raw.seed.handle).2.1.description) ∧
+      names reached ((dir).file .lock) = some ((view.handle raw.raw.afterFlock raw.raw.lock).1.inode
+        (view.handle raw.raw.afterFlock raw.raw.lock).2.1.description) ∧
+      (∀ bytes, (retryFiles).image.directory.active.walBoundary = some bytes →
+        ∃ read : opening.reads.reads.ObservesFile ((dir).file .walBoundary) bytes,
+          names reached ((dir).file .walBoundary) = some read.object ∧ visible reached read.object = bytes) ∧
+      (∀ segment ∈ plan.layout.sealed,
+        ∃ read : opening.reads.reads.ObservesFile ((dir).file (.walSegment segment.first)) segment.bytes,
+          names reached ((dir).file (.walSegment segment.first)) = some read.object ∧ visible reached read.object = segment.bytes) ∧
       (∃ read : opening.reads.reads.ObservesFile ((dir).file (.walSegment plan.layout.keeper.first))
           (plan.layout.keeper.bytes ++ plan.layout.tail),
         names reached ((dir).file (.walSegment target.first)) = some read.object ∧
@@ -301,42 +314,63 @@ theorem NativeReadPosition.opensAfterWriteRetries
         ∃ run : opening.reads.reads.ObservesFile ((dir).file (.run metadata.header.generation index)) payload,
           names reached ((dir).file (.run metadata.header.generation index)) = some run.object ∧ visible reached run.object = payload) ∧
       raw.SelectedReturn (log ++ [.uncertainBatch batch]) current.reads bootstrap assemble get set ptrEq := by
-  obtain ⟨⟨plan⟩, kept, frame, carries⟩ := current.preparesWriteRetry prepared fits admitted manifest effects valid
-  obtain ⟨opening, raw, refs, actualStat⟩ := observe plan
+  obtain ⟨⟨plan⟩, kept, frame, carries⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest effects initial.valid
+  obtain ⟨opening, raw, refs, root, lock, actualStat⟩ := observe plan
+  let files (heap : heap) : CheckpointSurvivingFiles := ⟨names heap, fun inode => [visible heap inode]⟩
+  obtain ⟨rootObject, lockObject⟩ := raw.entryAuthority files root lock
   let file := opening.reads.wal.keeper
   let read := file.calls.observesFile file.bound file.contents
   have named := actualStat _ _ _ (.inr (.inr (.inl ⟨plan.layout.keeper, by simp, rfl⟩))) read.stat
   have samePath := congrArg (fun (target : Target) => (dir).file (.walSegment target.first)) plan.targetEq
   change (dir).file (.walSegment plan.layout.keeper.first) = _ at samePath
   have keeperName := (congrArg (names reached) samePath).symm.trans named
-  have keeperAt := carries firstKeeper
+  have keeperAt := carries initial.keeper
   unfold RawOpenRetryTrace.KeeperAt at keeperAt
   have contents : visible reached read.object = plan.layout.keeper.bytes ++ plan.layout.tail := by
     rw [keeperName, Option.map_some, plan.layout.visible] at keeperAt
     exact (Option.some.inj keeperAt).symm
-  have keptFiles := initialFiles.frame frame
+  have keptFiles := initial.protectedFiles.frame (fun path keep => frame path (.inr keep))
   have reachedManifest : (retryFiles).image.directory.active.manifest = current.state.writer.target.pair.manifest :=
-    (congrArg (fun (target : Target) => target.pair.manifest) plan.targetEq).trans manifest
-  refine ⟨keptFiles, plan, opening, raw, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
+    (congrArg (fun (target : Target) => target.pair.manifest) plan.targetEq).trans initial.manifest
+  refine ⟨keptFiles, plan, opening, raw, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
+  · intro bytes selectedMarker
+    have sameMarker : (retryFiles).image.directory.active.walBoundary = target.pair.walBoundary :=
+      congrArg (fun (t : Target) => t.pair.walBoundary) plan.targetEq
+    have live := (frame.visiblePayload (.inl rfl)).trans (initial.marker.trans (sameMarker.symm.trans selectedMarker))
+    have stored : (files reached).Stored ((dir).file .walBoundary) bytes := by
+      change (names reached ((dir).file .walBoundary)).map (visible reached) = some bytes at live
+      obtain ⟨inode, bound, content⟩ := Option.map_eq_some_iff.mp live
+      exact ⟨inode, bound, congrArg (fun bytes => [bytes]) content⟩
+    obtain ⟨read, bound, content⟩ := opening.readsEntryMarker (files reached) selectedMarker
+      (fun _ _ stat => actualStat _ _ _ (.inr (.inl rfl)) stat) stored
+    exact ⟨read, bound, (List.cons.inj content).1⟩
+  · intro segment chosen
+    have selectedPath : plan.layout.selectedFilePath dir ((dir).file (.walSegment segment.first)) :=
+      .inr (.inr (.inl ⟨segment, List.mem_append_left _ chosen, rfl⟩))
+    obtain ⟨read, bound, content⟩ := opening.readsEntrySeal (files reached) segment chosen
+      (fun _ _ stat => actualStat _ _ _ selectedPath stat) (keptFiles.sealedFiles segment (NativeReadPosition.SelectedWritePlan.retainsSeal current plan chosen))
+    exact ⟨read, bound, (List.cons.inj content).1⟩
   · intro bytes present
     obtain ⟨⟨file⟩, _⟩ := opening.reads.metadata.manifestFile bytes present
     let read := file.calls.observesFile file.bound file.contents
-    have bound := actualStat _ _ _ (.inl rfl) read.stat
     have stored := keptFiles.manifest
     rw [← reachedManifest, present] at stored
-    obtain ⟨inode, named, payload⟩ := stored
-    exact ⟨read, bound, (Option.some.inj (named.symm.trans bound)) ▸ (List.cons.inj payload).1⟩
+    obtain ⟨bound, content⟩ := read.matchesStoredEntry (files reached)
+      (fun _ _ stat => actualStat _ _ _ (.inl rfl) stat) stored
+    exact ⟨read, bound, (List.cons.inj content).1⟩
   · intro bytes metadata present decoded index within payload stored
     obtain ⟨run⟩ := opening.reads.chunkReads bytes metadata present decoded index within payload stored
-    have bound := actualStat _ _ _ (.inr (.inr (.inr ⟨bytes, metadata, index, present, decoded, within, rfl⟩))) run.stat
-    obtain ⟨inode, named, exactBytes⟩ := keptFiles.runs bytes metadata (reachedManifest.symm.trans present)
-      decoded index within payload stored
-    exact ⟨run, bound, (Option.some.inj (named.symm.trans bound)) ▸ (List.cons.inj exactBytes).1⟩
+    have selectedPath : plan.layout.selectedFilePath dir ((dir).file (.run metadata.header.generation index)) :=
+      .inr (.inr (.inr ⟨bytes, metadata, index, present, decoded, within, rfl⟩))
+    obtain ⟨bound, content⟩ := run.matchesStoredEntry (files reached)
+      (fun _ _ stat => actualStat _ _ _ selectedPath stat)
+      (keptFiles.runs bytes metadata (reachedManifest.symm.trans present) decoded index within payload stored)
+    exact ⟨run, bound, (List.cons.inj content).1⟩
   ·
     obtain ⟨ready, _, _⟩ := current.readPrefix.refines
     exact raw.opensWithSelectedReplay refs plan.prepared plan.accepted plan.ordered plan.walLayout plan.walValid
       ready.retained.spans rfl (congrArg WalSegment.first plan.keeper) plan.descriptors plan.offsets
-      (kept.trans (seals.trans ready.retained.sealedFiles)) plan.pending plan.bounded bootstrap assemble constructs phase ptrEq
+      (kept.trans (initial.kept.trans ready.retained.sealedFiles)) plan.pending plan.bounded bootstrap assemble constructs phase ptrEq
 
 end Retry
 
