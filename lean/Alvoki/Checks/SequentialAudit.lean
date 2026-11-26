@@ -4163,6 +4163,11 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.SampledCheckpointRetryFrame.trans
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.framesSampledCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesSampledCheckpointBeforeFlock
+#check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.CrashFileFrame.trans
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.LiveKeeperCrashChoices.frame
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.KeeperCrashChoices.frame
+#check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.KeeperCrashChoices.afterFailedCalls
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.framesCrashFilesBeforeFlock
 #check_axioms Alvoki.Storage.DiskSession.RawBeforeFlockRejection.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawFlockRejection.returnsMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawContendedAliasOpen.returnsMarkedInterpreter
@@ -4262,6 +4267,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointSurvivingFiles.Frames.privateBindingOn
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.protectedPathNeWalFromActive
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsDurableRetry
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.keeperCrashChoices
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.SelectedRetryDurability.frame
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preservesDurability
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.framesAfter

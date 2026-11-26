@@ -52,6 +52,38 @@ theorem NativeReadyState.SelectedRetryFrame.trans {state : NativeReadyState}
     state.SelectedRetryFrame first last firstBytes lastBytes :=
   ⟨before.live.trans after.live, before.durable.trans after.durable, before.parent.trans after.parent⟩
 
+/-- The inode currently bound at the keeper path can be settled by the
+next authorization barrier. Any of its durable payloads can be read. -/
+def RawOpenRetryTrace.LiveKeeperCrashChoices (directory : DiskDirectory) (target : Target)
+    (storage : CheckpointStorageObservation) : Prop :=
+  ∃ inode, storage.files.names (directory.file (.walSegment target.first)) = some inode ∧
+    ∀ payload ∈ storage.files.bytes inode, target.Accepts (some payload)
+
+/-- Each joint namespace must retain a keeper whose durable bytes contain
+the selected prefix. A replacement may have removed that inode's live name. -/
+def RawOpenRetryTrace.KeeperCrashChoices (directory : DiskDirectory) (target : Target)
+    (storage : CheckpointStorageObservation) : Prop :=
+  ∀ names ∈ storage.crashNames, ∃ inode, names (directory.file (.walSegment target.first)) = some inode ∧
+    ∀ payload ∈ storage.files.bytes inode, target.Accepts (some payload)
+
+theorem RawOpenRetryTrace.LiveKeeperCrashChoices.frame {directory : DiskDirectory} {target : Target}
+    {before after : CheckpointStorageObservation} {scope : FilePath → Prop}
+    (kept : LiveKeeperCrashChoices directory target before) (framed : before.files.Frames scope after.files)
+    (inside : scope (directory.file (.walSegment target.first))) : LiveKeeperCrashChoices directory target after := by
+  obtain ⟨inode, bound, accepted⟩ := kept
+  obtain ⟨name, bytes⟩ := framed _ inside
+  exact ⟨inode, name.trans bound, fun payload present => accepted payload ((bytes inode bound) ▸ present)⟩
+
+theorem RawOpenRetryTrace.KeeperCrashChoices.frame {directory : DiskDirectory} {target : Target}
+    {before after : CheckpointStorageObservation} {scope : FilePath → Prop}
+    (kept : KeeperCrashChoices directory target before) (framed : before.CrashFileFrame scope after)
+    (inside : scope (directory.file (.walSegment target.first))) : KeeperCrashChoices directory target after := by
+  intro names allowed
+  obtain ⟨prior, earlier, same⟩ := framed.toFrames.survivors names allowed
+  obtain ⟨inode, oldBound, accepted⟩ := kept prior earlier
+  have bound := (same _ inside).trans oldBound
+  exact ⟨inode, bound, fun payload present => accepted payload (framed.bytes names allowed _ inside inode bound payload present)⟩
+
 variable {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap FileImage}
   {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
   {visible : heap → Nat → ByteArray} {failed rebooted : heap}
@@ -75,6 +107,31 @@ private theorem RawWriteRebootEntry.DurableReset.stored
     (storage rebooted).files.Stored path payload := by
   obtain ⟨inode, bound, bytes⟩ := rebootFile
   exact ⟨inode, (reset.bindings path (.inr (.inr selected))).trans bound, (reset.bytes path selected inode bound).trans bytes⟩
+
+/-- The live keeper chosen by the first reboot starts with one durable
+payload and the same binding in every subsequent crash namespace. Its
+accepted prefix comes from the selected retry target at the reboot heap. -/
+theorem RawWriteRebootEntry.keeperCrashChoices
+    (seen : RawWriteRebootEntry state view storage names visible failed rebooted)
+    (reset : seen.DurableReset) {target : Target}
+    (selected : RawOpenRetryTrace.SelectedEntry view state target names visible rebooted)
+    (sameFirst : target.first = state.writer.wal.active.first) :
+    RawOpenRetryTrace.LiveKeeperCrashChoices state.session.directory target (storage rebooted) ∧
+      RawOpenRetryTrace.KeeperCrashChoices state.session.directory target (storage rebooted) := by
+  let path := state.session.directory.file (.walSegment target.first)
+  have survivorPath : checkpointSurvivorPath state.session.directory state.writer state.writer.target.pair.manifest path :=
+    .inr (.inl (.inr (.inl (congrArg (fun first => state.session.directory.file (.walSegment first)) sameFirst))))
+  have inCrash : state.crashPath path := .inr (.inr survivorPath)
+  obtain ⟨tail, trimmed⟩ := selected.valid.keeper.activeValid
+  rw [selected.keeper] at trimmed
+  obtain ⟨inode, bound, exactBytes⟩ := Option.map_eq_some_iff.mp trimmed
+  have durable := reset.bytes path survivorPath inode bound
+  have accepted : ∀ payload ∈ (storage rebooted).files.bytes inode, target.Accepts (some payload) := by
+    intro payload present
+    rw [durable] at present
+    exact ⟨tail, congrArg some ((List.mem_singleton.mp present).trans exactBytes)⟩
+  exact ⟨⟨inode, (reset.bindings path inCrash).trans bound, accepted⟩,
+    fun names survives => ⟨inode, (reset.crashBindings names survives path inCrash).trans bound, accepted⟩⟩
 
 /-- Project the already selected reboot into the actual physical
 observation. This also retains sealed files older than the replay window. -/
@@ -131,6 +188,37 @@ theorem RawMarkedOpenInterpreter.FailedCalls.framesAfter
     have initial := ih (fun ran inside result => each ran (inside.trans extended) result)
     have last := each (previousCalls.append previous) (by rw [List.append_assoc]; exact List.prefix_rfl) returned
     exact trans initial last
+
+/-- A read-only retry block preserves the same scoped crash candidates
+through the actual caller-visible errors. No restart has selected a new map. -/
+theorem RawOpenRetryTrace.KeeperCrashChoices.afterFailedCalls
+    {stream : Type} {source : RawMarkedOpenInterpreter heap stream} {directory : DiskDirectory} {target : Target}
+    {first reached : heap} {errors : List (FilePath × IO.Error)}
+    (attempts : source.FailedCalls first errors reached)
+    (observe : heap → CheckpointStorageObservation) (scope : FilePath → Prop)
+    (inside : scope (directory.file (.walSegment target.first)))
+    (live : LiveKeeperCrashChoices directory target (observe first))
+    (crash : KeeperCrashChoices directory target (observe first))
+    (each : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+      source.FailedCalls first prior before → List.IsPrefix (prior ++ [(input, cause)]) errors →
+      source.openTable input before = .error cause after → (observe before).CrashFileFrame scope (observe after)) :
+    LiveKeeperCrashChoices directory target (observe reached) ∧ KeeperCrashChoices directory target (observe reached) := by
+  have framed := attempts.framesAfter .empty (fun before after => (observe before).CrashFileFrame scope (observe after))
+    (fun atHeap => .refl scope (observe atHeap)) (fun first last => first.trans last)
+    (fun prior inside returned => each prior (by simpa only [List.nil_append] using inside) returned)
+  exact ⟨live.frame framed.toFrames.visible inside, crash.frame framed inside⟩
+
+/-- A rejection before flock carries the survivor frame on the same
+heap as the actual public error. The lock append error has its own law. -/
+theorem RawMarkedOpenInterpreter.framesCrashFilesBeforeFlock {stream : Type}
+    (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {before after : heap} {cause : IO.Error}
+    (failed : source.calls.beforeFlock input before = .error cause after)
+    (observe : heap → CheckpointStorageObservation) (scope : FilePath → Prop)
+    (effects : source.calls.BeforeFlockErrorFrames input before cause after
+      (fun entry reached => (observe entry).CrashFileFrame scope (observe reached))) :
+    source.openTable input before = .error cause after ∧ (observe before).CrashFileFrame scope (observe after) :=
+  source.framesBeforeFlock failed (frame := fun entry reached => (observe entry).CrashFileFrame scope (observe reached))
+    (fun first last => first.trans last) effects
 
 section CheckpointRetry
 

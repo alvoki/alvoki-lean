@@ -58,6 +58,30 @@ theorem CheckpointStorageObservation.Frames.settledFrom {entry reached : Checkpo
   obtain ⟨prior, earlier, same⟩ := frame.survivors names allowed
   exact (same path selected).trans ((settled prior earlier path selected).trans (frame.visible path selected).1.symm)
 
+/-- Preserve the durable contents of every inode reachable at a scoped
+path in a surviving namespace. The live file frame alone only covers
+inodes still bound in the live namespace. -/
+structure CheckpointStorageObservation.CrashFileFrame (scope : FilePath → Prop)
+    (before after : CheckpointStorageObservation) : Prop extends before.Frames scope after where
+  bytes : ∀ names ∈ after.crashNames, ∀ path, scope path → ∀ inode, names path = some inode →
+    ∀ payload ∈ after.files.bytes inode, payload ∈ before.files.bytes inode
+
+namespace CheckpointStorageObservation.CrashFileFrame
+
+theorem refl (scope : FilePath → Prop) (atHeap : CheckpointStorageObservation) : atHeap.CrashFileFrame scope atHeap :=
+  ⟨.refl _ _, fun _ _ _ _ _ _ _ present => present⟩
+
+theorem trans {scope : FilePath → Prop} {first middle last : CheckpointStorageObservation}
+    (firstFrame : first.CrashFileFrame scope middle) (lastFrame : middle.CrashFileFrame scope last) :
+    first.CrashFileFrame scope last := by
+  refine ⟨firstFrame.toFrames.trans lastFrame.toFrames, ?_⟩
+  intro names allowed path inside inode bound payload possible
+  obtain ⟨prior, earlier, same⟩ := lastFrame.toFrames.survivors names allowed
+  exact firstFrame.bytes prior earlier path inside inode ((same path inside).symm.trans bound) payload
+    (lastFrame.bytes names allowed path inside inode bound payload possible)
+
+end CheckpointStorageObservation.CrashFileFrame
+
 /-- Transport the selected file together with its durable payload. -/
 theorem CheckpointSurvivingFiles.Frames.stored {footprint : FilePath → Prop}
     {first last : CheckpointSurvivingFiles} (frame : first.Frames footprint last)
