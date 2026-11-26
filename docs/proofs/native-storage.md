@@ -226,6 +226,17 @@ without a write response. The file callbacks each preserve the protected paths a
 the bounded WAL names. The proof composes those local facts up to the marker
 rename, then through the actual cache read and outstanding sync. [Interrupted root sync](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) [Late publication](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
+For the fresh two-write path, `readsAfterInterruptedSecondBatch` carries the
+first write’s established storage and name window into the second write on the
+same cache. Its interrupted directory sync and one reboot sample select the
+client history. A successful open through the scoped reader then identifies
+the returned handle’s phase and token. For any key, acquiring its latest pin
+and reading it extends that history’s recorded reads. This covers a stop at
+the final directory fsync before the first checkpoint. Rotation still needs
+to supply the corresponding reached storage entry.
+[Fresh two-write composition](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
+[Literal reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the
 sampled reboot and the effects of the intervening failed opens, it establishes

@@ -1806,6 +1806,7 @@ abbrev RawMarkedOpenInterpreter.ReadsClientHistoryAtOpen
   source.AfterWalOpen view state.session.directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
     ∃ (installed : Installed) (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit),
       view.phase returnedAt phase = some (.ready installed) ∧
+      (∃ lock files, table.UsesOpenReferences state.session.directory lock files phase token) ∧
       ∀ {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
         {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
         (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool),
@@ -1822,9 +1823,11 @@ theorem RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
     (pending : PendingClientReplay log reads history) :
     source.ReadsClientHistoryAtOpen view state storage visible rebooted namespaceView root log reads history := by
   intro input returnedAt table admission effects child absent initializes keeps returned
-  obtain ⟨logical, count, held, phase, token, repaired, afterPhase, _, _, _, _, stored, _, lookup⟩ :=
+  obtain ⟨logical, count, held, phase, token, repaired, afterPhase, _, _, _, _, stored, assembled, lookup⟩ :=
     opened admission effects child absent initializes keeps returned
-  refine ⟨_, phase, token, stored, ?_⟩
+  refine ⟨_, phase, token, stored, ?_, ?_⟩
+  · rw [assembled]
+    exact ⟨_, _, (RawMarkedOpenInterpreter.assembles _ _ _).usesReferences phase token⟩
   intro get set ptrEq cells compare key
   exact (lookup ptrEq cells compare key).recordsRead pending
 

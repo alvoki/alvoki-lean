@@ -4,6 +4,7 @@ import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
 import Alvoki.Storage.Disk.NativeRawWriteReboot
+import Alvoki.Storage.Disk.NativeRawWriteRootStop
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 
@@ -646,10 +647,9 @@ local notation "visible" => fun h =>
   WalInodeImage.visible (FreshBootstrapKeeperPhysical.inodes (FreshBootstrapOpenHeap.keeperPhysical seen) h)
 local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage h))
 
-/-- One fresh open, its first nonempty acknowledged write and one sampled
-restart determine the exact batch replayed by a successful public reopen.
-The write and reboot share the file observer and the actual write return heap. -/
-theorem replaysFirstAcknowledgedWrite {stream : Type}
+section FirstAcknowledgement
+
+variable
     (references : opened.handle.files.UsesCacheReferences seed.activeRef seed.pendingRef seed.directoryRef)
     (atDirectory : opened.handle.files.AtDirectory directory.path)
     (census : view.descriptors opened.start.reached = opened.start.current.ready.state.census)
@@ -659,11 +659,75 @@ theorem replaysFirstAcknowledgedWrite {stream : Type}
     (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit) {sequence : UInt64} {reached : heap}
-    (nonempty : request.rows ≠ []) (covered : request.rows.length ≤ through)
-    (wrote : ∀ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path),
-      cache.directory = seed.directoryRef → cache.active = seed.activeRef → cache.pending = seed.pendingRef →
-      opened.start.ObservesPublishedWrite appender stager syncer clientView cache seen.keeperPhysical.inodes runs storage
-        inode buffered request lookup rename sequence reached)
+    (nonempty : request.rows ≠ [])
+    (covered : request.rows.length ≤ through)
+
+set_option quotPrecheck false in
+local notation "observedFirstWrite" =>
+  ∀ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path),
+    OpenSyncCacheRefs.directory cache = OpenSyncCacheAllocations.directoryRef seed →
+    OpenSyncCacheRefs.active cache = OpenSyncCacheAllocations.activeRef seed →
+    OpenSyncCacheRefs.pending cache = OpenSyncCacheAllocations.pendingRef seed →
+    NativeOpenedPosition.ObservesPublishedWrite (FreshBootstrapOpenHeap.Returned.start opened)
+      appender stager syncer clientView cache
+      (FreshBootstrapKeeperPhysical.inodes (FreshBootstrapOpenHeap.keeperPhysical seen)) runs storage
+      inode buffered request lookup rename sequence reached
+
+include references atDirectory census cacheAt nonempty
+
+/-- The first acknowledgement leaves the same table and cache ready to
+accept another write. The bootstrap window can cover both requests. -/
+theorem acknowledgesFirstWriteWithWindow (wrote : observedFirstWrite) :
+    ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
+      (batch : List WAL.Write) (preparedTable : PackedTable) (next : NativeOpenedPosition opened.handle)
+      (sameDirectory : next.current.ready.state.session.directory = opened.start.current.ready.state.session.directory),
+      let state := next.current.ready.state
+      call entry = .ok opened.handle.table opened.start.reached ∧
+      request.runOnRawOpenPhase directory lookup (appender.run seed.activeRef) (stager.run seed.pendingRef)
+        (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
+        rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
+      prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (batch, preparedTable) ∧
+      sequence = preparedTable.committed ∧ sequence.toNat = batch.length ∧
+      cache.directory = seed.directoryRef ∧ cache.active = seed.activeRef ∧ cache.pending = seed.pendingRef ∧
+      next.reached = reached ∧ next.pins = [] ∧ next.current.history = batch ∧
+      opened.start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
+      next.WriteStorageEntry clientView
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
+        (storage next.reached) (visible next.reached) ∧
+      (state.writer.target.pair.manifest = none ∧ state.writer.wal.sealed = [] ∧ state.writer.history = batch ∧
+        state.writer.target.range.through = request.rows.length) ∧
+      ∀ horizon ≤ through,
+        opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 horizon →
+        (∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 horizon
+            (storage preReady) (storage reached)) →
+        next.WalWindowAt storage 0 horizon := by
+  obtain ⟨settled, freshWindow⟩ := opened.readyStorageAndWindow seen resolved used runs files through
+    createdKeeps createdWal rootNames liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame
+    phaseInodes tokenInodes
+  obtain ⟨initial, _, cache, batch, preparedTable, next, sameDirectory, dirRef, activeRef, pendingRef, write, number,
+    prepared, exactHeap, emptyPins, ledger, batchHistory, _, _, physical, shape, carries⟩ :=
+    opened.acknowledgesFirstWrite used clientView resolved references atDirectory census cacheAt
+      seen.keeperPhysical.inodes runs storage settled appender stager syncer inode buffered request lookup rename nonempty wrote
+  rw [dirRef, activeRef, pendingRef, opened.start.directory.trans resolved] at write
+  obtain ⟨ready, initialHistory, _⟩ := opened.start.current.ready.readPrefix.refines
+  obtain ⟨_, refined, represented⟩ := ready.retained.resumed.canonical
+  have initialCount : opened.start.current.ready.state.writer.installed.table.committed.toNat = 0 := by
+    rw [refined.committed, represented.committed_count, initialHistory, opened.emptyHistory]
+    rfl
+  have count : sequence.toNat = batch.length := by
+    rw [number, replay_committed_count batch (prepareBatch_spec prepared).2.1, initialCount, Nat.zero_add]
+  refine ⟨cache, batch, preparedTable, next, sameDirectory, initial, write, prepared, number, count,
+    dirRef, activeRef, pendingRef, exactHeap, emptyPins, batchHistory, ledger, physical, shape, ?_⟩
+  intro horizon covered nameEffects restore
+  exact ⟨fun offset _ => Nat.zero_le offset,
+    carries horizon (freshWindow.restrictUpper covered).2 nameEffects restore⟩
+
+include covered in
+/-- A sampled restart after the first acknowledged write uses the
+same returned writer and cache as a subsequent write would. -/
+theorem replaysFirstAcknowledgedWrite {stream : Type} (wrote : observedFirstWrite)
     (source : RawMarkedOpenInterpreter heap stream) (namespaceView : DirectoryReadNamespace) (root : DeviceInode) :
     ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
       (batch : List WAL.Write) (preparedTable : PackedTable) (next : NativeOpenedPosition opened.handle),
@@ -684,31 +748,107 @@ theorem replaysFirstAcknowledgedWrite {stream : Type}
           WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
             (storage preReady) (storage reached)) →
         source.ReplaysWalBeforeCheckpointAtOpen clientView state storage visible rebooted namespaceView root batch := by
-  obtain ⟨settled, freshWindow⟩ := opened.readyStorageAndWindow seen resolved used runs files through
-    createdKeeps createdWal rootNames liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame
-    phaseInodes tokenInodes
-  obtain ⟨initial, _, cache, batch, preparedTable, next, _, dirRef, activeRef, pendingRef, write, number, prepared, exactHeap, _,
-    ledger, _, _, _, physical, ⟨noManifest, _, history, cutoff⟩, carries⟩ :=
-    opened.acknowledgesFirstWrite used clientView resolved references atDirectory census cacheAt
-      seen.keeperPhysical.inodes runs storage settled appender stager syncer inode buffered request lookup rename nonempty wrote
-  rw [dirRef, activeRef, pendingRef, opened.start.directory.trans resolved] at write
-  obtain ⟨ready, initialHistory, _⟩ := opened.start.current.ready.readPrefix.refines
-  obtain ⟨_, refined, represented⟩ := ready.retained.resumed.canonical
-  have initialCount : opened.start.current.ready.state.writer.installed.table.committed.toNat = 0 := by
-    rw [refined.committed, represented.committed_count, initialHistory, opened.emptyHistory]
-    rfl
-  have count : sequence.toNat = batch.length := by
-    rw [number, replay_committed_count batch (prepareBatch_spec prepared).2.1, initialCount, Nat.zero_add]
+  obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, dirRef, activeRef, pendingRef,
+    exactHeap, _, _, ledger, physical, ⟨noManifest, _, history, cutoff⟩, carries⟩ :=
+    opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
+      liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+      modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
   refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, dirRef, activeRef, pendingRef,
     exactHeap, history, ledger, ?_⟩
   intro _ sampled reset nameEffects restore
-  have finalWindow := carries request.rows.length (freshWindow.restrictUpper covered).2 nameEffects restore
+  have finalWindow := (carries request.rows.length covered nameEffects restore).2
   rw [← cutoff, exactHeap] at finalWindow
   have readyPhysical := physical.physical
   rw [exactHeap] at readyPhysical
   rw [← history]
   exact @RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen _ _ _ _ source _ _ _ _ namespaceView root
     sampled next.current.ready.readPrefix.refines.1 readyPhysical reset finalWindow noManifest
+
+/-- The actual first acknowledgement starts the interrupted second
+write. One reboot sample selects its replay and the subsequent lookup
+runs on the table returned by that literal open. -/
+theorem readsAfterInterruptedSecondBatch {stream : Type}
+    (second : WriteRequest) (bothCovered : request.rows.length + second.rows.length ≤ through)
+    (wrote : observedFirstWrite)
+    (fsync : IO.FS.Handle → EStateM IO.FS.Handle heap (Except IO.Error Unit))
+    (source : RawMarkedOpenInterpreter heap stream) (namespaceView : DirectoryReadNamespace) (root : DeviceInode) :
+    ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
+      (firstBatch : List WAL.Write) (firstTable : PackedTable) (next : NativeOpenedPosition opened.handle)
+      (sameDirectory : next.current.ready.state.session.directory = opened.start.current.ready.state.session.directory),
+      let dir := next.current.ready.state.session.directory
+      let nextCache : OpenSyncCacheRefs opened.handle.files dir.path :=
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
+      let observed := fun h => next.directory.symm ▸ files h
+      let observedStorage := fun h => (observed h).storageObservation
+      let horizon := request.rows.length + second.rows.length
+      call entry = .ok opened.handle.table opened.start.reached ∧
+      request.runOnRawOpenPhase directory lookup (appender.run seed.activeRef) (stager.run seed.pendingRef)
+        (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
+        rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
+      prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (firstBatch, firstTable) ∧
+      sequence.toNat = firstBatch.length ∧ next.reached = reached ∧
+      opened.start.current.LedgerSuffix [.acknowledged request firstBatch] next.current ∧
+      ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 horizon)
+        (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 horizon
+            (storage preReady) (storage reached))
+        (stop : next.RootFsyncStop syncer nextCache clientView appender stager seen.keeperPhysical.inodes runs observed
+          inode buffered second lookup rename fsync),
+        second.runUntilRootFsync dir nextCache lookup appender stager syncer rename fsync
+          opened.handle.phase opened.handle.get opened.handle.set next.reached = .error stop.handle stop.reached ∧
+        ∀ {rebooted : heap} (sample : RawWriteRebootEntry next.current.ready.state clientView observedStorage
+          (fun h => (observedStorage h).files.names) visible stop.reached rebooted),
+          sample.DurableReset →
+          ∃ history retained : List WAL.Write,
+            history = firstBatch ++ retained ∧ (retained = [] ∨ retained = stop.batch) ∧
+            opened.start.current.InterruptedWriteLedger next.current [.acknowledged request firstBatch]
+              second stop.batch retained history ∧
+            source.ReadsClientHistoryAtOpen clientView next.current.ready.state observedStorage visible rebooted
+              namespaceView root [.acknowledgedBatch firstBatch, .uncertainBatch stop.batch] [] history := by
+  obtain ⟨cache, firstBatch, firstTable, next, sameDirectory, atOpen, write, prepared, _, count, _, _, _,
+    exactHeap, _, batchHistory, firstLedger, physical, ⟨noManifest, _, _, _⟩, carries⟩ :=
+    opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
+      liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+      modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
+  refine ⟨cache, firstBatch, firstTable, next, sameDirectory, atOpen, write, prepared, count, exactHeap, firstLedger, ?_⟩
+  intro firstNames restore stop
+  have castStorage {before after : DiskDirectory} {inodes : WalInodeImage} {runs : RunUnlinkImage}
+      (same : before = after) (files : RunDirectoryInodeView before inodes runs) :
+      (same ▸ files : RunDirectoryInodeView after inodes runs).storageObservation = files.storageObservation := by
+    subst after
+    rfl
+  have sameStorage : (fun h => (next.directory.symm ▸ files h : RunDirectoryInodeView _ _ _).storageObservation) =
+      storage := funext (fun h => castStorage next.directory.symm (files h))
+  have firstWindow := carries _ bothCovered firstNames restore
+  have rowCount := (prepareBatch_spec prepared).1
+  have expectedHorizon : next.current.history.length + second.rows.length = request.rows.length + second.rows.length := by
+    rw [batchHistory, rowCount]
+  have old : NativeReadyStorage next.current.ready.state
+      (next.directory.symm ▸ files next.reached : RunDirectoryInodeView _ _ _).storageObservation := by
+    rw [castStorage]
+    exact physical.physical
+  have window : next.WalWindowAt
+      (fun h => (next.directory.symm ▸ files h : RunDirectoryInodeView _ _ _).storageObservation)
+      0 (next.current.history.length + second.rows.length) := by
+    rw [sameStorage, expectedHorizon]
+    exact firstWindow
+  obtain ⟨_, stopped, _, selects⟩ := next.stopsAtRootFsync syncer _ clientView appender stager seen.keeperPhysical.inodes
+    runs (fun h => next.directory.symm ▸ files h) inode buffered second lookup rename fsync stop old
+  refine ⟨stopped, ?_⟩
+  intro rebooted sample reset
+  obtain ⟨_, plan, retained, _, _, ledger, opens⟩ := selects sample reset window
+  have interruption := ledger firstLedger
+  have retainedHistory : plan.history = firstBatch ++ retained := by
+    simpa only [opened.emptyHistory, List.nil_append, List.flatMap_cons, List.flatMap_nil,
+      List.append_nil, NativeExecutionEvent.writes] using interruption.history_eq
+  have pending : PendingClientReplay [.acknowledgedBatch firstBatch, .uncertainBatch stop.batch] [] plan.history := by
+    simpa only [opened.emptySubmissions, opened.emptyReads, List.nil_append, List.flatMap_cons, List.flatMap_nil,
+      List.append_nil, List.cons_append, NativeExecutionEvent.submissions, NativeExecutionEvent.reads] using interruption.pending
+  exact ⟨plan.history, retained, retainedHistory, interruption.whole, interruption,
+    (@opens stream source namespaceView root noManifest).recordsReads pending⟩
+
+end FirstAcknowledgement
 
 end BootstrapWriteEntry
 

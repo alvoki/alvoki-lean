@@ -2693,6 +2693,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyBeforeCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.writeStorageEntry
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.acknowledgesFirstWrite
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.acknowledgesFirstWriteWithWindow
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterInterruptedSecondBatch
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.replaysFirstAcknowledgedWrite
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid

@@ -212,78 +212,100 @@ variable (cache : OpenSyncCacheRefs opened.files current.current.ready.state.ses
 
 local notation "storage" => fun atHeap => RunDirectoryInodeView.storageObservation (observe atHeap)
 
+/-- Returns of the exact append, stage, rename and directory-fsync
+callbacks reached by one interrupted request on the opened table. -/
+structure NativeOpenedPosition.RootFsyncStop
+    (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (stopped : IO.FS.Handle → EStateM IO.FS.Handle heap (Except IO.Error Unit)) where
+  batch : List WAL.Write
+  table : PackedTable
+  guarded : heap
+  poisoned : heap
+  appended : heap
+  staged : heap
+  grouped : heap
+  renamed : heap
+  issued : heap
+  reached : heap
+  handle : IO.FS.Handle
+  effective : Bool
+  nonempty : request.rows ≠ []
+  prepared : prepareBatch (state).writer.installed.table request.rows = some (batch, table)
+  fits : (state).writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size
+  checked : checkActiveSegmentWith dir (state).writer.installed lookup current.reached = .ok () guarded
+  assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned
+  preface : (storage current.reached).Frames (state).crashPath (storage poisoned)
+  wrote : append.run cache.active ((dir).file (.walSegment first)) (WAL.encodeBatch batch) poisoned = .ok () appended
+  remembered : stage.run cache.pending stagePath
+    (WAL.Boundary.encode ((state).writer.installed.walBytes + WAL.frameSize * request.rows.length).toUInt64)
+    appended = .ok () staged
+  synced : calls.group (dir).path cache.directory cache.active cache.pending
+    #[(dir).file (.walSegment first), stagePath] staged = .ok () grouped
+  groupEffects : calls.WalGroupEffects cache view append stage inodes observe inode buffered first
+    ((state).writer.installed.walBytes + WAL.frameSize * request.rows.length)
+    (state).writer.wal.active.bytes (WAL.encodeBatch batch) poisoned appended staged grouped
+  moved : rename stagePath markerPath grouped = .ok () renamed
+  renameEffect : ∀ marker, (observe grouped).visible stagePath = some marker →
+    WalMarkerRenameEffect dir marker true (storage grouped) (storage renamed)
+  loaded : calls.readDirectory cache.directory renamed = .ok (some handle) issued
+  readFrame : WalPublicationPayloads.CacheReadFrame dir first (storage renamed) (storage issued)
+  target : RawFsyncTarget view renamed issued handle
+  root : (storage issued).files.names (dir).path =
+    some ((view.descriptors issued).inode (view.handle issued handle).2.1.description)
+  noResponse : stopped handle issued = .error handle reached
+  effect : stopped handle issued = .error handle reached →
+    (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
+    (storage issued).files.names (dir).path =
+      some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
+    WalRootSyncEffect dir effective (storage issued) (storage reached)
+  frames :
+    let frame := fun before after =>
+      (storage before).Frames (state).writeFramePath (storage after) ∧
+      WalNamePresenceFrame dir 0 (current.current.history.length + request.rows.length)
+        (storage before) (storage after)
+    current.WriteCallbackFrames append stage calls cache request lookup rename frame (fun fromRename =>
+      ∀ {atIssue atStop : heap} {directoryHandle : IO.FS.Handle},
+        calls.readDirectory cache.directory fromRename = .ok (some directoryHandle) atIssue →
+        RawFsyncTarget view fromRename atIssue directoryHandle →
+        (storage atIssue).files.names (dir).path =
+          some ((view.descriptors atIssue).inode (view.handle atIssue directoryHandle).2.1.description) →
+        stopped directoryHandle atIssue = .error directoryHandle atStop →
+        frame fromRename atIssue ∧ frame atIssue atStop)
+
 /-- The reached file group, rename and cached root load establish the
 publication payloads at the same unresolved fsync. An observed stop can
 settle the new marker even when the write never reports a response. -/
 theorem NativeOpenedPosition.stopsAtRootFsync
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
-    {batch : List WAL.Write} {table : PackedTable}
-    {guarded poisoned appended staged grouped renamed issued reached : heap} {handle : IO.FS.Handle}
-    (nonempty : request.rows ≠ [])
-    (prepared : prepareBatch (state).writer.installed.table request.rows = some (batch, table))
-    (fits : (state).writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
-    (checked : checkActiveSegmentWith dir (state).writer.installed lookup current.reached = .ok () guarded)
-    (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
-    (old : NativeReadyStorage state (storage current.reached))
-    (preface : (storage current.reached).Frames (state).crashPath (storage poisoned))
-    (wrote : append.run cache.active ((dir).file (.walSegment first)) (WAL.encodeBatch batch) poisoned = .ok () appended)
-    (remembered : stage.run cache.pending stagePath
-      (WAL.Boundary.encode ((state).writer.installed.walBytes + WAL.frameSize * request.rows.length).toUInt64)
-      appended = .ok () staged)
-    (synced : calls.group (dir).path cache.directory cache.active cache.pending
-      #[(dir).file (.walSegment first), stagePath] staged = .ok () grouped)
-    (groupEffects : calls.WalGroupEffects cache view append stage inodes observe inode buffered first
-      ((state).writer.installed.walBytes + WAL.frameSize * request.rows.length)
-      (state).writer.wal.active.bytes (WAL.encodeBatch batch) poisoned appended staged grouped)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (moved : rename stagePath markerPath grouped = .ok () renamed)
-    (renameEffect : ∀ marker, (observe grouped).visible stagePath = some marker →
-      WalMarkerRenameEffect dir marker true (storage grouped) (storage renamed))
-    (loaded : calls.readDirectory cache.directory renamed = .ok (some handle) issued)
-    (readFrame : WalPublicationPayloads.CacheReadFrame dir first (storage renamed) (storage issued))
-    (target : RawFsyncTarget view renamed issued handle)
-    (root : (storage issued).files.names (dir).path =
-      some ((view.descriptors issued).inode (view.handle issued handle).2.1.description))
     (stopped : IO.FS.Handle → EStateM IO.FS.Handle heap (Except IO.Error Unit))
-    (noResponse : stopped handle issued = .error handle reached) {effective : Bool}
-    (effect : stopped handle issued = .error handle reached →
-      (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
-      (storage issued).files.names (dir).path =
-        some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
-      WalRootSyncEffect dir effective (storage issued) (storage reached)) :
+    (stop : current.RootFsyncStop calls cache view append stage inodes runs observe inode buffered
+      request lookup rename stopped)
+    (old : NativeReadyStorage state (storage current.reached)) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     request.runUntilRootFsync dir cache lookup append stage calls rename stopped opened.phase opened.get opened.set
-      current.reached = .error handle reached ∧
-    WalPublicationPayloads.ReachedWrite state batch request.rows (storage reached) true
-      (fun published => effective = true → published = true) ∧
-    ∀ (_frames :
-      let frame := fun before after =>
-        (storage before).Frames (state).writeFramePath (storage after) ∧
-        WalNamePresenceFrame dir 0 (current.current.history.length + request.rows.length)
-          (storage before) (storage after)
-      current.WriteCallbackFrames append stage calls cache request lookup rename frame (fun fromRename =>
-        ∀ {atIssue atStop : heap} {directoryHandle : IO.FS.Handle},
-          calls.readDirectory cache.directory fromRename = .ok (some directoryHandle) atIssue →
-          RawFsyncTarget view fromRename atIssue directoryHandle →
-          (storage atIssue).files.names (dir).path =
-            some ((view.descriptors atIssue).inode (view.handle atIssue directoryHandle).2.1.description) →
-          stopped directoryHandle atIssue = .error directoryHandle atStop →
-          frame fromRename atIssue ∧ frame atIssue atStop))
-      {rebooted} (sample : RawWriteRebootEntry state view storage (fun h => (storage h).files.names)
-        (fun h => (inodes h).visible) reached rebooted), sample.DurableReset →
+      current.reached = .error stop.handle stop.reached ∧
+    WalPublicationPayloads.ReachedWrite state stop.batch request.rows (storage stop.reached) true
+      (fun published => stop.effective = true → published = true) ∧
+    ∀ {rebooted} (sample : RawWriteRebootEntry state view storage (fun h => (storage h).files.names)
+        (fun h => (inodes h).visible) stop.reached rebooted), sample.DurableReset →
       current.WalWindowAt storage 0 (current.current.history.length + request.rows.length) →
-      ∃ (target : Target) (plan : current.current.ready.SelectedWritePlan batch target (view.files rebooted).image)
+      ∃ (target : Target) (plan : current.current.ready.SelectedWritePlan stop.batch target (view.files rebooted).image)
         (retained : List WAL.Write),
-        current.current.SelectedWriteReboot view storage (fun h => (inodes h).visible) 0 request batch table target
-          reached rebooted ∧
+        current.current.SelectedWriteReboot view storage (fun h => (inodes h).visible) 0 request stop.batch stop.table target
+          stop.reached rebooted ∧
         target.range.through = plan.history.length ∧
         (∀ {origin : NativeExecutionPosition} {events : List NativeExecutionEvent},
           origin.LedgerSuffix events current.current →
-            origin.InterruptedWriteLedger current.current events request batch retained plan.history) ∧
+            origin.InterruptedWriteLedger current.current events request stop.batch retained plan.history) ∧
         ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
           (state).writer.target.pair.manifest = none →
           opener.ReplaysWalBeforeCheckpointAtOpen view state storage (fun h => (inodes h).visible)
             rebooted namespaceView root plan.history := by
+  obtain ⟨batch, table, guarded, poisoned, appended, staged, grouped, renamed, issued, reached, handle, effective,
+    nonempty, prepared, fits, checked, assigned, preface, wrote, remembered, synced, groupEffects, moved, renameEffect,
+    loaded, readFrame, target, root, noResponse, effect, frames⟩ := stop
   have valid := current.current.ready.readPrefix.refines.1
   have stored := current.stored.trans (congrArg some valid.phase)
   have loadedPhase := opened.phaseEffects.reads current.reached opened.phase _ stored
@@ -306,7 +328,7 @@ theorem NativeOpenedPosition.stopsAtRootFsync
     obtain ⟨published, allowed, selected⟩ := physical.2 names included
     exact ⟨published, (fun settled => by simpa only [settled, ↓reduceIte] using allowed), selected⟩
   refine ⟨current.uses.writeSchedules, stopWrite, published, ?_⟩
-  intro frames rebooted sample reset window
+  intro rebooted sample reset window
   let frame := fun before after =>
     (storage before).Frames (state).writeFramePath (storage after) ∧
     WalNamePresenceFrame dir 0 (current.current.history.length + request.rows.length)
