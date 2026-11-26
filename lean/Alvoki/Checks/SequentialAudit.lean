@@ -467,6 +467,8 @@ import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeRawWriteProjection
 import Alvoki.Storage.Disk.NativeReadyWriteStorage
 import Alvoki.Storage.Disk.NativeRawUncertainWrite
+import Alvoki.Storage.Disk.NativeWalPublicationTail
+import Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
 import Alvoki.Storage.Disk.NativeRawWriteCustody
 import Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
@@ -1494,6 +1496,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentCommit.forgetError_commitBytesAt
 #check_axioms Alvoki.Storage.WalSegmentCommit.batch_reports
 #check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atReportedBatchCut
+#check_axioms Alvoki.Storage.WalSegmentCommit.selectSegment_atBatchBoundary
+#check_axioms Alvoki.Storage.WalSegmentRepair.BatchRetryTarget.ofSelected
 #check_axioms Alvoki.Storage.WalSegmentCommit.settledSegment_ofBatchSuccess
 #check_axioms Alvoki.Storage.WalSegmentRepair.BatchRetryTarget.unique
 #check_axioms Alvoki.Storage.WalSegmentRepair.prepareAfterBatchCut
@@ -3808,6 +3812,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.RunDirectoryInodeView.fileSyncEffect
 #check_axioms Alvoki.Storage.DiskSession.RawFsyncTarget.returnedFileEffect
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedFileReturns
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedFileError
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedFailurePreservesSelection
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.groupedFailureAcceptsOldWal
 #check_axioms Alvoki.Storage.DiskSession.RegularFileSyncEffect.pairedStored
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedReturnedStorage
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedStorageFromStaging
@@ -3815,6 +3822,10 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedKeeperVisible
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedKeeperVisible
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publicationReturned
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publicationOutcome
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootBarrierResult
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedMarkerRenameSelects
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.failedRootSyncSelects
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write
@@ -3834,6 +3845,12 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_commitUnknown
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.framesRawWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.returnsCommitUnknown
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_prepared
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.preparedWalCount
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.selectsWriteWal
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.selectedWriteManifest
+#check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selection.retryTarget
+#check_axioms Alvoki.Storage.DiskSession.WalPublicationPayloads.Selections.retryTargets
 #check_axioms Alvoki.Storage.DiskSession.withoutWriteGroupCache_eq_projectResult
 #check_axioms Alvoki.Storage.DiskSession.commitBytesAt_projects
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnRawOpenPhase_projectsAcknowledged

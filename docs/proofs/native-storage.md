@@ -395,6 +395,18 @@ that narrow them. The runtime, FFI and filesystem assumptions remain explicit at
 boundary. The traces and invariants
 can be verification-only. [Append and retry selections](../../lean/Alvoki/Storage/Disk/AppendRetrySession.lean)
 
+The ordinary `commitUnknown` result supplies the actual prepared group and one reached
+publication outcome. The grouped failure producer follows both literal fsyncs and preserves
+the old marker and keeper prefix. After a successful file group, the local rename and
+root-sync effects determine the allowed marker selections on the reached heap. Before an
+effective directory barrier, the visible marker may already have changed while an older
+binding remains admissible on reboot. Once the directory effect settles the rename, a
+reported fsync error is compatible with a definite new marker. These results derive a
+bounded repair target from one chosen map and its selected manifest, marker and keeper
+bytes. The post-group payload observations and native effect laws remain explicit. The
+recovery worker must still consume the derived target and prove the exact returned table
+across all supported retries.
+
 ## Migration test
 
 Keep the codecs, ordered replay, snapshot and retention proofs, publication laws, bounded reads,

@@ -1,5 +1,33 @@
 # Current handoff
 
+The actual `commitUnknown` return now derives the accepted preparation, byte limit and reached
+publication outcome on the same guarded and poisoned phase. The success proof uses that same
+callback classifier. The group-error proof follows both fsyncs, including the second after a
+keeper error. The first diagnostic and the last reached heap are both preserved. On a failed
+group, the named old marker and surviving keeper prefix admit the prior repair target on the
+live view and on every joint crash choice. The pending inode remains independent of the old
+marker and keeper. [Write dispatch](../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
+· [Failed group selection](../lean/Alvoki/Storage/Disk/NativeGroupedWalRetryTarget.lean)
+
+A rename error and a final directory-sync error now have local effect proofs on the reached
+namespace and inodes. An effective directory barrier settles the new marker even when fsync
+reports an error. A survivor supplies a single map for the marker, keeper and independently
+framed manifest. A shared cutoff proof interprets those selected bytes into a bounded repair
+target. The late proof takes the settled files from a successful file group at its entry and
+requires the local rename, cached-directory and filesystem effects. The next join is the
+exact open worker, including repair that changes the keeper and arbitrarily many failed
+attempts. Earlier append and stage returns and interrupted operations still need to supply the
+same selection boundary. [Publication tail](../lean/Alvoki/Storage/Disk/NativeWalPublicationTail.lean)
+· [Selected repair target](../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
+
+Linux regression replays start at a checkpoint with a rotated keeper. An injected keeper error
+before effect or staged-marker error after effect produces `commitUnknown`, leaves the old live
+marker and reopens at the prior snapshot. An injected final directory error either before or
+after effect follows the rename and leaves the whole batch visible on reopening. All four cases
+retain the original manifest, run, seal and lock inodes and bytes and permit a later append.
+The runtime tests observe live recovery. The proof separately models jointly surviving bytes
+after power loss.
+
 The acknowledged WAL proof derives both grouped payloads from the actual append, marker stage
 and two file syncs, using local file and reference effects. The old keeper's visible bytes
 pass the guard and poison assignment on the same named inode. The append flush produces the old
