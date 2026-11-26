@@ -125,11 +125,11 @@ theorem NativeReadyState.rotationWriterAtSample_namespace {state : NativeReadySt
       (names (state.session.directory.file (.walSegment start))).isSome = true ↔ start ∈ wal.segments.map WalSegment.first :=
     ((framed start lower upper apart).preservesNamespaceWindow (initial start lower upper apart)).2
       names chosen start (Nat.le_refl _) (Nat.le_refl _)
-  intro start lower upper
   unfold NativeReadyState.rotationWriterAtSample
   cases present : (names (state.session.directory.file (.walSegment successor))).isSome with
   | false =>
     simp only [Bool.false_eq_true, ↓reduceIte]
+    intro start lower upper
     by_cases same : start = successor
     · subst start
       simp only [present, Bool.false_eq_true, false_iff]
@@ -137,13 +137,7 @@ theorem NativeReadyState.rotationWriterAtSample_namespace {state : NativeReadySt
     · exact other start lower upper same
   | true =>
     simp only [↓reduceIte]
-    change (names (state.session.directory.file (.walSegment start))).isSome = true ↔
-      start ∈ wal.rotated.segments.map WalSegment.first
-    rw [newStarts, List.mem_append, List.mem_singleton]
-    by_cases same : start = successor
-    · subst start
-      simp only [present, or_true]
-    · simpa only [same, or_false] using other start lower upper same
+    exact WalSegmentImage.namespaceWindowAfterRotation newStarts present other
 
 /-- At the error heap of the actual cached directory sync, preserve the
 old recovery files and select the keeper using the observed reboot map.

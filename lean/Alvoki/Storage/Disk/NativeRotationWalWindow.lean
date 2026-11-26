@@ -13,6 +13,23 @@ abbrev RotationWalNameFrame (directory : DiskDirectory) (first through successor
   ∀ start, first ≤ start → start ≤ through → start ≠ successor →
     WalNamePresenceFrame directory start start before after
 
+/-- On a single observed directory map, rotation adds the successor to the
+WAL catalog while preserving presence and absence at every other offset. -/
+theorem _root_.Alvoki.Storage.WalSegmentImage.namespaceWindowAfterRotation
+    {old next : WalSegmentImage} {directory : DiskDirectory} {first through successor : Nat}
+    {names : FilePath → Option Nat}
+    (starts : next.segments.map WalSegment.first = old.segments.map WalSegment.first ++ [successor])
+    (installed : (names (directory.file (.walSegment successor))).isSome = true)
+    (other : ∀ start, first ≤ start → start ≤ through → start ≠ successor →
+      ((names (directory.file (.walSegment start))).isSome = true ↔ start ∈ old.segments.map WalSegment.first)) :
+    next.NamespaceWindow directory first through names := by
+  intro start low high
+  rw [starts, List.mem_append, List.mem_singleton]
+  by_cases same : start = successor
+  · subst start
+    simp only [installed, or_true]
+  · simpa only [same, or_false] using other start low high same
+
 /-- Extend the catalog at a settled successor. The old catalog makes
 no claim about that one name, which may already have existed. -/
 theorem _root_.Alvoki.Storage.WalSegmentImage.settlesRotatedNamespace
@@ -27,19 +44,8 @@ theorem _root_.Alvoki.Storage.WalSegmentImage.settlesRotatedNamespace
     next.SettledNamespaceWindow directory first through after := by
   have off (start : Nat) (low : first ≤ start) (high : start ≤ through) (apart : start ≠ successor) :=
     (kept start low high apart).preservesNamespaceWindow (initial start low high apart)
-  have extend (names : FilePath → Option Nat)
-      (installed : (names (directory.file (.walSegment successor))).isSome = true)
-      (unchanged : ∀ start, first ≤ start → start ≤ through → start ≠ successor →
-        ((names (directory.file (.walSegment start))).isSome = true ↔ start ∈ old.segments.map WalSegment.first)) :
-      next.NamespaceWindow directory first through names := by
-    intro start low high
-    rw [starts, List.mem_append, List.mem_singleton]
-    by_cases same : start = successor
-    · subst start
-      simp only [installed, or_true]
-    · simpa only [same, or_false] using unchanged start low high same
-  exact ⟨extend _ live (fun start low high apart => (off start low high apart).1 start (Nat.le_refl _) (Nat.le_refl _)),
-    fun names chosen => extend names (survives names chosen) (fun start low high apart =>
+  exact ⟨WalSegmentImage.namespaceWindowAfterRotation starts live (fun start low high apart => (off start low high apart).1 start (Nat.le_refl _) (Nat.le_refl _)),
+    fun names chosen => WalSegmentImage.namespaceWindowAfterRotation starts (survives names chosen) (fun start low high apart =>
       (off start low high apart).2 names chosen start (Nat.le_refl _) (Nat.le_refl _))⟩
 
 /-- Project the live and durable presence of the active name from ready storage. -/
