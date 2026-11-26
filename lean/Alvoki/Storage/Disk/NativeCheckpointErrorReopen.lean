@@ -378,7 +378,7 @@ theorem NativeReadyReadPrefix.reopensCheckpointDirectoryError
     exact sameKept
   have following := opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors
   obtain ⟨next, seeded, nextCache, nextCensus, nextOwner, nextDirectory, nextPair, nextRuns,
-    nextCheckpoint, nextPath, nextTarget, nextKept, phaseFresh, sessionFresh⟩ :=
+    nextCheckpoint, nextPath, nextTarget, nextKept, _, _, phaseFresh, sessionFresh⟩ :=
     finish.startsNativeReadPrefix seen.chronology opening.markerFound plan.prepared following plan.accepted
       ready.resumed.ordered plan.walLayout plan.walValid ready.spans pair (congrArg WalSegment.first plan.keeper) kept
       (exactHistory.symm ▸ pending) (exactHistory.symm ▸ prior.readsBounded)

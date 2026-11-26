@@ -2,6 +2,7 @@ import Alvoki.Storage.Disk.NativeCheckpointFinalManifest
 import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
+import Alvoki.Storage.Disk.NativeAlignedKeeperStorage
 
 namespace Alvoki.Storage.DiskSession
 
@@ -109,6 +110,10 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
       returned.start.current.ready.state.writer.checkpoint = checkpoint ∧
       returned.start.current.ready.reads = (ready).reads ∧
       current.current.LedgerSuffix [] returned.start.current ∧
+      RebootDirectoryBindings next.state names ∧
+      next.state.writer.target = layout.target ∧ next.state.writer.published.durable = actual ∧
+      next.state.writer.wal = { wal with directory := next.state.files.image.directory } ∧
+      (∀ segment ∈ wal.segments, checkpointFiles.Stored (dir.file (.walSegment segment.first)) segment.bytes) ∧
       recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode current.current.history) =
         .ok returned.start.current.ready.state.writer.installed.table ∧
       InstalledClientReplay current.current.submissions (ready).reads current.current.history
@@ -166,16 +171,27 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
   have following := opening.reads.walReads.selectedAfterWatermark offsets descriptors
   obtain ⟨prior, history, pending⟩ := (ready).readPrefix.refines
   have first : layout.target.first = wal.active.first := congrArg WalSegment.first keeper
-  obtain ⟨next, returned, opened, selectedAgain, priorReads, replay, ledger⟩ :=
+  obtain ⟨next, returned, opened, selectedAgain, priorReads, sameTarget, sameRuns, sameWal, replay, ledger⟩ :=
     raw.returnsSelectedFromFixedInterpreter sameFiles sameDirectory sameKeeper prepared following accepted
       prior.retained.resumed.ordered walLayout walValid prior.retained.spans rfl first rfl
       history pending (ready).readPrefix.readsBounded write effects ptrEq
   have unchanged : current.current.LedgerSuffix [] returned.start.current :=
     ⟨by rw [returned.position]; simp, by rw [returned.position]; simp, by simpa using priorReads, by simp⟩
+  have newState := congrArg (fun position : NativeExecutionPosition => position.ready.state) returned.position
+  rw [newState] at sameTarget sameRuns sameWal
+  have readNames (path : FilePath) (inside : path = dir.path ∨ path = dir.file .lock) :
+      opening.reads.bindings path = names path :=
+    (readsAtEntry path inside).trans (entryKeeps path inside)
+  have newAuthority : RebootDirectoryBindings next.state names := by
+    constructor
+    · rw [returned.resolvedDirectory, returned.repairCensus, returned.directorySlot, opening.finish.sameCensusObjects]
+      exact (readNames _ (.inl rfl)).symm.trans opening.reads.sameObjects.1
+    · rw [returned.resolvedDirectory, returned.repairCensus, returned.lockOwner, opening.finish.sameCensusObjects]
+      exact (readNames _ (.inr rfl)).symm.trans opening.reads.sameObjects.2.1
   refine ⟨published, layout, checkpoint, selected, opening, chronology, raw, next, returned,
     resetCensus, resetLock, sameImage.symm.trans (congrArg LockedFileState.image raw.raw.entryFiles), survivor,
     raw.raw.entryFiles, opened, captures.1, captures.2, missing, manifestRead, markerRead, runRead, walReads,
-    selectedAgain, priorReads, unchanged, replay, ledger, ?_⟩
+    selectedAgain, priorReads, unchanged, newAuthority, sameTarget, sameRuns, sameWal, segments, replay, ledger, ?_⟩
   intro α request compareAtAcquire
   obtain ⟨_, _, last, reference, _, _, _, _, calls, reads, snapshotReplay, agrees⟩ :=
     returned.start.acquiresAndReadsLatest request (fun reached => by

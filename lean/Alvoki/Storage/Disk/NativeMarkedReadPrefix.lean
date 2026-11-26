@@ -57,6 +57,8 @@ theorem CapturedKeeperFinish.startsNativeReadPrefix
       state.writer.published.durable = published.durable ∧ state.writer.checkpoint = checkpoint ∧
       state.session.directory = directory ∧ state.writer.target = layout.target ∧
       state.files.image.kept = retry.image.kept ∧
+      state.writer.wal = { wal with directory := state.files.image.directory } ∧
+      recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok state.writer.installed.table ∧
       state.session.phaseRef ∉ calls.liveRefs ∧ state.session.sessionRef ∉ calls.liveRefs := by
   obtain ⟨session, final, returned, pair, ownerLive, directoryLive, installed⟩ :=
     finish.installsFromCensus chronology marker prepared following accepted ordered
@@ -76,12 +78,24 @@ theorem CapturedKeeperFinish.startsNativeReadPrefix
     change writer.files.kept = retry.image.kept
     rw [ready.sealedFiles, retainedWal]
     exact kept.symm
+  obtain ⟨_, _, _, _, sameReturn, samePhase, replaySelection, replay, _⟩ :=
+    CachedRetryInstalled.refinesPendingClient installed pending
+  have sameSession := (EStateM.Result.ok.inj sameReturn).1
+  have sameInstalled := Phase.ready.inj (phase.symm.trans (sameSession.symm ▸ samePhase))
+  have exactReplay : recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) =
+      .ok state.writer.installed.table := by
+    change recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok writer.installed.table
+    rw [sameInstalled, ← replaySelection.uniqueResult selected]
+    exact replay
+  have exactWal : state.writer.wal = { wal with directory := state.files.image.directory } := by
+    rw [exactFiles]
+    exact retainedWal
   have freshness : session.phaseRef ∉ calls.liveRefs ∧ session.sessionRef ∉ calls.liveRefs := by
     obtain ⟨_, _, _, _, _, indexed, _, _, _, _, _, _, _, _, _, phaseFresh, sessionFresh, _⟩ := installed
     obtain ⟨rfl, rfl⟩ := EStateM.Result.ok.inj indexed
     exact ⟨phaseFresh, sessionFresh⟩
   exact ⟨state, .installed (exactFiles.symm ▸ returned) valid exactHistory pending bounded,
-    rfl, rfl, rfl, rfl, exactFiles.symm ▸ pair, durable, chosen.uniqueResult selected, path, target, seals,
+    rfl, rfl, rfl, rfl, exactFiles.symm ▸ pair, durable, chosen.uniqueResult selected, path, target, seals, exactWal, exactReplay,
     freshness.1, freshness.2⟩
 
 end Alvoki.Storage.DiskSession

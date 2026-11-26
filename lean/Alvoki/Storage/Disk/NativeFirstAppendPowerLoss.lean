@@ -130,7 +130,7 @@ theorem NativeReadPosition.recoversFirstAppendPowerLossFrom (current : NativeRea
   have bounded : ∀ read ∈ current.reads, read.BoundedBy current.state.writer.history.length :=
     earlierHistory.symm ▸ stopped.bounded
   have pairWal := ready.walPair.trans (congrArg Target.pair selectedLayout.target).symm
-  obtain ⟨after, seed, cache, census, owner, directorySlot, _, durable, checkpoint, path, _, _, phaseFresh, sessionFresh⟩ :=
+  obtain ⟨after, seed, cache, census, owner, directorySlot, _, durable, checkpoint, path, _, _, _, _, phaseFresh, sessionFresh⟩ :=
     seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound selectedLayout.prepared
       (seen.opening.reads.walReads.selectedAfterWatermark selectedLayout.offsets selectedLayout.descriptors)
       accepted ready.resumed.ordered ready.layout ready.valid ready.spans pairWal selectedLayout.first

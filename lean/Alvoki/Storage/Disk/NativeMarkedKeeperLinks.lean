@@ -20,6 +20,41 @@ variable {heap : Type} {input : FilePath} {directory : DiskDirectory} {inventory
   {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
   {view : OpenCloseHeapView heap FileImage} {init : OpenSyncCacheCallbacks heap} {entry : heap}
 
+section Extent
+
+variable {stream : Type} {admission : CensusOpenAdmissionReports input directory inventory retry}
+  {reads : CapturedMarkedReadReports admission layout published} {keeper : CapturedKeeperOpenReports reads}
+  {chronology : CapturedMarkedReadCensus reads keeper}
+  {seed : OpenSyncCacheAllocations admission.opened view init entry}
+  {fileCalls : MarkedTemporaryReadCalls heap} {directoryCalls : MarkedDirectoryReadCalls heap stream}
+  {checkpointReads : NativeMarkedCheckpointReadHeap seed chronology fileCalls}
+  {slotOf : heap → stream → DescriptorSlot} {listing : MarkedDirectoryReadReport checkpointReads directoryCalls slotOf}
+
+/-- The checked keeper extent and one-link census identify the single
+canonical name of the inode read for recovery. -/
+theorem MarkedWalExtentReports.keeperPrivateBinding
+    (extents : MarkedWalExtentReports checkpointReads listing)
+    {names : heap → FilePath → Option Nat}
+    (links : RunOpenLinkCensus (path := directory.file (.walSegment layout.keeper.first))
+      (before := listing.reached) fileCalls.stat (names listing.reached) reads.wal.keeper.observesFile.object) :
+    ∀ path, names listing.reached path = some reads.wal.keeper.observesFile.object →
+      path = directory.file (.walSegment layout.keeper.first) := by
+  have catalog := (reads.catalog.present layout.keeper.first).mpr (by simp)
+  have checked := (CheckedDirectoryReadReport.scan_complete directory.path reads.listing.eof reads.listing.closed
+    reads.listing.complete).1
+  have listingNames := Except.ok.inj (reads.catalog.listed.symm.trans (reads.listed.trans checked))
+  have listed : renderWalSegmentName layout.keeper.first ∈ (reads.listing.scan.entries directory.path).toList.map (·.fileName) := by
+    rw [← listingNames, reads.catalog.names]
+    exact catalog
+  have keeperStat := extents.stat (renderWalSegmentName layout.keeper.first) listed
+    layout.keeper.first (parseWalSegmentName_render layout.keeper.first)
+  change fileCalls.stat (directory.file (.walSegment layout.keeper.first)) listing.reached =
+    .ok (reads.catalog.inventory.reports.lstat (directory.file (.walSegment layout.keeper.first))) listing.reached at keeperStat
+  rw [reads.stat, reads.wal.keeper.calls.stat] at keeperStat
+  exact links.privateBinding (.inr ⟨_, keeperStat, reads.wal.keeper.calls.regular, reads.wal.keeper.oneLink⟩)
+
+end Extent
+
 section RawGuard
 
 variable {opening : MarkedReadyOpenObservations input directory inventory retry layout published vacant selected}
@@ -41,20 +76,7 @@ theorem RawHealthyMarkedOpenEffects.keeperPrivateBinding
       (before := raw.listing.reached) raw.fileCalls.stat (names raw.listing.reached) opening.reads.wal.keeper.observesFile.object) :
     ∀ path, names raw.listing.reached path = some opening.reads.wal.keeper.observesFile.object →
       path = directory.file (.walSegment layout.keeper.first) := by
-  let reads := opening.reads
-  have catalog := (reads.catalog.present layout.keeper.first).mpr (by simp)
-  have checked := (CheckedDirectoryReadReport.scan_complete directory.path reads.listing.eof reads.listing.closed
-    reads.listing.complete).1
-  have listing := Except.ok.inj (reads.catalog.listed.symm.trans (reads.listed.trans checked))
-  have listed : renderWalSegmentName layout.keeper.first ∈ (reads.listing.scan.entries directory.path).toList.map (·.fileName) := by
-    rw [← listing, reads.catalog.names]
-    exact catalog
-  have keeperStat := raw.extents.stat (renderWalSegmentName layout.keeper.first) listed
-    layout.keeper.first (parseWalSegmentName_render layout.keeper.first)
-  change raw.fileCalls.stat (directory.file (.walSegment layout.keeper.first)) raw.listing.reached =
-    .ok (reads.catalog.inventory.reports.lstat (directory.file (.walSegment layout.keeper.first))) raw.listing.reached at keeperStat
-  rw [reads.stat, reads.wal.keeper.calls.stat] at keeperStat
-  exact links.privateBinding (.inr ⟨_, keeperStat, reads.wal.keeper.calls.regular, reads.wal.keeper.oneLink⟩)
+  exact raw.extents.keeperPrivateBinding links
 
 end RawGuard
 

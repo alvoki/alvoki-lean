@@ -158,7 +158,7 @@ theorem NativeReadyReadPrefix.reopensReleasedUncertainWriteFrom
   obtain ⟨valid, oldHistory, priorReplay⟩ := prior.refines
   have allowed : plan.history = history ∨ plan.history = history ++ seen.failure.batch := oldHistory ▸ plan.allowed
   obtain ⟨pending, bounded⟩ := priorReplay.appendUncertain prior.readsBounded allowed plan.ordered
-  obtain ⟨next, seed, cacheIdentity, census, owner, directorySlot, pair, durable, checkpoint, path, _, _,
+  obtain ⟨next, seed, cacheIdentity, census, owner, directorySlot, pair, durable, checkpoint, path, _, _, _, _,
     phaseFresh, sessionFresh⟩ :=
     report.finish.startsNativeReadPrefix report.chronology report.markerFound plan.prepared
       (report.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors) plan.accepted plan.ordered

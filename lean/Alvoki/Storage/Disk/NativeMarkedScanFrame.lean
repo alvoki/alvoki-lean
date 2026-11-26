@@ -78,6 +78,28 @@ theorem MarkedSealReadChain.framesSeals {released : FilePath → List LockRefere
   | sealed _ _ _ _ raw _ rest =>
     exact trans (one _ _ raw.returns.1) rest
 
+/-- Follow the same read-only checkpoint, directory and sealed-WAL
+callbacks regardless of how the selected recovery will repair the keeper. -/
+theorem MarkedDirectoryReadReport.framesThroughSeals
+    (seen : MarkedDirectoryReadReport prepared directoryCalls slotOf)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    {beforeKeeper : heap} (seals : MarkedSealReadChain seed fileCalls chronology.seals seen.reached beforeKeeper)
+    (frame : heap → heap → Prop) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
+    (readEffects : fileCalls.ScopeFrames frame) (listingEffects : directoryCalls.ScopeFrames directory frame) :
+    frame seed.afterPending seen.reached ∧ frame seen.reached beforeKeeper := by
+  have sealFrame (first count : Nat) {start finish : heap} {bytes : ByteArray}
+      (returned : fileCalls.seal (directory.file (.walSegment first)) count start = .ok bytes finish) :
+      frame start finish := by
+    have read := fileCalls.readWithFrames readEffects trans (directory.file (.walSegment first)) _
+      (fun file => exactReadFrames refl trans selectedWalSpanError (fileCalls.readChunk file)
+        (readEffects.readChunk file) count ByteArray.empty) start
+    change frame start (reachedState (fileCalls.seal (directory.file (.walSegment first)) count start)) at read
+    simpa only [returned, reachedState] using read
+  exact ⟨trans (prepared.framesScan selected readEffects refl trans)
+    (seen.framesScan frame trans listingEffects), seals.framesSeals frame refl trans sealFrame⟩
+
 end Listing
 
 section Healthy
@@ -108,16 +130,7 @@ theorem RawHealthyMarkedOpenEffects.framesReadPrefix
     (reads : raw.fileCalls.ScopeFrames frame)
     (listing : raw.directoryCalls.ScopeFrames directory frame) :
     frame raw.seed.afterPending raw.listing.reached ∧ frame raw.listing.reached raw.beforeKeeper := by
-  have sealFrame (first count : Nat) {start finish : heap} {bytes : ByteArray}
-      (returned : raw.fileCalls.seal (directory.file (.walSegment first)) count start = .ok bytes finish) :
-      frame start finish := by
-    have read := raw.fileCalls.readWithFrames reads trans (directory.file (.walSegment first)) _
-      (fun file => exactReadFrames refl trans selectedWalSpanError (raw.fileCalls.readChunk file)
-        (reads.readChunk file) count ByteArray.empty) start
-    change frame start (reachedState (raw.fileCalls.seal (directory.file (.walSegment first)) count start)) at read
-    simpa only [returned, reachedState] using read
-  exact ⟨trans (raw.checkpoint.framesScan selected reads refl trans)
-    (raw.listing.framesScan frame trans listing), raw.seals.framesSeals frame refl trans sealFrame⟩
+  exact raw.listing.framesThroughSeals selected raw.seals frame refl trans reads listing
 
 end Healthy
 

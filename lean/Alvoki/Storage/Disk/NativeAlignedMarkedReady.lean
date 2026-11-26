@@ -5,10 +5,243 @@ import Alvoki.Storage.Disk.NativeReadyWriteStorage
 import Alvoki.Storage.Disk.NativeMarkedKeeperLinks
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
+import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
 
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair CheckpointPublication
+
+section CheckpointReturn
+
+variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory}
+  {history modelHistory : List WAL.Write} {log : List DatabaseSubmissions}
+  {inventory : DescriptorInventory} {retry : LockedFileState FileImage}
+  {layout : CanonicalKeeperLayout retry.image modelHistory} {published : Image}
+  {vacant : TryLockObserves retry.owners directory (.ok true)} {checkpoint : Option (PackedTable × UInt64)}
+  {selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint}
+  {bindings : FilePath → Option Nat}
+  {opening : CheckpointBarrierAlignedReports input directory inventory retry layout published vacant selected bindings}
+  {chronology : CapturedMarkedReadCensus opening.reads opening.finish.readCustody}
+  {view : OpenCloseHeapView heap FileImage} {calls : RawOpenAdmissionCallbacks heap}
+  {init : OpenSyncCacheCallbacks heap} {entry : heap}
+  {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
+  {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
+  {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+  {raw : RawAlignedCheckpointReopenEffects opening chronology view calls init entry phaseIdentity tokenIdentity
+    allocatePhase allocateToken stream}
+  {next : NativeReadPosition history log}
+  {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+  {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+  {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+  {bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened}
+  {assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles → IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable}
+  {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+  {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+  {ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool}
+
+local notation "reopened" => next.state
+local notation "keeperPath" => next.state.session.directory.file (DiskFile.walSegment next.state.writer.wal.active.first)
+local notation "keeperInode" => opening.reads.wal.keeper.calls.inventory.inode opening.reads.wal.keeper.calls.slot.description
+
+/-- The actual aligned syncs establish the next write entry for the selected
+writer. The phase and token allocations frame those facts up to the
+returned heap. All protected files refer to the selected checkpoint. -/
+theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageEntry
+    (returned : raw.ReturnedAt next remove write rename bootstrap assemble get set ptrEq)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (sameFirst : (reopened).writer.wal.active.first = layout.keeper.first)
+    (sameBytes : (reopened).writer.wal.active.bytes = layout.keeper.bytes)
+    (protectedFiles : NativeReadyProtectedStorage reopened (observe raw.keeper.remembered).files)
+    (marker : (observe raw.keeper.remembered).files.Stored ((reopened).session.directory.file .walBoundary)
+      (WAL.Boundary.encode (WAL.encode (reopened).writer.history).size.toUInt64))
+    (rootSettled : ∀ names ∈ (observe raw.keeper.remembered).crashNames,
+      names (reopened).session.directory.path = (observe raw.keeper.remembered).files.names (reopened).session.directory.path)
+    (effects : raw.keeper.StorageEffects observe visible reopened)
+    (keeperAtIssue : (observe raw.keeper.consumed).files.names (directory.file (.walSegment layout.keeper.first)) =
+      some (keeperInode) ∧ visible raw.keeper.consumed (keeperInode) = layout.keeper.bytes)
+    (apart : ∀ path, path = (reopened).session.directory.file .walBoundary ∨ (reopened).writeFramePath path →
+      (observe raw.keeper.remembered).files.names path ≠ some (keeperInode))
+    (phaseFrames : ∀ ref after, allocatePhase (.ready (reopened).writer.installed) raw.keeper.reached = .ok ref after →
+      (observe raw.keeper.reached).Frames (reopened).crashPath (observe after) ∧
+      ∀ inode, (observe raw.keeper.reached).files.names (keeperPath) = some inode →
+        visible after inode = visible raw.keeper.reached inode)
+    (tokenFrames : ∀ before ref after, allocateToken () before = .ok ref after →
+      (observe before).Frames (reopened).crashPath (observe after) ∧
+      ∀ inode, (observe before).files.names (keeperPath) = some inode → visible after inode = visible before inode) :
+    ∃ cache : OpenSyncCacheRefs returned.handle.files returned.start.current.ready.state.session.directory.path,
+      cache.directory = raw.seed.directoryRef ∧ cache.active = raw.seed.activeRef ∧ cache.pending = raw.seed.pendingRef ∧
+      returned.start.WriteStorageEntry view cache (observe returned.start.reached) (visible returned.start.reached) := by
+  obtain ⟨_, settled, keeper⟩ := raw.keeper.readyStorage observe visible returned.resolvedDirectory
+    returned.repairCensus returned.directorySlot sameFirst sameBytes protectedFiles marker rootSettled effects keeperAtIssue apart
+  obtain ⟨allocation, sameAllocation⟩ := returned.allocation
+  obtain ⟨phase, phaseKeeper⟩ := phaseFrames _ _ allocation.phaseAllocated
+  obtain ⟨token, tokenKeeper⟩ := tokenFrames _ _ _ allocation.tokenAllocated
+  obtain ⟨physical, bytes⟩ := allocation.framesReadyStorage observe visible settled keeper phase token phaseKeeper tokenKeeper
+  have stateAtReturn := congrArg (fun position : NativeExecutionPosition => position.ready.state) returned.position
+  have reached : returned.start.reached = allocation.afterToken := congrArg (fun allocated => allocated.2.2) sameAllocation
+  have atPath : returned.handle.files.AtDirectory returned.start.current.ready.state.session.directory.path := by
+    rw [stateAtReturn, returned.resolvedDirectory]
+    exact returned.directory
+  let cache : OpenSyncCacheRefs returned.handle.files returned.start.current.ready.state.session.directory.path :=
+    ⟨raw.seed.directoryRef, raw.seed.activeRef, raw.seed.pendingRef, returned.references, atPath⟩
+  have cached : (reopened).cache.directory = some (opening.admission.reached, (reopened).directorySlot, 0) := by
+    rw [returned.capturedCache, returned.directorySlot]
+    rfl
+  have sameObjects := (congrArg DescriptorInventory.inode returned.repairCensus).trans opening.finish.sameCensusObjects
+  refine ⟨cache, rfl, rfl, rfl, ⟨returned.census.trans (congrArg NativeReadyState.census stateAtReturn.symm),
+    returned.cache.trans (congrArg NativeReadyState.cache stateAtReturn.symm), ?_, ?_, ?_⟩⟩
+  · rw [stateAtReturn, reached]
+    exact physical
+  · rw [stateAtReturn, reached]
+    exact bytes
+  · intro literal found
+    rw [stateAtReturn]
+    exact (reached.symm ▸ physical).bindsOpenCacheDirectory view returned.cache cached sameObjects.symm found
+
+/-- The reopened writer's own selected map determines which physical
+payloads it keeps through a subsequent append. -/
+theorem NativeReadyProtectedStorage.ofCheckpointSample {state : NativeReadyState}
+    {files : CheckpointSurvivingFiles}
+    (names : FilePath → Option Nat) (contents : Nat → ByteArray)
+    (physicalFrame : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
+      state.writeFramePath files)
+    (authority : RebootDirectoryBindings state names)
+    (manifest : (names (state.session.directory.file .manifest)).map contents = state.writer.target.pair.manifest)
+    (sealed : ∀ segment ∈ state.writer.wal.sealed,
+      (names (state.session.directory.file (.walSegment segment.first))).map contents = some segment.bytes)
+    (runs : ∀ generation index, state.writer.published.durable generation index =
+      (names (state.session.directory.file (.run generation index))).map contents) :
+    NativeReadyProtectedStorage state files := by
+  have stored {path : FilePath} {payload : ByteArray} (inside : state.writeFramePath path)
+      (sampled : (names path).map contents = some payload) : files.Stored path payload := by
+    obtain ⟨inode, bound, exactPayload⟩ := Option.map_eq_some_iff.mp sampled
+    obtain ⟨name, bytes⟩ := physicalFrame path inside
+    exact ⟨inode, name.trans bound, (bytes inode bound).trans (congrArg (fun payload => [payload]) exactPayload)⟩
+  refine ⟨(physicalFrame _ (.inl rfl)).1.trans authority.directory,
+    (physicalFrame _ (.inr (.inl rfl))).1.trans authority.lock, ?_, ?_, ?_⟩
+  · cases selected : state.writer.target.pair.manifest with
+    | none => exact (physicalFrame _ (.inr (.inr (.inl rfl)))).1.trans (Option.map_eq_none_iff.mp (manifest.trans selected))
+    | some bytes => exact stored (.inr (.inr (.inl rfl))) (manifest.trans selected)
+  · intro segment included
+    exact stored (.inr (.inr (.inr (.inl ⟨segment, included, rfl⟩)))) (sealed segment included)
+  · intro bytes metadata selected decoded index within payload storedPayload
+    exact stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, selected, decoded, within, rfl⟩))))
+      ((runs metadata.header.generation index).symm.trans storedPayload)
+
+/-- The sampled files at the healthy entry survive the exact admission,
+listing and reads. The same keeper inode then supplies the write entry. -/
+theorem RawAlignedCheckpointReopenEffects.ReturnedAt.writeStorageFromCheckpointSample
+    (returned : raw.ReturnedAt next remove write rename bootstrap assemble get set ptrEq)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (contents : Nat → ByteArray)
+    (sameFirst : (reopened).writer.wal.active.first = layout.keeper.first)
+    (sameBytes : (reopened).writer.wal.active.bytes = layout.keeper.bytes)
+    (authority : RebootDirectoryBindings reopened bindings)
+    (manifest : (bindings ((reopened).session.directory.file .manifest)).map contents =
+      (reopened).writer.target.pair.manifest)
+    (sealed : ∀ segment ∈ (reopened).writer.wal.sealed,
+      (bindings ((reopened).session.directory.file (.walSegment segment.first))).map contents = some segment.bytes)
+    (runs : ∀ generation index, (reopened).writer.published.durable generation index =
+      (bindings ((reopened).session.directory.file (.run generation index))).map contents)
+    (sampled : (⟨bindings, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
+      (reopened).crashPath (observe entry).files)
+    (marker : (bindings ((reopened).session.directory.file .walBoundary)).map contents =
+      some (WAL.Boundary.encode (WAL.encode (reopened).writer.history).size.toUInt64))
+    (rootSettled : ∀ names ∈ (observe entry).crashNames, names (reopened).session.directory.path =
+      (observe entry).files.names (reopened).session.directory.path)
+    (keeperLive :
+      let path := directory.file (.walSegment layout.keeper.first)
+      let object := opening.reads.wal.keeper.observesFile.object
+      (observe entry).files.names path = some object ∧ visible entry object = layout.keeper.bytes ++ layout.tail)
+    (admissionEffects : raw.raw.CacheFrames raw.seed (fun before after =>
+      MarkedOpenReadFrame directory (reopened).crashPath (directory.file (.walSegment layout.keeper.first))
+        (observe before) (observe after) (visible before) (visible after)))
+    (readEffects :
+      let path := directory.file (.walSegment layout.keeper.first)
+      let frame before after := MarkedOpenReadFrame directory (reopened).crashPath path
+        (observe before) (observe after) (visible before) (visible after)
+      raw.fileCalls.ScopeFrames frame ∧ raw.directoryCalls.ScopeFrames directory frame ∧
+      ((raw.callbacks.withFileReads raw.fileCalls).modifyPending raw.seed.pendingRef
+        (SyncHandleRouting.pushPending path raw.keeper.keeper) raw.keeper.read =
+        .ok () raw.keeper.remembered → frame raw.keeper.read raw.keeper.remembered))
+    (directoryLive :
+      (raw.callbacks.withFileReads raw.fileCalls).sync raw.seed.handle raw.keeper.remembered = .ok () raw.keeper.authorized →
+      (⟨(observe raw.keeper.remembered).files.names, fun inode => [visible raw.keeper.remembered inode]⟩ :
+        CheckpointSurvivingFiles).Frames (· = directory.file (.walSegment layout.keeper.first))
+        ⟨(observe raw.keeper.authorized).files.names, fun inode => [visible raw.keeper.authorized inode]⟩)
+    (pendingLive :
+      (raw.callbacks.withFileReads raw.fileCalls).setPending raw.seed.pendingRef [] raw.keeper.authorized =
+        .ok () raw.keeper.consumed →
+      (⟨(observe raw.keeper.authorized).files.names, fun inode => [visible raw.keeper.authorized inode]⟩ :
+        CheckpointSurvivingFiles).Frames (· = directory.file (.walSegment layout.keeper.first))
+        ⟨(observe raw.keeper.consumed).files.names, fun inode => [visible raw.keeper.consumed inode]⟩)
+    (links : RunOpenLinkCensus (path := directory.file (.walSegment layout.keeper.first))
+      (before := raw.listing.reached) raw.fileCalls.stat (observe raw.listing.reached).files.names
+      opening.reads.wal.keeper.observesFile.object)
+    (effects : raw.keeper.StorageEffects observe visible reopened)
+    (phaseFrames : ∀ ref after, allocatePhase (.ready (reopened).writer.installed) raw.keeper.reached = .ok ref after →
+      (observe raw.keeper.reached).Frames (reopened).crashPath (observe after) ∧
+      ∀ inode, (observe raw.keeper.reached).files.names (keeperPath) = some inode →
+        visible after inode = visible raw.keeper.reached inode)
+    (tokenFrames : ∀ before ref after, allocateToken () before = .ok ref after →
+      (observe before).Frames (reopened).crashPath (observe after) ∧
+      ∀ inode, (observe before).files.names (keeperPath) = some inode → visible after inode = visible before inode) :
+    ∃ cache : OpenSyncCacheRefs returned.handle.files returned.start.current.ready.state.session.directory.path,
+      cache.directory = raw.seed.directoryRef ∧ cache.active = raw.seed.activeRef ∧ cache.pending = raw.seed.pendingRef ∧
+      returned.start.WriteStorageEntry view cache (observe returned.start.reached) (visible returned.start.reached) := by
+  let path := directory.file (.walSegment layout.keeper.first)
+  let frame before after := MarkedOpenReadFrame directory (reopened).crashPath path
+    (observe before) (observe after) (visible before) (visible after)
+  have refl : ∀ atHeap, frame atHeap atHeap := fun _ => .refl _ _ _ _ _
+  obtain ⟨fileEffects, listingEffects, remembered⟩ := readEffects
+  have admission := raw.raw.framesThroughCache raw.seed (frame := frame) MarkedOpenReadFrame.trans admissionEffects
+  obtain ⟨toListing, afterListing⟩ := raw.listing.framesThroughSeals selected raw.seals frame refl
+    MarkedOpenReadFrame.trans fileEffects listingEffects
+  have readKeeper := raw.keeper.framesRemembered refl MarkedOpenReadFrame.trans (fun opened => by
+    have effect := fileEffects.openRead path raw.beforeKeeper
+    change raw.fileCalls.openRead path raw.beforeKeeper = .ok raw.keeper.keeper raw.keeper.opened at opened
+    simpa only [opened, SyncHandleRouting.reachedState] using effect)
+    (fileEffects.readChunk raw.keeper.keeper) remembered
+  have listedToRemembered := afterListing.trans readKeeper
+  have all := admission.trans (toListing.trans listedToRemembered)
+  have writtenPath {file} (holds : (reopened).writeFramePath file) :
+      (reopened).crashPath file := NativeReadyState.crashPath_iff_write.mpr (.inr (.inr holds))
+  have protectedAtSync := (NativeReadyProtectedStorage.ofCheckpointSample bindings contents
+    (fun file valid => sampled file (writtenPath valid)) authority manifest sealed runs).frame
+      (fun file valid => all.durable.visible file (writtenPath valid))
+  let markerPath := (reopened).session.directory.file .walBoundary
+  have keepsMarker : (reopened).crashPath markerPath := NativeReadyState.crashPath_iff_write.mpr (.inl rfl)
+  have markerAtEntry : (observe entry).files.Stored markerPath
+      (WAL.Boundary.encode (WAL.encode (reopened).writer.history).size.toUInt64) := by
+    obtain ⟨inode, bound, observed⟩ := Option.map_eq_some_iff.mp marker
+    obtain ⟨sameName, kept⟩ := sampled markerPath keepsMarker
+    exact ⟨inode, sameName.trans bound, (kept inode bound).trans (congrArg (fun bytes => [bytes]) observed)⟩
+  have markerAtSync := all.durable.visible.stored keepsMarker markerAtEntry
+  have parent := all.durable.weaken (scope := (· = (reopened).session.directory.path))
+    (fun _ same => .inl same)
+  have stableRoot := parent.settledFrom (fun names member file same => same.symm ▸ rootSettled names member)
+  obtain ⟨keeperName, keeperBytes⟩ := (admission.trans (toListing.trans afterListing)).keeper path rfl
+  have keeperAtEntry := keeperName.trans keeperLive.1
+  have visibleAtEntry := (List.cons.inj (keeperBytes _ keeperLive.1)).1.trans keeperLive.2
+  have keeperAtIssue := raw.keeper.keeperAtIssue (fun atHeap => (observe atHeap).files.names) visible
+    keeperAtEntry visibleAtEntry readKeeper.keeper directoryLive pendingLive
+  rw [raw.keeper.keeperIssueInode, ← opening.reads.wal.keeper.observesFile.sameObject] at keeperAtIssue
+  have valid := next.readPrefix.refines.1
+  have apart : ∀ file, file = markerPath ∨ (reopened).writeFramePath file →
+      (observe raw.keeper.remembered).files.names file ≠ some (keeperInode) := by
+    intro file selectedPath bound
+    have crashPath : (reopened).crashPath file := NativeReadyState.crashPath_iff_write.mpr (selectedPath.imp id Or.inr)
+    have declared := NativeReadyState.crashPath_rootOrChild crashPath
+    rw [returned.resolvedDirectory] at declared
+    have privateAtListing := raw.extents.keeperPrivateBinding (names := fun atHeap => (observe atHeap).files.names) links
+    have canonical := privateAtListing file ((listedToRemembered.names file declared).symm.trans
+      (bound.trans (congrArg some opening.reads.wal.keeper.observesFile.sameObject)))
+    exact NativeReadyState.protectedPathNeWalFromActive valid selectedPath (Nat.le_refl _)
+      (by rw [returned.resolvedDirectory, sameFirst]; exact canonical)
+  exact returned.writeStorageEntry observe visible sameFirst sameBytes protectedAtSync markerAtSync
+    (fun names member => stableRoot names member _ rfl) effects keeperAtIssue apart phaseFrames tokenFrames
+
+end CheckpointReturn
 
 variable {heap stream : Type} {prior : NativeReadyState} {input : FilePath}
   {inventory : DescriptorInventory} {retry : LockedFileState FileImage}

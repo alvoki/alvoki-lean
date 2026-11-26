@@ -464,7 +464,7 @@ theorem NativeReadPosition.recoversInterruptedMarkerFrom (current : NativeReadPo
   have allowed : chosen = history ∨ chosen = history ++ prepared.batch :=
     allowedInWriter.imp (·.trans earlierHistory) (·.trans (congrArg (· ++ prepared.batch) earlierHistory))
   obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded allowed ordered
-  obtain ⟨reached, seed, cache, census, owner, directorySlot, pair, durable, checkpointEq, path, _, _,
+  obtain ⟨reached, seed, cache, census, owner, directorySlot, pair, durable, checkpointEq, path, _, _, _, _,
     phaseFresh, sessionFresh⟩ :=
     seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound repair
       (seen.opening.reads.walReads.selectedAfterWatermark offsets descriptors) accepted ordered walLayout walValid

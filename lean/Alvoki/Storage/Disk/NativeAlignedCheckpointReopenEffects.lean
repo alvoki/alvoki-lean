@@ -169,6 +169,7 @@ structure ReturnedAt where
   position : start.current = ⟨history, log, next⟩
   lock : handle.lock = seen.raw.lock
   references : handle.files.UsesCacheReferences seen.seed.activeRef seen.seed.pendingRef seen.seed.directoryRef
+  resolvedDirectory : next.state.session.directory = directory
   directory : handle.files.AtDirectory directory.path
   contents : handle.contents = view.phase
   readsPhase : handle.get = get
@@ -179,6 +180,10 @@ structure ReturnedAt where
   files : view.files start.reached = next.state.files
   census : view.descriptors start.reached = next.state.census
   cache : view.cacheAt start.reached seen.seed.directoryRef seen.seed.activeRef seen.seed.pendingRef = next.state.cache
+  repairCensus : next.state.census = opening.finish.census
+  capturedCache : next.state.cache = opening.admission.cache
+  lockOwner : next.state.owner = opening.admission.owner
+  directorySlot : next.state.directorySlot = opening.admission.cached
   allocation : ∃ allocated : OpenReferenceAllocations allocatePhase allocateToken view.phase
       next.state.writer.installed seen.keeper.reached,
     (handle.phase, handle.token, start.reached) = (allocated.phase, allocated.token, allocated.afterToken)
@@ -232,9 +237,14 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     selectedReport.opensAlignedFromAdmission seen.raw seen.seed opening.finish rfl seen.checkpoint seen.listing
       seen.extents seen.seals seen.keeper seen.sameLookup seen.flat seen.marked remove write rename bootstrap assemble
       constructs seen.allocations
-  obtain ⟨handle, start, table, _, lock, files, phase, token, contents, getEq, setEq, compared, position,
+  obtain ⟨handle, start, table, resolved, lock, files, phase, token, contents, getEq, setEq, compared, position,
     reached, pins, sameFiles, sameCensus, sameCache, _, _, _, _, tokenRef⟩ :=
     installed.startsAtReportedPosition next sameReturn returned cache owner slot effects ptrEq
+  obtain ⟨_, atRepair, _⟩ := selectedReport.opening.finish.reachesInstaller chronology opening.markerFound
+    (sameReturn.trans returned)
+  have sameRepair := (EStateM.Result.ok.inj (atRepair.symm.trans installed.recovered)).2
+  have resolvedAtPosition := start.directory.trans resolved
+  rw [position] at resolvedAtPosition
   refine ⟨{
     cacheOpen := cacheOpen
     makeCache := makeCache
@@ -257,6 +267,11 @@ theorem installsAtReportedPosition (sameHistory : modelHistory = history)
     files := sameFiles
     census := sameCensus
     cache := sameCache
+    resolvedDirectory := resolvedAtPosition
+    repairCensus := (congrArg Prod.fst sameRepair).trans seen.keeper.reachedCensus
+    capturedCache := cache
+    lockOwner := owner
+    directorySlot := slot
     allocation := ?_ }⟩
   · rw [table, reached]
     exact openedTable

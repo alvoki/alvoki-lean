@@ -179,7 +179,7 @@ theorem returnsReady (report : NativeOpenSuccessReports input directory history 
         keeperName, markerName, keeperBytes, markerBytes⟩, seed.refines.1.ownerLive, seed.refines.1.directoryLive, seed⟩
   | marked observed =>
     let opening := observed.opening
-    obtain ⟨state, seed, cache, census, owner, directorySlot, _, _, _, path, _, _, phaseFresh, sessionFresh⟩ :=
+    obtain ⟨state, seed, cache, census, owner, directorySlot, _, _, _, path, _, _, _, _, phaseFresh, sessionFresh⟩ :=
       opening.finish.startsNativeReadPrefix opening.chronology opening.markerFound observed.prepared
         observed.following observed.accepted observed.ordered observed.walLayout observed.walValid observed.spans
         observed.active observed.keeper observed.kept observed.pending observed.bounded

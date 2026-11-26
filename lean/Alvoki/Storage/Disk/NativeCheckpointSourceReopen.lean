@@ -191,6 +191,10 @@ theorem RawAlignedCheckpointReopenEffects.returnsSelectedFromFixedInterpreter
       source.openTable input entry = .ok returned.handle.table returned.start.reached ∧
       returned.start.current.ready.state.writer.checkpoint = checkpoint ∧
       returned.start.current.ready.reads = recorded ∧
+      returned.start.current.ready.state.writer.target = layout.target ∧
+      returned.start.current.ready.state.writer.published.durable = published.durable ∧
+      returned.start.current.ready.state.writer.wal =
+        { wal with directory := returned.start.current.ready.state.files.image.directory } ∧
       recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode ledgerHistory) =
         .ok returned.start.current.ready.state.writer.installed.table ∧
       InstalledClientReplay log recorded ledgerHistory
@@ -220,30 +224,26 @@ theorem RawAlignedCheckpointReopenEffects.returnsSelectedFromFixedInterpreter
       kept := kept
       pending := pending
       bounded := bounded }
-  obtain ⟨state, seeded, cache, _, owner, slot, _, _, selectedAtReturn, _, _, _, _, _⟩ :=
+  obtain ⟨state, seeded, cache, _, owner, slot, _, durableAtReturn, selectedAtReturn, _, targetAtReturn, _, retainedWal, exactReplay, _, _⟩ :=
     finish.startsNativeReadPrefix chronology opening.markerFound prepared following accepted ordered walLayout walValid
       spans active keeper kept pending bounded
-  obtain ⟨session, final, replayReturn, _, _, _, installed⟩ :=
-    finish.installsFromCensus chronology opening.markerFound prepared following accepted ordered
-  obtain ⟨replayedSession, replayedFiles, replayed, replayedCheckpoint, installedReturn, sessionPhase,
-    replayedSelection, recovered, _⟩ := CachedRetryInstalled.refinesPendingClient installed pending
-  have sameSession := (EStateM.Result.ok.inj (seeded.frames.1.symm.trans replayReturn)).1.trans
-    (EStateM.Result.ok.inj installedReturn).1
-  have sameInstalled := Phase.ready.inj (seeded.refines.1.phase.symm.trans (sameSession.symm ▸ sessionPhase))
-  have sameCheckpoint := replayedSelection.uniqueResult selected
   let next : NativeReadPosition history log := ⟨finish.run chronology, state, state, recorded, seeded⟩
   obtain ⟨returned⟩ := raw.installsAtReportedPosition (report := report) next source.remove write source.rename
     source.bootstrap RawMarkedOpenInterpreter.assemble ptrEq rfl rfl seeded.frames.1 cache owner slot
     RawMarkedOpenInterpreter.assembles effects
   have opened := returned.returnsFixedInterpreter files directoryReads keeperCallbacks prepared following accepted ordered
-  refine ⟨next, returned, opened, ?_, ?_, ?_, ?_⟩
+  refine ⟨next, returned, opened, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [returned.position]
     exact selectedAtReturn
   · rw [returned.position]
   · rw [returned.position]
-    change recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode history) = .ok state.writer.installed.table
-    rw [sameInstalled, ← sameCheckpoint]
-    exact recovered
+    exact targetAtReturn
+  · rw [returned.position]
+    exact durableAtReturn
+  · rw [returned.position]
+    exact retainedWal
+  · rw [returned.position]
+    exact exactReplay
   · rw [returned.position]
     exact seeded.guardedReplay
 

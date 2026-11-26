@@ -142,7 +142,7 @@ theorem NativeReadPosition.recoversUncertainWriteAfterPowerLoss (current : Nativ
     plan.allowed.imp (·.trans earlierHistory)
       (·.trans (congrArg (· ++ observed.write.failure.batch) earlierHistory))
   obtain ⟨pending, bounded⟩ := replay.appendUncertain current.readPrefix.readsBounded allowed plan.ordered
-  obtain ⟨reached, seed, cacheEq, censusEq, owner, directorySlot, pair, durable, checkpoint, directory, _, _,
+  obtain ⟨reached, seed, cacheEq, censusEq, owner, directorySlot, pair, durable, checkpoint, directory, _, _, _, _,
     phaseFresh, sessionFresh⟩ :=
     seen.opening.finish.startsNativeReadPrefix seen.opening.chronology seen.opening.markerFound plan.prepared
       (seen.opening.reads.walReads.selectedAfterWatermark plan.offsets plan.descriptors) plan.accepted plan.ordered
