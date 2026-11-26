@@ -1,33 +1,28 @@
 # Current handoff
 
-Resume at the native write → crash → reopen → next session boundary.
-The [invariant map](proofs/native-storage.md#refinement-boundaries) explains
-the argument from filesystem effects to client history. The
-[completion checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
-owns the full list of obligations.
+Start with the [invariant map](proofs/native-storage.md#refinement-boundaries). The
+[roadmap checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
+tracks the remaining obligations.
 
-**What composes today.** On the covered aligned checkpoint path, a successful
-open installs the literal returned table. Its next supported writes and snapshot
-calls extend the incoming client ledger. An observed checkpoint fsync stop on that handle establishes that no preceding write
-returned `commitUnknown`: that return poisons the phase and prevents any later checkpoint
-from reaching fsync. The returned calls determine the heap, cache and ledger at the stop. The
-final manifest-directory recovery follows its cached root through the rename to the interrupted
-raw fsync. The effect of that syscall on crash bindings remains a local filesystem premise. Failed opens before the file lock,
-a refused lock, errors in the held flat-WAL and marker metadata checks,
-errors during marked checkpoint, marker and WAL preparation, and partial
-pruning of later WAL segments each supply a retry frame under local callback
-and cleanup laws. Given such a frame for each failed call, one induction
-carries the live files, bounded WAL names, durable files and root binding
-to the next open. Thus a
-retry can start after an earlier unlink took effect. The canonical keeper
-layout supplies the same byte-prefix and cutoff facts to repair, installation
-and work accounting. [Failed repair](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) · [Keeper facts](../lean/Alvoki/Storage/Disk/WalSegmentBoundedRetry.lean)
+**What composes.** On the covered aligned recovery path, the sampled checkpoint
+and WAL determine the table that `open` returns. Writes and snapshots on that
+table extend its incoming client history. If a later checkpoint reaches fsync,
+the preceding same-handle calls determine its ready entry: an uncertain write
+would have poisoned the handle. At the final directory barrier the proof
+identifies the cached root descriptor. Its durability effect remains an explicit
+filesystem premise. A later confirmed or uncertain write also establishes its ready
+prefix. A failed keeper/marker sync group joins this ledger to a sampled reboot
+and the final failed reopen under the local storage effects.
 
-**Next obligation.** Derive the retry frame for mutating keeper repairs from their actual callbacks. Extend coverage to interrupted
-calls, whose handles and durable effects can differ from ordinary errors. A successful reopen needs the held scan to cover all
-physical later WAL names. This remains a local filesystem enumeration law.
-Mixed sessions and interruptions outside the covered paths remain open.
+**Retries.** Admission, read and cleanup callbacks preserve the selected files.
+A failed prune may already have removed later WAL segments. Even if all removes
+return and the following directory fsync reports EIO, the retry starts from the
+actual changed namespace. The live keeper stays in place through this barrier.
+A later repair can replace it with a new inode.
 
-**Verification baseline.** At `83716ee8`, 779 kernel checks, the axiom audit
-and its negative control, native fault tests and reproduction passed. For
-commands see [local verification](../README.md#reproduce-on-linux-x86-64).
+**Next obligation.** Carry the replaced keeper's new binding and bytes through
+later failed and interrupted open attempts. A successful scan still needs the
+local enumeration law covering every physically present later WAL name. The
+remaining mixed sessions and maintenance cases are listed in the roadmap.
+
+**Verification baseline.** See commit `43bb5c19` and the [verification commands](../README.md#reproduce-on-linux-x86-64).

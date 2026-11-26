@@ -143,7 +143,7 @@ theorem foldReturnedWalUnlinks {heap model : Type}
 
 /-- Carry a frame across every reached remove, including the one whose
 outer failure or rejected unlink result ends the loop. -/
-theorem framesFailedWalUnlinks {heap : Type}
+theorem framesWalUnlinks {heap : Type}
     {directory : DiskDirectory} {plan : Plan}
     {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
     {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
@@ -153,10 +153,9 @@ theorem framesFailedWalUnlinks {heap : Type}
     (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
     (unlink : ∀ ordinal ∈ plan.newer, ∀ before,
       frame before (NativeFileEffectProjection.reached (remove (directory.file (.walSegment ordinal)) before)))
-    {first last : heap} {cause : IO.Error}
-    (returned : ((plan.newer.map Step.unlink).forM
-      (performPaths directory plan remove throw write sync rename)) first = .error cause last) :
-    frame first last := by
+    (first : heap) :
+    frame first (NativeFileEffectProjection.reached (((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) first)) := by
   have called {ordinal : Nat} {before after : heap} {result : EStateM.Result IO.Error heap (Except IO.Error Unit)}
       (member : ordinal ∈ plan.newer)
       (returns : remove (directory.file (.walSegment ordinal)) before = result)
@@ -167,7 +166,38 @@ theorem framesFailedWalUnlinks {heap : Type}
     (fun member returns _ prior => trans prior (called member returns rfl))
     (fun member returns prior => trans prior (called member returns rfl))
     (fun member returns _ prior => trans prior (called member returns rfl))
-  simpa only [returned] using framed
+  cases result : ((plan.newer.map Step.unlink).forM
+    (performPaths directory plan remove throw write sync rename)) first with
+  | error => simpa only [result, NativeFileEffectProjection.reached] using framed
+  | ok value => cases value; simpa only [result, NativeFileEffectProjection.reached] using framed
+
+/-- Only a longer keeper or a nonempty suffix reaches the prune block.
+Its returned error stops before either the keeper sync or replacement. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_errorDuringPrune {heap : Type}
+    {directory : DiskDirectory} {plan : Plan} {physicalSize : Nat}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    (valid : plan.valid = true) (bytes : plan.keeperBytes.size = plan.keeperSize)
+    (bounded : plan.keeperSize ≤ physicalSize)
+    (needsPrune : plan.newer ≠ [] ∨ plan.keeperSize < physicalSize)
+    {first authorized last : heap} {cause : IO.Error}
+    (authorization : sync #[directory.path] first = .ok () authorized)
+    (failed : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .error cause last) :
+    finishBoundedMarkedOpen directory plan physicalSize remove write sync rename first = .error cause last := by
+  have notFast : (plan.newer.isEmpty && physicalSize == plan.keeperSize) = false := by
+    cases needsPrune with
+    | inl listed => simp [List.isEmpty_eq_false_iff.mpr listed]
+    | inr longer => simp [Nat.ne_of_gt longer]
+  have guarded : (plan.valid && plan.keeperBytes.size == plan.keeperSize &&
+      decide (plan.keeperSize ≤ physicalSize)) = true := by simp [valid, bytes, bounded]
+  simp only [finishBoundedMarkedOpen, guarded, ite_true, notFast, Bool.false_eq_true, ite_false,
+    runRepairPlan, Bind.bind, EStateM.bind, authorization]
+  unfold steps
+  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+  simp only [Bind.bind, EStateM.bind, failed]
 
 /-- A reported unlink error ends the literal bounded repair at the unlink's
 reached heap. Both keeper sizes share this authorization and unlink prefix. -/
@@ -183,16 +213,11 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_errorDuri
     (failed : ((plan.newer.map Step.unlink).forM
       (performPaths directory plan remove throw write sync rename)) authorized = .error cause last) :
     finishBoundedMarkedOpen directory plan physicalSize remove write sync rename first = .error cause last := by
-  have nonempty : plan.newer.isEmpty = false := by
-    cases names : plan.newer with
-    | nil => simp [names, List.forM_eq_forM, List.forM_nil, Pure.pure, EStateM.pure] at failed
-    | cons => rfl
-  have guarded : (plan.valid && plan.keeperBytes.size == plan.keeperSize &&
-      decide (plan.keeperSize ≤ physicalSize)) = true := by simp [valid, bytes, bounded]
-  simp only [finishBoundedMarkedOpen, guarded, ite_true, nonempty, Bool.false_and, Bool.false_eq_true, ite_false,
-    runRepairPlan, Bind.bind, EStateM.bind, authorization]
-  unfold steps
-  rw [List.append_assoc, List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
+  have nonempty : plan.newer ≠ [] := by
+    intro names
+    simp [names, List.forM_eq_forM, List.forM_nil, Pure.pure, EStateM.pure] at failed
+  apply finishBoundedMarkedOpen_errorDuringPrune valid bytes bounded (.inl nonempty) authorization
+  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM]
   simp only [Bind.bind, EStateM.bind, failed]
 
 /-- An accepted unlink changes its logical suffix entry while preserving

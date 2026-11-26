@@ -28,27 +28,21 @@ def SampledCheckpointRetryFrame.WalUnlinkEffects (plan : Plan)
     ∀ path, scope path → path ≠ victim → ∀ inode,
       (observe issued).files.names path = some inode → readBytes after inode = readBytes issued inode
 
-/-- The checked suffix starts beyond the selected WAL cutoff. A local
-remove can change the victim's live or durable binding on either result.
-The selected files and the root's parent binding survive at the heap
-returned by the literal bounded repair. -/
-theorem SampledCheckpointRetryFrame.afterFailedWalPrune
-    {plan : Plan} {physicalSize : Nat}
+/-- The checked suffix starts beyond the selected cutoff. Each reached
+remove can change its own binding while preserving the selected scope. -/
+theorem SampledCheckpointRetryFrame.afterWalUnlinks
+    {plan : Plan}
     {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
-    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
-    {sync : Array FilePath → EStateM IO.Error heap Unit}
-    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
-    (valid : plan.valid = true) (bytes : plan.keeperBytes.size = plan.keeperSize)
-    (bounded : plan.keeperSize ≤ physicalSize) (cutoff : through ≤ plan.through)
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (valid : plan.valid = true) (cutoff : through ≤ plan.through)
     (outside : ∀ ordinal ∈ plan.newer, ¬ scope (directory.file (.walSegment ordinal)))
-    {entry authorized reached : heap} {cause : IO.Error}
-    (authorization : sync #[directory.path] entry = .ok () authorized)
-    (rootFrame : SampledCheckpointRetryFrame directory scope through observe readBytes entry authorized)
     (unlink : SampledCheckpointRetryFrame.WalUnlinkEffects directory scope through observe readBytes plan remove)
-    (stopped : ((plan.newer.map Step.unlink).forM
-      (performPaths directory plan remove throw write sync rename)) authorized = .error cause reached) :
-    finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .error cause reached ∧
-      SampledCheckpointRetryFrame directory scope through observe readBytes entry reached := by
+    (entry : heap) :
+    SampledCheckpointRetryFrame directory scope through observe readBytes entry
+      (NativeFileEffectProjection.reached (((plan.newer.map Step.unlink).forM
+        (performPaths directory plan remove throw write sync rename)) entry)) := by
   let frame := SampledCheckpointRetryFrame directory scope through observe readBytes
   have each ordinal (listed : ordinal ∈ plan.newer) issued :
       frame issued (NativeFileEffectProjection.reached (remove (directory.file (.walSegment ordinal)) issued)) := by
@@ -71,9 +65,56 @@ theorem SampledCheckpointRetryFrame.afterFailedWalPrune
         have upper : ordinal ≤ plan.through := ordinals ▸ Nat.le_trans within cutoff
         exact (Nat.not_lt_of_ge upper) later
       exact congrArg Option.isSome (physical _ ⟨.inr ⟨start, within, rfl⟩, apart⟩).1
-  exact ⟨finishBoundedMarkedOpen_errorDuringUnlinks valid bytes bounded authorization stopped,
-    rootFrame.trans (framesFailedWalUnlinks frame SampledCheckpointRetryFrame.refl
-      SampledCheckpointRetryFrame.trans each stopped)⟩
+  exact framesWalUnlinks (plan := plan) (write := write) (sync := sync) (rename := rename)
+    frame SampledCheckpointRetryFrame.refl SampledCheckpointRetryFrame.trans each entry
+
+/-- The literal prune block carries the selected files across ordinary
+errors. A barrier effect is used only after every unlink has returned. -/
+theorem SampledCheckpointRetryFrame.afterFailedWalPruneBlock
+    {plan : Plan} {physicalSize : Nat}
+    {remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit)}
+    {write : FilePath → ByteArray → EStateM IO.Error heap Unit}
+    {sync : Array FilePath → EStateM IO.Error heap Unit}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    (valid : plan.valid = true) (bytes : plan.keeperBytes.size = plan.keeperSize)
+    (bounded : plan.keeperSize ≤ physicalSize) (needsPrune : plan.newer ≠ [] ∨ plan.keeperSize < physicalSize)
+    (cutoff : through ≤ plan.through)
+    (outside : ∀ ordinal ∈ plan.newer, ¬ scope (directory.file (.walSegment ordinal)))
+    {entry authorized reached : heap} {cause : IO.Error}
+    (authorization : sync #[directory.path] entry = .ok () authorized)
+    (rootFrame : SampledCheckpointRetryFrame directory scope through observe readBytes entry authorized)
+    (unlink : SampledCheckpointRetryFrame.WalUnlinkEffects directory scope through observe readBytes plan remove)
+    (stopped : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .error cause reached)
+    (barrier : ∀ {unlinked}, ((plan.newer.map Step.unlink).forM
+      (performPaths directory plan remove throw write sync rename)) authorized = .ok () unlinked →
+      sync #[directory.path] unlinked = .error cause reached →
+      SampledCheckpointRetryFrame directory scope through observe readBytes unlinked reached) :
+    finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .error cause reached ∧
+      SampledCheckpointRetryFrame directory scope through observe readBytes entry reached := by
+  refine ⟨finishBoundedMarkedOpen_errorDuringPrune valid bytes bounded needsPrune authorization stopped, ?_⟩
+  let perform := performPaths directory plan remove throw write sync rename
+  have frame := rootFrame.trans (SampledCheckpointRetryFrame.afterWalUnlinks write sync rename valid cutoff outside
+    unlink authorized)
+  change ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM perform) authorized = _ at stopped
+  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at stopped
+  cases unlinks : ((plan.newer.map Step.unlink).forM perform) authorized with
+  | error diagnostic failed =>
+    have same : failed = reached := (EStateM.Result.error.inj
+      (by simpa only [Bind.bind, EStateM.bind, unlinks] using stopped)).2
+    subst failed
+    simpa only [perform, unlinks, NativeFileEffectProjection.reached] using frame
+  | ok value unlinked =>
+    cases value
+    have failed : sync #[directory.path] unlinked = .error cause reached := by
+      simp only [Bind.bind, EStateM.bind, unlinks, List.forM_eq_forM, List.forM_cons, List.forM_nil,
+        perform, performPaths, Pure.pure, EStateM.pure] at stopped
+      cases returned : sync #[directory.path] unlinked with
+      | error => simpa only [returned] using stopped
+      | ok value => cases value; simp [returned] at stopped
+    have throughUnlinks : SampledCheckpointRetryFrame directory scope through observe readBytes entry unlinked := by
+      simpa only [perform, unlinks, NativeFileEffectProjection.reached] using frame
+    exact throughUnlinks.trans (barrier unlinks failed)
 
 end SuffixRetryFrame
 
