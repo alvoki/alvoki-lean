@@ -2552,6 +2552,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.CheckpointPublication.run_firstReturnedError
 #check_axioms Alvoki.Storage.CheckpointPublication.prefixBeforeManifestRename
 #check_axioms Alvoki.Storage.CheckpointPublication.RunWriteInodeFrame.preservesCheckpointFootprint
+#check_axioms Alvoki.Storage.DiskSession.runCheckpointOnOpenPhaseUntilSyncStop_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointStopsFromWhole
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.checkpointErrorsFromWhole
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceError.phaseAtError
@@ -4059,10 +4060,13 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.splitAppend
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyBeforeWrite
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readyCallStorage
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteCalls.commitUnknownPoisons
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyFramed
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCallsFramed
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReady
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCalls
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCall.Reaches.heapOfPoisoned
+#check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.fromPoisoned
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.append
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.acknowledgesAndReadsLatest
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preflightsReturnedWrite

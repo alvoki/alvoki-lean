@@ -151,11 +151,15 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   From the returned fresh handle, one induction now covers confirmed writes,
   empty batches, preflight rejections, successful snapshot acquisitions and
   returned reads on that handle. Each event uses the request, result and heap
-  of that occurrence. A rejected write that passes local batch preparation
-  needs the actual failing metadata guard. A setter can return the same error
-  later. Setter failures, uncertain writes and interrupted calls still need
-  transitions into this argument. Its inputs include local publication,
-  metadata, phase-update and token effects.
+  of that occurrence. The file callbacks preserve the opened phase cell, and a
+  comparison of the open token with itself succeeds on the same heap. Under
+  these local laws a prepared write returning a rejection stopped at its
+  metadata guard. A write returning `commitUnknown` leaves the handle poisoned.
+  Later writes and snapshot calls on that handle preserve the poisoned heap;
+  a checkpoint there returns before issuing a filesystem operation. An observed
+  checkpoint fsync stop therefore establishes coverage of its preceding
+  same-handle calls. Recovery after an uncertain write still needs the durable
+  marker and the file sample selected at reboot.
   [Ready-call induction](../lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean)
 
   A first acknowledged write on the fresh table carries the WAL namespace

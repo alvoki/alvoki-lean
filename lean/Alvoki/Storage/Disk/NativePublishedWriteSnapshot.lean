@@ -63,6 +63,35 @@ def Reaches (call : NativeReturnedCall opened) (writes : NativeReadyWriteCalls o
   | .read pin request result =>
     pin.raw ∈ pins ∧ opened.readPinRaw pin request entry = atReturn result reached
 
+/-- A public return on this poisoned handle reaches only its ready-phase
+guard. The write metadata, snapshot setter and token comparison are
+all bypassed. -/
+theorem Reaches.heapOfPoisoned {call : NativeReturnedCall opened}
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {pins : List DiskSnapshotPin} {entry reached : heap}
+    (returned : call.Reaches writes issuer pins entry reached)
+    (stored : opened.contents entry opened.phase = some .poisoned) : reached = entry := by
+  have loaded := opened.phaseEffects.reads entry opened.phase .poisoned stored
+  have atError {ε α : Type} {result : Except ε α} {cause : ε}
+      (same : EStateM.Result.error cause entry = atReturn result reached) : reached = entry := by
+    cases result with
+    | error _ => exact (EStateM.Result.error.inj same).2.symm
+    | ok _ => cases same
+  cases call with
+  | write request result =>
+    simp only [Reaches] at returned
+    rw [request.runOnRawOpenPhase_rejectsPhase _ _ _ _ _ _ _ _ _ loaded rfl] at returned
+    exact atError returned
+  | acquire result =>
+    simp only [Reaches, NativeOpenedHandle.acquireLatestRaw, acquireLatestWith, Bind.bind, EStateM.bind, loaded,
+      Phase.installed, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+    exact atError returned
+  | read pin request result =>
+    obtain ⟨_, read⟩ := returned
+    simp only [NativeOpenedHandle.readPinRaw, readSnapshotWith, withLocalHandle, Bind.bind, EStateM.bind, loaded,
+      Phase.installed, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at read
+    exact atError read
+
 end NativeReturnedCall
 
 /-- A returned preflight records the response on the same model table and
@@ -121,6 +150,21 @@ inductive NativeReturnedCalls {heap : Type} {opened : NativeOpenedHandle heap}
   | cons (returned : call.Reaches writes issuer pins entry next)
       (later : NativeReturnedCalls writes issuer next (call.pinsAfter pins) calls last) :
       NativeReturnedCalls writes issuer entry pins (call :: calls) last
+
+/-- Every return in a sequence on the same poisoned handle preserves
+the precise heap and the original poisoned phase cell. -/
+theorem NativeReturnedCalls.fromPoisoned {heap : Type} {opened : NativeOpenedHandle heap}
+    {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
+    {entry last : heap} {pins : List DiskSnapshotPin} {calls : List (NativeReturnedCall opened)}
+    (returned : NativeReturnedCalls writes issuer entry pins calls last)
+    (stored : opened.contents entry opened.phase = some .poisoned) :
+    last = entry ∧ opened.contents last opened.phase = some .poisoned := by
+  induction returned with
+  | empty => exact ⟨rfl, stored⟩
+  | cons call _ rest =>
+    have same := call.heapOfPoisoned stored
+    obtain ⟨lastAtNext, lastPoisoned⟩ := rest (same.symm ▸ stored)
+    exact ⟨lastAtNext.trans same, lastPoisoned⟩
 
 theorem NativeReturnedCalls.append {heap : Type} {opened : NativeOpenedHandle heap}
     {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}

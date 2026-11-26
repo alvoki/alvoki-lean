@@ -84,6 +84,24 @@ noncomputable def runCheckpointOnOpenPhaseUntilSyncStop {heap : Type}
         (tagStop (primitives.checkpointStepUntilStop directory fsync next manifest)))
       (phaseAction (set phase (.ready next))))
 
+/-- A checkpoint rejected by its reached phase and preflight returns an
+ordinary diagnostic. There is no filesystem stop because publication
+has not started. -/
+theorem runCheckpointOnOpenPhaseUntilSyncStop_rejectsPhase {heap : Type}
+    (directory : DiskDirectory) (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (fsync : CheckpointFsync heap)
+    {cache : CensusDirectoryCache} {entry : heap} {atPhase : Phase Installed} {cause : IO.Error}
+    (loaded : get phase entry = .ok atPhase entry)
+    (rejected : CheckpointPreflight atPhase (.error cause)) :
+    (runCheckpointOnOpenPhaseUntilSyncStop directory phase get set primitives fsync).run (cache, entry) =
+      .ok (.error cause) (cache, entry) := by
+  unfold runCheckpointOnOpenPhaseUntilSyncStop
+  apply preflightFromRead rejected
+  change (ExceptT.bind (phaseAction (get phase)) (fun value => value.installed)).run (cache, entry) = _
+  rw [run_bind, phaseAction_run, loaded]
+
 variable {heap : Type} {opened : NativeOpenedHandle heap}
 
 /-- The completed actions and issued step come from the same
@@ -174,14 +192,9 @@ private theorem checkpointRejectsBeforePublication (current : NativeOpenedPositi
     let state := current.current.ready.state
     (runCheckpointOnOpenPhaseUntilSyncStop state.session.directory opened.phase opened.get opened.set
       primitives fsync).run (state.cache, current.reached) = .ok (.error cause) (state.cache, current.reached) := by
-  intro state
-  let load : CheckpointStopM heap Installed := do (← phaseAction (opened.get opened.phase)).installed
-  have readPhase : load.run (state.cache, current.reached) =
-      (state.session.phase.installed : CheckpointStopM heap Installed).run (state.cache, current.reached) := by
-    change (ExceptT.bind (phaseAction (opened.get opened.phase))
-      (fun phase => phase.installed)).run (state.cache, current.reached) = _
-    rw [run_bind, phaseAction_run, opened.phaseEffects.reads current.reached opened.phase state.session.phase current.stored]
-  apply preflightFromRead rejected load readPhase
+  let state := current.current.ready.state
+  exact runCheckpointOnOpenPhaseUntilSyncStop_rejectsPhase state.session.directory opened.phase opened.get opened.set
+    primitives fsync (opened.phaseEffects.reads current.reached opened.phase state.session.phase current.stored) rejected
 
 /-- Derive the stop directly from the interpreted whole call starting at
 the original opened position, using each successful prefix once. -/

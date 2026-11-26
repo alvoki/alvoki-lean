@@ -8,8 +8,9 @@ owns the full list of obligations.
 
 **What composes today.** On the covered aligned checkpoint path, a successful
 open installs the literal returned table. Its next supported writes and snapshot
-calls extend the incoming client ledger. The supported calls also determine the
-heap, cache and ledger at the next observed checkpoint interruption. The
+calls extend the incoming client ledger. An observed checkpoint fsync stop on that handle establishes that no preceding write
+returned `commitUnknown`: that return poisons the phase and prevents any later checkpoint
+from reaching fsync. The returned calls determine the heap, cache and ledger at the stop. The
 final manifest-directory recovery follows its cached root through the rename to the interrupted
 raw fsync. The effect of that syscall on crash bindings remains a local filesystem premise. Failed opens before the file lock,
 a refused lock, errors in the held flat-WAL and marker metadata checks,
@@ -27,6 +28,6 @@ calls, whose handles and durable effects can differ from ordinary errors. A succ
 physical later WAL names. This remains a local filesystem enumeration law.
 Mixed sessions and interruptions outside the covered paths remain open.
 
-**Verification baseline.** At `006f7924`, 779 kernel checks, the axiom audit
+**Verification baseline.** At `83716ee8`, 779 kernel checks, the axiom audit
 and its negative control, native fault tests and reproduction passed. For
 commands see [local verification](../README.md#reproduce-on-linux-x86-64).

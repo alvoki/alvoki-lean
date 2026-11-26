@@ -72,7 +72,7 @@ abbrev RawMarkedOpenInterpreter.AlignedReadyCalls
           (_reported : writes.ReturnEffects view inodes runs observe inode buffered)
           {calls : List (NativeReturnedCall handle)} {reached : heap},
           NativeReturnedCalls writes issuer returnedAt [] calls reached →
-          NativeReturnedCalls.ReadyFrom writes issuer returnedAt [] calls →
+          NativeReturnedCalls.ReadyResponses calls →
           ∃ (last : NativeOpenedPosition handle) (events : List NativeExecutionEvent),
             last.reached = reached ∧
             last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins call => call.pinsAfter pins) [] ∧

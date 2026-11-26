@@ -421,7 +421,7 @@ theorem refinesReadyCallsFramed {input : FilePath} {directory : DiskDirectory}
     (effects : writes.ReturnEffects view inodes runs storage inode buffered)
     {calls : List (NativeReturnedCall opened.handle)} {reached : heap}
     (executed : NativeReturnedCalls writes issuer opened.start.reached [] calls reached)
-    (covered : NativeReturnedCalls.ReadyFrom writes issuer opened.start.reached [] calls) :
+    (covered : NativeReturnedCalls.ReadyResponses calls) :
     call entry = .ok opened.handle.table opened.start.reached ∧
     ∃ (last : NativeOpenedPosition opened.handle) (events : List NativeExecutionEvent),
       last.reached = reached ∧
@@ -469,7 +469,7 @@ theorem refinesReadyCalls {input : FilePath} {directory : DiskDirectory}
     (effects : writes.ReturnEffects view inodes runs storage inode buffered)
     {calls : List (NativeReturnedCall opened.handle)} {reached : heap}
     (executed : NativeReturnedCalls writes issuer opened.start.reached [] calls reached)
-    (covered : NativeReturnedCalls.ReadyFrom writes issuer opened.start.reached [] calls) :
+    (covered : NativeReturnedCalls.ReadyResponses calls) :
     call entry = .ok opened.handle.table opened.start.reached ∧
     ∃ (last : NativeOpenedPosition opened.handle) (events : List NativeExecutionEvent),
       last.reached = reached ∧
