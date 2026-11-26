@@ -486,8 +486,11 @@ scoped frame through admission. The same helper serves the successful prefix and
 existing failed-open cleanup proofs. The held manifest, chunk reads, ordered releases,
 marker and selected seal reads share one generic frame proof. The checked listing carries
 that frame through its actual stream open, iteration and close. These proofs connect the
-admission and worker to the exact entry of the keeper read. Physical file and inode
-effects are supplied for the primitive callbacks. Keeper and repair frames follow separately.
+admission and worker to the exact entry of the keeper read. The aligned return proof now
+carries the durable files, names used for alias exclusion, and the live keeper separately
+through that prefix and the exact keeper open, chunk reads and pending insertion. Local
+physical effects are supplied at the primitive calls. The initial live keeper observation
+and the repair barriers remain separate.
 [Open admission frames](../../lean/Alvoki/Storage/Disk/NativeOpenAdmissionStorage.lean)
 · [Marked scan frames](../../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean)
 

@@ -109,8 +109,8 @@ private theorem RawOpenCacheDisposal.ScopeFileFrames.reachesWorker
     (frames : disposal.ScopeFileFrames finalized files selectedPath) :
     (files entry).Frames selectedPath (files seed.afterPending) :=
   admitted.framesThroughCache seed (frame := fun before after => (files before).Frames selectedPath (files after))
-    (fun first last => first.trans last) (fun _ => frames.lockOpen) (fun _ => frames.flock)
-    (fun _ => frames.openDirectory) (fun _ => frames.directoryRef) (fun _ => frames.activeRef) (fun _ => frames.pendingRef)
+    (fun first last => first.trans last) ⟨fun _ => frames.lockOpen, fun _ => frames.flock,
+      fun _ => frames.openDirectory, fun _ => frames.directoryRef, fun _ => frames.activeRef, fun _ => frames.pendingRef⟩
 
 /-- Preserve the worker's reached bindings through both runtime drops
 and the intervening unlock. These bindings can include a new keeper

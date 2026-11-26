@@ -3979,6 +3979,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readWithFrames
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedCheckpointReadHeap.framesScan
 #check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.framesScan
+#check_axioms Alvoki.Storage.DiskSession.MarkedOpenReadFrame.refl
+#check_axioms Alvoki.Storage.DiskSession.MarkedOpenReadFrame.trans
 #check_axioms Alvoki.Storage.DiskSession.MarkedSealReadChain.framesSeals
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.framesReadPrefix
 #check_axioms Alvoki.Storage.DiskSession.CapturedPrunedAlignedFinish.sameCensusObjects

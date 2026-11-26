@@ -1,5 +1,16 @@
 # Current handoff
 
+The aligned writer proof now derives its read-only frames from the source callbacks.
+The exact append-open, flock, held directory and three cache allocations carry the
+durable footprint and live keeper to the worker. Manifest, runs, marker, the checked
+listing, ordered seals and the keeper read carry those same projections. The link census
+is at the listing's reached heap. The ensuing exact reads and pending update preserve
+the names used for alias exclusion. The remaining assumptions are the individual
+callback effects, the keeper observation at entry and the separate repair laws.
+[Admission frames](../lean/Alvoki/Storage/Disk/NativeOpenAdmissionStorage.lean)
+· [Read projections](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean)
+· [Aligned return](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
+
 All three checked keeper repairs now feed the same storage proof for the table actually
 returned by the marked opener. The pruned path derives absence of later names from the
 reached unlink calls and syncs the inode it read. The longer path follows the fresh

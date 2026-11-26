@@ -3,6 +3,8 @@ import Alvoki.Storage.Disk.NativeSelectedWriteReopen
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 import Alvoki.Storage.Disk.NativeReadyWriteStorage
 import Alvoki.Storage.Disk.NativeMarkedKeeperLinks
+import Alvoki.Storage.Disk.NativeMarkedScanFrame
+import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
 
 namespace Alvoki.Storage.DiskSession
 
@@ -147,16 +149,29 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
       (view.handle raw.seed.afterPending raw.seed.handle).2.1.description))
     (lock : (observe entry).files.names ((dir).file .lock) = some ((view.handle raw.raw.afterFlock raw.raw.lock).1.inode
       (view.handle raw.raw.afterFlock raw.raw.lock).2.1.description))
-    (frames : (observe entry).Frames prior.selectedRetryPath (observe seen.remembered))
+    (admissionEffects :
+      let path := (dir).file (.walSegment layout.keeper.first)
+      let live (atHeap : heap) : CheckpointSurvivingFiles :=
+        ⟨(observe atHeap).files.names, fun inode => [visible atHeap inode]⟩
+      raw.raw.CacheFrames raw.seed fun before after =>
+        (observe before).Frames prior.selectedRetryPath (observe after) ∧
+        (live before).Frames (· = path) (live after))
+    (readEffects :
+      let keeperPath := (dir).file (.walSegment layout.keeper.first)
+      let frame before after :=
+        MarkedOpenReadFrame dir prior.selectedRetryPath keeperPath (observe before) (observe after)
+          (visible before) (visible after)
+      raw.fileCalls.ScopeFrames frame ∧ raw.directoryCalls.ScopeFrames dir frame ∧
+      ((raw.callbacks.withFileReads raw.fileCalls).modifyPending raw.seed.pendingRef
+        (SyncHandleRouting.pushPending keeperPath seen.keeper) seen.read = .ok () seen.remembered → frame seen.read seen.remembered))
     (effects : ∀ state : NativeReadyState, state.session.directory = dir → seen.StorageEffects observe visible state)
     (keeperRead :
       let path := (dir).file (.walSegment layout.keeper.first)
       let inode := opening.reads.wal.keeper.observesFile.object
       let live (atHeap : heap) : CheckpointSurvivingFiles :=
         ⟨(observe atHeap).files.names, fun file => [visible atHeap file]⟩
-      (live raw.beforeKeeper).names path = some inode ∧
-      visible raw.beforeKeeper inode = layout.keeper.bytes ++ layout.tail ∧
-      (live raw.beforeKeeper).Frames (· = path) (live seen.remembered) ∧
+      (live entry).names path = some inode ∧
+      visible entry inode = layout.keeper.bytes ++ layout.tail ∧
       ((raw.callbacks.withFileReads raw.fileCalls).sync raw.seed.handle seen.remembered = .ok () seen.authorized →
         (live seen.remembered).Frames (· = path) (live seen.authorized)) ∧
       ((raw.callbacks.withFileReads raw.fileCalls).setPending raw.seed.pendingRef [] seen.authorized =
@@ -164,9 +179,6 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
     (links : RunOpenLinkCensus (path := (dir).file (.walSegment layout.keeper.first))
       (before := raw.listing.reached) raw.fileCalls.stat (observe raw.listing.reached).files.names
       opening.reads.wal.keeper.observesFile.object)
-    (readFrame : (observe raw.listing.reached).files.Frames
-      (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
-      (observe seen.remembered).files)
     (phaseFrames : ∀ (state : NativeReadyState) ref reached,
       allocatePhase (.ready state.writer.installed) raw.repaired = .ok ref reached →
       (observe raw.repaired).Frames state.crashPath (observe reached) ∧ visible reached = visible raw.repaired)
@@ -177,9 +189,30 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
   have alignedFinish : opening.finish = .aligned finish := congrArg Sigma.fst aligned
   have sameObjects : opening.finish.census.inode = opening.admission.reached.inode := by
     simpa only [alignedFinish, CapturedKeeperFinish.census] using finish.sameCensusObjects
-  obtain ⟨bound, payload, keeperFrame, dirFrame, consumeFrame⟩ := keeperRead
+  let keeperPath := (dir).file (.walSegment layout.keeper.first)
+  let frame before after :=
+    MarkedOpenReadFrame dir prior.selectedRetryPath keeperPath (observe before) (observe after)
+      (visible before) (visible after)
+  obtain ⟨fileEffects, listingEffects, rememberEffect⟩ := readEffects
+  obtain ⟨toListing, afterListing⟩ := raw.framesReadPrefix frame (fun _ => .refl _ _ _ _ _)
+    MarkedOpenReadFrame.trans fileEffects listingEffects
+  have readKeeper := seen.framesRemembered (frame := frame) (fun _ => .refl _ _ _ _ _)
+    MarkedOpenReadFrame.trans
+    (fun opened => by
+      have effect := fileEffects.openRead keeperPath raw.beforeKeeper
+      change raw.fileCalls.openRead keeperPath raw.beforeKeeper = .ok seen.keeper seen.opened at opened
+      simpa only [opened, SyncHandleRouting.reachedState] using effect)
+    (fileEffects.readChunk seen.keeper) rememberEffect
+  obtain ⟨admission, entryKeeper⟩ := raw.raw.framesThroughCache raw.seed
+    (fun first last => ⟨first.1.trans last.1, first.2.trans last.2⟩) admissionEffects
+  have scans := toListing.trans afterListing
+  have frames := admission.trans (scans.trans readKeeper).durable
+  have afterCensus := afterListing.trans readKeeper
+  obtain ⟨bound, payload, dirFrame, consumeFrame⟩ := keeperRead
+  obtain ⟨nameAtRead, bytesAtRead⟩ := entryKeeper.trans scans.keeper keeperPath rfl
+  have exactKeeperBytes := (List.cons.inj (bytesAtRead _ bound)).1.trans payload
   have keeperAtIssue := seen.keeperAtIssue (fun heap => (observe heap).files.names) visible
-    bound payload keeperFrame dirFrame consumeFrame
+    (nameAtRead.trans bound) exactKeeperBytes readKeeper.keeper dirFrame consumeFrame
   rw [seen.keeperIssueInode, ← opening.reads.wal.keeper.observesFile.sameObject] at keeperAtIssue
   have repairHeap : raw.repaired = seen.reached := congrArg (fun route => route.2.1) aligned
   refine returned.readyAfterRepair observe visible sameObjects ?_ phaseFrames tokenFrames
@@ -199,8 +232,8 @@ theorem RawHealthyMarkedOpenEffects.SelectedReturn.readyAfterAlignedRetry
     have framedPath := NativeReadyState.crashPath_rootOrChild crashPath
     rw [directory] at framedPath
     have privateAtListing := raw.keeperPrivateBinding (names := fun heap => (observe heap).files.names) links
-    have canonical := readFrame.privateBindingOn privateAtListing path framedPath
-      (bound.trans (congrArg some opening.reads.wal.keeper.observesFile.sameObject))
+    have canonical := privateAtListing path ((afterCensus.names path framedPath).symm.trans
+      (bound.trans (congrArg some opening.reads.wal.keeper.observesFile.sameObject)))
     exact NativeReadyState.protectedPathNeWalFromActive valid selectedPath (Nat.le_refl _)
       (by rw [directory, first]; exact canonical)
   obtain ⟨_, ready, issuedKeeper⟩ := seen.readyStorage observe visible directory census slot first bytes protectedFiles

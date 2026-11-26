@@ -1,8 +1,42 @@
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+import Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
 
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair SyncHandleRouting
+
+/-- The independent projections a read-only callback frames. The names
+also cover the later alias check. Live bytes are needed only for the
+one keeper that the selected plan will open. -/
+structure MarkedOpenReadFrame (directory : DiskDirectory) (protectedPaths : FilePath → Prop)
+    (keeperPath : FilePath) (before after : CheckpointStorageObservation)
+    (beforeBytes afterBytes : Nat → ByteArray) : Prop where
+  durable : before.Frames protectedPaths after
+  names : ∀ path, (path = directory.path ∨ ∃ file, path = directory.file file) →
+    after.files.names path = before.files.names path
+  keeper : (CheckpointSurvivingFiles.mk before.files.names fun inode => [beforeBytes inode]).Frames
+    (· = keeperPath) ⟨after.files.names, fun inode => [afterBytes inode]⟩
+
+theorem MarkedOpenReadFrame.refl (directory : DiskDirectory) (protectedPaths : FilePath → Prop)
+    (keeperPath : FilePath) (storage : CheckpointStorageObservation) (bytes : Nat → ByteArray) :
+    MarkedOpenReadFrame directory protectedPaths keeperPath storage storage bytes bytes :=
+  ⟨.refl _ _, fun _ _ => rfl, fun _ _ => ⟨rfl, fun _ _ => rfl⟩⟩
+
+theorem MarkedOpenReadFrame.trans {directory : DiskDirectory} {protectedPaths : FilePath → Prop}
+    {keeperPath : FilePath} {before middle after : CheckpointStorageObservation}
+    {beforeBytes middleBytes afterBytes : Nat → ByteArray}
+    (first : MarkedOpenReadFrame directory protectedPaths keeperPath before middle beforeBytes middleBytes)
+    (second : MarkedOpenReadFrame directory protectedPaths keeperPath middle after middleBytes afterBytes) :
+    MarkedOpenReadFrame directory protectedPaths keeperPath before after beforeBytes afterBytes :=
+  ⟨first.durable.trans second.durable, fun path inside => (second.names path inside).trans (first.names path inside),
+    first.keeper.trans second.keeper⟩
+
+structure MarkedDirectoryReadCalls.ScopeFrames {heap stream : Type}
+    (calls : MarkedDirectoryReadCalls heap stream) (directory : DiskDirectory)
+    (frame : heap → heap → Prop) : Prop where
+  openDir : ∀ {entry reached handle}, calls.openDir directory.path entry = .ok handle reached → frame entry reached
+  readDir : ∀ handle entry, frame entry (calls.readDir handle entry).2
+  closeDir : ∀ {entry reached handle}, calls.closeDir handle entry = .ok () reached → frame entry reached
 
 section Listing
 
@@ -22,15 +56,11 @@ scan and close. Local laws can frame both bytes and parent settlement. -/
 theorem MarkedDirectoryReadReport.framesScan
     (seen : MarkedDirectoryReadReport prepared directoryCalls slotOf)
     (frame : heap → heap → Prop) (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
-    (openFrame : ∀ {entryHeap reached handle}, directoryCalls.openDir directory.path entryHeap = .ok handle reached →
-      frame entryHeap reached)
-    (scanFrame : ∀ handle entryHeap, frame entryHeap (directoryCalls.readDir handle entryHeap).2)
-    (closeFrame : ∀ {entryHeap reached handle}, directoryCalls.closeDir handle entryHeap = .ok () reached →
-      frame entryHeap reached) :
+    (effects : directoryCalls.ScopeFrames directory frame) :
     frame prepared.atScan seen.reached := by
-  have scan := scanFrame seen.descriptor seen.opened
+  have scan := effects.readDir seen.descriptor seen.opened
   rw [seen.readRaw] at scan
-  exact trans (trans (openFrame seen.openedRaw) scan) (closeFrame seen.closedRaw)
+  exact trans (trans (effects.openDir seen.openedRaw) scan) (effects.closeDir seen.closedRaw)
 
 /-- Each selected seal read carries the same scope through its actual
 returned heap, including the release. The keeper is still unread. -/
@@ -76,11 +106,7 @@ theorem RawHealthyMarkedOpenEffects.framesReadPrefix
     (frame : heap → heap → Prop) (refl : ∀ atHeap, frame atHeap atHeap)
     (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
     (reads : raw.fileCalls.ScopeFrames frame)
-    (listed : ∀ {entryHeap reached handle}, raw.directoryCalls.openDir directory.path entryHeap = .ok handle reached →
-      frame entryHeap reached)
-    (scan : ∀ handle entryHeap, frame entryHeap (raw.directoryCalls.readDir handle entryHeap).2)
-    (closed : ∀ {entryHeap reached handle}, raw.directoryCalls.closeDir handle entryHeap = .ok () reached →
-      frame entryHeap reached) :
+    (listing : raw.directoryCalls.ScopeFrames directory frame) :
     frame raw.seed.afterPending raw.listing.reached ∧ frame raw.listing.reached raw.beforeKeeper := by
   have sealFrame (first count : Nat) {start finish : heap} {bytes : ByteArray}
       (returned : raw.fileCalls.seal (directory.file (.walSegment first)) count start = .ok bytes finish) :
@@ -91,7 +117,7 @@ theorem RawHealthyMarkedOpenEffects.framesReadPrefix
     change frame start (reachedState (raw.fileCalls.seal (directory.file (.walSegment first)) count start)) at read
     simpa only [returned, reachedState] using read
   exact ⟨trans (raw.checkpoint.framesScan selected reads refl trans)
-    (raw.listing.framesScan frame trans listed scan closed), raw.seals.framesSeals frame refl trans sealFrame⟩
+    (raw.listing.framesScan frame trans listing), raw.seals.framesSeals frame refl trans sealFrame⟩
 
 end Healthy
 
