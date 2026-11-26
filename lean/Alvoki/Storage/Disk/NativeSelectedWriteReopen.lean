@@ -62,14 +62,15 @@ theorem NativeWriteCrashReads.reopensAfterReadOnlyAttempts
     (heldFrame : ∀ path before (failed : RawFinalizedOpenAttempt view dir calls init release path before),
       (files before).Frames footprint (files failed.reached))
     (prepared : Prepared retry.image layout.target layout.plan)
-    (following : ∀ first ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
-      layout.range.watermark < first)
     (accepted : state.writer.published.AcceptsVersioned history.length.toUInt64
       (WAL.Boundary.CheckpointRepresentsPrefix history) retry.image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history)
     {wal : WalSegmentImage} (walLayout : wal.ReadLayout history) (walValid : wal.Valid history)
     (spans : ∀ segment ∈ wal.sealed, segment.bytes.size = (segment.last - segment.first) * WAL.frameSize)
     (active : wal.directory.active = layout.target.pair) (keeper : layout.target.first = wal.active.first)
+    (descriptors : layout.sealed ++ [layout.keeper] = wal.readDescriptors layout.range.watermark)
+    (offsets : selectWalSegmentReads (wal.segments.map WalSegment.first) layout.range.watermark =
+      some (layout.first, (wal.readDescriptors layout.range.watermark).map WalSegment.first))
     (kept : retry.image.kept = (wal.checkpointReopenFiles wal.directory none).kept)
     {log : List DatabaseSubmissions} {reads : List RecordedSnapshotRead}
     (pending : PendingClientReplay log reads history) (bounded : ∀ read ∈ reads, read.BoundedBy history.length)
@@ -103,7 +104,9 @@ theorem NativeWriteCrashReads.reopensAfterReadOnlyAttempts
       handle.lock = raw.raw.lock ∧ handle.files.UsesCacheReferences raw.seed.activeRef raw.seed.pendingRef
         raw.seed.directoryRef ∧ handle.files.AtDirectory (dir).path ∧
       handle.contents = view.phase ∧ handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧
-      tokenIdentity handle.token = next.state.session.sessionRef ∧ start.pins = [] ∧
+      phaseIdentity handle.phase = next.state.session.phaseRef ∧ tokenIdentity handle.token = next.state.session.sessionRef ∧
+      phaseIdentity handle.phase ≠ state.session.phaseRef ∧ tokenIdentity handle.token ≠ state.session.sessionRef ∧
+      start.pins = [] ∧
       view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
       view.cacheAt start.reached raw.seed.directoryRef raw.seed.activeRef raw.seed.pendingRef = next.state.cache := by
   have frame := attempts.frames (frame := fun a b => (files a).Frames footprint (files b))
@@ -125,6 +128,7 @@ theorem NativeWriteCrashReads.reopensAfterReadOnlyAttempts
     have before := (rebootNames _ (.inr (.inr selectedFile))).trans bound
     exact ⟨read, nameFrame.trans before, (byteFrame _ before).trans
       ((rebootBytes path selectedFile _ bound).trans (congrArg (fun payload => [payload]) bytes))⟩
+  have following := reader.opening.reads.walReads.selectedAfterWatermark offsets descriptors
   let marked : MarkedOpenSuccessReports input dir history log reads := {
     inventory := crash.reboot
     retry := retry
@@ -148,7 +152,7 @@ theorem NativeWriteCrashReads.reopensAfterReadOnlyAttempts
     pending := pending
     bounded := bounded
   }
-  obtain ⟨next, seeded, cache, _, owner, slot, _, durable, checkpoint, _, target, _, _⟩ :=
+  obtain ⟨next, seeded, cache, _, owner, slot, _, durable, checkpoint, _, target, _, freshRefs⟩ :=
     reader.opening.finish.startsNativeReadPrefix reader.opening.chronology reader.opening.markerFound
       prepared following accepted ordered walLayout walValid spans active keeper kept pending bounded
   let position : NativeReadPosition history log :=
@@ -156,13 +160,17 @@ theorem NativeWriteCrashReads.reopensAfterReadOnlyAttempts
   obtain ⟨measured, installed, _, makeCache, _, _, ran⟩ :=
     marked.opensHealthyFromAdmission raw.raw raw.seed raw.checkpoint raw.listing raw.extents raw.seals raw.keeper
       raw.sameLookup raw.flat raw.marked bootstrap assemble constructs raw.allocations
-  obtain ⟨handle, start, positionEq, table, sameLock, sameCache, contents, sameGet, sameSet, sameCompare,
-    token, reached, pins, sameFiles, sameCensus, cached⟩ :=
-    installed.startsAtCheckpointReopen rfl position rfl seeded.frames.1 cache owner slot phase ptrEq
+  obtain ⟨handle, start, table, _, sameLock, sameCache, _, _, contents, sameGet, sameSet, sameCompare,
+    positionEq, reached, pins, sameFiles, sameCensus, cached, _, _, _, phaseId, tokenId⟩ :=
+    installed.startsAtReportedPosition position rfl seeded.frames.1 cache owner slot phase ptrEq
+  have freshPhase : phaseIdentity handle.phase ≠ state.session.phaseRef :=
+    fun same => freshRefs.1 ((phaseId.symm.trans same).symm ▸ reader.previousTokens.1)
+  have freshToken : tokenIdentity handle.token ≠ state.session.sessionRef :=
+    fun same => freshRefs.2 ((tokenId.symm.trans same).symm ▸ reader.previousTokens.2)
   refine ⟨measured, position, makeCache, handle, start, ?_, positionEq, rfl, rfl, target,
     target ▸ seeded.refines.1.retained.resumed.ready, checkpoint, durable, sameLock,
     sameCache.symm ▸ installed.cacheReferences, sameCache.symm ▸ installed.cacheDirectory,
-    contents, sameGet, sameSet, sameCompare, token, pins, sameFiles, sameCensus, cached⟩
+    contents, sameGet, sameSet, sameCompare, phaseId, tokenId, freshPhase, freshToken, pins, sameFiles, sameCensus, cached⟩
   rw [table, reached]
   exact ran
 
