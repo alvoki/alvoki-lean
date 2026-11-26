@@ -462,7 +462,7 @@ Linux effects and distinguishes a returned error from whether its syscall took e
 
 One held marked interpreter now fixes primitive callbacks before admission and passes the actual
 new cache references to the worker. A successful worker result or a finalized worker error
-establishes an exact return of that same call. The selected write retry fold now records the exact failure returns of this fixed interpreter.
+establishes an exact return of that same call. The selected write retry fold is indexed by those exact failure returns. Read-only and repair observations contribute local facts at the same endpoints through one append rule.
 The healthy installation uses the identical callback bundle and the precise cache from its own
 admission. The worker result remains a local obligation of its read and repair evidence. The
 main execution must derive the individual reports from the primitive schedules to replace the

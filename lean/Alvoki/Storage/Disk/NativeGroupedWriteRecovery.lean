@@ -55,8 +55,8 @@ theorem NativeOpenedPosition.recoversGroupedWriteError
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (later : ∀ ordinal ∈ (view.files rebooted).image.later.visible, (state).writer.target.range.through < ordinal)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
-    {attempts : RawOpenRetryTrace view dir source.calls source.init source.release rebooted returns reached}
-    (retryEffects : RawOpenRetryTrace.SelectedEffects view dir source rebooted (state).writer.target
+    {attempts : source.FailedCalls rebooted returns reached}
+    (retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted (state).writer.target
       (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) (state).selectedRetryPath
       (RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible) attempts)
     (vacant : TryLockObserves (view.files reached).owners dir (.ok true))

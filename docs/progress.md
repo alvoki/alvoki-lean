@@ -1,5 +1,11 @@
 # Current handoff
 
+Marked recovery now uses the fixed interpreter's exact failed-call sequence as its only
+retry chronology. Read-only errors and failed repairs supply local preservation facts for
+one shared fold. It carries the selected image, protected files, inode identities and current
+keeper to the next open's actual entry heap. The grouped and late write paths both use this
+interface. [Selected retry effects](../lean/Alvoki/Storage/Disk/NativeMutatingOpenRetries.lean)
+
 A failed marker rename and a failed final directory fsync now supply the same recovery
 interface. The actual commit return identifies the error heap. The proof samples the selected
 manifest, marker and keeper from one joint reboot and derives the target and its accepted WAL

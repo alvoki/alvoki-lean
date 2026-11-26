@@ -49,14 +49,14 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
     {names : heap → FilePath → Option Nat} {visible : heap → Nat → ByteArray}
     (reboot : RawWriteRebootEntry state view storage names visible failed rebooted)
     (source : RawMarkedOpenInterpreter heap stream) {input : FilePath} {returns : List (FilePath × IO.Error)}
-    {attempts : RawOpenRetryTrace view dir source.calls source.init source.release rebooted returns reached}
+    {attempts : source.FailedCalls rebooted returns reached}
     (vacant : TryLockObserves (view.files reached).owners dir (.ok true))
     {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
     (observes : ∀ target : Target,
       BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       (∀ ordinal ∈ (view.files rebooted).image.later.visible, target.range.through < ordinal) ∧
-      RawOpenRetryTrace.SelectedEffects view dir source rebooted target
+      RawOpenRetryTrace.SelectedEffects view source rebooted target
         (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) (state).selectedRetryPath
         (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts ∧
       (ready).ObservesHealthyWriteRetry (input := input) (view := view) (batch := batch)

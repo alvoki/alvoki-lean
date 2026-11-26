@@ -330,8 +330,8 @@ theorem NativeReadPosition.opensAfterWriteRetries
     (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
     (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
     {first : heap} (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
-    {attempts : RawOpenRetryTrace view dir source.calls source.init source.release first returns reached}
-    (effects : RawOpenRetryTrace.SelectedEffects view dir source first target
+    {attempts : source.FailedCalls first returns reached}
+    (effects : RawOpenRetryTrace.SelectedEffects view source first target
       (fun heap => ⟨names heap, fun inode => [visible heap inode]⟩) current.state.selectedRetryPath
       (RawOpenRetryTrace.KeeperAt view dir target names visible) attempts)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target names visible first)
@@ -346,7 +346,7 @@ theorem NativeReadPosition.opensAfterWriteRetries
     current.SelectedWriteRecovery (returns := returns)
     (input := input) (view := view) (batch := batch) (target := target) (reached := reached)
       (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity) source names visible first vacant get set ptrEq := by
-  obtain ⟨⟨plan⟩, kept, frame, carries, failures⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest effects initial.valid
+  obtain ⟨⟨plan⟩, kept, frame, carries⟩ := current.preparesWriteRetry prepared fits admitted initial.manifest effects initial.valid
   obtain ⟨opening, raw, fileCalls, directoryCalls, keeperCallbacks, refs, root, lock, actualStat⟩ := observe plan
   let files (heap : heap) : CheckpointSurvivingFiles := ⟨names heap, fun inode => [visible heap inode]⟩
   obtain ⟨rootObject, lockObject⟩ := raw.entryAuthority files root lock
@@ -364,7 +364,7 @@ theorem NativeReadPosition.opensAfterWriteRetries
   have keptFiles := initial.protectedFiles.frame (fun path keep => frame path (.inr keep))
   have reachedManifest : (retryFiles).image.directory.active.manifest = current.state.writer.target.pair.manifest :=
     (congrArg (fun (target : Target) => target.pair.manifest) plan.targetEq).trans initial.manifest
-  refine ⟨failures, keptFiles, plan, opening, raw, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
+  refine ⟨attempts, keptFiles, plan, opening, raw, rootObject, lockObject, ?_, ?_, ⟨read, keeperName, contents⟩, ?_, ?_, ?_⟩
   · intro bytes selectedMarker
     have sameMarker : (retryFiles).image.directory.active.walBoundary = target.pair.walBoundary :=
       congrArg (fun (t : Target) => t.pair.walBoundary) plan.targetEq
