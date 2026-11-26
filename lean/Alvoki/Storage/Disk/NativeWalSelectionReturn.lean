@@ -464,19 +464,18 @@ Older names before the covering start are unconstrained. Existing names
 inside that window must agree exactly, since an extra start can change
 the file chosen to cover the checkpoint. Keep the actual later set. -/
 theorem WalSegmentRepair.selectWalExtentsThrough_matchesWindow
-    {extents : List (Nat × IO.FS.Metadata)} {first watermark through : Nat}
-    {expected : List Nat}
+    {extents required : List (Nat × IO.FS.Metadata)} {first watermark through : Nat}
+    {expected later : List Nat}
     (ordered : (extents.map Prod.fst).Pairwise (· ≤ ·))
-    (unique : ((extents.map Prod.fst).filter
-      (fun start => decide (start ≤ through) && decide (first ≤ start))).Nodup)
+    (selected : selectWalExtentsThrough extents watermark through = some (required, later))
+    (strict : (required.map Prod.fst).Pairwise (· < ·))
     (canonical : (first :: expected).Pairwise (· < ·))
     (covers : first ≤ watermark) (bounded : watermark ≤ through)
     (within : ∀ start ∈ expected, watermark < start ∧ start ≤ through)
     (catalog : ∀ start, first ≤ start → start ≤ through →
       (start ∈ extents.map Prod.fst ↔ start ∈ first :: expected)) :
-    ∃ required, selectWalExtentsThrough extents watermark through =
-        some (required, (extents.map Prod.fst).filter (fun start => decide (through < start))) ∧
-      required.map Prod.fst = first :: expected := by
+    required.map Prod.fst = first :: expected ∧
+      later = (extents.map Prod.fst).filter (fun start => decide (through < start)) := by
   let offsets := extents.map Prod.fst
   have present : first ∈ offsets := (catalog first (Nat.le_refl _) (Nat.le_trans covers bounded)).mpr List.mem_cons_self
   have greatest : (offsets.filter fun start => decide (start ≤ watermark)).max? = some first := by
@@ -493,11 +492,6 @@ theorem WalSegmentRepair.selectWalExtentsThrough_matchesWindow
       rcases List.mem_cons.mp wanted with rfl | expectedStart
       · exact Nat.lt_irrefl _ beyond
       · exact Nat.not_lt_of_ge atMarker (within _ expectedStart).1
-  let matching := extents.filter (fun extent => decide (first ≤ extent.1))
-  let required := matching.takeWhile (fun extent => decide (extent.1 ≤ through))
-  let later := (matching.dropWhile (fun extent => decide (extent.1 ≤ through))).map Prod.fst
-  have selected : selectWalExtentsThrough extents watermark through = some (required, later) := by
-    simp [selectWalExtentsThrough, offsets, greatest, required, later, matching, Bind.bind, Option.bind, Pure.pure]
   have exactOffsets := selectWalExtentsThrough_offsets extents watermark through
   rw [selected, Option.map_some] at exactOffsets
   have dropped := selectWalSegmentReadsThrough_later exactOffsets.symm bounded ordered
@@ -505,11 +499,10 @@ theorem WalSegmentRepair.selectWalExtentsThrough_matchesWindow
   change some (required.map Prod.fst, later) = selectWalSegmentReadsThrough offsets watermark through at logical
   simp only [selectWalSegmentReadsThrough, selectWalSegmentReads, greatest, Bind.bind, Option.bind, Pure.pure] at logical
   have needed := (Prod.mk.inj (Option.some.inj logical)).1
-  refine ⟨required, selected.trans (congrArg (fun suffix => some (required, suffix)) dropped), ?_⟩
-  rw [needed, takesBoundedOffsets through _ (List.Pairwise.filter _ ordered), List.filter_filter]
   let keeps := fun start => decide (start ≤ through) && decide (first ≤ start)
-  change offsets.filter keeps = _
-  have sorted := (List.Pairwise.filter keeps ordered).imp₂ (fun _ _ before distinct => Nat.lt_of_le_of_ne before distinct) unique
+  have window : required.map Prod.fst = offsets.filter keeps := by
+    rw [needed, takesBoundedOffsets through _ (List.Pairwise.filter _ ordered), List.filter_filter]
+  have sorted := window ▸ strict
   have perm : (offsets.filter keeps).Perm (first :: expected) := by
     apply (List.perm_ext_iff_of_nodup (sorted.imp Nat.ne_of_lt) (canonical.imp Nat.ne_of_lt)).mpr
     intro start
@@ -523,6 +516,7 @@ theorem WalSegmentRepair.selectWalExtentsThrough_matchesWindow
         · exact ⟨Nat.le_refl _, Nat.le_trans covers bounded⟩
         · exact ⟨Nat.le_trans covers (Nat.le_of_lt (within _ among).1), (within _ among).2⟩
       exact ⟨(catalog start range.1 range.2).mpr member, range.2, range.1⟩
-  exact List.Perm.eq_of_pairwise (fun _ _ _ _ ab ba => False.elim ((Nat.lt_asymm ab) ba)) sorted canonical perm
+  exact ⟨window.trans (List.Perm.eq_of_pairwise (fun _ _ _ _ ab ba => False.elim (Nat.lt_asymm ab ba))
+    sorted canonical perm), dropped⟩
 
 end Alvoki.Storage

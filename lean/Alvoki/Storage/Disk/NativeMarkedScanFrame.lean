@@ -442,8 +442,6 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     (catalog : ∀ start, layout.first ≤ start → start ≤ layout.range.through →
       ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔
         start ∈ (layout.sealed ++ [layout.keeper]).map WalSegment.first))
-    (unique : (((namespaceView.names root).filterMap parseWalSegmentName).filter
-      (fun start => decide (start ≤ layout.range.through) && decide (layout.first ≤ start))).Nodup)
     (sealed : ∀ segment ∈ layout.sealed,
       (names initial (directory.file (.walSegment segment.first))).map (visible initial) = some segment.bytes)
     (keeperContent : (names initial (directory.file (.walSegment layout.keeper.first))).map (visible initial) =
@@ -479,11 +477,10 @@ theorem MarkedTemporaryReadCalls.readsCanonicalWal
     have mapped : start ∈ segments.map WalSegment.first := by rw [first]; exact List.mem_cons_of_mem _ member
     obtain ⟨segment, part, rfl⟩ := List.mem_map.mp mapped
     exact ⟨afterCover, layout.through ▸ layout.chain.startsWithin segment part⟩
-  obtain ⟨canonicalReads, later, canonicalSelection, need, laterNames⟩ :=
+  obtain ⟨need, laterNames⟩ :=
     MarkedWalExtentReports.selectsWindow fileCalls directory namespaceView root _ (listedNames listedCall) scan
-      (absent listedCall) canonical layout.covers (through ▸ aligned.2) bounds
-      (fun start lower upper => by simpa only [first] using catalog start lower upper) unique
-  obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj (selected.symm.trans canonicalSelection))
+      (absent listedCall) selected (orderedReads.successfulOrder rfl) canonical layout.covers
+      (through ▸ aligned.2) bounds (fun start lower upper => by simpa only [first] using catalog start lower upper)
   have offsets : required.map Prod.fst = segments.map WalSegment.first := need.trans first.symm
   have protectedExtent : ∀ extent ∈ required, scope (directory.file (.walSegment extent.1)) := by
     intro extent member

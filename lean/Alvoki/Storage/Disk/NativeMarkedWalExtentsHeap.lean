@@ -423,27 +423,22 @@ theorem DiskSession.MarkedWalExtentReports.selectsWindow
     (scan : readWalSegmentExtentsWith directory (MarkedWalExtentReports.inspect fileCalls) names listed =
       .ok extents scanned)
     (absent : MarkedWalExtentReports.TruthfulAbsence fileCalls directory namespaceView root names listed)
-    {first watermark through : Nat} {expected : List Nat}
+    {first watermark through : Nat} {expected later : List Nat} {required : List (Nat × IO.FS.Metadata)}
+    (selected : selectWalExtentsThrough extents watermark through = some (required, later))
+    (strict : (required.map Prod.fst).Pairwise (· < ·))
     (canonical : (first :: expected).Pairwise (· < ·))
     (covers : first ≤ watermark) (bounded : watermark ≤ through)
     (within : ∀ start ∈ expected, watermark < start ∧ start ≤ through)
     (catalog : ∀ start, first ≤ start → start ≤ through →
-      ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔ start ∈ first :: expected))
-    (unique : (((namespaceView.names root).filterMap parseWalSegmentName).filter
-      (fun start => decide (start ≤ through) && decide (first ≤ start))).Nodup) :
-    ∃ required later, selectWalExtentsThrough extents watermark through = some (required, later) ∧
-      required.map Prod.fst = first :: expected ∧
+      ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔ start ∈ first :: expected)) :
+    required.map Prod.fst = first :: expected ∧
       ∀ start, start ∈ later ↔ through < start ∧
         ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
   obtain ⟨inventory, exactNames⟩ := exactInventory fileCalls directory namespaceView root names listedNames scan absent
-  let keeps := fun start => decide (start ≤ through) && decide (first ≤ start)
   have ordered := inventory.symm ▸ walOffsetsOrdered ((namespaceView.names root).filterMap parseWalSegmentName)
-  have windowUnique : ((extents.map Prod.fst).filter keeps).Nodup := by
-    rw [inventory]
-    exact ((List.mergeSort_perm _ _).filter keeps).nodup_iff.mpr unique
-  obtain ⟨required, selected, offsets⟩ := selectWalExtentsThrough_matchesWindow ordered windowUnique
+  obtain ⟨offsets, rfl⟩ := selectWalExtentsThrough_matchesWindow ordered selected strict
     canonical covers bounded within (fun start lower upper => (exactNames start).trans (catalog start lower upper))
-  refine ⟨required, _, selected, offsets, ?_⟩
+  refine ⟨offsets, ?_⟩
   intro start
   rw [List.mem_filter, exactNames start]
   simp only [decide_eq_true_eq, and_comm]

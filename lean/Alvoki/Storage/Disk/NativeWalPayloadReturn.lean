@@ -121,6 +121,30 @@ theorem CachedWalPayloadReturn.classifies (directory : DiskDirectory) (through :
             (readKeeper := readKeeper) (metadata := metadata) (nextMetadata := nextMetadata) (rest := rest)
             (entry := entry) forward)
 
+/-- An accepted payload traversal checks strict order between each
+adjacent pair of required offsets. -/
+theorem CachedWalPayloadReturn.successfulOrder
+    {directory : DiskDirectory} {through : Nat}
+    {readSeal : FilePath → Nat → EStateM IO.Error heap ByteArray}
+    {readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray}
+    {required : List (Nat × IO.FS.Metadata)} {entry : heap}
+    {result : EStateM.Result IO.Error heap (List (Nat × ByteArray) × Nat)}
+    (observed : CachedWalPayloadReturn directory through readSeal readKeeper required entry result)
+    {payload : List (Nat × ByteArray) × Nat} {reached : heap}
+    (returned : result = .ok payload reached) : (required.map Prod.fst).Pairwise (· < ·) := by
+  induction observed generalizing payload reached with
+  | noKeeper _ | keeperError _ | invalidKeeper _ _ | invalidOrder _ | sealError _ _ | sealedThenError _ _ _ =>
+    cases returned
+  | kept => simp
+  | @sealed first next metadata nextMetadata rest _ _ _ _ _ _ forward _ _ ih =>
+    have ordered := ih rfl
+    rw [List.map_cons, List.pairwise_cons] at ordered ⊢
+    refine ⟨?_, List.pairwise_cons.mpr ordered⟩
+    intro offset member
+    rcases List.mem_cons.mp member with rfl | follows
+    · exact forward
+    · exact Nat.lt_trans forward (ordered.1 offset follows)
+
 /-- Recover the existing seal schedule from a successful payload return.
 The keeper read starts at the last seal's reached heap. The payloads in
 the result can be certified using any predicate on those exact seals. -/

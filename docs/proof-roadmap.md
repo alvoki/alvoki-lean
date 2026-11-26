@@ -198,6 +198,7 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   from the marker prefix. A held inventory that agrees with the
   recovery window now supplies the ordered canonical payloads, with
   exact later-name membership independent of the expected replay.
+  The successful payload loop supplies strict order in the window.
   The checked selection and marker give the recovered table and
   checkpoint pin floor by a pure replay theorem. The literal open
   exposes the same read, repair and table allocations from one

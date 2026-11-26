@@ -3,8 +3,9 @@
 The table returned by the marked WAL replay now supplies the ordinary
 retained writer, including its checkpoint pin floor. This uses the same
 writer construction as the existing reported append reopen. For the
-aligned keeper, the actual directory fsync settles the protected names.
-The subsequent pending-cache update frames them, and the fsync of the
+aligned keeper, the actual directory fsync settles the protected child
+names. The directory binding in its parent is already settled. The
+subsequent pending-cache update frames those names, and the fsync of the
 attached keeper settles its visible bytes. The reported aligned route
 and the actual callback sequence now share that storage argument. The
 remaining step is to derive the reached footprint and both attached
@@ -15,8 +16,9 @@ and token allocations of the returned table.
 
 The reached WAL inventory and payload loop now give the canonical
 replay bytes when the held namespace matches the chosen recovery
-window. Only offsets inside that window need match. The later set
-remains the actual names beyond the marker. A shared byte replay
+window. Only offsets inside that window need match. The successful
+payload loop already checks strict order there. The later set remains
+the actual names beyond the marker. A shared byte replay
 lemma provides the table, history and checkpoint pin floor without
 constructing a reader report. One successful marked-open inversion
 retains its read, replay, repair and allocation receipts and supports
