@@ -1971,7 +1971,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.selectWalExtentsThrough_matchesWindow
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.exactInventory
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.selectsWindow
-#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.absenceOnFromNames
+#check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadCalls.liveWalChildren
+#check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.absenceOnFromNamePresence
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.matchesSelectedWalPayloads
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.readsCanonicalWal
 #check_axioms Alvoki.Storage.CheckpointPublication.Image.replaysVersionedRuns

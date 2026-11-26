@@ -87,6 +87,51 @@ theorem MarkedDirectoryReadCalls.listedRootNames {heap stream : Type}
   rw [sameRoot descriptor opened openCall] at truthful
   exact (CheckedDirectoryReadReport.scan_complete path rfl rfl truthful).2
 
+/-- Native callback law for the actual stream at clean EOF and close.
+For the relevant canonical WAL names, the reached live directory
+contains a name exactly when the stream reported it. -/
+def MarkedDirectoryReadCalls.ObservesWalNames {heap stream : Type}
+    (calls : MarkedDirectoryReadCalls heap stream) (directory : DiskDirectory)
+    (streamObject : heap → stream → DeviceInode) (root : DeviceInode)
+    (names : heap → FilePath → Option Nat) (relevant : Nat → Prop) : Prop :=
+  ∀ {before opened scanned closed : heap} {descriptor : stream} {reported : List String},
+    calls.openDir directory.path before = .ok descriptor opened →
+    streamObject opened descriptor = root →
+    calls.readDir descriptor opened = ((reported, .ok ()), scanned) →
+    calls.closeDir descriptor scanned = .ok () closed →
+    ∀ start, relevant start →
+      ((names closed (directory.file (.walSegment start))).isSome = true ↔
+        renderWalSegmentName start ∈ (⟨reported, .ok (), .ok ()⟩ : OpenedDirectoryScan).visibleNames)
+
+/-- Compare live canonical names with the held child view through the
+same checked stream, including absence on either side. -/
+theorem MarkedDirectoryReadCalls.liveWalChildren {heap stream : Type}
+    (calls : MarkedDirectoryReadCalls heap stream) (directory : DiskDirectory)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (streamObject : heap → stream → DeviceInode)
+    {names : heap → FilePath → Option Nat} {relevant : Nat → Prop}
+    (physical : calls.ObservesWalNames directory streamObject root names relevant)
+    {before reached : heap} {entries : Array IO.FS.DirEntry}
+    (returned : calls.run directory.path before = .ok entries reached)
+    (sameRoot : ∀ descriptor opened, calls.openDir directory.path before = .ok descriptor opened →
+      streamObject opened descriptor = root)
+    (complete : ∀ descriptor opened scanned reported,
+      calls.openDir directory.path before = .ok descriptor opened →
+      calls.readDir descriptor opened = ((reported, .ok ()), scanned) →
+      calls.closeDir descriptor scanned = .ok () reached →
+      (⟨reported, .ok (), .ok ()⟩ : OpenedDirectoryScan).visibleNames.Perm
+        (namespaceView.names (streamObject opened descriptor))) :
+    ∀ start, relevant start →
+      ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔
+        (names reached (directory.file (.walSegment start))).isSome = true) := by
+  obtain ⟨descriptor, opened, scanned, reported, openCall, readCall, closeCall, _⟩ :=
+    calls.returnedScan directory.path returned
+  have held := sameRoot descriptor opened openCall
+  have observed := complete descriptor opened scanned reported openCall readCall closeCall
+  rw [held] at observed
+  intro start inside
+  exact ((physical openCall held readCall closeCall start inside).trans
+    (observed.mem_iff.trans (namespaceView.namesExact _ _))).symm
+
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
   {published : CheckpointPublication.Image} {admission : CensusOpenAdmissionReports input directory inventory retry}

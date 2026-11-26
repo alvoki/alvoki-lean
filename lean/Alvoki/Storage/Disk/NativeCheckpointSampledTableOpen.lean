@@ -258,9 +258,10 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (child : ∀ start ≤ current.current.ready.state.writer.history.length,
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
         (observe entry).files.names ((dbDir).file (.walSegment start)))
-    (laterAbsent : ∀ {before entries listed}, source.directoryCalls.run (dbDir).path before = .ok entries listed →
-      MarkedWalExtentReports.TruthfulAbsenceOn (current.current.ready.state.writer.history.length < ·)
-        source.fileCalls dbDir namespaceView root (entries.toList.map (·.fileName)) listed)
+    (physicalScan : ∀ (cache : HeldOpenCache heap) (held : LiteralOpenAuthority view dbDir cache cache.ready)
+      (bound : namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description),
+      source.directoryCalls.ObservesWalNames dbDir (effects cache held bound).streamObject root
+        (fun atHeap => (observe atHeap).files.names) (current.current.ready.state.writer.history.length < ·))
     {table : DiskTable} {returnedAt : heap}
     (returned : source.openTable input entry = .ok table returnedAt) :
     let dir := dbDir
@@ -305,9 +306,6 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
               (∀ surviving ∈ (observe rebooted).crashNames, surviving dir.path = names dir.path) →
               (observe rebooted).files.Frames footprint (observe entry).files →
               (observe rebooted).Frames (· = dir.path) (observe entry) →
-              (∀ start, layout.range.through < start →
-                (∃ inode, (observe entry).files.names (dir.file (.walSegment start)) = some inode) →
-                ∃ object, namespaceView.child root (renderWalSegmentName start) = some object) →
               ∀ (origin : NativeExecutionPosition) (earlier : List NativeExecutionEvent),
                 origin.LedgerSuffix earlier current.current → OpenPhaseCellEffects view.phase get set →
                 ∀ _ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool,
@@ -327,7 +325,17 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
   have heldRoot := (sampled _ (.inl rfl)).1.symm.trans rootNamed
   have heldLock := (sampled _ (.inr (.inl rfl))).1.symm.trans lockNamed
   have rootMatches := (congrArg some rootObject).trans (liveRoot.symm.trans rootNamed)
-  have readEffects := effects cache authority (Option.some.inj rootMatches)
+  have bound := Option.some.inj rootMatches
+  let readEffects := effects cache authority bound
+  have laterAtScan {before listed : heap} {entries : Array IO.FS.DirEntry}
+      (returned : source.directoryCalls.run dir.path before = .ok entries listed) :
+      ∀ start, layout.range.through < start →
+        ((∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔
+          ((observe listed).files.names (dir.file (.walSegment start))).isSome = true) := by
+    intro start beyond
+    exact source.directoryCalls.liveWalChildren dir namespaceView root readEffects.streamObject
+      (physicalScan cache authority bound) returned (fun _ _ opened => readEffects.streamRoot opened)
+      (fun _ _ _ _ opened scanned closed => readEffects.complete opened scanned closed) start (layout.through ▸ beyond)
   have sampledFiles : (⟨names, fun inode => [contents inode]⟩ : CheckpointSurvivingFiles).Frames
       selectedPath (filesAt entry) := fun path selected => sampled path (.inr (.inr selected))
   let files : CheckpointSurvivingFiles := ⟨(observe entry).files.names, fun inode => [readBytes entry inode]⟩
@@ -384,17 +392,27 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
       · exact segmentBytes segment (List.mem_filter.mp read).1
       · exact segmentBytes segment (List.mem_append_right _ read)
     · simpa [aligned, keeper] using segmentBytes writer.wal.active (by simp [WalSegmentImage.segments])
-  have literal := source.readsLiteralMarkedOpen dir layout selected cache.lock cache.directoryRef cache.activeRef cache.pendingRef
+  obtain ⟨literal, ⟨_, listed, _, scan, entryToScan⟩⟩ := source.readsLiteralMarkedOpen dir layout selected cache.lock cache.directoryRef cache.activeRef cache.pendingRef
     cache.ready (fun atHeap => (observe atHeap).files.names) readBytes namespaceView root (managedPath dir)
     observedOpenReadFrame.refl observedOpenReadFrame.trans (admitted.entersReader authority) readEffects
     manifest selectedRuns markerBytes (.inr ⟨.manifest, rfl⟩)
     (fun _ metadata _ _ index _ => .inr ⟨.run metadata.header.generation index, rfl⟩)
     (.inr ⟨.walBoundary, rfl⟩) modeled.2 (fun start _ _ => .inr ⟨.walSegment start, rfl⟩)
     (fun start _ bound => child start (layout.through ▸ bound))
-    (fun listed _ => by
-      intro earlier rest name start order parsed beyond
-      exact laterAbsent listed order parsed (layout.through ▸ beyond))
+    (fun scanned _ =>
+      source.fileCalls.absenceOnFromNamePresence dir live readBytes namespaceView root (managedPath dir)
+        (fun _ _ => ⟨rfl, fun _ _ => rfl⟩) (fun path before => (readEffects.statFrame path before).1)
+        readEffects.statMissing (fun start _ => .inr ⟨.walSegment start, rfl⟩) (laterAtScan scanned))
     physical worker
+  have laterComplete (start : Nat) (beyond : layout.range.through < start)
+      (present : ∃ inode, (observe entry).files.names (dir.file (.walSegment start)) = some inode) :
+      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
+    apply (laterAtScan scan start beyond).mpr
+    change (live listed (dir.file (.walSegment start))).isSome = true
+    have kept : live listed (dir.file (.walSegment start)) = live entry (dir.file (.walSegment start)) :=
+      (entryToScan _ (.inr ⟨.walSegment start, rfl⟩)).1
+    rw [kept]
+    exact Option.isSome_iff_exists.mpr present
   refine ⟨cache, published, layout, checkpoint, authority, heldRoot, heldLock, emptyActive, emptyPending,
     keeper, aligned, selected, (fun start lower upper => window start lower (layout.through ▸ upper)), physical, literal, ?_⟩
   intro repair allocate phaseId tokenId selectedPair selectedKeeper sealed suffix
@@ -407,7 +425,7 @@ theorem NativeCheckpointSourcePrefix.readsLiteralSampledCheckpoint
     (fun ordinal member => (suffix ordinal member).imp_left (fun after => layout.through.symm ▸ after))
     repair allocate phaseId tokenId
   refine ⟨repaired, reopened, allocation, installed, ?_⟩
-  intro observed included restored rootReset retryDurable retryParent laterComplete origin earlier carried phaseEffects ptrEq
+  intro observed included restored rootReset retryDurable retryParent origin earlier carried phaseEffects ptrEq
   have readDurable := seen.storageFrame.weaken included
   have durableAtPrepare := restored.trans (retryDurable.trans readDurable.visible)
   have rootFrame : (observe rebooted).Frames (· = dir.path) (observe seen.prepared) :=

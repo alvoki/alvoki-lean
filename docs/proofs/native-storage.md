@@ -205,11 +205,14 @@ sampled reboot and the effects of the intervening failed opens, it establishes
 the next write entry. A finite sequence of supported writes and snapshot calls
 then extends the actual predecessor's ledger. [Checkpoint consumer][checkpoint] · [Finite induction][fold]
 
-**Where it is still conditional.** A complete scan of the held directory must
-cover every physically present WAL name beyond the marker. The pruning proof
-uses this filesystem law and the effects of the reached unlinks, including
-accepted `ENOENT`. Every reachable failure must still supply its local effects
-through cleanup to the public return, and each interruption must supply its
+**Where it is still conditional.** The native directory reader opens the path
+and returns entries only after clean EOF and successful close. Under the
+stable, engine-owned directory contract, its stream must denote the held root
+and its list must agree with physical WAL names beyond the marker. A physically
+present file omitted from the list would never reach the stat or prune loop.
+[Native reader](../../lean/native/read_dir_checked.c)
+
+Every reachable failure must still supply its local effects through cleanup to the public return, and each interruption must supply its
 reached state. If segments 4 and 8 both start beyond the marker, a retry can
 delete 4 and then fail at 8. The next open must see the surviving suffix while the
 selected checkpoint and bounded WAL range remain intact. The global
@@ -368,10 +371,11 @@ immutable files to their durable contents, and later WAL names to the physical s
 On a successful extent scan, the segment covering the checkpoint is the lower
 bound for selection. For a write retry, the held directory bindings, the frame
 through preceding stats and the primitive ENOENT observation establish absence
-at every relevant WAL start. The sampled checkpoint path has binding agreement
-through the marker and still requires truthful absence for later names to prune.
-The selected marker bounds replay. Above it, the successful directory scan must enumerate
-every later canonical WAL name, including any restored by power loss before pruning was durable.
+at every relevant WAL start. At checkpoint reopen the sampled bindings cover
+replay through the marker. Above the marker only name presence matters.
+The same successful directory scan supplies that fact to both the reader and
+the installer, including for files restored by power loss before pruning was durable.
+[Checked directory observation](../../lean/Alvoki/Storage/Disk/NativeMarkedWalExtentsHeap.lean)
 After all unlinks return, the directory barrier can report an error before or after
 taking effect. Before the effect, a surviving map keeps the protected bindings of a
 predecessor. After the effect, it reflects the live directory at fsync. In either case,

@@ -40,13 +40,14 @@ For checkpoint and write recovery, the held directory handle identifies the
 cached root inode at installation. Allocating the phase and token needs to
 preserve visible bytes only for the inode named by the selected keeper.
 
-The write-retry reader derives WAL stat absence from the held bindings and
-the actual scan prefix. The checkpoint reader still needs an absence observation
-for names beyond the marker, which determine the cleanup list.
+At checkpoint reopen, one filesystem assumption connects the closed directory
+scan to the physical WAL names above the marker. The reader uses it to interpret
+a missing-file stat. The installer uses it to show that pruning covered every
+later name. Write retries share the stat proof using their held inode bindings.
 
 **Next obligation.** Supply the remaining read, cache and installation effects
 from the fixed production callbacks. The original write’s admitted old-or-whole
 target and incoming ledger must come from the same execution prefix. Further
 interrupted calls, mixed sessions and maintenance remain in the roadmap.
 
-**Verification baseline.** See commit `db6ba183` and the [verification commands](../README.md#reproduce-on-linux-x86-64).
+**Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).

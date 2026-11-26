@@ -178,9 +178,14 @@ theorem RawMarkedOpenInterpreter.readsLiteralMarkedOpen
     (returned : source.worker cached active pending directory lock
       (RawMarkedOpenInterpreter.makeCache directory cached active pending) cacheReady = .ok table returnedAt) :
     source.LiteralMarkedReturn directory layout checkpoint lock cached active pending cacheReady view
-      names visible namespaceView root scope keeps reached returnedAt table := by
-  unfold RawMarkedOpenInterpreter.LiteralMarkedReturn
-  intro keeperCalls segment path cache files
+      names visible namespaceView root scope keeps reached returnedAt table ∧
+    ∃ (before listed : heap) (entries : Array IO.FS.DirEntry),
+      source.directoryCalls.run directory.path before = .ok entries listed ∧
+      (CheckpointSurvivingFiles.mk (names reached) fun inode => [visible reached inode]).Frames scope
+        ⟨names listed, fun inode => [visible listed inode]⟩ := by
+  let keeperCalls := source.keeperCallbacks.withFileReads source.fileCalls
+  let segment := layout.keeper
+  let files := (layout.sealed ++ [segment]).map fun item => (item.first, item.bytes)
   obtain ⟨watermark, _, markerBytes, count, markerName, decoded, absolute⟩ :=
     DirectoryPublication.Bindings.walRange_accounting layout.decoded
   have through : count.toNat / WAL.frameSize = layout.range.through := by
@@ -221,7 +226,7 @@ theorem RawMarkedOpenInterpreter.readsLiteralMarkedOpen
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
         names afterMarker ((directory).file (.walSegment start)) :=
     (child start lower upper).trans ((framed _ (scopedWindow start lower upper)).1).symm
-  obtain ⟨payloadEq, extentEq, newer, file, slot, inode, _, _, readHeap, named, _, attached, route, preserved, privateAtReturn⟩ :=
+  obtain ⟨payloadEq, extentEq, newer, ⟨entries, listed, listedCall, listedFrame⟩, file, slot, inode, _, _, readHeap, named, _, attached, route, preserved, privateAtReturn⟩ :=
     source.fileCalls.readsCanonicalWal source.directoryCalls directory view names visible layout namespaceView root scope
       effects.opens effects.reads readsVisible listingVisible
       (fun path file => keeperCalls.modifyPending pending (pushPending path file))
@@ -233,10 +238,12 @@ theorem RawMarkedOpenInterpreter.readsLiteralMarkedOpen
         have bounded : MarkedWalExtentReports.TruthfulAbsenceOn
             (fun start => layout.first ≤ start ∧ start ≤ layout.range.through) source.fileCalls directory
             namespaceView root (entries.toList.map (·.fileName)) listedHeap :=
-          source.fileCalls.absenceOnFromNames directory names visible namespaceView root scope
-            (relevant := fun start => layout.first ≤ start ∧ start ≤ layout.range.through) fromEntry (fun path before => (effects.statFrame path before).1) effects.statMissing
+          source.fileCalls.absenceOnFromNamePresence directory names visible namespaceView root scope
+            (relevant := fun start => layout.first ≤ start ∧ start ≤ layout.range.through) fromEntry
+            (fun path before => (effects.statFrame path before).1) effects.statMissing
             (fun start inside => scopedWindow start inside.1 inside.2)
-            (fun start inside => child start inside.1 inside.2)
+            (fun start inside => by
+              rw [← child start inside.1 inside.2, Option.isSome_map, Option.isSome_iff_exists])
         intro earlier rest name start order parsed lower
         by_cases within : start ≤ layout.range.through
         · exact bounded order parsed ⟨lower, within⟩
@@ -260,6 +267,7 @@ theorem RawMarkedOpenInterpreter.readsLiteralMarkedOpen
     rw [payloadEq, List.map_append]
     simp [segment]
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj (lastKeeper.symm.trans last))
+  refine ⟨?_, afterMarker, listed, entries, listedCall, listedFrame⟩
   refine ⟨count, markerBytes, patched, logical, file, slot, inode, readHeap, prepared, repaired, extent, payloads.newer,
     phase, afterPhase, token, markerName, decoded, through, ?_, named, attached, route, extentEq, newer, preserved,
     privateAtReturn (fun looked object => effects.statLinks looked object ⟨segment.first, rfl⟩), throughReader,
@@ -1419,9 +1427,9 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
   have childLater (start : Nat) (later : plan.layout.range.through < start) :=
     shared.child start (Nat.le_trans plan.layout.covers
       (Nat.le_trans (DirectoryPublication.Bindings.walRange_accounting plan.layout.decoded).2.1 (Nat.le_of_lt later)))
-  obtain ⟨count, markerBytes, patched, logical, keeper, slot, inode, readHeap, prepared, repaired, extent, newer,
+  obtain ⟨⟨count, markerBytes, patched, logical, keeper, slot, inode, readHeap, prepared, repaired, extent, newer,
     phase, afterPhase, token, markerName, decoded, _, replay, named, attached, route, extentEq, laterNames, liveFrame,
-    privateKeeper, readFrame, cacheFrame, rawFinish, phaseReturn, tokenReturn, tableEq, _⟩ :=
+    privateKeeper, readFrame, cacheFrame, rawFinish, phaseReturn, tokenReturn, tableEq, _⟩, _⟩ :=
     source.readsLiteralMarkedOpen dir plan.layout plan.selected
       cache.lock cache.directoryRef cache.activeRef cache.pendingRef cache.ready
       (fun atHeap => (observe atHeap).files.names) visible namespaceView root
@@ -1435,9 +1443,11 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       (.inr ⟨.walBoundary, rfl⟩) plan.modeledWindow.2 (fun first _ _ => .inr ⟨.walSegment first, rfl⟩)
       (fun start lower _ => shared.child start lower)
       (fun _ fromEntry =>
-        source.fileCalls.absenceOnFromNames dir (fun atHeap => (observe atHeap).files.names) visible namespaceView root
+        source.fileCalls.absenceOnFromNamePresence dir (fun atHeap => (observe atHeap).files.names) visible namespaceView root
           (managedPath dir) fromEntry (fun path before => (shared.readEffects.statFrame path before).1)
-          shared.readEffects.statMissing (fun start _ => .inr ⟨.walSegment start, rfl⟩) childLater)
+          shared.readEffects.statMissing (fun start _ => .inr ⟨.walSegment start, rfl⟩)
+          (fun start later => by
+            rw [← childLater start later, Option.isSome_map, Option.isSome_iff_exists]))
       physical workerReturn
   have cutoff : plan.layout.range.through = target.range.through :=
     congrArg (fun t : Target => t.range.through) plan.targetEq
