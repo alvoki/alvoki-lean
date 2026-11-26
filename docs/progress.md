@@ -49,9 +49,10 @@ later name. Write retries share the stat proof using their held inode bindings.
 from the fixed production callbacks. A late `commitUnknown` now supplies the exact append,
 staging and file-sync prefix. Given the effects at the reached rename and
 directory callbacks, the failed heap supplies the old-or-whole batch choices
-that both retry continuations require. Wire this producer into their shared
-selector with the protected-file frame and incoming ledger from the same
-write prefix. Earlier write interruptions,
+that both retry continuations require. Their shared selector derives preservation of the root,
+lock, manifest, selected runs and sealed WALs from local effects along the
+actual write. The same rule carries WAL name presence for acknowledged writes.
+Join the late payload producer and the incoming client ledger at that selector. Earlier write interruptions,
 mixed sessions and maintenance remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).

@@ -262,7 +262,8 @@ variable
       (syncer.group current.current.ready.state.session.directory.path cache.directory cache.active cache.pending)
       rename opened.phase opened.get opened.set current.reached = .error (.commitUnknown cause) failed)
     (initial : NativeReadyStorage current.current.ready.state (storage current.reached))
-    (protectedFiles : (storage current.reached).Frames current.current.ready.state.writeFramePath (storage failed))
+    (fileFrames : current.WriteCallbackFrames appender stager syncer cache request lookup rename
+      (fun before after => (storage before).Frames current.current.ready.state.writeFramePath (storage after)))
     {liveNew : Bool} {allows : Bool → Prop}
     (publication : WalPublicationPayloads.ReachedWrite current.current.ready.state batch request.rows
       (storage failed) liveNew allows)
@@ -277,7 +278,7 @@ variable
       (current.current.history.length + request.rows.length))
     (initialWindow : current.WalWindowAt storage firstOffset (current.current.history.length + request.rows.length))
 
-include nonempty prepared returned initial protectedFiles publication reset nameEffects initialWindow
+include nonempty prepared returned initial fileFrames publication reset nameEffects initialWindow
 
 /-- The public return fixes the prepared write's bound. Its separately
 observed publication payloads select one reboot before any open. -/
@@ -292,8 +293,10 @@ theorem NativeOpenedPosition.selectsDurableAfterPublicationError :
       RawOpenRetryTrace.SelectedEntry view state target storageNames visible rebooted ∧
       RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset
         target.range.through rebooted := by
-  obtain ⟨_, _, _, _, _, fits, _, _, _, _⟩ :=
+  obtain ⟨_, _, _, _, actualBatch, fits, guarded, poisoned, _, outcome⟩ :=
     current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
+  have protectedFiles := fileFrames.throughPublication CheckpointStorageObservation.Frames.trans
+    actualBatch guarded poisoned outcome
   obtain ⟨rebootVacant, slots, target, admitted, active, selected⟩ :=
     current.selectsReachedWrite view storage prepared fits initial protectedFiles publication reboot
   have nameFrame := current.preservesWalNamesAfterCommitUnknown appender stager syncer cache request lookup rename
@@ -386,7 +389,7 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
           (∀ observed ∈ last.current.ready.reads, observed.agrees reference) := by
   obtain ⟨schedules, fits, rebootVacant, slots, target, admitted, active, selected, recovery⟩ :=
     current.selectsDurableAfterPublicationError view cache appender stager syncer storage request lookup rename
-      nonempty prepared returned initial protectedFiles publication visible reboot reset nameEffects initialWindow
+      nonempty prepared returned initial fileFrames publication visible reboot reset nameEffects initialWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext,
     _, nextWindow⟩ :=
     (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
@@ -437,7 +440,7 @@ theorem NativeOpenedPosition.stopsAfterPublicationErrorRetries
         PendingClientReplay submissions reads plan.history ∧ ∀ read ∈ reads, read.BoundedBy plan.history.length := by
   obtain ⟨schedules, fits, _, _, target, admitted, active, selected, recovery⟩ :=
     current.selectsDurableAfterPublicationError view cache appender stager syncer storage request lookup rename
-      nonempty prepared returned initial protectedFiles publication visible reboot reset nameEffects initialWindow
+      nonempty prepared returned initial fileFrames publication visible reboot reset nameEffects initialWindow
   obtain ⟨whole, earlier, lastInput, diagnostic, issued, reported, previous, call, plan, physical, last, settled,
     later, allowed, replay, bounds⟩ :=
     NativeExecutionPosition.refinesFailedOpenTerminalLedger (current := current.current) prior prepared fits admitted

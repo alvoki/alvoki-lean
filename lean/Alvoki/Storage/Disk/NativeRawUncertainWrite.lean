@@ -191,60 +191,117 @@ theorem NativeOpenedPosition.classifiesCommitUnknown
   rw [failed] at outcome
   exact ⟨batch, table, guarded, poisoned, prepared, fits, guard, excluded, failed, outcome⟩
 
-/-- Local namespace effects of the original write callbacks. The append
-effect only describes a prepared write after the actual guard and poison
-assignment. The same laws cover either publication result. -/
-structure NativeOpenedPosition.WalNameEffects
+/-- Frames at the callbacks actually reached after preparation.
+Only a successful callback exposes the next frame in the schedule. -/
+structure NativeOpenedPosition.PublicationCallbackFrames
     (request : WriteRequest)
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (storage : heap → CheckpointStorageObservation) (first through : Nat) : Prop where
-  guard : ∀ {guarded}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
-    WalNamePresenceFrame dir first through (storage current.reached) (storage guarded)
-  poison : ∀ {guarded poisoned}, opened.set opened.phase .poisoned guarded = .ok () poisoned →
-    WalNamePresenceFrame dir first through (storage guarded) (storage poisoned)
-  appendKeeper : ∀ {batch table guarded poisoned},
+    (frame : heap → heap → Prop) : Prop where
+  atPoison : ∀ {batch table guarded poisoned},
     prepareBatch (oldInstalled).table request.rows = some (batch, table) →
     checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
     opened.set opened.phase .poisoned guarded = .ok () poisoned →
-    WalNamePresenceFrame dir first through (storage poisoned)
-      (storage (reachedState (append ((dir).file (.walSegment (oldInstalled).activeFirst)) (WAL.encodeBatch batch) poisoned)))
-  stageMarker : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
-    (storage (reachedState (stage ((dir).file .stagedWalBoundary)
-      (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) entry)))
-  syncFiles : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
-    (storage (reachedState (sync #[(dir).file (.walSegment (oldInstalled).activeFirst),
-      (dir).file .stagedWalBoundary] entry)))
-  renameMarker : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
-    (storage (reachedState (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry)))
-  syncRoot : ∀ entry, WalNamePresenceFrame dir first through (storage entry)
-    (storage (reachedState (sync #[(dir).path] entry)))
+    let keeper := (dir).file (.walSegment (oldInstalled).activeFirst)
+    let scratch := (dir).file .stagedWalBoundary
+    let marker := (dir).file .walBoundary
+    let writeKeeper := append keeper (WAL.encodeBatch batch)
+    let stageMarker := stage scratch (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64)
+    let syncFiles := sync #[keeper, scratch]
+    let renameMarker := rename scratch marker
+    frame poisoned (reachedState (writeKeeper poisoned)) ∧
+    ∀ {appended}, writeKeeper poisoned = .ok () appended →
+      frame appended (reachedState (stageMarker appended)) ∧
+      ∀ {staged}, stageMarker appended = .ok () staged →
+        frame staged (reachedState (syncFiles staged)) ∧
+        ∀ {grouped}, syncFiles staged = .ok () grouped →
+          frame grouped (reachedState (renameMarker grouped)) ∧
+          ∀ {renamed}, renameMarker grouped = .ok () renamed →
+            frame renamed (reachedState (sync #[(dir).path] renamed))
+
+/-- The guard and poison callback frame joins the publication schedule
+to the reached ready position. -/
+structure NativeOpenedPosition.WriteCallbackFrames
+    (request : WriteRequest)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (frame : heap → heap → Prop) : Prop
+    extends current.PublicationCallbackFrames appender stager syncer cache request lookup rename frame where
+  guard : ∀ {guarded}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
+    frame current.reached guarded
+  poison : ∀ {guarded poisoned}, checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded →
+    opened.set opened.phase .poisoned guarded = .ok () poisoned →
+    frame guarded poisoned
+
+/-- The write's scope can be bounded to WAL namespace presence. -/
+abbrev NativeOpenedPosition.WalNameEffects
+    (request : WriteRequest)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (storage : heap → CheckpointStorageObservation) (first through : Nat) : Prop :=
+  current.WriteCallbackFrames appender stager syncer cache request lookup rename
+    (fun entry after => WalNamePresenceFrame dir first through (storage entry) (storage after))
 
 variable {current appender stager syncer cache} in
-/-- Compose the same frames up to the actual return of publication.
-Only the subsequent ready setter distinguishes a successful write here. -/
-theorem NativeOpenedPosition.WalNameEffects.throughPublication
+/-- Compose the file callbacks in issue order to the actual result. -/
+theorem NativeOpenedPosition.PublicationCallbackFrames.throughCommit
     {request : WriteRequest}
     {lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata}
     {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
-    {storage : heap → CheckpointStorageObservation} {first through : Nat}
-    (effects : current.WalNameEffects appender stager syncer cache request lookup rename storage first through)
+    {frame : heap → heap → Prop}
+    (effects : current.PublicationCallbackFrames appender stager syncer cache request lookup rename frame)
+    (trans : ∀ {entry middle after}, frame entry middle → frame middle after → frame entry after)
     {batch : List WAL.Write} {table : PackedTable} {guarded poisoned : heap}
     (prepared : prepareBatch (oldInstalled).table request.rows = some (batch, table))
     (checked : checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded)
     (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
     {result : EStateM.Result IO.Error heap Unit}
-    (committed : commitBytesAt dir (oldInstalled).activeFirst (WAL.encodeBatch batch)
-      ((oldInstalled).walBytes + WAL.frameSize * request.rows.length)
-      append stage sync rename poisoned = result) :
-    WalNamePresenceFrame dir first through (storage current.reached) (storage (reachedState result)) := by
-  let frame entry reached := WalNamePresenceFrame dir first through (storage entry) (storage reached)
-  have publication := commitBytesAt_frames frame (fun _ => .refl _) WalNamePresenceFrame.trans
-    dir (oldInstalled).activeFirst (WAL.encodeBatch batch) ((oldInstalled).walBytes + WAL.frameSize * request.rows.length)
-    append stage sync rename poisoned (effects.appendKeeper prepared checked assigned)
-    effects.stageMarker effects.syncFiles effects.renameMarker effects.syncRoot
-  rw [committed] at publication
-  exact ((effects.guard checked).trans (effects.poison assigned)).trans publication
+    (outcome : syncer.PublicationOutcome cache appender stager rename (oldInstalled).activeFirst
+      ((oldInstalled).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch) poisoned result) :
+    frame poisoned (reachedState result) := by
+  have frames := effects.atPoison prepared checked assigned
+  have reached {entry after : heap} {ran : EStateM.Result IO.Error heap Unit}
+      (kept : frame entry (reachedState ran)) (returned : ran = .ok () after) : frame entry after := by
+    simpa only [returned, reachedState] using kept
+  have throughStage {appended : heap}
+      (wrote : append ((dir).file (.walSegment (oldInstalled).activeFirst)) (WAL.encodeBatch batch) poisoned =
+        .ok () appended) :=
+    trans (reached frames.1 wrote) (frames.2 wrote).1
+  cases outcome with
+  | appendError failed => simpa only [failed] using frames.1
+  | stageError wrote failed => simpa only [failed] using throughStage wrote
+  | groupError wrote staged failed =>
+    exact trans (reached (throughStage wrote) staged) (by simpa only [failed] using ((frames.2 wrote).2 staged).1)
+  | renameError wrote staged grouped failed =>
+    have group := (frames.2 wrote).2 staged
+    exact trans (reached (throughStage wrote) staged)
+      (trans (reached group.1 grouped) (by simpa only [failed] using (group.2 grouped).1))
+  | directory wrote staged grouped moved returned =>
+    have group := (frames.2 wrote).2 staged
+    have rename := group.2 grouped
+    exact trans (reached (throughStage wrote) staged)
+      (trans (reached group.1 grouped) (trans (reached rename.1 moved) (by simpa only [returned] using rename.2 moved)))
+
+variable {current appender stager syncer cache} in
+/-- The same reached callback fold carries any preserved relation from
+the ready entry through the exact publication result. -/
+theorem NativeOpenedPosition.WriteCallbackFrames.throughPublication
+    {request : WriteRequest}
+    {lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata}
+    {rename : FilePath → FilePath → EStateM IO.Error heap Unit}
+    {frame : heap → heap → Prop}
+    (effects : current.WriteCallbackFrames appender stager syncer cache request lookup rename frame)
+    (trans : ∀ {entry middle after}, frame entry middle → frame middle after → frame entry after)
+    {batch : List WAL.Write} {table : PackedTable} {guarded poisoned : heap}
+    (prepared : prepareBatch (oldInstalled).table request.rows = some (batch, table))
+    (checked : checkActiveSegmentWith dir oldInstalled lookup current.reached = .ok () guarded)
+    (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
+    {result : EStateM.Result IO.Error heap Unit}
+    (outcome : syncer.PublicationOutcome cache appender stager rename (oldInstalled).activeFirst
+      ((oldInstalled).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch) poisoned result) :
+    frame current.reached (reachedState result) :=
+  trans (effects.guard checked) (trans (effects.poison checked assigned)
+    (effects.toPublicationCallbackFrames.throughCommit trans prepared checked assigned outcome))
 
 /-- An ordinary uncertain return preserves the selected WAL name window
 at the failed publication's reached heap. -/
@@ -259,9 +316,9 @@ theorem NativeOpenedPosition.preservesWalNamesAfterCommitUnknown
     {storage : heap → CheckpointStorageObservation} {first through : Nat}
     (effects : current.WalNameEffects appender stager syncer cache request lookup rename storage first through) :
     WalNamePresenceFrame dir first through (storage current.reached) (storage reached) := by
-  obtain ⟨_, _, _, _, prepared, _, checked, assigned, failed, _⟩ :=
+  obtain ⟨_, _, _, _, prepared, _, checked, assigned, _, outcome⟩ :=
     current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
-  exact effects.throughPublication prepared checked assigned failed
+  exact effects.throughPublication WalNamePresenceFrame.trans prepared checked assigned outcome
 
 /-- A successful nonempty write frames WAL names through publication
 and the actual phase update that returns the table to ready. -/
@@ -282,10 +339,14 @@ theorem NativeOpenedPosition.preservesWalNamesAfterAcknowledgement
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
   obtain ⟨batch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared dir lookup append stage sync rename
     opened.phase opened.get opened.set loaded nonempty (by rw [returned]; trivial)
-  obtain ⟨_, _, _, checked, assigned, committed, installed, _, _⟩ :=
+  obtain ⟨_, poisoned, _, checked, assigned, committed, installed, _, _⟩ :=
     request.runOnRawOpenPhase_acknowledges dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits returned
-  exact (effects.throughPublication prepared checked assigned committed).trans (restoreFrame installed)
+  have outcome := syncer.publicationOutcome cache appender stager rename
+    (first := (oldInstalled).activeFirst) (count := (oldInstalled).walBytes + WAL.frameSize * request.rows.length)
+    (bytes := WAL.encodeBatch batch) poisoned
+  rw [committed] at outcome
+  exact (effects.throughPublication WalNamePresenceFrame.trans prepared checked assigned outcome).trans (restoreFrame installed)
 
 /-- An ordinary uncertain write returns on the original opened phase
 and cache. Follow the reached guard, poison assignment and failed
@@ -310,20 +371,8 @@ theorem NativeOpenedPosition.returnsCommitUnknown
       current.framesRawWrite view cache.directory storage current.reached guarded)
     (poisonFrame : ∀ {guarded poisoned}, opened.set opened.phase .poisoned guarded = .ok () poisoned →
       view.framesWrite before cache.directory storage guarded poisoned)
-    (appendFrame : let frame := current.framesRawWrite view cache.directory storage
-      ∀ batch table, prepareBatch (oldInstalled).table request.rows = some (batch, table) →
-      ∀ entry, frame entry (reachedState (append ((dir).file (.walSegment (oldInstalled).activeFirst))
-        (WAL.encodeBatch batch) entry)))
-    (stageFrame : let frame := current.framesRawWrite view cache.directory storage
-      ∀ entry, frame entry (reachedState (stage ((dir).file .stagedWalBoundary)
-        (WAL.Boundary.encode ((oldInstalled).walBytes + WAL.frameSize * request.rows.length).toUInt64) entry)))
-    (groupFrame : let frame := current.framesRawWrite view cache.directory storage
-      ∀ entry, frame entry (reachedState (sync
-        #[(dir).file (.walSegment (oldInstalled).activeFirst), (dir).file .stagedWalBoundary] entry)))
-    (renameFrame : let frame := current.framesRawWrite view cache.directory storage
-      ∀ entry, frame entry (reachedState (rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry)))
-    (rootFrame : let frame := current.framesRawWrite view cache.directory storage
-      ∀ entry, frame entry (reachedState (sync #[(dir).path] entry))) :
+    (commitFrames : current.PublicationCallbackFrames appender stager syncer cache request lookup rename
+      (current.framesRawWrite view cache.directory storage)) :
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
     opened.contents reached opened.phase = some .poisoned ∧
     (storage current.reached).Frames (before).writeFramePath (storage reached) ∧
@@ -338,7 +387,7 @@ theorem NativeOpenedPosition.returnsCommitUnknown
         ((oldInstalled).walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch) poisoned
         (.error cause reached) := by
   have valid := current.current.ready.readPrefix.refines.1
-  obtain ⟨batch, table, guarded, poisoned, prepared, fits, guard, excluded, failed, outcome⟩ :=
+  obtain ⟨batch, table, guarded, poisoned, prepared, fits, guard, excluded, _, outcome⟩ :=
     current.classifiesCommitUnknown appender stager syncer cache request lookup rename nonempty returned
   have afterGuard := guardFrame guard
   have present := afterGuard.2.trans current.stored
@@ -346,13 +395,9 @@ theorem NativeOpenedPosition.returnsCommitUnknown
   have samePoisoned := (EStateM.Result.ok.inj (assigned.symm.trans excluded)).2
   have atPoisoned : opened.contents poisoned opened.phase = some .poisoned := samePoisoned ▸ stored
   let frame := current.framesRawWrite view cache.directory storage
-  have frameId (entry : heap) : frame entry entry := ⟨⟨rfl, .refl _ _⟩, rfl⟩
   have frameTrans {entry mid after : heap} (first : frame entry mid) (last : frame mid after) : frame entry after :=
     ⟨⟨last.1.1.trans first.1.1, first.1.2.trans last.1.2⟩, last.2.trans first.2⟩
-  have afterCommit := commitBytesAt_frames frame frameId frameTrans dir (oldInstalled).activeFirst
-    (WAL.encodeBatch batch) ((oldInstalled).walBytes + WAL.frameSize * request.rows.length)
-    append stage sync rename poisoned (appendFrame batch table prepared poisoned) stageFrame groupFrame renameFrame rootFrame
-  rw [failed, reachedState] at afterCommit
+  have afterCommit := commitFrames.throughCommit frameTrans prepared guard excluded outcome
   have afterPoison := poisonFrame excluded
   have authority := afterCommit.1.1.trans (afterPoison.1.trans afterGuard.1.1)
   have protectedFrame := afterGuard.1.2.trans (afterPoison.2.trans afterCommit.1.2)

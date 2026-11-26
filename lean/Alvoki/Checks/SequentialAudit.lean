@@ -4219,7 +4219,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentImage.NamespaceWindow.restrict
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.walNamespace
 #check_axioms Alvoki.Storage.DiskSession.WalNamePresenceFrame.preservesNamespaceWindow
-#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.WalNameEffects.throughPublication
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.PublicationCallbackFrames.throughCommit
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.WriteCallbackFrames.throughPublication
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preservesWalNamesAfterAcknowledgement
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.preservesWalNamesAfterCommitUnknown
 #check_axioms Alvoki.Storage.DiskSession.OpenReferenceAllocations.opensReadyWriter
