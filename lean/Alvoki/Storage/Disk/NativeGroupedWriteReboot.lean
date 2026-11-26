@@ -77,12 +77,10 @@ heap with the write's protected-file frame. The selected reboot admits
 the original repair target even when a prefix of the batch survived. -/
 theorem RawWriteRebootEntry.selectsGroupErrorRetry
     {initial poisoned appended staged reached rebooted : heap} {cause : IO.Error}
-    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write} {table : PackedTable}
+    {rows : List (UInt64 × Option UInt64)} {batch : List WAL.Write}
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     (valid : state.Valid) (old : NativeReadyStorage state (storage initial))
     (protectedFrame : (storage initial).Frames state.writeFramePath (storage reached))
-    (prepared : prepareBatch state.writer.installed.table rows = some (batch, table))
-    (fits : state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
     (wrote : append ((dir).file (.walSegment first)) (WAL.encodeBatch batch) poisoned = .ok () appended)
     (remembered : stage ((dir).file .stagedWalBoundary)
       (WAL.Boundary.encode (state.writer.installed.walBytes + WAL.frameSize * rows.length).toUInt64)
@@ -101,7 +99,7 @@ theorem RawWriteRebootEntry.selectsGroupErrorRetry
     (view.descriptors rebooted).slots = [] := by
   obtain ⟨returned, admitted, _, selected⟩ :=
     NativeReadyState.groupedFailureAcceptsOldWal valid cache view appender stager calls rename inodes observe inode buffered
-      prepared fits old effects.startFrame protectedFrame effects.keeperVisible effects.markerVisible
+      old effects.startFrame protectedFrame effects.keeperVisible effects.markerVisible
       effects.stagedNames effects.markerFrame effects.stagedMarkerVisible wrote remembered failed
       effects.appendFile effects.stageFile effects.fileBarriers
   have sameFirst : state.writer.installed.activeFirst = state.writer.wal.active.first :=

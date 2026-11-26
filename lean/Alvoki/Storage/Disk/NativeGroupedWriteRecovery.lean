@@ -82,7 +82,7 @@ theorem NativeOpenedPosition.recoversGroupedWriteError
   obtain ⟨committed, admitted, selected, rebootVacant, slots⟩ :=
     RawWriteRebootEntry.selectsGroupErrorRetry cache view appender stager syncer inodes observe inode buffered rename
       valid initial (prefixFrame.trans (appendFrame.trans (stageFrame.trans syncFrame)))
-      prepared fits wrote stagedMarker fileError groupEffects reboot later
+      wrote stagedMarker fileError groupEffects reboot later
   refine ⟨current.uses.writeSchedules, ?_, rebootVacant, slots, ?_⟩
   · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits]

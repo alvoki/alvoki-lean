@@ -31,6 +31,59 @@ abbrev run (calls : RawWalAppendCalls heap) (active : IO.Ref (Option (FilePath �
     (path : FilePath) (bytes : ByteArray) : EStateM IO.Error heap Unit :=
   appendWithActive (calls.getActive active) (calls.setActive active) calls.openAppend calls.write calls.flush path bytes
 
+/-- Compose a local file frame through the append callback, including a
+failed write or flush followed by the reached active-cell clear. A cache
+hit does not invoke the opener. -/
+theorem reachedPreserves (calls : RawWalAppendCalls heap) (frame : heap → heap → Prop)
+    (identity : ∀ heap, frame heap heap) (compose : ∀ {a b c}, frame a b → frame b c → frame a c)
+    {active : IO.Ref (Option (FilePath × IO.FS.Handle))} {path : FilePath} {bytes : ByteArray}
+    {entry : heap} {cached : Option (FilePath × IO.FS.Handle)}
+    (loaded : calls.getActive active entry = .ok cached entry)
+    (openEffect : cached.map Prod.fst ≠ some path → frame entry (reachedState (calls.openAppend path entry)))
+    (writeEffect : ∀ {file opened}, selectAppendHandle cached calls.openAppend path entry = .ok file opened →
+      frame opened (reachedState (calls.write file bytes opened)))
+    (flushEffect : ∀ {file opened written}, selectAppendHandle cached calls.openAppend path entry = .ok file opened →
+      calls.write file bytes opened = .ok () written → frame written (reachedState (calls.flush file written)))
+    (storeEffect : ∀ {file opened outcome}, selectAppendHandle cached calls.openAppend path entry = .ok file opened →
+      (calls.write file bytes >>= fun _ => calls.flush file) opened = outcome →
+      let (value, atStore) := match outcome with
+        | .ok () reached => (some (path, file), reached)
+        | .error _ reached => (none, reached)
+      frame atStore (reachedState (calls.setActive active value atStore))) :
+    frame entry (reachedState (calls.run active path bytes entry)) := by
+  have atOpen : frame entry (reachedState (selectAppendHandle cached calls.openAppend path entry)) := by
+    cases cached with
+    | none => simpa [selectAppendHandle] using openEffect (by simp)
+    | some atPath =>
+      by_cases hit : path = atPath.1
+      · simpa [selectAppendHandle, hit, Pure.pure, EStateM.pure, reachedState] using identity entry
+      · simpa [selectAppendHandle, hit] using openEffect (by simpa using Ne.symm hit)
+  rw [run, appendWithActive_effect]
+  simp only [loaded]
+  cases selected : selectAppendHandle cached calls.openAppend path entry with
+  | error cause reached => simpa only [selected, reachedState] using atOpen
+  | ok file opened =>
+    have throughWrite := compose (by simpa only [selected, reachedState] using atOpen) (writeEffect selected)
+    let data := (calls.write file bytes >>= fun _ => calls.flush file) opened
+    have throughData : frame entry (reachedState data) := by
+      cases wrote : calls.write file bytes opened with
+      | error cause reached => simpa only [data, Bind.bind, EStateM.bind, wrote, reachedState] using throughWrite
+      | ok value written =>
+        cases value
+        simpa only [data, Bind.bind, EStateM.bind, wrote] using
+          compose (by simpa only [wrote, reachedState] using throughWrite) (flushEffect selected wrote)
+    change frame entry (reachedState (match data with
+      | .error cause failed => (calls.setActive active none >>= fun _ => EStateM.throw cause) failed
+      | .ok () flushed => calls.setActive active (some (path, file)) flushed))
+    cases outcome : data with
+    | error cause failed =>
+      have afterClear := compose (by simpa only [outcome, reachedState] using throughData) (storeEffect selected outcome)
+      cases cleared : calls.setActive active none failed <;>
+        simpa [cleared, Bind.bind, EStateM.bind, EStateM.throw, reachedState] using afterClear
+    | ok value flushed =>
+      cases value
+      exact compose (by simpa only [outcome, reachedState] using throughData) (storeEffect selected outcome)
+
 /-- Invert the actual successful append. The same selected handle goes
 through the reached write, flush and update of the original active cell. -/
 theorem returned (calls : RawWalAppendCalls heap) {active : IO.Ref (Option (FilePath × IO.FS.Handle))}

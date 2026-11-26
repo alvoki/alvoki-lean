@@ -1,5 +1,13 @@
 # Current handoff
 
+A returned WAL append or marker-staging error now leads to the exact reopened table through
+the same old-target recovery path. The reached callbacks supply separate frames for protected
+files, the canonical marker and the committed keeper prefix. Durable choices may extend that
+prefix with uncertain bytes. One joint reboot samples the actual names and bytes, and the
+old marker selects the earlier history with zero writes from the uncertain batch. The grouped
+file-sync error reuses the same old-target selection proof.
+[Early write recovery](../lean/Alvoki/Storage/Disk/NativeEarlyWriteRecovery.lean)
+
 The aligned marked repair without pruning now establishes physical readiness for the writer
 returned by the actual successful open. The directory fsync settles the child names. The
 retained keeper descriptor then supplies a regular-file fsync of the committed bytes. The

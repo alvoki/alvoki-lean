@@ -459,6 +459,15 @@ consume the remaining repair paths.
 · [Aligned returned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
 · [Long keeper repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
+A returned append or marker-staging error uses the same prior-marker selector as a
+grouped file-sync error. Only the append and any reached staging callbacks contribute to
+the error heap. Local effect laws preserve the canonical marker and protected names
+and bytes. The keeper may grow, and each admitted durable byte choice still extends its
+previous committed prefix. Sampling one observed reboot derives the old history, an exact
+failed-call sequence and the successful table with the uncertain submission retained as zero
+writes. An interrupted callback that has yet to return is a separate case.
+[Early write recovery](../../lean/Alvoki/Storage/Disk/NativeEarlyWriteRecovery.lean)
+
 A marked repair that fails after changing files supplies its reached image through the same
 worker and finalizers as the read-only error path. The local stage-sync and final-directory
 errors share the ordered successful prefix they actually executed. A repair may leave the

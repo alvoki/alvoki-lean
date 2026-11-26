@@ -49,56 +49,55 @@ noncomputable def run (calls : RawWalStageCalls heap) (pending : IO.Ref (List (F
   let file ← calls.fresh path bytes
   calls.remember pending (pushPending path file)
 
-private theorem keepsAfterBind {α β footprint : Type} (observe : heap → footprint)
+private theorem keepsAfterBind {α β : Type} (frame : heap → heap → Prop)
+    (compose : ∀ {a b c}, frame a b → frame b c → frame a c)
     (first : EStateM IO.Error heap α) (next : α → EStateM IO.Error heap β) (entry : heap)
-    (firstKeeps : observe (reachedState (first entry)) = observe entry)
-    (nextKeeps : ∀ {value after}, first entry = .ok value after →
-      observe (reachedState (next value after)) = observe after) :
-    observe (reachedState ((first >>= next) entry)) = observe entry := by
+    (firstKeeps : frame entry (reachedState (first entry)))
+    (nextKeeps : ∀ {value after}, first entry = .ok value after → frame after (reachedState (next value after))) :
+    frame entry (reachedState ((first >>= next) entry)) := by
   cases returned : first entry with
-  | error cause after =>
-    have kept : observe after = observe entry := by simpa [returned, reachedState] using firstKeeps
-    simpa [Bind.bind, EStateM.bind, returned, reachedState] using kept
+  | error cause after => simpa [Bind.bind, EStateM.bind, returned, reachedState] using firstKeeps
   | ok value after =>
     have kept := nextKeeps returned
     rw [returned] at firstKeeps
-    simpa [Bind.bind, EStateM.bind, returned] using kept.trans firstKeeps
+    simpa [Bind.bind, EStateM.bind, returned] using compose firstKeeps kept
 
-/-- Only the reached metadata read, unlink and exclusive retries can
-affect the protected observation during scratch acquisition. -/
-theorem acquireKeeps {footprint : Type} (calls : RawWalStageCalls heap) (path : FilePath)
-    (observe : heap → footprint) (entry : heap)
-    (tryKeeps : observe (reachedState (calls.tryCreate path entry)) = observe entry)
-    (statKeeps : ∀ before, observe (reachedState (calls.stat path before)) = observe before)
-    (unlinkKeeps : ∀ before, observe (reachedState (calls.unlink path before)) = observe before)
-    (createKeeps : ∀ before, observe (reachedState (calls.create path before)) = observe before) :
-    observe (reachedState (calls.acquire path entry)) = observe entry := by
-  have detachKeeps : ∀ before, observe (reachedState (removeStaleStagingWith calls.stat calls.unlink path before)) =
-      observe before := by
+/-- Compose the local frame through exclusive create, no-follow stat,
+private unlink and exclusive retry, including their reached errors. -/
+theorem acquireKeeps (calls : RawWalStageCalls heap) (path : FilePath)
+    (frame : heap → heap → Prop) (identity : ∀ heap, frame heap heap)
+    (compose : ∀ {a b c}, frame a b → frame b c → frame a c) (entry : heap)
+    (tryKeeps : frame entry (reachedState (calls.tryCreate path entry)))
+    (statKeeps : ∀ before, frame before (reachedState (calls.stat path before)))
+    (unlinkKeeps : ∀ before, frame before (reachedState (calls.unlink path before)))
+    (createKeeps : ∀ before, frame before (reachedState (calls.create path before))) :
+    frame entry (reachedState (calls.acquire path entry)) := by
+  have detachKeeps : ∀ before, frame before (reachedState (removeStaleStagingWith calls.stat calls.unlink path before)) := by
     intro before
     unfold removeStaleStagingWith
-    refine keepsAfterBind observe _ _ before (statKeeps before) ?_
+    refine keepsAfterBind frame compose _ _ before (statKeeps before) ?_
     intro metadata after returned
     split
     · rename_i info
       by_cases regular : info.type == .file
       · simp only [regular, ite_true]
-        refine keepsAfterBind observe _ _ after (unlinkKeeps after) ?_
+        refine keepsAfterBind frame compose _ _ after (unlinkKeeps after) ?_
         intro result reached _
-        cases RunCollection.ownedUnlinkResult result <;> rfl
-      · simp [regular, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState]
-    next => rfl
-    next => rfl
+        cases RunCollection.ownedUnlinkResult result <;> exact identity reached
+      · simpa [regular, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, reachedState]
+          using identity after
+    next => exact identity after
+    next => exact identity after
   unfold acquire withFreshStaging
-  refine keepsAfterBind observe _ _ entry tryKeeps ?_
+  refine keepsAfterBind frame compose _ _ entry tryKeeps ?_
   intro result after _
   split
-  next => rfl
+  next => exact identity after
   next =>
-    refine keepsAfterBind observe _ _ after (detachKeeps after) ?_
+    refine keepsAfterBind frame compose _ _ after (detachKeeps after) ?_
     intro _ atCreate _
-    exact keepsAfterBind observe _ _ atCreate (createKeeps atCreate) (fun _ => rfl)
-  next => rfl
+    exact keepsAfterBind frame compose _ _ atCreate (createKeeps atCreate) (fun {_ after} _ => identity after)
+  next => exact identity after
 
 private theorem acquireProvides (calls : RawWalStageCalls heap) (path : FilePath)
     (observes : IO.FS.Handle → heap → Prop)
@@ -275,23 +274,25 @@ theorem retainsStaged {image footprint : Type} (calls : RawWalStageCalls heap)
 
 /-- An error means fresh staging did not produce a handle for the
 infallible pending modification. The reached heap includes any release
-after a failed write or flush. No pending entry was added. -/
-theorem rejected {footprint : Type} (calls : RawWalStageCalls heap)
+after a failed write or flush. Compose the local frame through these
+callbacks, including the release. -/
+theorem rejected (calls : RawWalStageCalls heap) (frame : heap → heap → Prop)
+    (compose : ∀ {a b c}, frame a b → frame b c → frame a c)
     {pending : IO.Ref (List (FilePath × IO.FS.Handle))} {path : FilePath} {bytes : ByteArray}
-    {entry reached : heap} {cause : IO.Error} (observeProtected : heap → footprint)
+    {entry reached : heap} {cause : IO.Error}
     (failed : calls.run pending path bytes entry = .error cause reached)
     (rememberTotal : ∀ {file before}, calls.fresh path bytes entry = .ok file before →
       ∃ after, calls.remember pending (pushPending path file) before = .ok () after)
-    (opened : observeProtected (reachedState (calls.acquire path entry)) = observeProtected entry)
+    (opened : frame entry (reachedState (calls.acquire path entry)))
     (written : ∀ {file before}, calls.acquire path entry = .ok file before →
-      observeProtected (reachedState (calls.write file bytes before)) = observeProtected before)
+      frame before (reachedState (calls.write file bytes before)))
     (flushed : ∀ {file opened before}, calls.acquire path entry = .ok file opened →
       calls.write file bytes opened = .ok () before →
-      observeProtected (reachedState (calls.flush file before)) = observeProtected before)
+      frame before (reachedState (calls.flush file before)))
     (dropped : ∀ {file opened cause failed}, calls.acquire path entry = .ok file opened →
       (calls.write file bytes >>= fun _ => calls.flush file) opened = .error cause failed →
-      observeProtected (dataErrorDropState calls.drop file failed) = observeProtected failed) :
-    calls.fresh path bytes entry = .error cause reached ∧ observeProtected reached = observeProtected entry := by
+      frame failed (dataErrorDropState calls.drop file failed)) :
+    calls.fresh path bytes entry = .error cause reached ∧ frame entry reached := by
   have freshFailed : calls.fresh path bytes entry = .error cause reached := by
     simp only [run, Bind.bind, EStateM.bind] at failed
     cases fresh : calls.fresh path bytes entry with
@@ -316,7 +317,7 @@ theorem rejected {footprint : Type} (calls : RawWalStageCalls heap)
         simp only [Bind.bind, EStateM.bind, writeResult])
       rw [← freshFailed.2]
       rw [writeResult] at writeProtected
-      exact released.trans (writeProtected.trans opened)
+      exact compose (compose opened writeProtected) released
     | ok value atWrite =>
       cases value
       have flushProtected := flushed openResult writeResult
@@ -328,7 +329,7 @@ theorem rejected {footprint : Type} (calls : RawWalStageCalls heap)
         rw [← freshFailed.2]
         rw [writeResult] at writeProtected
         rw [flushResult] at flushProtected
-        exact released.trans (flushProtected.trans (writeProtected.trans opened))
+        exact compose (compose (compose opened writeProtected) flushProtected) released
       | ok value atFlush =>
         cases value
         simp [openResult, writeResult, flushResult] at freshFailed

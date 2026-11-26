@@ -483,6 +483,7 @@ import Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
 import Alvoki.Storage.Disk.NativeGroupedWriteReboot
 import Alvoki.Storage.Disk.NativeSourceLedger
 import Alvoki.Storage.Disk.NativeGroupedWriteRecovery
+import Alvoki.Storage.Disk.NativeEarlyWriteRecovery
 import Alvoki.Storage.Disk.NativeLateWriteRecovery
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeAlignedKeeperStorage
@@ -3914,6 +3915,16 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawHealthyMarkedOpenEffects.opensWithSelectedReplay
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.opensAfterWriteRetries
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsGroupErrorRetry
+#check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.reachedPreserves
+#check_axioms Alvoki.Storage.DiskSession.WalKeeperPrefixFrame.refl
+#check_axioms Alvoki.Storage.DiskSession.WalKeeperPrefixFrame.trans
+#check_axioms Alvoki.Storage.DiskSession.WalKeeperPrefixFrame.ofFileFrame
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.selectsPriorWriteWal
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.priorWriteTargetOfSample
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.earlyErrorKeeps
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.refl
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.trans
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversEarlyWriteError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversGroupedWriteError
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.LedgerSuffix.empty
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.LedgerSuffix.append
