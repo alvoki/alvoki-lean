@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.NativeCheckpointRawSyncStop
 import Alvoki.Storage.Disk.NativeFreshOpenedSessions
 import Alvoki.Storage.Disk.NativeCheckpointSampledTableOpen
 
@@ -99,8 +100,19 @@ theorem FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
        ∀ {first}, writes.WalWindowEffects storage first through →
          start.WalWindowAt storage first through → current.WalWindowAt storage first current.current.history.length) ∧
       let files := fun atHeap => current.directory.symm ▸ observe atHeap
+      let cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path :=
+        { writes.cache with atRoot := current.directory.symm ▸ writes.cache.atRoot }
       ∀ (names : FilePath → Option Nat), names ∈ (files reached.2).crashBindings → ∀ (contents : Nat → ByteArray),
-        ∀ publication : FinalCheckpointStorageEffects stop inodes runs files,
+        ∀ (publication : RenamedCheckpointStorageEffects stop inodes runs files) (effective : Bool)
+          (sync : CheckpointRawSyncCalls heap),
+          stop.toNativeCheckpointSourcePrefix.DirectoryProjectionEffects view cache.directory →
+          sync.DirectoryAt view cache.directory fsync stop.atIssue.2 →
+          (∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
+            current.current.ready.state.cache.directory = some (view.handle stop.atIssue.2 literal) →
+            RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal →
+            sync.fsync literal stop.atIssue.2 = .error reason reached.2 →
+            CheckpointManifestDirectoryEffect current.current.ready.state.session.directory effective publication.scope
+              (files stop.atIssue.2).storageObservation (files reached.2).storageObservation) →
           (∀ path, path = current.current.ready.state.session.directory.file .manifest ∨ publication.scope path →
             ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode) →
           (view.descriptors rebooted).slots = [] →
@@ -119,8 +131,13 @@ theorem FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
   refine ⟨fresh.opened, fresh.emptyHistory, fresh.emptySubmissions, fresh.emptyReads,
     current, events, stop, atStop, pins, physical, length, records, current.directory.trans sameDirectory,
     stop.poisonStored, together, wal, ?_⟩
-  intro files names chosen contents publication sampled resetCensus resetLock errors attempts effects
-  exact stop.reopensSampledFinalCheckpoint inodes runs files publication names chosen contents sampled
+  intro files cache names chosen contents publication effective sync frames routing durability sampled
+    resetCensus resetLock errors attempts effects
+  have initialDirectory := congrArg Cache.directory physical.cacheAt
+  have projected := stop.toNativeCheckpointSourcePrefix.projectsDirectoryAtIssue view cache.directory initialDirectory frames
+  obtain ⟨literal, found, retained, target, issued, _⟩ := stop.manifestDirectoryIssuesRawSync sync cache projected routing
+  exact stop.reopensSampledFinalCheckpoint inodes runs files publication effective
+    (durability literal found retained target issued) names chosen contents sampled
     resetCensus (current.directory.symm ▸ resetLock) attempts effects together
 
 end Alvoki.Storage.DiskSession

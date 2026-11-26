@@ -10,7 +10,8 @@ owns the full list of obligations.
 open installs the literal returned table. Its next supported writes and snapshot
 calls extend the incoming client ledger. The supported calls also determine the
 heap, cache and ledger at the next observed checkpoint interruption. The
-final manifest-directory sync recovery consumes that position. Failed opens before the file lock,
+final manifest-directory recovery follows its cached root through the rename to the interrupted
+raw fsync. The effect of that syscall on crash bindings remains a local filesystem premise. Failed opens before the file lock,
 a refused lock, errors during marked checkpoint, marker and WAL preparation, and partial
 pruning of later WAL segments each supply a retry frame under local callback
 and cleanup laws. Given such a frame for each failed call, one induction

@@ -278,23 +278,19 @@ theorem NativeCheckpointSourceStop.selectsFinalManifest
       CheckpointManifestRenameEffect dbDir staged scope
         (observe before).storageObservation (observe stop.atIssue.2).storageObservation)
     (effective : Bool)
-    (directoryEffect : ∀ (handle : CheckpointOpenHandle) atSync,
-      stop.atIssue.1.resolve (dbDir).path (dbDir).path primitives.openRead stop.atIssue.2 =
-        .ok handle (reached.1, atSync) →
-      fsync handle atSync = .error reason reached.2 →
-      CheckpointManifestDirectoryEffect dbDir effective scope
-        (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
+    (directoryEffect : CheckpointManifestDirectoryEffect dbDir effective scope
+      (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
     (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
     (contents : Nat → ByteArray)
     (sampled : ∀ path, path = (dbDir).file .manifest ∨ scope path →
       ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode) :
     stop.toNativeCheckpointSourcePrefix.ManifestSelection inodes observe reached scope names contents true effective := by
-  obtain ⟨beforeRename, handle, atSync, throughStage, renamed, _, resolved, stopped⟩ :=
+  obtain ⟨beforeRename, _, _, throughStage, renamed, _⟩ :=
     stop.manifestDirectoryFollowsRename
   exact stop.toNativeCheckpointSourcePrefix.selectsSampledManifest inodes runs observe throughStage stageEffects
       oldStorage scope outsideStage true effective
       (fun staged bound => (renameEffect beforeRename.2 staged bound renamed).followedByDirectory
-        (directoryEffect handle atSync resolved stopped)) names chosen contents sampled
+        directoryEffect) names chosen contents sampled
 /-- A before-effect rename error frames the canonical manifest and other
 protected paths on one predecessor map. An after-effect error has the
 local effect of an atomic rename. Both admit separate crash choices
@@ -499,9 +495,9 @@ structure CheckpointPublicationStorageEffects
   outsideStage : ∀ path, scope path → path ≠ (dbDir).file .stagedManifest
   retained : ∀ path, current.current.ready.state.crashPath path → path ≠ (dbDir).file .manifest → scope path
   newRuns : ∀ index < stop.next.table.runs.length, scope ((dbDir).file (.run stop.next.generation index))
-/-- The returned rename and issued final directory sync add only their
-local effects to the common publication prefix. -/
-structure FinalCheckpointStorageEffects
+/-- The returned manifest rename fixes the visible namespace at the final
+directory barrier. The barrier has its own durability effect. -/
+structure RenamedCheckpointStorageEffects
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
@@ -511,13 +507,6 @@ structure FinalCheckpointStorageEffects
       primitives.rename ((dbDir).file .stagedManifest) ((dbDir).file .manifest) before = .ok () stop.atIssue.2 →
       CheckpointManifestRenameEffect dbDir staged scope
         (observe before).storageObservation (observe stop.atIssue.2).storageObservation
-  effective : Bool
-  directoryEffect : ∀ (handle : CheckpointOpenHandle) atSync,
-      stop.atIssue.1.resolve (dbDir).path (dbDir).path primitives.openRead stop.atIssue.2 =
-        .ok handle (reached.1, atSync) →
-      fsync handle atSync = .error reason reached.2 →
-      CheckpointManifestDirectoryEffect dbDir effective scope
-        (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation
 
 /-- The sampled files carry the marker, aligned WAL, selected run map
 and complete logical replay needed by the actual opener. -/
@@ -644,7 +633,9 @@ theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
-    (storage : FinalCheckpointStorageEffects stop inodes runs observe)
+    (storage : RenamedCheckpointStorageEffects stop inodes runs observe) (effective : Bool)
+    (directoryEffect : CheckpointManifestDirectoryEffect dbDir effective storage.scope
+      (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
     (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
     (contents : Nat → ByteArray)
     (sampled : ∀ path, path = (dbDir).file .manifest ∨ storage.scope path →
@@ -655,7 +646,7 @@ theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
   have oldStorage := prior.priorStorageBeforeStaging inodes runs observe common.initial common.phaseStorage common.runEffects
     (fun handle entry after cached synced => (common.runBarrier handle entry after cached synced).weaken (fun _ => .inl))
   have manifest := stop.selectsFinalManifest inodes runs observe common.stageEffects oldStorage common.scope
-    common.outsideStage storage.renameEffect storage.effective storage.directoryEffect names chosen contents sampled
+    common.outsideStage storage.renameEffect effective directoryEffect names chosen contents sampled
   exact prior.replaysSampledManifest inodes runs observe common names chosen contents sampled manifest
 
 /-- The physical rename effect determines which canonical manifest

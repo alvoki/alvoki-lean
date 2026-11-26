@@ -775,7 +775,9 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
-    (storage : FinalCheckpointStorageEffects stop inodes runs observe)
+    (storage : RenamedCheckpointStorageEffects stop inodes runs observe) (effective : Bool)
+    (directoryEffect : CheckpointManifestDirectoryEffect dbDir effective storage.scope
+      (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
     (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
     (contents : Nat → ByteArray)
     (sampled : ∀ path, path = (dbDir).file .manifest ∨ storage.scope path →
@@ -789,7 +791,7 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
       (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
       (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe stop.manifest names contents origin earlier errors := by
-  have selection := stop.replaysSampledFinalCheckpoint inodes runs observe storage names chosen contents sampled
+  have selection := stop.replaysSampledFinalCheckpoint inodes runs observe storage effective directoryEffect names chosen contents sampled
   exact stop.toNativeCheckpointSourcePrefix.reopensSampledCheckpoint inodes runs observe names contents selection
     resetCensus resetLock attempts effects prefixLedger
 

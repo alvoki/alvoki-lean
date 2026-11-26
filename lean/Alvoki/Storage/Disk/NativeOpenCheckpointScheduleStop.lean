@@ -567,6 +567,27 @@ theorem NativeCheckpointSourceStop.runsDirectoryIssue
         .ok handle (reached.1, atEffect) ∧ fsync handle atEffect = .error reason reached.2 := by
   exact ⟨prefixBeforeRunsDirectory stop.ordered, primitives.issuedFsync stop.stoppedStep⟩
 
+/-- The successful manifest rename advances the raw heap and retains
+the checkpoint cache. -/
+theorem CheckpointPrimitiveCalls.manifestRenameReturned
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (directory : DiskDirectory)
+    (fsync : CheckpointFsync heap) (next : Installed) (manifest : ByteArray)
+    {before after : CheckpointWorld heap}
+    (returned : (primitives.checkpointStepUntilStop directory fsync next manifest (.manifest .renameStaged)).run
+      before = .ok (.ok ()) after) :
+    primitives.rename (directory.file .stagedManifest) (directory.file .manifest) before.2 = .ok () after.2 ∧
+      after.1 = before.1 := by
+  obtain ⟨cache, raw⟩ := before
+  rw [CheckpointFileCallbacks.performManifestRenameUntilSyncStop] at returned
+  simp only [CheckpointCacheCalls.callbacks, CheckpointPrimitiveCalls.cached] at returned
+  cases renamed : primitives.rename (directory.file .stagedManifest) (directory.file .manifest) raw with
+  | error cause after => simp [withCache, renamed] at returned
+  | ok value after =>
+    cases value
+    simp only [withCache, renamed] at returned
+    have same := (EStateM.Result.ok.inj returned).2
+    exact ⟨congrArg (EStateM.Result.ok ()) (congrArg Prod.snd same), (congrArg Prod.fst same).symm⟩
+
 /-- The final directory barrier follows the actual returned replacement
 of MANIFEST. Extract the rename's entry and return from the same prefix
 that supplies the issued directory descriptor and fsync heap. -/
@@ -589,18 +610,9 @@ theorem NativeCheckpointSourceStop.manifestDirectoryFollowsRename
   obtain ⟨beforeRename, earlier, renameReturned⟩ :=
     returnedLastStep perform beforeRenameSteps (.manifest .renameStaged) completed
   obtain ⟨handle, atSync, resolved, issued⟩ := primitives.issuedFsync stop.stoppedStep
-  obtain ⟨renameCache, renameHeap⟩ := beforeRename
-  rw [show perform = primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest from rfl,
-    CheckpointFileCallbacks.performManifestRenameUntilSyncStop] at renameReturned
-  simp only [CheckpointCacheCalls.callbacks, CheckpointPrimitiveCalls.cached] at renameReturned
-  cases renamed : primitives.rename (directory.file .stagedManifest) (directory.file .manifest) renameHeap with
-  | error cause after => simp [withCache, renamed] at renameReturned
-  | ok value after =>
-    cases value
-    simp only [withCache, renamed] at renameReturned
-    have same := (EStateM.Result.ok.inj renameReturned).2
-    exact ⟨(renameCache, renameHeap), handle, atSync, earlier,
-      (congrArg Prod.snd same) ▸ renamed, (congrArg Prod.fst same).symm, resolved, issued⟩
+  obtain ⟨renamed, keepsCache⟩ :=
+    primitives.manifestRenameReturned directory fsync stop.next stop.manifest renameReturned
+  exact ⟨beforeRename, handle, atSync, earlier, renamed, keepsCache, resolved, issued⟩
 
 private theorem resolveKeepsDirectory (cache : CensusDirectoryCache) (dir path : FilePath)
     (openRead : FilePath → EStateM IO.Error heap CheckpointOpenHandle) (before : heap) :
@@ -768,38 +780,77 @@ private theorem checkpointSyncKeepsDirectory
   simpa only [resolved, reachedState] using
     resolveKeepsDirectory before.1 dir path primitives.openRead before.2
 
-/-- All preceding run pairs leave the original directory descriptor in
-its cache slot. The next barrier issues on that exact descriptor. -/
-theorem NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
-    (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached) :
+private theorem checkpointStepKeepsDirectory
+    (primitives : CheckpointPrimitiveCalls CheckpointOpenHandle heap) (directory : DiskDirectory)
+    (fsync : CheckpointFsync heap) (next : Installed) (manifest : ByteArray)
+    (step : Step) {before after : CheckpointWorld heap}
+    (returned : (primitives.checkpointStepUntilStop directory fsync next manifest step).run before =
+      .ok (.ok ()) after) :
+    after.1.directory = before.1.directory := by
+  cases step with
+  | writeRun index =>
+    obtain ⟨_, _, _, _, remembered⟩ := primitives.runWriteReturned directory fsync next manifest index returned
+    rw [remembered]
+    rfl
+  | syncRun index =>
+    exact checkpointSyncKeepsDirectory primitives fsync directory.path
+      (directory.file (.run next.generation index)) returned
+  | syncRunsDirectory =>
+    exact checkpointSyncKeepsDirectory primitives fsync directory.path directory.path returned
+  | manifest step =>
+    cases step with
+    | writeStaged =>
+      obtain ⟨_, _, remembered⟩ := checkpointManifestWriteReturned primitives directory fsync next manifest returned
+      rw [remembered]
+      rfl
+    | syncStaged =>
+      exact checkpointSyncKeepsDirectory primitives fsync directory.path (directory.file .stagedManifest) returned
+    | renameStaged =>
+      exact congrArg Cache.directory (primitives.manifestRenameReturned directory fsync next manifest returned).2
+    | syncDirectory =>
+      exact checkpointSyncKeepsDirectory primitives fsync directory.path directory.path returned
+
+/-- A returned checkpoint step can add or consume pending handles.
+The original directory slot survives the whole prefix, including rename. -/
+theorem NativeCheckpointSourcePrefix.directoryCacheAtIssue
+    (prior : NativeCheckpointSourcePrefix current primitives fsync stage) :
+    prior.atIssue.1.directory = current.current.ready.state.cache.directory :=
+  successfulCheckpointStepsFrame _ (fun world => world.1.directory) prior.completed
+    (fun step _ _ _ => checkpointStepKeepsDirectory primitives current.current.ready.state.session.directory
+      fsync prior.next prior.manifest step) prior.returnedPrefix
+
+private theorem checkpointDirectoryUsesCachedHandle
+    (stop : NativeCheckpointSourceStop current primitives fsync stage reason reached)
+    (issued : let dir := current.current.ready.state.session.directory.path
+      (primitives.syncUntilStop dir fsync #[dir]).run stop.atIssue = .error reason reached) :
     ∃ handle, current.current.ready.state.cache.directory = some handle ∧
       stop.atIssue.1.directory = some handle ∧
       reached.1 = stop.atIssue.1 ∧ fsync handle stop.atIssue.2 = .error reason reached.2 := by
-  let directory := current.current.ready.state.session.directory
-  have issued := stop.runsDirectoryIssue
-  have frame : ∀ step ∈ stop.completed, ∀ before after,
-      (primitives.checkpointStepUntilStop directory fsync stop.next stop.manifest step).run before =
-        .ok (.ok ()) after → after.1.directory = before.1.directory := by
-    intro step member before after returned
-    rw [issued.1] at member
-    simp only [runSteps, List.mem_flatMap, List.mem_range, List.mem_cons, List.not_mem_nil, or_false] at member
-    obtain ⟨index, within, write | sync⟩ := member
-    · subst step
-      obtain ⟨_, _, _, _, staged⟩ := primitives.runWriteReturned directory fsync stop.next stop.manifest index returned
-      rw [staged]; rfl
-    · subst step
-      exact checkpointSyncKeepsDirectory primitives fsync directory.path
-        (directory.file (.run stop.next.generation index)) returned
-  have kept := successfulCheckpointStepsFrame _ (fun world => world.1.directory)
-    stop.completed frame stop.returnedPrefix
-  obtain ⟨handle, heapAtEffect, resolved, effect⟩ := issued.2
+  obtain ⟨handle, heapAtEffect, resolved, effect⟩ := primitives.issuedFsync issued
   simp only [Cache.resolve, beq_self_eq_true, ↓reduceIte] at resolved
   cases cached : stop.atIssue.1.directory with
   | none => rw [cached] at resolved; cases resolved
   | some original =>
     rw [cached] at resolved
     obtain ⟨rfl, same⟩ := EStateM.Result.ok.inj resolved
-    exact ⟨original, kept.symm.trans cached, rfl, (congrArg Prod.fst same).symm,
+    exact ⟨original, stop.toNativeCheckpointSourcePrefix.directoryCacheAtIssue.symm.trans cached, rfl, (congrArg Prod.fst same).symm,
       (congrArg Prod.snd same).symm ▸ effect⟩
+
+/-- The first directory barrier issues on the original cached descriptor. -/
+theorem NativeCheckpointSourceStop.runsDirectoryUsesCachedHandle
+    (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached) :
+    ∃ handle, current.current.ready.state.cache.directory = some handle ∧
+      stop.atIssue.1.directory = some handle ∧
+      reached.1 = stop.atIssue.1 ∧ fsync handle stop.atIssue.2 = .error reason reached.2 :=
+  checkpointDirectoryUsesCachedHandle stop stop.stoppedStep
+
+/-- After the manifest rename, the final directory barrier issues on
+the same original cached descriptor. -/
+theorem NativeCheckpointSourceStop.manifestDirectoryUsesCachedHandle
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached) :
+    ∃ handle, current.current.ready.state.cache.directory = some handle ∧
+      stop.atIssue.1.directory = some handle ∧
+      reached.1 = stop.atIssue.1 ∧ fsync handle stop.atIssue.2 = .error reason reached.2 :=
+  checkpointDirectoryUsesCachedHandle stop stop.stoppedStep
 
 end Alvoki.Storage.DiskSession

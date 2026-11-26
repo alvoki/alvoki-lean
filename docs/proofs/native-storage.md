@@ -144,8 +144,11 @@ identify one set of exact durable bytes, and its watermark establishes where WAL
 Run-file syncs and the first directory sync preserve the prior selection. When manifest rename has
 taken effect before the last directory barrier, a crash can select the old or the synchronized new
 manifest. `CheckpointPowerCut.finalDirectoryPublication` shows that an effective final directory
-barrier settles the new selection. These claims use the
-reported file and directory effects, the selected inode bindings and the published run custody.
+barrier settles the new selection. For a supported ready-call prefix that stops at this barrier,
+the opened cache and local frame laws identify the cached root at the interrupted raw fsync.
+The Linux effect on the surviving directory bindings is a separate premise at that syscall.
+Selection then uses the published run custody and bytes from one allowed crash image.
+[Source stop and recovery](../../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
 Proofs cover the reported cut families. Derivation from all reached raw schedules and interrupted
 manifest preparation branches remains open. [Checkpoint protocol](../../lean/Alvoki/Storage/Publication/CheckpointPublicationModel.lean) · [Final directory cut](../../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryCut.lean) · [Manifest rename and selected read](../../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameReboot.lean)
 

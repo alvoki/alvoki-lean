@@ -325,11 +325,8 @@ structure RunsDirectoryStopObservations
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap)) where
   calls : CheckpointRawSyncCalls heap
-  projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1
-  load : calls.readDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2
-  primitive : ∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
-    fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal stop.atIssue.2 ∧
-      RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal
+  projected : (view.directory stop.atIssue.2 cache.directory).map (view.handle stop.atIssue.2) = stop.atIssue.1.directory
+  routing : calls.DirectoryAt view cache.directory fsync stop.atIssue.2
   effective : Bool
   effect : ∀ literal, calls.fsync literal stop.atIssue.2 = .error reason reached.2 →
     let state := current.current.ready.state
@@ -355,7 +352,7 @@ theorem NativeCheckpointSourceStop.runsDirectoryPreservesSelected
     (stable : NativeReadyStorage current.current.ready.state (observe stop.atIssue.2).storageObservation)
     (seen : RunsDirectoryStopObservations (view := view) stop cache inodes runs observe) :
     NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
-  obtain ⟨literal, _, _, _, stopped, _⟩ := stop.runsDirectoryIssuesRawSync seen.calls cache seen.projected seen.load seen.primitive
+  obtain ⟨literal, _, _, _, stopped, _⟩ := stop.runsDirectoryIssuesRawSync seen.calls cache seen.projected seen.routing
   obtain ⟨_, bytes, visible, survives⟩ := seen.effect literal stopped
   apply stable.frame
   constructor

@@ -167,6 +167,82 @@ theorem NativeCheckpointSourceStop.manifestSyncIssuesRawSync
   exact checkpointPendingIssuesRawSync calls cache (file_ne_directory _ .stagedManifest)
     (projected.trans remembered) observed stopped
 
+/-- The actual cache load and fsync at one directory barrier. -/
+structure CheckpointRawSyncCalls.DirectoryAt (calls : CheckpointRawSyncCalls heap)
+    (view : OpenCloseHeapView heap image) (directory : IO.Ref (Option IO.FS.Handle))
+    (fsync : CheckpointFsync heap) (entry : heap) : Prop where
+  load : calls.readDirectory directory entry = .ok (view.directory entry directory) entry
+  primitive : ∀ literal, view.directory entry directory = some literal →
+    fsync (view.handle entry literal) entry = calls.fsync literal entry ∧ RawFsyncTarget view entry entry literal
+
+private abbrev directoryProjection (view : OpenCloseHeapView heap image)
+    (directory : IO.Ref (Option IO.FS.Handle)) (atHeap : heap) : Option CheckpointOpenHandle :=
+  (view.directory atHeap directory).map (view.handle atHeap)
+
+/-- Frame the opened directory projection at the phase update and at
+returned checkpoint steps. Rename is framed at its literal callback. -/
+structure NativeCheckpointSourcePrefix.DirectoryProjectionEffects {stage : Step}
+    (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
+    (view : OpenCloseHeapView heap image) (directory : IO.Ref (Option IO.FS.Handle)) : Prop where
+  poison : opened.set opened.phase .poisoned current.reached = .ok () prior.poisoned →
+    directoryProjection view directory prior.poisoned = directoryProjection view directory current.reached
+  returned : ∀ step ∈ prior.completed, step ≠ .manifest .renameStaged → ∀ before after,
+    (primitives.checkpointStepUntilStop current.current.ready.state.session.directory fsync
+      prior.next prior.manifest step).run before = .ok (.ok ()) after →
+    directoryProjection view directory after.2 = directoryProjection view directory before.2
+  rename : ∀ {before after},
+    let root := current.current.ready.state.session.directory
+    primitives.rename (root.file .stagedManifest) (root.file .manifest) before = .ok () after →
+    directoryProjection view directory after = directoryProjection view directory before
+
+/-- Derive agreement at issue from the raw cache of the opened handle,
+the actual poison setter and the reached successful checkpoint prefix. -/
+theorem NativeCheckpointSourcePrefix.projectsDirectoryAtIssue {stage : Step}
+    (prior : NativeCheckpointSourcePrefix current primitives fsync stage)
+    (view : OpenCloseHeapView heap image) (directory : IO.Ref (Option IO.FS.Handle))
+    (initial : (view.directory current.reached directory).map (view.handle current.reached) =
+      current.current.ready.state.cache.directory)
+    (effects : prior.DirectoryProjectionEffects view directory) :
+    (view.directory prior.atIssue.2 directory).map (view.handle prior.atIssue.2) =
+      prior.atIssue.1.directory := by
+  let project := directoryProjection view directory
+  let root := current.current.ready.state.session.directory
+  have kept : project prior.atIssue.2 = project prior.poisoned :=
+    successfulCheckpointStepsPreserve _ (fun world => project world.2) (fun before after => after = before)
+      (fun _ => rfl) (fun earlier later => later.trans earlier) prior.completed (by
+        intro step member before after returned
+        by_cases isRename : step = .manifest .renameStaged
+        · subst step
+          exact effects.rename (primitives.manifestRenameReturned root fsync prior.next prior.manifest returned).1
+        · exact effects.returned step member isRename before after returned) prior.returnedPrefix
+  exact kept.trans ((effects.poison prior.setsPoisoned).trans (initial.trans prior.directoryCacheAtIssue.symm))
+
+private theorem checkpointDirectoryIssuesRawSync {files : DiskTable.OpenSyncFiles} {dir : FilePath}
+    (calls : CheckpointRawSyncCalls heap)
+    (cache : OpenSyncCacheRefs files dir) {issued rawReached : heap}
+    {original : Option CheckpointOpenHandle} {handle : CheckpointOpenHandle}
+    (cached : original = some handle)
+    (projected : (view.directory issued cache.directory).map (view.handle issued) = some handle)
+    (routing : calls.DirectoryAt view cache.directory fsync issued)
+    (stopped : fsync handle issued = .error reason rawReached) :
+    ∃ literal, view.directory issued cache.directory = some literal ∧
+      original = some (view.handle issued literal) ∧
+      RawFsyncTarget view issued issued literal ∧ calls.fsync literal issued = .error reason rawReached ∧
+      calls.group dir dir cache.directory cache.active cache.pending issued = .error reason rawReached := by
+  cases rawDirectory : view.directory issued cache.directory with
+  | none => simp [rawDirectory] at projected
+  | some literal =>
+    simp only [rawDirectory, Option.map_some, Option.some.injEq] at projected
+    have sourceFsync := projected.symm ▸ stopped
+    obtain ⟨physical, custody⟩ := routing.primitive literal rawDirectory
+    have rawFsync := physical.symm.trans sourceFsync
+    have selected : (calls.select dir dir cache.directory cache.active cache.pending).run issued =
+        .error reason rawReached := by
+      simp [CheckpointRawSyncCalls.select, syncWithHandles, returned, routing.load, rawDirectory,
+        rawFsync, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.run, ExceptT.mk, EStateM.bind,
+        Pure.pure, ExceptT.pure, EStateM.pure]
+    exact ⟨literal, rfl, projected.symm ▸ cached, custody, rawFsync, checkpointRawGroupStops _ selected⟩
+
 /-- The first directory barrier chooses the literal handle held in the
 original directory cache, at the exact heap reached by the file prefix.
 It neither consumes a pending entry nor consults a fallback file open. -/
@@ -174,34 +250,34 @@ theorem NativeCheckpointSourceStop.runsDirectoryIssuesRawSync
     (stop : NativeCheckpointSourceStop current primitives fsync .syncRunsDirectory reason reached)
     (calls : CheckpointRawSyncCalls heap)
     (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
-    (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
-    (load : calls.readDirectory cache.directory stop.atIssue.2 = .ok (view.directory stop.atIssue.2 cache.directory) stop.atIssue.2)
-    (primitive : ∀ literal, view.directory stop.atIssue.2 cache.directory = some literal →
-      fsync (view.handle stop.atIssue.2 literal) stop.atIssue.2 = calls.fsync literal stop.atIssue.2 ∧
-        RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal) :
+    (projected : (view.directory stop.atIssue.2 cache.directory).map (view.handle stop.atIssue.2) =
+      stop.atIssue.1.directory)
+    (routing : calls.DirectoryAt view cache.directory fsync stop.atIssue.2) :
     let dir := current.current.ready.state.session.directory.path
     ∃ literal, view.directory stop.atIssue.2 cache.directory = some literal ∧
       current.current.ready.state.cache.directory = some (view.handle stop.atIssue.2 literal) ∧
       RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal ∧
       calls.fsync literal stop.atIssue.2 = .error reason reached.2 ∧
       calls.group dir dir cache.directory cache.active cache.pending stop.atIssue.2 = .error reason reached.2 := by
-  intro dir
-  obtain ⟨handle, cached, issuing, _, stopped⟩ := stop.runsDirectoryUsesCachedHandle
-  have projectedDirectory := congrArg Cache.directory projected
-  change (view.directory stop.atIssue.2 cache.directory).map (view.handle stop.atIssue.2) = stop.atIssue.1.directory at projectedDirectory
-  rw [issuing] at projectedDirectory
-  cases rawDirectory : view.directory stop.atIssue.2 cache.directory with
-  | none => simp [rawDirectory] at projectedDirectory
-  | some literal =>
-    simp only [rawDirectory, Option.map_some, Option.some.injEq] at projectedDirectory
-    have sourceFsync := projectedDirectory.symm ▸ stopped
-    obtain ⟨physical, custody⟩ := primitive literal rawDirectory
-    have rawFsync := physical.symm.trans sourceFsync
-    have selected : (calls.select dir dir cache.directory cache.active cache.pending).run stop.atIssue.2 =
-        .error reason reached.2 := by
-      simp [CheckpointRawSyncCalls.select, syncWithHandles, returned, load, rawDirectory,
-        rawFsync, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.run, ExceptT.mk, EStateM.bind,
-        Pure.pure, ExceptT.pure, EStateM.pure]
-    exact ⟨literal, rfl, projectedDirectory.symm ▸ cached, custody, rawFsync, checkpointRawGroupStops _ selected⟩
+  obtain ⟨_, cached, issuing, _, stopped⟩ := stop.runsDirectoryUsesCachedHandle
+  exact checkpointDirectoryIssuesRawSync calls cache cached (projected.trans issuing) routing stopped
+
+/-- The same literal routing proof applies after the returned rename.
+Only the directory cell needs to match the modeled cache at issue. -/
+theorem NativeCheckpointSourceStop.manifestDirectoryIssuesRawSync
+    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
+    (calls : CheckpointRawSyncCalls heap)
+    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+    (projected : (view.directory stop.atIssue.2 cache.directory).map (view.handle stop.atIssue.2) =
+      stop.atIssue.1.directory)
+    (routing : calls.DirectoryAt view cache.directory fsync stop.atIssue.2) :
+    let dir := current.current.ready.state.session.directory.path
+    ∃ literal, view.directory stop.atIssue.2 cache.directory = some literal ∧
+      current.current.ready.state.cache.directory = some (view.handle stop.atIssue.2 literal) ∧
+      RawFsyncTarget view stop.atIssue.2 stop.atIssue.2 literal ∧
+      calls.fsync literal stop.atIssue.2 = .error reason reached.2 ∧
+      calls.group dir dir cache.directory cache.active cache.pending stop.atIssue.2 = .error reason reached.2 := by
+  obtain ⟨_, cached, issuing, _, stopped⟩ := stop.manifestDirectoryUsesCachedHandle
+  exact checkpointDirectoryIssuesRawSync calls cache cached (projected.trans issuing) routing stopped
 
 end Alvoki.Storage.DiskSession
