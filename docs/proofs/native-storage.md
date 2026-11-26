@@ -207,10 +207,18 @@ premises include a settled WAL name interval through the cutoff, truthful
 directory and file reads, and reference allocation that preserves the phase.
 The fresh-table composition also identifies the acknowledged sequence. Under
 the phase-cell and same-token laws, a latest snapshot on the reopened handle
-reads the replayed batch at its latest sequence for any key.
+reads the replayed batch for any key. Its pin and the original acknowledgement
+both have sequence number equal to the batch length.
 [Fresh writer through reopen](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 · [Snapshot lookup](../../lean/Alvoki/Storage/Disk/NativeOpenSnapshotControls.lean)
 · [Reopen theorem](https://github.com/alvoki/alvoki-lean/blob/069be1e6d09dd3eba01b87d8756d454126d4ca8f/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1755)
+
+For a later write returning `commitUnknown` after the file-sync group
+succeeds, the sampled marker selects the earlier history or the earlier history
+plus the whole prepared batch. Before rotation or checkpoint, the same opener
+and latest lookup use that selected history. The client receives an error in
+this execution. An interruption while a syscall is outstanding has a different
+source prefix. [Late publication](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the

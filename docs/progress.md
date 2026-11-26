@@ -83,10 +83,12 @@ Several cache references may share a handle. The fsync may already have taken ef
 On a fresh table, a first acknowledged batch, one sampled crash and a successful
 reopen now compose through a latest snapshot lookup for any key. The lookup
 uses the reopened table’s actual phase and token and returns the value obtained
-by replaying the prepared batch.
+by replaying the prepared batch. Its pin carries the sequence returned by the write.
+For a subsequent late publication error after the file group succeeded, the
+selected old-or-whole history also feeds that same open and snapshot proof.
 
-**Next obligation.** Admit a final interrupted batch on that segment and show
-that reopening reads either the previous history or the whole added batch. On the
+**Next obligation.** Feed an interruption during the outstanding final directory
+fsync into the same physical crash selection, without assuming a returned error. On the
 failed-barrier path, the surviving namespace and cleanup inventory still need
 to feed the next admission.
 Further interruptions, mixed sessions and maintenance remain in the

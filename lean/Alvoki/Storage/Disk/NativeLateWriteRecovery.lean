@@ -532,7 +532,10 @@ theorem NativeReturnedCalls.selectsAfterLatePublicationError
               let reads := origin.ready.reads ++ (earlier ++ events).flatMap NativeExecutionEvent.reads
               (plan.history = history ∨ plan.history = history ++ batch) ∧
               PendingClientReplay submissions reads plan.history ∧
-              ∀ read ∈ reads, read.BoundedBy plan.history.length := by
+              (∀ read ∈ reads, read.BoundedBy plan.history.length) ∧
+              ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
+                state.writer.target.pair.manifest = none → state.writer.wal.sealed = [] →
+                opener.ReplaysSingleSegmentAtOpen view state storage visible rebooted namespaceView root plan.history := by
   obtain ⟨last, events, ran, length, records, through, write⟩ :=
     executed.refinesReadyBeforeCommitUnknown start prior view inodes runs observe inode buffered effects
       initial readyNames initialWindow
@@ -554,9 +557,14 @@ theorem NativeReturnedCalls.selectsAfterLatePublicationError
   obtain ⟨plan⟩ := last.current.ready.preparesSelectedWrite handoff.prepared handoff.fits handoff.admitted
     handoff.selected.valid handoff.selected.manifest
   refine ⟨target, plan, handoff,
-    (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through, ?_, ?_, ?_⟩
+    (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through, ?_, ?_, ?_, ?_⟩
   · simpa only [← through.history] using plan.allowed
   · simpa only [← through.submissions, ← through.reads] using plan.pending
   · simpa only [← through.reads] using plan.bounded
+  · intro stream opener namespaceView root absent single
+    exact @NativeReadPosition.SelectedWritePlan.replaysSingleSegmentAtOpen
+      (source := opener) (namespaceView := namespaceView) (root := root) (plan := plan)
+      (selected := handoff.selected) (recovery := handoff.recovery) (covers := handoff.covers)
+      (noManifest := absent) (single := single)
 
 end Alvoki.Storage.DiskSession

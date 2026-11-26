@@ -754,12 +754,20 @@ theorem NativeReadPosition.SelectedWritePlan.visibleWal
     {view : OpenCloseHeapView heap FileImage} {entry : heap}
     (plan : current.SelectedWritePlan batch target (view.files entry).image)
     (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
+    {first : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, first ≤ offset)
     (window : current.state.writer.wal.NamespaceWindow current.state.session.directory
-      plan.layout.first plan.layout.range.through (names entry))
+      first target.range.through (names entry))
     (protectedFiles : NativeReadyProtectedStorage current.state ⟨names entry, fun inode => [visible entry inode]⟩)
     (keeper : RawOpenRetryTrace.KeeperAt view current.state.session.directory target names visible entry) :
-    plan.layout.VisibleWal current.state.session.directory (names entry) (visible entry) :=
-  plan.layout.visibleWalOfSelection plan.targetEq (plan.liveWalWindow (names entry) window)
+    plan.layout.VisibleWal current.state.session.directory (names entry) (visible entry) := by
+  obtain ⟨rest, firstRead⟩ := chainStarts plan.layout.chain (by simp)
+  have firstInWal := (plan.modeledWindow.1 plan.layout.first (Nat.le_refl _)).mpr
+    (firstRead ▸ List.mem_cons_self (a := plan.layout.first) (l := rest))
+  rw [WalSegmentImage.appendSelectedView_starts] at firstInWal
+  have cutoff : plan.layout.range.through = target.range.through :=
+    congrArg (fun selected : Target => selected.range.through) plan.targetEq
+  have bounded := window.restrict (covers _ firstInWal) (Nat.le_of_eq cutoff)
+  exact plan.layout.visibleWalOfSelection plan.targetEq (plan.liveWalWindow (names entry) bounded)
     (fun _ member => NativeReadPosition.SelectedWritePlan.retainsSeal current plan member) protectedFiles keeper
 
 private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
@@ -787,14 +795,8 @@ private theorem NativeReadPosition.preparesVisibleWriteRetryFromEffects
   obtain ⟨plan⟩ := current.preparesSelectedWrite prepared fits admitted valid initial.manifest
   have preserved := carries atEntry
   obtain ⟨reachedWindow, reachedKeeper⟩ := atReached preserved
-  obtain ⟨rest, firstRead⟩ := chainStarts plan.layout.chain (by simp)
-  have firstInWal := (plan.modeledWindow.1 plan.layout.first (Nat.le_refl _)).mpr
-    (firstRead ▸ List.mem_cons_self (a := plan.layout.first) (l := rest))
-  rw [WalSegmentImage.appendSelectedView_starts] at firstInWal
-  have cutoff : plan.layout.range.through = target.range.through :=
-    congrArg (fun selected : Target => selected.range.through) plan.targetEq
   have keptFiles := initial.protectedFiles.frame (fun path keep => protectedFrame path (.inr keep))
-  refine ⟨plan, plan.visibleWal names visible (reachedWindow.restrict (covers _ firstInWal) (cutoff ▸ Nat.le_refl _)) keptFiles reachedKeeper,
+  refine ⟨plan, plan.visibleWal names visible covers reachedWindow keptFiles reachedKeeper,
     ⟨valid, kept.trans initial.kept, initial.manifest, keptFiles, reachedKeeper, ?_⟩, preserved⟩
   exact (protectedFrame.visiblePayload (.inl rfl)).trans initial.marker
 
