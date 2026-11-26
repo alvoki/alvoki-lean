@@ -34,6 +34,20 @@ abbrev _root_.Alvoki.Storage.WalSegmentImage.SettledNamespaceWindow
   wal.NamespaceWindow directory first through storage.files.names ∧
     ∀ names ∈ storage.crashNames, wal.NamespaceWindow directory first through names
 
+/-- A rooted directory barrier settles the live WAL catalog, including
+absent segments. Only its child-name effects enter this argument. -/
+theorem _root_.Alvoki.Storage.WalSegmentImage.NamespaceWindow.afterDirectorySync
+    {wal : WalSegmentImage} {directory : DiskDirectory} {first through : Nat}
+    {entry reached : CheckpointStorageObservation}
+    (live : wal.NamespaceWindow directory first through entry.files.names)
+    (visible : ∀ file, reached.files.names (directory.file file) = entry.files.names (directory.file file))
+    (settled : ∀ names ∈ reached.crashNames, ∀ file,
+      names (directory.file file) = reached.files.names (directory.file file)) :
+    wal.SettledNamespaceWindow directory first through reached := by
+  have reachedLive := live.frame (fun start _ _ => congrArg Option.isSome (visible (.walSegment start)))
+  exact ⟨reachedLive, fun names survives => reachedLive.frame (fun start _ _ =>
+    congrArg Option.isSome (settled names survives (.walSegment start)))⟩
+
 theorem WalNamePresenceFrame.preservesNamespaceWindow
     {wal : WalSegmentImage} {directory : DiskDirectory} {first through : Nat}
     {entry reached : CheckpointStorageObservation}

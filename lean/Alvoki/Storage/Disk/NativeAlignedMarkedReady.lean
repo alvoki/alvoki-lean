@@ -476,16 +476,14 @@ theorem AlignedRepairStorageEffects.walWindowAfterSyncs
     state.writer.wal.SettledNamespaceWindow state.session.directory first through (observe repaired) := by
   let directory := state.session.directory
   obtain ⟨_, children, settled, _⟩ := effects.directorySync syncRoot rootAttached rootBound
-  have liveAfterRoot := live.frame (fun start _ _ =>
-    congrArg Option.isSome (children (directory.file (.walSegment start)) ⟨.walSegment start, rfl⟩).1)
+  have settledWindow := live.afterDirectorySync
+    (fun file => (children _ ⟨file, rfl⟩).1) settled
   have keeperAfterRoot := (children _ ⟨.walSegment state.writer.wal.active.first, rfl⟩).1.trans keeperBound
   obtain ⟨_, keeperAtIssue, _⟩ := effects.pendingKeeperAtIssue readPending clearPending keeperAfterRoot
   obtain ⟨keeperSync, _⟩ := effects.keeperSync syncKeeper keeperAttached keeperAtIssue
   have throughCache := (readNames readPending).trans (clearNames clearPending)
   have throughKeeper := throughCache.trans (WalNamePresenceFrame.ofFileSync keeperSync)
-  exact throughKeeper.preservesNamespaceWindow ⟨liveAfterRoot,
-    (fun names survives => liveAfterRoot.frame (fun start _ _ =>
-      congrArg Option.isSome (settled names survives (.walSegment start))))⟩
+  exact throughKeeper.preservesNamespaceWindow settledWindow
 
 end LiteralRepair
 

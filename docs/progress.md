@@ -46,8 +46,15 @@ with the selected bytes and leave the temporary name absent in every
 joint crash map. Successful marked installation and its initial read
 state now require only the later-name bound from the old preparation
 evidence. The completed replacement supplies its own durable keeper.
-The remaining literal-open step is to derive the physical effects at
-those callback heaps and install that writer on the returned references.
+For the literal successful finish, the primitive effects at its actual
+callback heaps now give physical writer readiness. The proof follows the
+original cached root across pruning and replacement. It keeps the exact
+staged descriptor selected from the pending list through the filtered
+cache update and file fsync. The update must preserve protected bytes,
+including when another reference is dropped. The final rooted barrier
+settles the new keeper binding and removes the scratch name from each
+admissible crash map. Connecting this heap and the replayed history to
+the actual returned table and its next-write namespace remains open.
 [Replacement callbacks](../lean/Alvoki/Storage/Disk/NativeLongKeeperSettlementHeap.lean) ·
 [Replacement storage](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
