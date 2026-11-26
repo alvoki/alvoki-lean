@@ -131,5 +131,62 @@ theorem RawSyncCalls.failedMarkerRenameSelects (valid : state.Valid)
   refine ⟨?_, payloads, keeper, oldMarker, newMarker, selectedReturn⟩
   simp only [calls.commitAfterStaging cache appender stager rename wrote remembered, synced, failed]
 
+/-- Follow the actual successful file group and rename to the cached
+root's reported error. The cache read selects the literal fsync. Its
+local effect applies to the joint namespace maps returned by the sync. -/
+theorem RawSyncCalls.failedRootSyncFromPublication (valid : state.Valid)
+    (old : NativeReadyStorage state (observe entry).storageObservation)
+    (wrote : append keeperPath bytes entry = .ok () appended)
+    (remembered : stage stagedPath mark appended = .ok () staged)
+    (synced : sync #[keeperPath, stagedPath] staged = .ok () grouped)
+    (effects : calls.WalGroupEffects cache view appender stager inodes observe inode buffered
+      first count priorBytes bytes entry appended staged grouped)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {renamed issued reached : heap} {rootHandle : IO.FS.Handle} {cause : IO.Error} {effective : Bool}
+    (moved : rename stagedPath markerPath grouped = .ok () renamed)
+    (loaded : calls.readDirectory cache.directory renamed = .ok (some rootHandle) issued)
+    (failedGroup : sync #[(dir).path] renamed = .error cause reached)
+    (target : RawFsyncTarget view renamed issued rootHandle)
+    (root : (observe renamed).visible (dir).path =
+      some ((view.handle renamed rootHandle).1.inode (view.handle renamed rootHandle).2.1.description))
+    (renameEffect : ∀ ino, (observe grouped).visible stagedPath = some ino →
+      WalMarkerRenameEffect dir ino true (observe grouped).storageObservation (observe renamed).storageObservation)
+    (loadKeeps : (observe issued).storageObservation = (observe renamed).storageObservation)
+    (syncEffect : ∀ {syncCause}, calls.fsync rootHandle issued = .error syncCause reached →
+      (view.handle issued rootHandle).2.1 ∈ (view.descriptors issued).slots →
+      (observe issued).visible (dir).path =
+        some ((view.descriptors issued).inode (view.handle issued rootHandle).2.1.description) →
+      WalRootSyncEffect dir effective (observe issued).storageObservation (observe reached).storageObservation) :
+    commitBytesAt dir first bytes count append stage sync rename entry = .error cause reached ∧
+    ∃ payloads : WalPublicationPayloads,
+      payloads.keeperBytes = priorBytes ++ bytes ∧
+      payloads.oldMarkerBytes = WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64 ∧
+      payloads.newMarkerBytes = mark ∧
+      payloads.Selections dir state.writer.wal.active.first (observe reached).storageObservation true
+        (fun published => effective = true → published = true) := by
+  have actualSync := (calls.rootBarrier cache loaded).2.symm.trans failedGroup
+  obtain ⟨syncCause, failed, diagnostic⟩ : ∃ syncCause,
+      calls.fsync rootHandle issued = .error syncCause reached ∧
+      IO.userError s!"sync failed for '{(dir).path}': {syncCause}" = cause := by
+    cases returned : calls.fsync rootHandle issued with
+    | ok value _ =>
+      cases value
+      rw [returned] at actualSync
+      contradiction
+    | error syncCause after =>
+      rw [returned] at actualSync
+      obtain ⟨diagnostic, sameHeap⟩ := EStateM.Result.error.inj actualSync
+      exact ⟨syncCause, sameHeap ▸ rfl, diagnostic⟩
+  obtain ⟨payloads, selected, keeper, oldMarker, newMarker⟩ :=
+    calls.groupedWalPayloadsFromPublication cache view appender stager inodes observe inode buffered
+      (rows := rows) valid old wrote remembered synced effects
+  obtain ⟨returned, selections⟩ := calls.failedRootSyncSelects cache appender stager rename
+    (fun atHeap => (observe atHeap).storageObservation) view payloads
+    wrote remembered synced moved loaded failed target root selected
+    (renameEffect payloads.newMarker selected.stagedNamed) loadKeeps syncEffect
+  have firstExact : first = state.writer.wal.active.first := valid.retained.resumed.keeper.trans valid.retained.active
+  rw [firstExact] at selections
+  exact ⟨diagnostic ▸ returned, payloads, keeper, oldMarker, newMarker, selections⟩
+
 end
 end Alvoki.Storage.DiskSession
