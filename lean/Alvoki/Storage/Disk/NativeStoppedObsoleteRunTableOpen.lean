@@ -87,14 +87,15 @@ theorem NativeOpenedPosition.opensAfterStoppedObsoleteRunUnlink
   let next : NativeReadPosition current.current.history current.current.submissions :=
     ⟨reader.run, returned, returned, current.current.ready.reads, reached.1⟩
   have reopened := NativeObsoleteRunUnlinkCrashReopen.fromReader current.current.ready stop crash reader reached lost
-  obtain ⟨cacheOpen, makeCache, handle, start, cacheAction, cacheSource, ran, currentEq, lock, references, cacheDirectory,
-    contents, getEq, setEq, compareEq, pins, sameFiles, sameCensus, sameCache⟩ :=
-    raw.installsAligned survivorValid history target keeper descriptors offsets prepared next rfl reached
-      remove write rename bootstrap assemble constructs effects ptrEq
+  obtain ⟨installed⟩ := raw.toRawAlignedCheckpointReopenEffects.installsQuietSelectionAt
+    survivorValid history target keeper descriptors offsets prepared next rfl reached
+    remove write rename bootstrap assemble constructs effects ptrEq
   have sameCutCensus := raw.admission.reboot.previousCensus.trans (congrArg Prod.fst stopped.files).symm
   refine ⟨stopped.stopped, sameCutCensus, ?_, ?_, Prod.ext raw.admission.raw.entryCensus raw.admission.raw.entryFiles, ?_,
-    next, cacheOpen, makeCache, handle, start, reopened, rfl, ?_, cacheAction, cacheSource, ran, currentEq, lock, references,
-    cacheDirectory, contents, getEq, setEq, compareEq, pins, sameFiles, sameCensus, sameCache⟩
+    next, installed.cacheOpen, installed.makeCache, installed.handle, installed.start, reopened, rfl, ?_,
+    installed.cacheAction, installed.cacheSource, installed.rawOpen, installed.position, installed.lock,
+    installed.references, installed.directory, installed.contents, installed.readsPhase, installed.writesPhase,
+    installed.comparesTokens, installed.pins, installed.files, installed.census, installed.cache⟩
   · exact fun path selected => (raw.admission.reboot.liveNames path selected).trans (crash.reachedBindings path selected)
   · intro path payload selected observed
     obtain ⟨read, named, actual⟩ := raw.admission.reboot.readsSurvivingFile selected observed
@@ -105,7 +106,7 @@ theorem NativeOpenedPosition.opensAfterStoppedObsoleteRunUnlink
     exact ⟨read, sameName.trans named, named, actual⟩
   · rw [raw.admission.raw.entryCensus]
     rfl
-  · rw [currentEq, ← stopped.holds]
+  · rw [installed.position, ← stopped.holds]
     exact .recoverInterruptedRunUnlink current.current stop crash next reopened
 
 end Alvoki.Storage.DiskSession

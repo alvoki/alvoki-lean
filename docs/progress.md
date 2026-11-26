@@ -15,6 +15,13 @@ prefix. A failed keeper/marker sync group joins this ledger to a sampled reboot
 and either a final failed reopen or a successful reopen followed by an acknowledged
 write and a snapshot read on the returned handle, under local storage effects.
 
+After a power loss between calls, one chronological reader now produces the
+logical restart step and its recovered session together. The opened-session
+trace and the checkpoint recovery proof use the same step producer and exact
+installation result. For the first acknowledged WAL batch, the remaining
+link is from one sampled crash namespace to the actual listing and reads of
+the healthy opener. [Quiet recovery](../lean/Alvoki/Storage/Disk/NativeQuietPowerLossTableOpen.lean)
+
 **Retries.** The first reboot selects the committed prefix and keeper. Given the
 bounded WAL catalog at that sample, the actual admission, listing and read frames
 carry them to prune authorization. Its fsync settles the protected names.

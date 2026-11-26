@@ -114,32 +114,38 @@ structure NativeQuietRestartReport.Returned (seen : NativeQuietRestartReport bef
 or its replay. The empty within-session prefix starts at this call. -/
 theorem NativeQuietRestartReport.reaches (seen : NativeQuietRestartReport before input view names bytes) :
     ∃ next, seen.Returned next := by
-  have prior : NativeOpenedTrace before.position [] [] before.position := .empty
-  obtain ⟨_, empty, next, cacheOpen, makeCache, handle, start, source, initializer, reads, reader, _, step,
-    _, returned, reached, lock, cache, _, contents, get, set, ptrEq, pins, files, census, cached⟩ :=
-    prior.restartsThenOpensAligned seen.crash seen.target seen.keeper seen.descriptors seen.offsets seen.prepared
-      seen.observed seen.remove seen.write seen.rename seen.bootstrap seen.assemble seen.constructs seen.phaseEffects seen.ptrEq
-  refine ⟨⟨handle, start⟩, ?_, empty, ⟨cacheOpen, makeCache, source, initializer, returned⟩,
-    ?_, ?_, lock, cache, contents, get, set, ptrEq, pins, ?_, ?_, ?_⟩
-  · change NativeExecutionStep before.position.current _ start.current
-    rw [reached]
+  let current := before.position.current.ready
+  obtain ⟨next, step, sameReads, sameReader, replay⟩ :=
+    current.restartsAtReader seen.reader seen.target seen.keeper seen.descriptors seen.offsets seen.prepared
+  obtain ⟨valid, history, _⟩ := current.readPrefix.refines
+  obtain ⟨installed⟩ := seen.observed.toRawAlignedCheckpointReopenEffects.installsQuietSelectionAt
+    valid history seen.target seen.keeper seen.descriptors seen.offsets seen.prepared next sameReader.symm
+    (sameReads.symm ▸ replay) seen.remove seen.write seen.rename seen.bootstrap seen.assemble
+    seen.constructs seen.phaseEffects seen.ptrEq
+  refine ⟨⟨installed.handle, installed.start⟩, ?_, ?_,
+    ⟨installed.cacheOpen, installed.makeCache, installed.cacheAction, installed.cacheSource, installed.rawOpen⟩,
+    ?_, ?_, installed.lock, installed.references, installed.contents, installed.readsPhase, installed.writesPhase,
+    installed.comparesTokens, installed.pins, ?_, ?_, ?_⟩
+  · change NativeExecutionStep before.position.current _ installed.start.current
+    rw [installed.position]
     exact .readOrRestart before.position.current step
-  · change seen.reader.run = start.current.ready.opened
-    rw [reached]
-    exact reader
-  · change seen.reader.ReachedSession start.current.ready.state _ _ _
-    rw [reached]
-    exact reads
-  · change view.files start.reached = start.current.ready.state.files
-    rw [reached]
-    exact files
-  · change view.descriptors start.reached = start.current.ready.state.census
-    rw [reached]
-    exact census
-  · change view.cacheAt start.reached seen.observed.admission.seed.directoryRef
-      seen.observed.admission.seed.activeRef seen.observed.admission.seed.pendingRef = start.current.ready.state.cache
-    rw [reached]
-    exact cached
+  · rw [seen.observed.admission.raw.entryCensus]
+    rfl
+  · dsimp only
+    rw [installed.position]
+    exact sameReader.symm
+  · dsimp only
+    rw [installed.position]
+    exact replay
+  · dsimp only
+    rw [installed.position]
+    exact installed.files
+  · dsimp only
+    rw [installed.position]
+    exact installed.census
+  · dsimp only
+    rw [installed.position]
+    exact installed.cache
 
 inductive NativeOpenedSessionAction : Type 1 where
   | calls (instructions : List NativeOpenedInstruction)

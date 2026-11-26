@@ -2553,8 +2553,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyQuietCrash.restartsAt
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRebootEntry.readsSurvivingFile
 #check_axioms Alvoki.Storage.DiskSession.RawQuietRestartAdmission.admits
-#check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.restartsThenOpensAligned
-#check_axioms Alvoki.Storage.DiskSession.RawQuietRestartEffects.installsAligned
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.restartsAtReader
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionTrace.append
 #check_axioms Alvoki.Storage.DiskSession.NativeQuietRestartReport.reaches
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedAlignedCloseReport.reaches

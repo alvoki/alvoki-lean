@@ -130,138 +130,6 @@ theorem RawAlignedCheckpointReopenEffects.installsQuietSelectionAt
     next remove write rename bootstrap assemble ptrEq sameHistory sameReturn
     (sameReturn.symm.trans readyPrefix.frames.1) cache owner slot constructs effects
 
-/-- Install the exact session of the one chosen chronological reader.
-The same marked callbacks and cache allocation produce the returned
-table used by the next public call. -/
-theorem RawQuietRestartEffects.installsAligned
-    {beforeCensus : DescriptorInventory}
-    (seen : RawQuietRestartEffects reader view calls init names bytes before after phaseIdentity tokenIdentity
-      allocatePhase allocateToken stream beforeCensus)
-    (valid : state.Valid) (sameHistory : state.writer.history = history)
-    (target : layout.target = state.writer.target) (keeper : layout.keeper = state.writer.wal.active)
-    (descriptors : layout.sealed ++ [layout.keeper] = state.writer.wal.readDescriptors layout.range.watermark)
-    (offsets : selectWalSegmentReads (state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
-      some (layout.first, (state.writer.wal.readDescriptors layout.range.watermark).map WalSegment.first))
-    (prepared : Prepared crash.retry.image layout.target layout.plan)
-    (next : NativeReadPosition history log)
-    (sameReturn : reader.run = next.opened)
-    (reached : reader.ReachedSession next.state history log next.reads)
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
-      IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
-    (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files))
-    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
-    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
-    (effects : OpenPhaseCellEffects view.phase get set)
-    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    ∃ (cacheOpen : IO DiskTable.OpenSyncFiles)
-      (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
-      DiskTable.OpenSyncFiles.IsOpenAction state.session.directory.path cacheOpen ∧
-      cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk state.session.directory.path .read)
-        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
-        (fun value => liftM (IO.mkRef value)) makeCache ∧
-      seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached ∧
-      start.current = ⟨history, log, next⟩ ∧
-      handle.lock = seen.admission.raw.lock ∧
-      handle.files.UsesCacheReferences seen.admission.seed.activeRef seen.admission.seed.pendingRef
-        seen.admission.seed.directoryRef ∧ handle.files.AtDirectory state.session.directory.path ∧
-      handle.contents = view.phase ∧ handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧ start.pins = [] ∧
-      view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
-      view.cacheAt start.reached seen.admission.seed.directoryRef seen.admission.seed.activeRef
-        seen.admission.seed.pendingRef = next.state.cache := by
-  obtain ⟨returned⟩ := seen.toRawAlignedCheckpointReopenEffects.installsQuietSelectionAt valid sameHistory target keeper
-    descriptors offsets prepared next sameReturn reached remove write rename bootstrap assemble constructs effects ptrEq
-  exact ⟨returned.cacheOpen, returned.makeCache, returned.handle, returned.start, returned.cacheAction,
-    returned.cacheSource, returned.rawOpen, returned.position, returned.lock, returned.references,
-    returned.directory, returned.contents, returned.readsPhase, returned.writesPhase,
-    returned.comparesTokens, returned.pins, returned.files, returned.census, returned.cache⟩
-
-variable {opened : NativeOpenedHandle heap} {initial current : NativeOpenedPosition opened}
-
-/-- Start a new raw opened-table trace after one settled power loss.
-One selected reader supplies the exact physical survivor, the marked
-worker, the returned table and the next common ready position. -/
-theorem NativeOpenedTrace.restartsThenOpensAligned
-    (prior : NativeOpenedTrace initial instructions events current)
-    (crash : NativeReadyQuietCrash current.current.ready.state)
-    {layout : CanonicalKeeperLayout crash.retry.image current.current.ready.state.writer.history}
-    (target : layout.target = current.current.ready.state.writer.target)
-    (keeper : layout.keeper = current.current.ready.state.writer.wal.active)
-    (descriptors : layout.sealed ++ [layout.keeper] =
-      current.current.ready.state.writer.wal.readDescriptors layout.range.watermark)
-    (offsets : selectWalSegmentReads (current.current.ready.state.writer.wal.segments.map WalSegment.first)
-      layout.range.watermark = some (layout.first,
-        (current.current.ready.state.writer.wal.readDescriptors layout.range.watermark).map WalSegment.first))
-    (prepared : Prepared crash.retry.image layout.target layout.plan)
-    {selected : SelectedIntegrityCheckpoint current.current.ready.state.writer.published.durable
-      crash.retry.image.directory.active.manifest current.current.ready.state.writer.checkpoint}
-    {reader : NativeReadyRestartReads crash input layout selected}
-    (seen : RawQuietRestartEffects reader view calls init names bytes current.reached after phaseIdentity tokenIdentity
-      allocatePhase allocateToken stream)
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (bootstrap : DiskDirectory → DiskTable.OpenSyncFiles → EStateM IO.Error heap Reopened)
-    (assemble : DiskDirectory → IO.FS.Handle → DiskTable.OpenSyncFiles →
-      IO.Ref (Phase Installed) → IO.Ref Unit → DiskTable)
-    (constructs : ∀ resolved lock files, DiskTable.OpenReferenceAssembly resolved lock files (assemble resolved lock files))
-    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
-    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
-    (effects : OpenPhaseCellEffects view.phase get set)
-    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool) :
-    let state := current.current.ready.state
-    (view.descriptors after, view.files after) = (crash.reboot, crash.retry) ∧ (view.descriptors after).slots = [] ∧
-    ∃ (next : NativeReadPosition current.current.history current.current.submissions)
-      (cacheOpen : IO DiskTable.OpenSyncFiles)
-      (makeCache : IO.Ref (Option IO.FS.Handle) → IO.Ref (Option (FilePath × IO.FS.Handle)) →
-        IO.Ref (List (FilePath × IO.FS.Handle)) → DiskTable.OpenSyncFiles)
-      (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle),
-      DiskTable.OpenSyncFiles.IsOpenAction state.session.directory.path cacheOpen ∧
-      cacheOpen = openSyncFilesWith (m := IO) (IO.FS.Handle.mk state.session.directory.path .read)
-        (fun value => liftM (IO.mkRef value)) (fun value => liftM (IO.mkRef value))
-        (fun value => liftM (IO.mkRef value)) makeCache ∧
-      reader.ReachedSession next.state current.current.history current.current.submissions current.current.ready.reads ∧
-      reader.run = next.opened ∧ next.opened = .ok next.state.session (next.state.census, next.state.files) ∧
-      NativeReadRecoveryStep current.current.ready (.restart input) next ∧
-      NativeExecutionTrace initial.current (events ++ [.readOrRestart (.restart input)]) start.current ∧
-      seen.openTable remove write rename bootstrap assemble makeCache = .ok handle.table start.reached ∧
-      start.current = ⟨current.current.history, current.current.submissions, next⟩ ∧
-      handle.lock = seen.admission.raw.lock ∧
-      handle.files.UsesCacheReferences seen.admission.seed.activeRef seen.admission.seed.pendingRef
-        seen.admission.seed.directoryRef ∧ handle.files.AtDirectory state.session.directory.path ∧
-      handle.contents = view.phase ∧ handle.get = get ∧ handle.set = set ∧ handle.ptrEq = ptrEq ∧ start.pins = [] ∧
-      view.files start.reached = next.state.files ∧ view.descriptors start.reached = next.state.census ∧
-      view.cacheAt start.reached seen.admission.seed.directoryRef seen.admission.seed.activeRef
-        seen.admission.seed.pendingRef = next.state.cache := by
-  intro state
-  obtain ⟨valid, rows, priorReplay⟩ := current.current.ready.readPrefix.refines
-  obtain ⟨lost, reached, restart⟩ := crash.restartsAt valid rows priorReplay current.current.ready.readPrefix.readsBounded
-    layout target keeper descriptors offsets prepared selected reader
-  have reachedSession := restart
-  obtain ⟨readyPrefix, directory, owner, slot, cache, census, freshToken, freshPhase, lockInode, directoryInode, _,
-    table, checkpoint, durable, _⟩ := restart
-  let next : NativeReadPosition current.current.history current.current.submissions :=
-    ⟨reader.run, reached, reached, current.current.ready.reads, readyPrefix⟩
-  have step : NativeReadRecoveryStep current.current.ready (.restart input) next :=
-    .restart current.current.ready crash lost layout selected reader reached readyPrefix owner slot cache census freshToken freshPhase
-      ⟨directory, directoryInode, lockInode, table, checkpoint, durable⟩
-  obtain ⟨cacheOpen, makeCache, handle, start, cacheAction, cacheSource, ran, currentEq, lock, references, cacheDirectory,
-    contents, getEq, setEq, compareEq, pins, sameFiles, sameCensus, sameCache⟩ :=
-    seen.installsAligned valid rows target keeper descriptors offsets prepared next rfl reachedSession
-      remove write rename bootstrap assemble constructs effects ptrEq
-  refine ⟨Prod.ext seen.admission.raw.entryCensus seen.admission.raw.entryFiles, ?_, next, cacheOpen, makeCache, handle, start,
-    cacheAction, cacheSource, reachedSession, rfl, readyPrefix.frames.1, step, ?_, ran, currentEq, lock, references,
-    cacheDirectory, contents, getEq, setEq, compareEq, pins, sameFiles, sameCensus, sameCache⟩
-  · rw [seen.admission.raw.entryCensus]
-    rfl
-  · rw [currentEq]
-    exact .step prior.common (.readOrRestart current.current step)
-
 end
 
 section
@@ -279,6 +147,26 @@ variable {heap stream : Type} {history : List WAL.Write} {log : List DatabaseSub
   {phaseIdentity : IO.Ref (Phase Installed) → Nat} {tokenIdentity : IO.Ref Unit → Nat}
   {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
   {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
+
+/-- One settled restart produces the logical recovery step and the session
+of the very same reader used to install the returned handle. -/
+theorem NativeReadPosition.restartsAtReader
+    (reader : NativeReadyRestartReads crash input layout selected)
+    (target : layout.target = current.state.writer.target) (keeper : layout.keeper = current.state.writer.wal.active)
+    (descriptors : layout.sealed ++ [layout.keeper] = current.state.writer.wal.readDescriptors layout.range.watermark)
+    (offsets : selectWalSegmentReads (current.state.writer.wal.segments.map WalSegment.first) layout.range.watermark =
+      some (layout.first, (current.state.writer.wal.readDescriptors layout.range.watermark).map WalSegment.first))
+    (prepared : Prepared crash.retry.image layout.target layout.plan)
+    : ∃ next : NativeReadPosition history log,
+      NativeReadRecoveryStep current (.restart input) next ∧ next.reads = current.reads ∧
+      next.opened = reader.run ∧ reader.ReachedSession next.state history log current.reads := by
+  obtain ⟨valid, historyEq, pending⟩ := current.readPrefix.refines
+  obtain ⟨lost, installed, reached⟩ := crash.restartsAt valid historyEq pending current.readPrefix.readsBounded
+    layout target keeper descriptors offsets prepared selected reader
+  have ⟨readyPrefix, directory, owner, slot, cache, census, freshToken, freshPhase, lockInode, directoryInode, _,
+    sameTarget, checkpoint, durable, _⟩ := reached
+  exact ⟨_, .restart current crash lost layout selected reader installed readyPrefix owner slot cache census freshToken
+    freshPhase ⟨directory, directoryInode, lockInode, sameTarget, checkpoint, durable⟩, rfl, rfl, reached⟩
 
 /-- The chosen reader and installer are independent of the operations
 that reached this entry, provided they still select the same files. -/
@@ -304,13 +192,12 @@ theorem RawAlignedCheckpointReopenEffects.reopensQuietSelection
     ∃ next : NativeReadPosition history log, next.reads = current.reads ∧ next.opened = reader.run ∧
       reader.ReachedSession next.state history log current.reads ∧
       Nonempty (raw.ReturnedAt next remove write rename bootstrap assemble get set ptrEq) := by
-  obtain ⟨valid, history, pending⟩ := current.readPrefix.refines
-  obtain ⟨_, installed, reached⟩ := crash.restartsAt valid history pending current.readPrefix.readsBounded
-    layout target keeper descriptors offsets prepared selected reader
-  let next : NativeReadPosition _ _ := ⟨reader.run, installed, installed, current.reads, reached.1⟩
-  exact ⟨next, rfl, rfl, reached,
-    raw.installsQuietSelectionAt valid history target keeper descriptors offsets prepared next rfl reached
-      remove write rename bootstrap assemble constructs effects ptrEq⟩
+  obtain ⟨next, _, sameReads, sameReader, reached⟩ :=
+    current.restartsAtReader reader target keeper descriptors offsets prepared
+  obtain ⟨valid, sameHistory, _⟩ := current.readPrefix.refines
+  exact ⟨next, sameReads, sameReader, reached,
+    raw.installsQuietSelectionAt valid sameHistory target keeper descriptors offsets prepared next sameReader.symm
+      (sameReads.symm ▸ reached) remove write rename bootstrap assemble constructs effects ptrEq⟩
 
 namespace RawQuietRestartEffects
 
