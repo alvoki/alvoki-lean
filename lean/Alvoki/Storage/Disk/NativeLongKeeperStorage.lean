@@ -117,14 +117,23 @@ private def freshKeeperStage (state : NativeReadyState) (view : OpenCloseHeapVie
   ∃ (slot : DescriptorSlot) (inode : Nat), keeperStageAt state view observe file slot inode atHeap ∧
     visible atHeap inode = .empty ∧ buffered atHeap file = .empty
 
-private def keepsKeeperStage (state : NativeReadyState) (view : OpenCloseHeapView heap image)
+private def SameLiveWalNames (directory : DiskDirectory) (before after : CheckpointStorageObservation) : Prop :=
+  ∀ start, after.files.names (directory.file (.walSegment start)) = before.files.names (directory.file (.walSegment start))
+
+private theorem SameLiveWalNames.trans {directory : DiskDirectory} {first middle last : CheckpointStorageObservation}
+    (earlier : SameLiveWalNames directory first middle) (later : SameLiveWalNames directory middle last) :
+    SameLiveWalNames directory first last :=
+  fun start => (later start).trans (earlier start)
+
+private structure keepsKeeperStage (state : NativeReadyState) (view : OpenCloseHeapView heap image)
     (observe : heap → CheckpointStorageObservation) (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat)
-    (cached : IO.Ref (Option IO.FS.Handle)) (root : IO.FS.Handle) (before after : heap) : Prop :=
-  (observe before).Frames state.crashPath (observe after) ∧
-    attachedReadSlot view file slot inode after ∧
-    (observe after).files.names (state.session.directory.file .stagedWal) =
-      (observe before).files.names (state.session.directory.file .stagedWal) ∧
-    (CachedKeeperReplacementRoot state view cached root before → CachedKeeperReplacementRoot state view cached root after)
+    (cached : IO.Ref (Option IO.FS.Handle)) (root : IO.FS.Handle) (before after : heap) : Prop where
+  storage : (observe before).Frames state.crashPath (observe after)
+  attached : attachedReadSlot view file slot inode after
+  scratch : (observe after).files.names (state.session.directory.file .stagedWal) =
+    (observe before).files.names (state.session.directory.file .stagedWal)
+  root : CachedKeeperReplacementRoot state view cached root before → CachedKeeperReplacementRoot state view cached root after
+  walNames : SameLiveWalNames state.session.directory (observe before) (observe after)
 
 private theorem keepsKeeperStage.carries {state : NativeReadyState} {view : OpenCloseHeapView heap image}
     {observe : heap → CheckpointStorageObservation} {file : IO.FS.Handle} {slot : DescriptorSlot} {inode : Nat}
@@ -132,8 +141,8 @@ private theorem keepsKeeperStage.carries {state : NativeReadyState} {view : Open
     (frame : keepsKeeperStage state view observe file slot inode cached root before after)
     (stage : keeperStageAt state view observe file slot inode before) :
     keeperStageAt state view observe file slot inode after :=
-  ⟨frame.2.1, frame.2.2.1.trans stage.2.1, fun path selected present =>
-    stage.2.2 path selected ((frame.1.visible path selected).1.symm.trans present)⟩
+  ⟨frame.attached, frame.scratch.trans stage.2.1, fun path selected present =>
+    stage.2.2 path selected ((frame.storage.visible path selected).1.symm.trans present)⟩
 
 /-- Local namespace, descriptor and byte laws for the successful staging
 and replacement callbacks. The same cached-root law is used at all
@@ -147,7 +156,8 @@ structure LongKeeperStageCallbacks.ReplacementStorageEffects
     (root : IO.FS.Handle) (rename : FilePath → FilePath → EStateM IO.Error heap Unit) where
   acquire : ∀ before, stage.AcquisitionFrames (state.session.directory.file .stagedWal) before
     (fun first last => (observe first).Frames state.crashPath (observe last) ∧
-      (CachedKeeperReplacementRoot state view cached root first → CachedKeeperReplacementRoot state view cached root last))
+      (CachedKeeperReplacementRoot state view cached root first → CachedKeeperReplacementRoot state view cached root last) ∧
+      SameLiveWalNames state.session.directory (observe first) (observe last))
   tryCreate : ∀ {before after file}, stage.tryCreate (state.session.directory.file .stagedWal) before = .ok (.ok file) after →
     freshKeeperStage state view observe visible buffered file after
   create : ∀ {before after file}, stage.create (state.session.directory.file .stagedWal) before = .ok file after →
@@ -193,12 +203,16 @@ structure LongKeeperStageCallbacks.ReplacementStorageEffects
       (observe after).files.names scratch = none ∧
       (observe after).files.bytes replacement = (observe before).files.bytes replacement ∧
       visible after replacement = visible before replacement ∧
-      (CachedKeeperReplacementRoot state view cached root before → CachedKeeperReplacementRoot state view cached root after)
+      (CachedKeeperReplacementRoot state view cached root before → CachedKeeperReplacementRoot state view cached root after) ∧
+      ∀ start, start ≠ state.writer.wal.active.first →
+        (observe after).files.names (dir.file (.walSegment start)) =
+        (observe before).files.names (dir.file (.walSegment start))
   loadRoot : ∀ {before issued}, calls.getDirectory cached before = .ok (some root) issued →
     CachedKeeperReplacementRoot state view cached root before →
     CachedKeeperReplacementRoot state view cached root issued ∧
     (observe before).Frames (fun path => state.crashPath path ∨ path = state.session.directory.file .stagedWal)
       (observe issued) ∧
+    SameLiveWalNames state.session.directory (observe before) (observe issued) ∧
     ∀ inode, (observe before).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
       some inode → visible issued inode = visible before inode
   rootSync : ∀ {issued after}, calls.sync root issued = .ok () after →
@@ -231,19 +245,21 @@ private theorem replacementRootFrame
       before = .ok () after) :
     (observe before).files.Frames state.crashPath (observe after).files ∧
       (observe before).Frames (· = state.session.directory.path) (observe after) ∧
-      CachedKeeperReplacementRoot state view cached root after := by
+      CachedKeeperReplacementRoot state view cached root after ∧
+      SameLiveWalNames state.session.directory (observe before) (observe after) := by
   let dir := state.session.directory
   let syncer : RawSyncCalls heap := ⟨⟨calls.getDirectory, calls.getPending, calls.setPending, calls.getActive, calls.openRead⟩, calls.sync⟩
   change syncer.group dir.path cached active pending #[dir.path] before = .ok () after at returned
   obtain ⟨chosen, _, loaded, synced⟩ := syncer.rootGroupReturned returned
   have same : chosen = root := Option.some.inj ((readsDirectory loaded).trans held.1)
   subst chosen
-  obtain ⟨attached, loadFrame, _⟩ := effects.loadRoot loaded held
+  obtain ⟨attached, loadFrame, loadNames, _⟩ := effects.loadRoot loaded held
   have rootScope : state.crashPath dir.path := .inl rfl
   obtain ⟨children, parent, reachedRoot, _⟩ := effects.rootSync synced attached
     (((loadFrame.visible _ (.inl rootScope)).1).trans rootNamed)
   have rootLoad := loadFrame.weaken (scope := (· = dir.path)) (fun path same => .inl (same.symm ▸ rootScope))
-  refine ⟨?_, rootLoad.trans parent, reachedRoot⟩
+  refine ⟨?_, rootLoad.trans parent, reachedRoot, fun start =>
+    (children.visible (.walSegment start)).trans (loadNames start)⟩
   intro path tracked
   rcases NativeReadyState.crashPath_rootOrChild tracked with atRoot | ⟨file, rfl⟩
   · exact (rootLoad.trans parent).visible path atRoot
@@ -253,7 +269,9 @@ private theorem replacementRootFrame
 
 /-- The actual successful long repair builds physical readiness. Its
 accepted unlink pass is framed locally; a fresh stage descriptor supplies
-its own bytes at the pending fsync and is the inode moved into the keeper. -/
+its own bytes at the pending fsync and is the inode moved into the keeper.
+If the selected scan identifies all later starts, the same execution
+also settles the WAL catalog through any prospective marker. -/
 theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
     (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
     (state : NativeReadyState) (view : OpenCloseHeapView heap image)
@@ -299,7 +317,21 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
       (∀ names ∈ (observe reached).crashNames,
         names (state.session.directory.file (.walSegment plan.keeper)) = some replacement ∧
         names (state.session.directory.file .stagedWal) = none) ∧
-      visible reached replacement = state.writer.wal.active.bytes := by
+      visible reached replacement = state.writer.wal.active.bytes ∧
+      ∀ {firstOffset : Nat},
+        state.writer.wal.NamespaceWindow state.session.directory firstOffset plan.through (observe entry).files.names →
+        (∀ start ∈ state.writer.wal.segments.map WalSegment.first, start ≤ plan.through) →
+        (∀ ordinal ∈ plan.newer, plan.through < ordinal) →
+        (∀ start, plan.through < start →
+          (((observe entry).files.names (state.session.directory.file (.walSegment start))).isSome = true ↔
+            start ∈ plan.newer)) →
+        (∀ {ordinal before after result}, plan.through < ordinal →
+          remove (state.session.directory.file (.walSegment ordinal)) before = .ok result after →
+          RunCollection.ownedUnlinkResult result = .ok () →
+          (observe after).files.names (state.session.directory.file (.walSegment ordinal)) = none ∧
+          ∀ start, start ≠ ordinal → (observe after).files.names (state.session.directory.file (.walSegment start)) =
+            (observe before).files.names (state.session.directory.file (.walSegment start))) →
+        ∀ through, state.writer.wal.SettledNamespaceWindow state.session.directory firstOffset through (observe reached) := by
   let dir := state.session.directory
   let path := dir.file .stagedWal
   let keeperPath := dir.file (.walSegment plan.keeper)
@@ -315,7 +347,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
     change state.crashPath (dir.file (.walSegment plan.keeper))
     rw [keeper]
     exact NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
-  obtain ⟨authFiles, authParent, authRoot⟩ :=
+  obtain ⟨authFiles, authParent, authRoot, authNames⟩ :=
     replacementRootFrame effects protectedFiles.directoryBound heldRoot readsDirectory firstRoot
   let frames (_ : Unit) (atHeap : heap) := (observe authorized).Frames state.crashPath (observe atHeap) ∧
     CachedKeeperReplacementRoot state view cached root atHeap
@@ -324,17 +356,17 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
       obtain ⟨unchanged, retained⟩ := unlink (laterOutside _ member) called accepted
       exact ⟨before.1.trans unchanged, retained before.2⟩) unlinks
   have prunedRootName := (removes.visible _ rootScope).1.trans ((authFiles _ rootScope).1.trans protectedFiles.directoryBound)
-  obtain ⟨prunedFiles, prunedParent, prunedRoot⟩ :=
+  obtain ⟨prunedFiles, prunedParent, prunedRoot, prunedNames⟩ :=
     replacementRootFrame effects prunedRootName unlinkedRoot readsDirectory pruneRoot
   have prunedFootprint := authFiles.trans (removes.visible.trans prunedFiles)
   have prunedParentFrame := authParent.trans
     ((removes.weaken (scope := (· = dir.path)) (fun _ same => same.symm ▸ rootScope)).trans prunedParent)
-  have acquiredFrame := (effects.acquire pruned).keeps (fun _ => ⟨.refl _ _, id⟩)
-    (fun first second => ⟨first.1.trans second.1, second.2 ∘ first.2⟩)
+  have acquiredFrame := (effects.acquire pruned).keeps (fun _ => ⟨.refl _ _, id, fun _ => rfl⟩)
+    (fun first second => ⟨first.1.trans second.1, second.2.1 ∘ first.2.1, first.2.2.trans second.2.2⟩)
   change stage.acquire path pruned = .ok file opened at acquired
   rw [show stage.acquire (dir.file .stagedWal) pruned = .ok file opened from acquired,
     NativeFileEffectProjection.reached] at acquiredFrame
-  obtain ⟨acquireFrame, acquiredRoot⟩ := acquiredFrame
+  obtain ⟨acquireFrame, acquiredRoot, acquiredNames⟩ := acquiredFrame
   obtain ⟨slot, replacement, openedStage, empty, unbuffered⟩ :=
     withFreshStaging_acquireProvides stage.tryCreate stage.detachStale stage.create path
       (freshKeeperStage state view observe visible buffered) acquired effects.tryCreate effects.create
@@ -351,9 +383,10 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
   have stagedBinding := syncedStage.2.1
   have stageBytes := payloadClear.trans (payloadLoad.trans (payloadRecord.trans (payloadFlush.trans payloadWrite)))
   rw [empty, unbuffered, ByteArray.empty_append, ByteArray.empty_append, prefixBytes] at stageBytes
-  have atSyncRoot := clearFrame.2.2.2 (loadFrame.2.2.2 (recordFrame.2.2.2
-    (flushFrame.2.2.2 (writeFrame.2.2.2 (acquiredRoot prunedRoot)))))
-  have pendingFrames := writeFrame.1.trans (flushFrame.1.trans (recordFrame.1.trans (loadFrame.1.trans clearFrame.1)))
+  have atSyncRoot := clearFrame.root (loadFrame.root (recordFrame.root
+    (flushFrame.root (writeFrame.root (acquiredRoot prunedRoot)))))
+  have pendingFrames := writeFrame.storage.trans
+    (flushFrame.storage.trans (recordFrame.storage.trans (loadFrame.storage.trans clearFrame.storage)))
   have oldAtCreate := (acquireFrame.visible _ keepScope).1.trans ((prunedFootprint _ keepScope).1.trans oldNamed)
   have distinct : replacement ≠ old := fun same => openedStage.2.2 _ keepScope (same.symm ▸ oldAtCreate)
   have noAlias (name : FilePath) (selected : state.crashPath name) (inode : Nat)
@@ -367,7 +400,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
   rw [keeper] at moved
   have oldKeeper : (observe synced).files.names (dir.file (.walSegment state.writer.wal.active.first)) = some old := by
     simpa only [keeperPath, keeper] using oldAtRename
-  obtain ⟨moveFrame, movedName, detached, movedBytes, movedVisible, keepMoveRoot⟩ :=
+  obtain ⟨moveFrame, movedName, detached, movedBytes, movedVisible, keepMoveRoot, movedOtherWalNames⟩ :=
     effects.move moved stageAtRename oldKeeper distinct
   have included (name : FilePath) (selected : state.selectedRetryPath name) : state.crashPath name :=
     NativeReadyState.crashPath_iff_write.mpr (selected.imp id Or.inr)
@@ -382,7 +415,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
   have heldAtRename := keepMoveRoot (keepSyncRoot atSyncRoot)
   have sameRoot : chosenRoot = root := Option.some.inj ((readsDirectory readRoot).trans heldAtRename.1)
   subst chosenRoot
-  obtain ⟨rootAttached, loadedRootFrame, rootLoadVisible⟩ := effects.loadRoot readRoot heldAtRename
+  obtain ⟨rootAttached, loadedRootFrame, rootLoadNames, rootLoadVisible⟩ := effects.loadRoot readRoot heldAtRename
   obtain ⟨children, parent, _, rootSyncVisible⟩ := effects.rootSync finalRoot rootAttached
     (((loadedRootFrame.visible _ (.inl rootScope)).1).trans rootAtRename)
   have finalKeeperName := movedName.trans stageAtRename
@@ -391,8 +424,27 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
     stagedBinding stageBytes fileSync syncedVisible oldKeeper distinct movedName detached movedBytes movedVisible
     protectedAtRename markerAtRename (fun map allowed => parentSettled map allowed _ rfl)
     loadedRootFrame (rootLoadVisible _ finalKeeperName) children parent (rootSyncVisible _ atRootIssue)
-  exact ⟨replacement, distinct, ready, keeper.symm ▸ bound, gone,
-    fun map allowed => keeper.symm ▸ chosen map allowed, live replacement bound⟩
+  refine ⟨replacement, distinct, ready, keeper.symm ▸ bound, gone,
+    fun map allowed => keeper.symm ▸ chosen map allowed, live replacement bound, ?_⟩
+  intro firstOffset selected bounded later listed unlinkNames through
+  have fromAuth := selected.frame (fun start _ _ => congrArg Option.isSome (authNames start))
+  have fromPrune := fromAuth.afterAcceptedUnlinks (plan := plan) (names := fun atHeap => (observe atHeap).files.names)
+    bounded later (fun start beyond => by rw [authNames start]; exact listed start beyond) remove write group rename
+    (fun member called accepted => unlinkNames (later _ member) called accepted) unlinks through
+  have stageFrames := prunedNames.trans (acquiredNames.trans
+    (writeFrame.walNames.trans (flushFrame.walNames.trans (recordFrame.walNames.trans
+      (loadFrame.walNames.trans (clearFrame.walNames.trans (fun start =>
+        congrFun fileSync.names (dir.file (.walSegment start)))))))))
+  have beforeRoot := (fromPrune.frame fun start _ _ => congrArg Option.isSome (stageFrames start)).frame
+    (fun start _ _ => by
+      have same : ((observe renamed).files.names (dir.file (.walSegment start))).isSome =
+          ((observe synced).files.names (dir.file (.walSegment start))).isSome := by
+        by_cases isKeeper : start = state.writer.wal.active.first
+        · rw [isKeeper, finalKeeperName, oldKeeper]
+          rfl
+        · rw [movedOtherWalNames start isKeeper]
+      exact (congrArg Option.isSome (rootLoadNames start)).trans same)
+  exact beforeRoot.afterDirectorySync children.visible (children.settled rfl)
 
 end LiteralReplacement
 

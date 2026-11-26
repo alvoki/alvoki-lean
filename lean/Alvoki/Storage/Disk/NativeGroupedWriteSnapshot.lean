@@ -56,15 +56,32 @@ variable
       some (namespaceView.modelObject root))
     {returnedAt : heap} {reopened : DiskTable}
     (openedTable : source.openTable input reached = .ok reopened returnedAt)
-    (exactKeeper : (view.files reached).image.keeper.active = some current.current.ready.state.writer.target.trimmed)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
-    (effects : ∀ {batch table}, prepareBatch current.current.ready.state.writer.installed.table request.rows =
+    (openEffects : ∀ {batch table}, prepareBatch current.current.ready.state.writer.installed.table request.rows =
       some (batch, table) →
       ∀ (cache : HeldOpenCache heap) (plan : current.current.ready.SelectedWritePlan batch
         current.current.ready.state.writer.target (view.files reached).image),
         LiteralOpenAuthority view current.current.ready.state.session.directory cache cache.ready →
         namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
-        source.LiteralAlignedEffects cache namespaceView root plan
+        source.LiteralOpenEffects cache namespaceView root plan
+          (fun atHeap => (observe atHeap).storageObservation) (fun atHeap => (inodes atHeap).visible))
+    (alignedEffects : ∀ {batch table}, prepareBatch current.current.ready.state.writer.installed.table request.rows =
+      some (batch, table) →
+      ∀ (cache : HeldOpenCache heap) (plan : current.current.ready.SelectedWritePlan batch
+        current.current.ready.state.writer.target (view.files reached).image),
+        LiteralOpenAuthority view current.current.ready.state.session.directory cache cache.ready →
+        namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+        plan.layout.tail.size = 0 →
+        source.LiteralAlignedRepairEffects cache plan
+          (fun atHeap => (observe atHeap).storageObservation) (fun atHeap => (inodes atHeap).visible))
+    (replacementEffects : ∀ {batch table}, prepareBatch current.current.ready.state.writer.installed.table request.rows =
+      some (batch, table) →
+      ∀ (cache : HeldOpenCache heap) (plan : current.current.ready.SelectedWritePlan batch
+        current.current.ready.state.writer.target (view.files reached).image),
+        LiteralOpenAuthority view current.current.ready.state.session.directory cache cache.ready →
+        namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+        0 < plan.layout.tail.size →
+        source.LiteralKeeperReplacementEffects cache (current := current.current.ready) plan
           (fun atHeap => (observe atHeap).storageObservation) (fun atHeap => (inodes atHeap).visible))
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
@@ -92,12 +109,13 @@ private abbrev groupedFailure (batch : List WAL.Write) (poisoned : heap) : Prop 
       .error cause failed
 
 include nonempty returned initial groupEffects reset covers nameEffects initialWindow admission
-  rootBinding openedTable exactKeeper phaseIdentity tokenIdentity effects phase ptrEq
+  rootBinding openedTable phaseIdentity tokenIdentity openEffects alignedEffects replacementEffects phase ptrEq
 
 /-- Classify the returned write at the grouped fsync boundary and
 interpret the literal next open on the same reboot observation. The
 returned handle can issue another write using its physical entry and
-settled WAL names. A grouped error leaves the previous history intact. -/
+settled WAL names. When the keeper contains uncommitted bytes, the
+actual open replaces it while keeping the previous history intact. -/
 theorem NativeOpenedPosition.reopensAfterGroupedError
     (attempts : source.FailedCalls rebooted returns reached)
     (retryEffects : retryEffectsFor current view inodes runs observe request source (firstOffset := firstOffset) attempts) :
@@ -133,10 +151,11 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
     have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
       simp only [List.length_append, (prepareBatch_spec prepared).1]
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, sameDirectory, coversNext, nextWindow⟩ :=
-      (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
+      (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
         covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
         (reboot.laterNames selected.valid.selected.symm) (by simpa only [upper] using retryEffects)
-        admission namespaceView root rootBinding (effects prepared) exactKeeper phaseIdentity tokenIdentity phase ptrEq openedTable
+        admission namespaceView root rootBinding (openEffects prepared) (alignedEffects prepared)
+        (replacementEffects prepared) phaseIdentity tokenIdentity phase ptrEq openedTable
     have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by
       simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using
@@ -196,7 +215,8 @@ theorem NativeOpenedPosition.groupedRetryAndReads
   obtain ⟨schedules, batch, table, guarded, poisoned, prepared, guard, assigned, classified⟩ :=
     current.reopensAfterGroupedError view cache appender stager syncer inodes runs observe inode buffered request lookup rename
       nonempty returned initial groupEffects reboot reset source covers nameEffects initialWindow admission namespaceView root
-      rootBinding openedTable exactKeeper phaseIdentity tokenIdentity effects phase ptrEq attempts retryEffects
+      rootBinding openedTable phaseIdentity tokenIdentity openEffects alignedEffects replacementEffects phase ptrEq
+      attempts retryEffects
   refine ⟨schedules, attempts, retried, batch, table, guarded, poisoned, prepared, guard, assigned, ?_⟩
   rcases classified with elsewhere |
     ⟨group, handle, start, nextCache, opened, _, old, recoveredLedger, physical, coversNext, nextWindow⟩

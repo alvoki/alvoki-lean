@@ -53,61 +53,35 @@ staged descriptor selected from the pending list through the filtered
 cache update and file fsync. The update must preserve protected bytes,
 including when another reference is dropped. The final rooted barrier
 settles the new keeper binding and removes the scratch name from each
-admissible crash map. The longer-keeper proof now combines this heap with the bounded replay
-and the actual worker return. Both keeper lengths share the phase and
-token allocation proof that puts the replayed history and next-write
-storage on the returned table. The longer route still needs canonical
-WAL name presence for every prospective batch end, including holes
-outside the protected files. The grouped and late public recovery
-theorems still select the aligned route.
+admissible crash map. The active keeper can change inode at rename.
+Every other canonical WAL name keeps its binding, including absent
+names. The final directory barrier settles this catalog for every
+prospective batch end.
 [Replacement callbacks](../lean/Alvoki/Storage/Disk/NativeLongKeeperSettlementHeap.lean) ·
 [Replacement storage](../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
-The grouped and late write proofs now derive the cache entry of their
-literal aligned reopen. The actual path and no-follow lookups supply
-their reached heaps. The selected retry already binds the existing
-`LOCK` inode, which the actual no-follow check verifies as private and
-the append-open and flock attach to a fresh live owner. The readonly
-directory open creates a distinct description. That open and the three
-new references supply the captured census, live root slot and exact initial
-cache contents. The
-aligned reader consumes this authority and the separate file frame.
-The older reported admission and cache initializer remain in other
-recovery paths. The aligned theorem still assumes an exact-length keeper
-and local effects from the isolated Linux storage model.
+Grouped-sync and late-publication errors share one retry proof. Each
+selects a reboot entry. The failed-open fold carries the visible WAL
+window, live keeper and durable checkpoint to the successful open.
+The no-follow check verifies the existing private `LOCK` inode. The
+append-open and flock acquire its fresh owner. The readonly directory
+open and the three reference allocations establish the held root and
+initial cache. The marked reader uses these references and obtains
+the actual WAL extent. An aligned keeper stays on its original
+descriptor for fsync. A longer keeper is released and the replacement
+uses its selected staging descriptor. Both routes install the same
+replay contract and prospective WAL catalog on the actual returned table.
+
+For the grouped error, the recovered history omits the failed batch.
+For the late error, the selected marker determines whether recovery retains
+the whole batch or omits it. The next write and snapshot use that history.
+The theorems still require local effects for the reached filesystem calls
+and failed opens. Deriving those effects across the remaining failure and
+interruption paths is part of the production-execution proof.
 [Literal admission](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
-[Aligned writer and its callback assumptions](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
-
-The grouped-sync error and late-publication error now share one aligned
-retry proof. Each write selects its own reboot entry. The same failed-open
-fold preserves the WAL window, keeper and durable checkpoint for the
-literal successful open. The returned table supports the next write and
-snapshot under the existing client ledger. The grouped case omits the
-failed batch. The late case admits the whole batch or omits it according
-to the selected marker. The old aligned report adapter and its
-installation wrappers were removed. Longer keepers require staged replacement
-and a distinct inode proof. Raw admission, local Linux callback effects and
-coverage of other recovery states still need to enter the common
-production execution.
-[Shared retry proof](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
 [Grouped write](../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean) ·
-[Late write](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
-
-One successful aligned marked open now supplies the exact replay, both
-repair barriers and the next write entry on its returned table. The same
-proof uses the admitted root, acquired lock, original cache cells and
-the keeper opened by the actual read. The one-link guard excludes a
-second managed name for that inode under the local link-count contract.
-Read frames preserve held authority through the lifetime of the actual
-temporary handle, including its release. The cache update uses the
-locally retained keeper as the operand of the next sync. A single failed-open fold
-carries the visible WAL window, live keeper and durable checkpoint
-through the earlier retries. The aligned proof uses local callback
-effects and starts from an observed selected retry entry with an exact
-keeper and no later WAL files. The grouped and late write consumers
-still need to supply this entry and the local open effects from their
-production traces.
-[Literal aligned return](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
+[Late write](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean) ·
+[Literal marked return](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
 [Retry fold](../lean/Alvoki/Storage/Disk/NativeMarkedScanFrame.lean)
 
 The literal aligned reader now carries a caller-chosen frame from admission
@@ -120,17 +94,6 @@ steps for the seal and keeper. At the remembered keeper, the repair still
 needs the instantiated root and lock frames and their projection into the
 phase and token allocations.
 [Literal reader and repair](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
-
-The aligned finisher now supplies the two reached sync calls and the
-retained writer built from the exact decoded checkpoint and WAL replay.
-The file image is projected from those calls. A separate proof uses the
-root and keeper descriptor effects to settle physical storage and the
-allocation effects to carry it into the next write entry on the returned
-table. The same next position carries the old-or-whole history and the
-earlier read ledger. The remaining connection is to instantiate both
-proofs from the read and allocation witnesses of one literal open in the
-grouped and late write consumers.
-[Aligned repair and installation](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
 The literal aligned open now identifies the actual checkpoint and
 marker reads, the canonical WAL payload and the remembered keeper on

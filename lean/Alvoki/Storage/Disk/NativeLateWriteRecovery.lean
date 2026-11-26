@@ -143,8 +143,8 @@ theorem NativeOpenedPosition.recoversAfterPublicationError
 
 /-- A late publication error and its joint reboot reach the ready table
 through the same interpreter's failed opens. The recovery event uses
-the exact issued request and diagnostic. A later observed write and
-snapshot on that table extend the same ledger. -/
+the exact issued request and diagnostic. Either keeper repair leaves
+the table ready for another observed write and snapshot on that ledger. -/
 theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (request : WriteRequest) (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
@@ -191,15 +191,26 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
           RawOpenRetryTrace.KeeperAt view dir target storageNames visible atHeap ∧
           (state).SelectedRetryDurability target (storage atHeap) ∧
           RawOpenRetryTrace.LaterWalAt view dir target storageNames atHeap) attempts)
-    (exactKeeper : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
-      target.pair = (view.files rebooted).image.directory.active →
-      (view.files reached).image.keeper.active = some target.trimmed)
     (openEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
         LiteralOpenAuthority view dir cache cache.ready →
         namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
-        source.LiteralAlignedEffects cache namespaceView root plan storage visible)
+        source.LiteralOpenEffects cache namespaceView root plan storage visible)
+    (alignedEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
+      target.pair = (view.files rebooted).image.directory.active →
+      ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
+        LiteralOpenAuthority view dir cache cache.ready →
+        namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+        plan.layout.tail.size = 0 →
+        source.LiteralAlignedRepairEffects cache plan storage visible)
+    (replacementEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
+      target.pair = (view.files rebooted).image.directory.active →
+      ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
+        LiteralOpenAuthority view dir cache cache.ready →
+        namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+        0 < plan.layout.tail.size →
+        source.LiteralKeeperReplacementEffects cache (current := ready) plan storage visible)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
@@ -252,10 +263,11 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     nonempty returned nameEffects
   have window := reboot.walNamespace nameFrame initialWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, coversNext, nextWindow⟩ :=
-    (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
+    (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
       covers selected window (reboot.startsDurableRetry reset selected).2
       (reboot.laterNames active) (retryEffects target admitted active)
-      admission namespaceView root rootBinding (openEffects target admitted active) (exactKeeper target admitted active)
+      admission namespaceView root rootBinding (openEffects target admitted active)
+      (alignedEffects target admitted active) (replacementEffects target admitted active)
       phaseIdentity tokenIdentity phase ptrEq openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
   refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,
