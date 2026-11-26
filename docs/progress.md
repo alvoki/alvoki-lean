@@ -1,5 +1,14 @@
 # Current handoff
 
+The final-sync error now uses one proof for the observed filesystem
+effect. It retains live and durable keeper bytes on either outcome
+and proves the keeper name settled in every crash map after an
+effective sync. The failed repair derives its suffix frame from the
+actual accepted unlinks and directory barrier. The newer offsets
+exclude every protected path. Two separate final-sync lemmas that
+used an entire projected inode map have been removed.
+[Repair effects](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
 The final directory-fsync error during long-keeper repair now extends
 the actual failed-open prefix. The reached cached handle identifies
 the root being synced. The same bounded finisher, cache disposal and
@@ -7,9 +16,13 @@ lock finalization give the exact returned diagnostic and heap. That
 heap still binds the keeper to the renamed inode with the durable
 trimmed bytes, and carries the protected checkpoint and WAL files
 and parent settlement into the next attempt. Both fsync timings and
-either selected write target use this step. It takes the scoped effects
-of the preceding callbacks and cleanup. Connect this extension to the
-successful raw reopen and its next write on the same heap.
+either selected write target use this step. One bounded repair theorem
+now derives the exact worker error, physical keeper and protected
+frame. When the directory sync takes effect, every allowed crash map
+binds the actual keeper name to the same replacement inode. The proof
+takes the scoped effects of the preceding callbacks and cleanup.
+Connect this extension to the successful raw reopen and its next write
+on the same heap.
 [Final sync error through cleanup](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 Keeper staging now follows the same acquisition for a direct exclusive

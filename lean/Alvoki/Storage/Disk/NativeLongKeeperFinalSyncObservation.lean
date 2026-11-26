@@ -1,14 +1,13 @@
 import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
 import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
-import Alvoki.Storage.Disk.AppendGroupedReports
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
+import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 import Alvoki.Storage.Disk.NativeWalPublicationTail
 
 namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair SyncHandleRouting CheckpointPublication
-open WAL.Boundary (WalInodeImage)
 
 private theorem NativeReadyState.selectedRetryPath_rootOrChild {state : NativeReadyState} {path : FilePath}
     (retained : state.selectedRetryPath path) :
@@ -50,104 +49,10 @@ variable {heap : Type} {directory : DiskDirectory} {initial : LockedFileState Fi
   {authorized : ListedDirectoryAuthorization held} {pruning : LongKeeperPruning authorized}
   {stage : ListedLongKeeperStageAt pruning} {renamed : ListedLongKeeperRename stage}
 
-/-- Project the same returned final fsync onto the logical repair image
-and its actual observed keeper inodes. Both error effects keep the
-trimmed replacement visible. Only an effective call settles its name. -/
-theorem ListedLongKeeperDirectoryIssue.observesFinalSyncError
-    (issue : ListedLongKeeperDirectoryIssue renamed) (view : OpenCloseHeapView heap FileImage)
-    (inodes : heap → WalInodeImage) (callbacks : AlignedKeeperCacheCallbacks heap)
-    {handle : IO.FS.Handle} {issued reached : heap} {cause : IO.Error} {effective : Bool}
-    (fileImage : view.files issued = issue.files)
-    (keeperInodes : inodes issued = issue.stoppedInodes false)
-    (failed : callbacks.sync handle issued = .error cause reached)
-    (observed : FsyncResult (view.files issued, inodes issued)
-      (issue.stopped true, (inodes issued).settleBinding) effective
-      (projectResult (fun heap => (view.files heap, inodes heap)) (callbacks.sync handle issued))) :
-    let replacement := stage.inventory.inode stage.slot.description
-    view.files reached = issue.stopped effective ∧
-    inodes reached = issue.stoppedInodes effective ∧
-    (inodes reached).active = replacement ∧
-    (inodes reached).visible replacement = layout.target.trimmed ∧
-    (inodes reached).crashBytes replacement = [layout.target.trimmed] ∧
-    (inodes reached).crashBindings =
-      if effective then [replacement] else replacement :: renamed.original.crashBindings := by
-  intro replacement
-  rw [failed, projectResult, fileImage, keeperInodes] at observed
-  have selects {projected : LockedFileState FileImage × WalInodeImage} {applied : Bool}
-      (reported : FsyncResult (issue.files, issue.stoppedInodes false)
-        (issue.stopped true, (issue.stoppedInodes false).settleBinding) applied (.error cause projected)) :
-      projected = (issue.stopped applied, issue.stoppedInodes applied) := by
-    cases reported <;> rfl
-  have outcome := selects observed
-  have seen : inodes reached = issue.stoppedInodes effective := congrArg Prod.snd outcome
-  refine ⟨congrArg Prod.fst outcome, seen, (congrArg WalInodeImage.active seen).trans (issue.stoppedBindings effective).1,
-    ?_, ?_, ?_⟩
-  · rw [seen]
-    cases effective <;> simp [replacement, ListedLongKeeperDirectoryIssue.stoppedInodes,
-      WalInodeImage.renameSynced, WalInodeImage.settleBinding, CanonicalKeeperLayout.target]
-  · rw [seen]
-    cases effective <;> simp [replacement, ListedLongKeeperDirectoryIssue.stoppedInodes,
-      WalInodeImage.renameSynced, WalInodeImage.settleBinding, CanonicalKeeperLayout.target]
-  · rw [seen]
-    exact (issue.stoppedBindings effective).2
-
-/-- At the failed final directory sync the replacement inode and its
-durable bytes remain available. Only the effective branch settles its
-binding. Parent settlement follows its own frame. -/
-theorem ListedLongKeeperDirectoryIssue.keepsSelectedAtFinalError
-    (issue : ListedLongKeeperDirectoryIssue renamed) (view : OpenCloseHeapView heap FileImage)
-    (state : NativeReadyState) (sameDirectory : state.session.directory = directory)
-    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observation : ∀ atHeap, RunDirectoryInodeView directory (inodes atHeap) (runs atHeap))
-    (callbacks : AlignedKeeperCacheCallbacks heap)
-    {handle : IO.FS.Handle} {issued reached : heap} {cause : IO.Error} {effective : Bool}
-    (fileImage : view.files issued = issue.files)
-    (keeperInodes : inodes issued = issue.stoppedInodes false)
-    (named : (observation issued).visible (directory.file (.walSegment layout.keeper.first)) =
-      some (stage.inventory.inode stage.slot.description))
-    (failed : callbacks.sync handle issued = .error cause reached)
-    (observed : FsyncResult (view.files issued, inodes issued)
-      (issue.stopped true, (inodes issued).settleBinding) effective
-      (projectResult (fun heap => (view.files heap, inodes heap)) (callbacks.sync handle issued)))
-    (fsync : callbacks.sync handle issued = .error cause reached →
-      WalRootSyncEffect directory effective (observation issued).storageObservation (observation reached).storageObservation ∧
-      (observation issued).storageObservation.Frames (· = directory.path) (observation reached).storageObservation) :
-    let replacement := stage.inventory.inode stage.slot.description
-    state.SelectedRetryFrame (observation issued).storageObservation (observation reached).storageObservation
-      (inodes issued).visible (inodes reached).visible ∧
-    (view.files reached).image.keeper.active = some layout.target.trimmed ∧
-    (observation reached).visible (directory.file (.walSegment layout.keeper.first)) = some replacement ∧
-    (inodes reached).visible replacement = layout.target.trimmed ∧
-    (inodes reached).crashBytes replacement = [layout.target.trimmed] ∧
-    (effective = true → ∀ names ∈ (observation reached).crashBindings,
-      names (directory.file (.walSegment layout.keeper.first)) = some replacement) := by
-  intro replacement
-  obtain ⟨afterFiles, afterInodes, _, live, durable, _⟩ :=
-    issue.observesFinalSyncError view inodes callbacks fileImage keeperInodes failed observed
-  have selectedKeeper : (view.files reached).image.keeper.active = some layout.target.trimmed := by
-    rw [afterFiles]
-    cases effective <;> rfl
-  have sameContents : (inodes reached).visible = (inodes issued).visible := by
-    rw [afterInodes, keeperInodes]
-    cases effective <;> rfl
-  obtain ⟨children, parent⟩ := fsync failed
-  have reachedName := (children.visible (.walSegment layout.keeper.first)).trans named
-  have childScope : WalRootSyncEffect state.session.directory effective
-      (observation issued).storageObservation (observation reached).storageObservation := by
-    rw [sameDirectory]
-    exact children
-  have parentScope : (observation issued).storageObservation.Frames (· = state.session.directory.path)
-      (observation reached).storageObservation := by
-    rw [sameDirectory]
-    exact parent
-  refine ⟨childScope.framesSelectedRetry parentScope sameContents,
-    selectedKeeper, reachedName, live, durable, ?_⟩
-  intro applied names admissible
-  exact (children.settled applied names admissible (.walSegment layout.keeper.first)).trans reachedName
-
 /-- The issued final sync connects the exact bounded repair error to
 its reached storage frame and live keeper. Only the observed path from
-authorization to this issued descriptor needs physical frames. -/
+authorization to this issued descriptor needs physical frames. An
+effective sync settles the reached keeper inode in every crash map. -/
 theorem ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
     (issue : ListedLongKeeperDirectoryIssue renamed) (view : OpenCloseHeapView heap FileImage)
     (state : NativeReadyState) (sameDirectory : state.session.directory = directory)
@@ -201,7 +106,9 @@ theorem ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
     RawOpenRetryTrace.KeeperAt view directory layout.target (fun atHeap => (storage atHeap).files.names) visible reached ∧
     (storage reached).files.names (directory.file (.walSegment layout.keeper.first)) =
       some (stage.inventory.inode stage.slot.description) ∧
-    (storage reached).files.bytes (stage.inventory.inode stage.slot.description) = [layout.target.trimmed] := by
+    (storage reached).files.bytes (stage.inventory.inode stage.slot.description) = [layout.target.trimmed] ∧
+    (effective = true → ∀ names ∈ (storage reached).crashNames,
+      names (directory.file (.walSegment layout.keeper.first)) = some (stage.inventory.inode stage.slot.description)) := by
   intro write sync
   let names atHeap := (storage atHeap).files.names
   obtain ⟨live, bound⟩ := issue.rawDirectoryTarget view names atIssue census root
@@ -217,11 +124,13 @@ theorem ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
     exact parent
   have durable := (children.bytes (storage reached).files.names (.inl rfl)
     (.walSegment layout.keeper.first) (stage.inventory.inode stage.slot.description) named).trans keeperDurable
-  refine ⟨returned, trace, prefixFrame.trans (childScope.framesSelectedRetry parentScope unchanged), ?_, named, durable⟩
-  unfold RawOpenRetryTrace.KeeperAt
-  change (view.files reached).image.keeper.active =
-    (names reached (directory.file (.walSegment layout.keeper.first))).map (visible reached)
-  rw [activeKeeper, named, Option.map_some, unchanged, keeperBytes]
+  refine ⟨returned, trace, prefixFrame.trans (childScope.framesSelectedRetry parentScope unchanged), ?_, named, durable, ?_⟩
+  · unfold RawOpenRetryTrace.KeeperAt
+    change (view.files reached).image.keeper.active =
+      (names reached (directory.file (.walSegment layout.keeper.first))).map (visible reached)
+    rw [activeKeeper, named, Option.map_some, unchanged, keeperBytes]
+  · intro applied names survives
+    exact (children.settled applied names survives (.walSegment layout.keeper.first)).trans named
 
 end DirectorySync
 
@@ -398,7 +307,15 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     (scratch : retryNames issued ((dir).file .stagedWal) = issue.bindings ((dir).file .stagedWal))
     (keeperBytes : visible issued (staged.inventory.inode staged.slot.description) = layout.target.trimmed)
     (keeperDurable : (storage issued).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed])
-    (authorizedFrame : retryFrame afterKeeper authorized) (prunedFrame : retryFrame authorized pruned)
+    (authorizedFrame : retryFrame afterKeeper authorized)
+    (currentReady : state.Valid) (targetAtKeeper : layout.target.first = state.writer.wal.active.first)
+    (unlinkFrame : ∀ {ordinal before after result}, ordinal ∈ layout.boundedPlan.newer →
+      source.remove ((dir).file (.walSegment ordinal)) before = .ok result after →
+      RunCollection.ownedUnlinkResult result = .ok () →
+      (liveFiles before).Frames (· ≠ (dir).file (.walSegment ordinal)) (liveFiles after) ∧
+      (storage before).files.Frames (· ≠ (dir).file (.walSegment ordinal)) (storage after).files ∧
+      (storage before).Frames (· = (dir).path) (storage after))
+    (suffixSyncFrame : ∀ {before after}, groupSync #[(dir).path] before = .ok () after → retryFrame before after)
     (stageFrame : retryFrame pruned synced) (renameFrame : retryFrame synced renamedHeap)
     (loadFrame : retryFrame renamedHeap issued)
     (failed : (callbacks).sync handle issued = .error cause reached)
@@ -427,8 +344,22 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       retryNames finalized.reached ((dir).file (.walSegment layout.keeper.first)) =
         some (staged.inventory.inode staged.slot.description) ∧
       (storage finalized.reached).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed] := by
+  have prunedFrame := framesReturnedPrune dir layout.boundedPlan source.remove stageWrite groupSync source.rename
+    retryFrame (fun atHeap => NativeReadyState.SelectedRetryFrame.refl state (storage atHeap) (visible atHeap))
+    (fun first last => first.trans last) (unlink := by
+      intro ordinal before after result member removed accepted
+      obtain ⟨live, durable, parent⟩ := unlinkFrame member removed accepted
+      have afterTarget : layout.range.through < ordinal := pruning.later ordinal member
+      have covers : state.writer.wal.active.first ≤ layout.range.through :=
+        targetAtKeeper ▸ layout.target.firstCovered
+      have separate (path : FilePath) (inside : state.selectedRetryPath path) :
+          path ≠ (dir).file (.walSegment ordinal) :=
+        state.protectedPathNeWalFromActive currentReady inside (Nat.le_trans covers (Nat.le_of_lt afterTarget))
+      exact ⟨fun path inside => live path (separate path inside),
+        fun path inside => durable path (separate path inside), parent⟩)
+    suffixSyncFrame prune
   have reachedIssue := authorizedFrame.trans (prunedFrame.trans (stageFrame.trans (renameFrame.trans loadFrame)))
-  obtain ⟨repair, trace, carried, kept, named, durable⟩ :=
+  obtain ⟨repair, trace, carried, kept, named, durable, _⟩ :=
     issue.returnsSelectedRepairError view state rfl storage visible callbacks seed.directoryRef seed.activeRef seed.pendingRef
       source.remove source.stage source.rename startFiles measured authorize prune written persisted moved loaded atIssue
       census issuedFiles root keeper scratch keeperBytes keeperDurable reachedIssue failed effect

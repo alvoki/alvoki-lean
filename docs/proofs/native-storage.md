@@ -418,6 +418,16 @@ that narrow them. The runtime, FFI and filesystem assumptions remain explicit at
 boundary. The traces and invariants
 can be verification-only. [Append and retry selections](../../lean/Alvoki/Storage/Disk/AppendRetrySession.lean)
 
+For a failed storage call, prove the error at its return and the state
+that the next restart sees. A read-only open failure frames the selected
+files. A mutating failure supplies the updated bindings, durable choices
+and lock custody. Both feed the same next-open proof, which starts with a
+new session and reuses the files on disk. Require a separate proof case
+only when an outcome changes those obligations or a public response.
+Recovery progress is conditional on readable, valid selected files and
+the required I/O succeeding. A permanent read failure can keep rejecting
+open without returning an invented empty database.
+
 One failed bounded repair can now extend the actual failed-call prefix on
 the fixed marked opener. The bounded schedule composes local frames
 through its callbacks, and shared admission and finalizers

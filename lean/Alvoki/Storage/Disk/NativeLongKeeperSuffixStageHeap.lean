@@ -21,6 +21,62 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
 
 private abbrev Remove := FilePath → EStateM IO.Error heap (Except IO.Error Unit)
 
+/-- Compose scoped effects along the actual checked unlink pass and its
+directory barrier. The local unlink law applies only when the production
+guard accepted the result, including an already absent name. -/
+theorem framesReturnedPrune
+    (directory : DiskDirectory) (plan : Plan) (remove : @Remove heap)
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (frame : heap → heap → Prop) (refl : ∀ atHeap, frame atHeap atHeap)
+    (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
+    (unlink : ∀ {ordinal first last result}, ordinal ∈ plan.newer →
+      remove (directory.file (.walSegment ordinal)) first = .ok result last →
+      RunCollection.ownedUnlinkResult result = .ok () → frame first last)
+    (barrier : ∀ {first last}, sync #[directory.path] first = .ok () last → frame first last)
+    {first last : heap}
+    (returned : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
+      (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
+    frame first last := by
+  let run := performPaths directory plan remove throw write sync rename
+  have preserve {ordinals : List Nat} (included : ∀ ordinal ∈ ordinals, ordinal ∈ plan.newer)
+      {start finish : heap} (ran : ((ordinals.map Step.unlink).forM run) start = .ok () finish) :
+      frame start finish := by
+    induction ordinals generalizing start with
+    | nil =>
+      have same : start = finish := (EStateM.Result.ok.inj ran).2
+      exact same ▸ refl start
+    | cons ordinal rest ih =>
+      simp only [List.map_cons, List.forM_eq_forM, List.forM_cons, run, performPaths,
+        RunCollection.performPaths, Bind.bind, EStateM.bind] at ran
+      cases removed : remove (directory.file (.walSegment ordinal)) start with
+      | error cause reached => simp [removed] at ran
+      | ok result reached =>
+        rw [removed] at ran
+        cases accepted : RunCollection.ownedUnlinkResult result with
+        | error cause =>
+          simp [accepted, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at ran
+        | ok value =>
+          cases value
+          simp only [accepted, Pure.pure, EStateM.pure] at ran
+          exact trans (unlink (included _ List.mem_cons_self) removed accepted)
+            (ih (fun other member => included other (List.mem_cons_of_mem _ member)) ran)
+  change ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM run) first = _ at returned
+  rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM] at returned
+  cases passed : ((plan.newer.map Step.unlink).forM run) first with
+  | error cause reached => simp [Bind.bind, EStateM.bind, passed] at returned
+  | ok value reached =>
+    cases value
+    refine trans (preserve (fun _ member => member) passed) (barrier ?_)
+    simp only [Bind.bind, EStateM.bind, passed, List.forM_eq_forM, List.forM_cons, List.forM_nil,
+      Pure.pure, EStateM.pure, run, performPaths] at returned
+    cases status : sync #[directory.path] reached with
+    | error cause stopped => simp [status] at returned
+    | ok value stopped =>
+      cases value
+      simpa only [status] using returned
+
 /-- Reuse the checked ordered unlink callbacks, with an empty pass
 when the selected longer-keeper report has no later names. -/
 def NativeLongKeeperUnlinks (finish : CapturedLongKeeperFinish calls reads vacant selected)
