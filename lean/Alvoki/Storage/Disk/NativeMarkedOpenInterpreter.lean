@@ -318,6 +318,186 @@ theorem RawMarkedOpenInterpreter.reachesHeldCache
       active, pending, opened, setDirectory, setActive, prepared, path, flat, probe, safe, lockOpen,
       flock, openRoot, directoryRef, activeRef, pendingRef, workerRan⟩
 
+/-- Observations from the directory open and the individual reference
+allocations. The readonly descriptor is added to the actual census. -/
+structure OpenSyncCacheCallbacks.ProjectionEffects {heap image : Type}
+    (calls : OpenSyncCacheCallbacks heap) (view : OpenCloseHeapView heap image)
+    (directory : DiskDirectory) (names : heap → FilePath → Option Nat) : Prop where
+  openRoot : ∀ {before after root}, calls.openDirectory directory.path before = .ok root after →
+    ∃ slot : DescriptorSlot,
+      (view.descriptors before).references slot.description = [] ∧
+      (view.descriptors after).slots = slot :: (view.descriptors before).slots ∧
+      (∀ other ∈ (view.descriptors before).slots,
+        (view.descriptors after).inode other.description = (view.descriptors before).inode other.description) ∧
+      view.handle after root = (view.descriptors after, slot, 0) ∧
+      names before directory.path = some ((view.descriptors after).inode slot.description) ∧
+      view.files after = view.files before ∧
+      ∀ file, (view.handle before file).2.1 ∈ (view.descriptors before).slots →
+        (view.handle after file).2.1 = (view.handle before file).2.1
+  refFrames : ∀ {α : Type} (value : α) {before after ref}, calls.newRef value before = .ok ref after →
+    view.descriptors after = view.descriptors before ∧ view.files after = view.files before ∧
+    ∀ file, view.handle after file = view.handle before file
+  directoryRef : ∀ {root before after ref}, calls.newRef (some root) before = .ok ref after →
+    view.directory after ref = some root
+  activeRef : ∀ {before after ref}, calls.newRef (none : Option (FilePath × IO.FS.Handle)) before = .ok ref after →
+    view.active after ref = none ∧ ∀ cached, view.directory after cached = view.directory before cached
+  pendingRef : ∀ {before after ref}, calls.newRef ([] : List (FilePath × IO.FS.Handle)) before = .ok ref after →
+    view.pending after ref = [] ∧ (∀ cached, view.directory after cached = view.directory before cached) ∧
+      ∀ active, view.active after active = view.active before active
+
+/-- The returned cells contain the actual cached directory and two empty
+collections. Its live slot and the previously acquired lock both survive. -/
+theorem OpenSyncCacheCallbacks.projectsHeldCache {heap image : Type}
+    {calls : OpenSyncCacheCallbacks heap} {view : OpenCloseHeapView heap image} {directory : DiskDirectory}
+    {names : heap → FilePath → Option Nat} (effects : calls.ProjectionEffects view directory names)
+    {lock root : IO.FS.Handle} {owner : DescriptorSlot} {ownerInode : Nat}
+    {cached : IO.Ref (Option IO.FS.Handle)} {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+    {locked opened setDirectory setActive prepared : heap}
+    (attachedLock : attachedReadSlot view lock owner ownerInode locked)
+    (owned : (view.files locked).owners.Owns directory owner.description)
+    (openRoot : calls.openDirectory directory.path locked = .ok root opened)
+    (setRoot : calls.newRef (some root) opened = .ok cached setDirectory)
+    (setEmptyActive : calls.newRef none setDirectory = .ok active setActive)
+    (setEmptyPending : calls.newRef [] setActive = .ok pending prepared) :
+    ∃ (captured : DescriptorInventory) (slot : DescriptorSlot),
+      names locked directory.path = some (captured.inode slot.description) ∧
+      view.descriptors prepared = captured ∧
+      view.files prepared = view.files locked ∧
+      view.handle prepared root = (captured, slot, 0) ∧
+      view.directory prepared cached = some root ∧
+      view.active prepared active = none ∧ view.pending prepared pending = [] ∧
+      view.cacheAt prepared cached active pending = ⟨some (captured, slot, 0), none, []⟩ ∧
+      attachedReadSlot view root slot (captured.inode slot.description) prepared ∧
+      attachedReadSlot view lock owner ownerInode prepared ∧ slot.description ≠ owner.description ∧
+      (view.files prepared).owners.Owns directory owner.description := by
+  obtain ⟨slot, fresh, rootSlots, oldInodes, openedHandle, named, rootFiles, lockSlot⟩ := effects.openRoot openRoot
+  obtain ⟨directoryCensus, directoryFiles, directoryHandles⟩ := effects.refFrames (some root) setRoot
+  obtain ⟨activeCensus, activeFiles, activeHandles⟩ := effects.refFrames none setEmptyActive
+  obtain ⟨pendingCensus, pendingFiles, pendingHandles⟩ := effects.refFrames [] setEmptyPending
+  obtain ⟨activeEmpty, activeKeepsRoot⟩ := effects.activeRef setEmptyActive
+  obtain ⟨pendingEmpty, pendingKeepsRoot, pendingKeepsActive⟩ := effects.pendingRef setEmptyPending
+  have census := pendingCensus.trans (activeCensus.trans directoryCensus)
+  have files := pendingFiles.trans (activeFiles.trans (directoryFiles.trans rootFiles))
+  have keeps file := (pendingHandles file).trans ((activeHandles file).trans (directoryHandles file))
+  have rootHandle := (keeps root).trans openedHandle
+  have rootCell := (pendingKeepsRoot cached).trans ((activeKeepsRoot cached).trans (effects.directoryRef setRoot))
+  have activeCell := (pendingKeepsActive active).trans activeEmpty
+  have cache : view.cacheAt prepared cached active pending = ⟨some (view.descriptors opened, slot, 0), none, []⟩ := by
+    simp only [OpenCloseHeapView.cacheAt, rootCell, rootHandle, activeCell, pendingEmpty, Option.map_some,
+      Option.map_none, List.map_nil]
+  have rootMember : slot ∈ (view.descriptors prepared).slots := by
+    rw [census, rootSlots]
+    exact List.mem_cons_self
+  have ownerMember : owner ∈ (view.descriptors prepared).slots := by
+    rw [census, rootSlots]
+    exact List.mem_cons_of_mem _ attachedLock.2.1
+  have lockLive : (view.handle locked lock).2.1 ∈ (view.descriptors locked).slots := by
+    rw [attachedLock.1]
+    exact attachedLock.2.1
+  have ownerSlot := (congrArg (fun handle => handle.2.1) (keeps lock)).trans
+    ((lockSlot lock lockLive).trans attachedLock.1)
+  refine ⟨_, slot, named, census, files, rootHandle, rootCell, activeCell, pendingEmpty, cache,
+    ⟨?_, rootMember, ?_⟩, ⟨ownerSlot, ownerMember, ?_⟩, ?_, ?_⟩
+  · rw [rootHandle]
+  · rw [census]
+  · rw [census, oldInodes owner attachedLock.2.1]
+    exact attachedLock.2.2
+  · intro same
+    have retained := (view.descriptors locked).mem_references.mpr ⟨owner, attachedLock.2.1, rfl, same.symm⟩
+    rw [fresh] at retained
+    exact List.not_mem_nil retained
+  · rw [files]
+    exact owned
+
+section HeldCacheFrames
+
+variable {heap : Type} {frame : heap → heap → Prop}
+
+private theorem realPathFrame
+    (realPath : FilePath → EStateM IO.Error heap FilePath)
+    {input : FilePath} {before after : heap} {directory : DiskDirectory}
+    (keeps : ∀ {path reached}, realPath input before = .ok path reached → frame before reached)
+    (returned : DiskDirectory.openWith realPath input before = .ok directory after) :
+    frame before after := by
+  simp only [DiskDirectory.openWith, Bind.bind, EStateM.bind] at returned
+  cases observed : realPath input before with
+  | error cause reached => simp [observed] at returned
+  | ok path reached =>
+    by_cases absolute : path.toString.startsWith '/' = true
+    · simp only [observed, absolute, ↓reduceDIte, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
+      exact returned.2 ▸ keeps observed
+    · simp [observed, absolute, throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+
+theorem optionalMetadata_success_frames
+    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
+    {before after : heap} {metadata : Option IO.FS.Metadata}
+    (keeps : ∀ {result reached}, lookup before = .ok result reached → frame before reached)
+    (returned : optionalMetadataWith lookup before = .ok metadata after) : frame before after := by
+  simp only [optionalMetadataWith, Bind.bind, EStateM.bind] at returned
+  cases observed : lookup before with
+  | error cause reached => simp [observed] at returned
+  | ok result reached =>
+    have actual := keeps observed
+    simp only [observed] at returned
+    cases result with
+    | ok stat =>
+      simp only [Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
+      exact returned.2 ▸ actual
+    | error cause =>
+      cases cause <;> simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
+      rename_i name code message
+      by_cases missing : code = 2
+      · simp [missing, Pure.pure, EStateM.pure] at returned
+        exact returned.2 ▸ actual
+      · simp [missing, EStateM.throw] at returned
+
+/-- Independent projections of the successful primitives that acquire a
+lock and initialize its cache. Each frame uses the actual reached heap. -/
+structure RawMarkedOpenInterpreter.HeldCacheFrames {stream : Type}
+    (source : RawMarkedOpenInterpreter heap stream) (frame : heap → heap → Prop) : Prop where
+  realPath : ∀ {input path before after}, source.calls.realPath input before = .ok path after → frame before after
+  lookup : ∀ {path result before after}, source.calls.lookup path before = .ok result after → frame before after
+  flock : ∀ {lock before after}, source.calls.flock lock before = .ok true after → frame before after
+  openDirectory : ∀ {path root before after}, source.init.openDirectory path before = .ok root after → frame before after
+  newRef : ∀ {α : Type} (value : α) {ref before after}, source.init.newRef value before = .ok ref after → frame before after
+
+/-- The path and metadata observations can advance the heap while
+preserving the caller's selected projection. -/
+theorem RawMarkedOpenInterpreter.HeldCacheFrames.throughProbes {stream : Type}
+    {source : RawMarkedOpenInterpreter heap stream}
+    (effects : source.HeldCacheFrames frame)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    {input : FilePath} {directory : DiskDirectory} {metadata : Option IO.FS.Metadata}
+    {entry resolved checked probed : heap}
+    (path : DiskDirectory.openWith source.calls.realPath input entry = .ok directory resolved)
+    (flat : optionalMetadataWith (source.calls.lookup (directory.file .wal)) resolved = .ok none checked)
+    (lockProbe : optionalMetadataWith (source.calls.lookup (directory.file .lock)) checked = .ok metadata probed) :
+    frame entry probed :=
+  trans (realPathFrame source.calls.realPath (fun ran => effects.realPath ran) path)
+    (trans (optionalMetadata_success_frames _ (fun ran => effects.lookup ran) flat)
+      (optionalMetadata_success_frames _ (fun ran => effects.lookup ran) lockProbe))
+
+/-- Readonly directory open and the reference allocations preserve the
+same projection after the lock has been acquired. -/
+theorem RawMarkedOpenInterpreter.HeldCacheFrames.throughAllocations {stream : Type}
+    {source : RawMarkedOpenInterpreter heap stream}
+    (effects : source.HeldCacheFrames frame)
+    (trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after)
+    {directory : DiskDirectory} {root : IO.FS.Handle}
+    {cached : IO.Ref (Option IO.FS.Handle)} {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+    {locked opened setDirectory setActive prepared : heap}
+    (openRoot : source.init.openDirectory directory.path locked = .ok root opened)
+    (directoryRef : source.init.newRef (some root) opened = .ok cached setDirectory)
+    (activeRef : source.init.newRef none setDirectory = .ok active setActive)
+    (pendingRef : source.init.newRef [] setActive = .ok pending prepared) :
+    frame locked prepared :=
+  trans (effects.openDirectory openRoot) (trans (effects.newRef (some root) directoryRef)
+    (trans (effects.newRef none activeRef) (effects.newRef [] pendingRef)))
+
+end HeldCacheFrames
+
 variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorInventory}
   {retry : LockedFileState FileImage} {view : OpenCloseHeapView heap FileImage} {entry : heap}
   {admission : CensusOpenAdmissionReports input directory inventory retry}
@@ -408,7 +588,7 @@ theorem RawMarkedOpenInterpreter.worker_reachesMarkedInstallation
         simp only [tokenReturn, Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at worker
         exact ⟨opened, repaired, phase, afterPhase, token, prepared, phaseReturn, worker.2 ▸ tokenReturn, worker.1.symm⟩
 
-private theorem optionalMetadata_absenceLookup
+theorem optionalMetadata_absenceLookup
     (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata)) {before after : heap}
     (returned : optionalMetadataWith lookup before = .ok none after) :
     ∃ name message, lookup before = .ok (.error (.noFileOrDirectory name 2 message)) after := by

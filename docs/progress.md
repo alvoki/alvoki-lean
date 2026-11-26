@@ -1,28 +1,21 @@
 # Current handoff
 
-The aligned checkpoint and WAL proof consumes the successful held
-worker and a separate entry-to-cache frame. The selected checkpoint,
-marker, WAL replay, repair and phase and token allocations follow from
-that worker's actual return. The grouped and late write callers still
-establish its entry frame via their existing admission witness. Three
-worker-result wrappers that duplicated the reported admission were
-removed. The next step is to derive that frame and the cache and lock
-projections from the primitive admission calls, including the heaps
-returned by the first path and metadata observations.
-[Held marked worker](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
-[Checkpoint selection](../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean) ·
-[Aligned reader](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
-
-A successful fixed open now determines its resolved directory, flat-WAL
-and lock probes, append-open, acquired lock, directory handle, three
-cache allocations and held worker return. The same aligned consumers
-derive the later guarded marker lookup from the literal successful open.
-They transport the selected marker binding to that lookup and exclude
-absence using the local no-follow ENOENT contract. The census and cache
-projections still enter through the existing raw admission and
-allocation observations. Construct those observations from the derived
-primitive receipts and local effects next.
-[Literal admission and guards](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+The grouped and late write proofs now derive the cache entry of their
+literal aligned reopen. The actual path and no-follow lookups supply
+their reached heaps. The selected retry already binds the existing
+`LOCK` inode, which the actual no-follow check verifies as private and
+the append-open and flock attach to a fresh live owner. The readonly
+directory open creates a distinct description. That open and the three
+new references supply the
+captured census, live root slot and exact initial cache contents. The
+aligned reader consumes this authority and the separate file frame.
+The older reported admission and cache initializer remain in other
+recovery paths. The aligned theorem still assumes an exact keeper, no
+later WAL names, and local effects from an isolated Linux storage
+model. Next, derive the recovery entry and retain the common reader
+when trimming or pruning changes the keeper or its siblings.
+[Literal admission](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
+[Aligned writer and its callback assumptions](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
 The grouped-sync error and late-publication error now share one aligned
 retry proof. Each write selects its own reboot entry. The same failed-open

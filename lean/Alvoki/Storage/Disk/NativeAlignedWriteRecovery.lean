@@ -442,131 +442,189 @@ end LiteralInstall
 
 section LiteralContinuation
 
-variable {inventory : DescriptorInventory}
-  {admission : CensusOpenAdmissionReports input current.state.session.directory inventory (view.files reached)}
-  {raw : RawOpenAdmissionReport admission view source.calls reached}
-
 local notation "keeperCalls" => source.keeperCallbacks.withFileReads source.fileCalls
 
-/-- The authority established by an observed admission. The root cache
-stores its captured description and cursor; the two live slots refer to
-that root and to the held lock. Other descriptors may change. -/
-structure LiteralOpenAuthority (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    (atHeap : heap) : Prop where
-  directoryCell : view.directory atHeap seed.directoryRef = some seed.handle
-  rootHandle : view.handle atHeap seed.handle = (admission.reached, admission.cached, 0)
-  rootAttached : attachedReadSlot view seed.handle admission.cached
-    (admission.reached.inode admission.cached.description) atHeap
-  ownerAttached : attachedReadSlot view raw.lock admission.owner
-    (admission.reached.inode admission.owner.description) atHeap
-  owned : (view.files atHeap).owners.Owns dir admission.owner.description
+/-- The resources obtained through the successful admission prefix. The
+cached inventory belongs to the returned directory handle. -/
+structure HeldOpenCache (heap : Type) where
+  lock : IO.FS.Handle
+  handle : IO.FS.Handle
+  directoryRef : IO.Ref (Option IO.FS.Handle)
+  activeRef : IO.Ref (Option (FilePath × IO.FS.Handle))
+  pendingRef : IO.Ref (List (FilePath × IO.FS.Handle))
+  owner : DescriptorSlot
+  rootSlot : DescriptorSlot
+  captured : DescriptorInventory
+  ready : heap
 
-/-- The admitted root and lock have the same live slots after the
-actual cache initializer. Only preservation of the lock handle's slot
-is needed at the four cache callbacks. -/
-theorem RawOpenAdmissionReport.literalAuthorityAtCache
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    (openKeepsLock : ∀ {before after handle}, source.init.openDirectory (dir).path before = .ok handle after →
-      (view.handle after raw.lock).2.1 = (view.handle before raw.lock).2.1)
-    (newRefKeepsLock : ∀ {α : Type} (value : α) {before after ref},
-      source.init.newRef value before = .ok ref after →
-      (view.handle after raw.lock).2.1 = (view.handle before raw.lock).2.1) :
-    LiteralOpenAuthority seed seed.afterPending := by
-  obtain ⟨_, _, _, _, _, _, _, _, directoryCell, _, _, _, files, census, _, ownerLive, rootLive, _⟩ := seed.installs
-  have rootHandle := seed.sameHandle.trans seed.openedHandle
-  have lockHandle := raw.sameLock.trans raw.appendHandle
-  have lockSlot : (view.handle seed.afterPending raw.lock).2.1 = admission.owner :=
-    (newRefKeepsLock [] seed.pendingAllocated).trans ((newRefKeepsLock none seed.activeAllocated).trans
-      ((newRefKeepsLock (some seed.handle) seed.directoryAllocated).trans
-        ((openKeepsLock seed.rawOpened).trans (congrArg (fun handle => handle.2.1) lockHandle))))
-  refine ⟨directoryCell, rootHandle, ⟨?_, rootLive, ?_⟩, ⟨lockSlot, ownerLive, ?_⟩, ?_⟩
-  · rw [rootHandle]
-  · rw [census]
-    rfl
-  · rw [census]
-    rfl
-  · rw [files]
-    exact admission.opened.held
-
-/-- A read frames the immutable footprint, the logical image and any
-authority already established at its entry. In particular, just before
-the cache is created the authority implication can be vacuous. -/
-def literalOpenReadFrame (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    (observe : heap → CheckpointStorageObservation) (before after : heap) : Prop :=
-  (observe before).Frames current.state.selectedRetryPath (observe after) ∧
-    (view.files after).image = (view.files before).image ∧
-    (LiteralOpenAuthority seed before → LiteralOpenAuthority seed after)
-
-private theorem literalReadFrame_refl
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    (observe : heap → CheckpointStorageObservation) (atHeap : heap) :
-    literalOpenReadFrame seed observe atHeap atHeap :=
-  ⟨.refl _ _, rfl, id⟩
-
-private theorem literalReadFrame_trans
-    {seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock}
-    {observe : heap → CheckpointStorageObservation} {before middle after : heap}
-    (left : literalOpenReadFrame seed observe before middle) (right : literalOpenReadFrame seed observe middle after) :
-    literalOpenReadFrame seed observe before after :=
-  ⟨left.1.trans right.1, right.2.1.trans left.2.1, right.2.2 ∘ left.2.2⟩
+/-- The cache and lock authority used by later reads. Temporary reads can
+change the census while preserving the two live descriptions. -/
+structure LiteralOpenAuthority (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
+    (cache : HeldOpenCache heap) (atHeap : heap) : Prop where
+  directoryCell : view.directory atHeap cache.directoryRef = some cache.handle
+  rootHandle : view.handle atHeap cache.handle = (cache.captured, cache.rootSlot, 0)
+  rootAttached : attachedReadSlot view cache.handle cache.rootSlot
+    (cache.captured.inode cache.rootSlot.description) atHeap
+  ownerAttached : attachedReadSlot view cache.lock cache.owner
+    (cache.captured.inode cache.owner.description) atHeap
+  separate : cache.rootSlot.description ≠ cache.owner.description
+  owned : (view.files atHeap).owners.Owns directory cache.owner.description
 
 private def managedPath (directory : DiskDirectory) (path : FilePath) : Prop :=
   path = directory.path ∨ ∃ file, path = directory.file file
 
+private def alignedAdmissionFrame (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) (before after : heap) : Prop :=
+  alignedReadFrame (fun atHeap => (observe atHeap).files.names) visible (managedPath state.session.directory)
+    (fun before after => (observe before).Frames state.selectedRetryPath (observe after) ∧
+      (view.files after).image = (view.files before).image) before after
+
+/-- Local observations of the primitives used to enter the held worker.
+The frame does not refer to cache cells ahead of their allocation. -/
+structure RawMarkedOpenInterpreter.AlignedAdmissionEffects (source : RawMarkedOpenInterpreter heap stream)
+    (view : OpenCloseHeapView heap FileImage) (state : NativeReadyState) (input : FilePath) (entry : heap)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) : Prop where
+  resolves : ∀ {directory after}, DiskDirectory.openWith source.calls.realPath input entry = .ok directory after →
+    directory = state.session.directory
+  frames : source.HeldCacheFrames (alignedAdmissionFrame view state observe visible)
+  lockMissing : ∀ {before after name message},
+    source.calls.lookup (state.session.directory.file .lock) before =
+      .ok (.error (.noFileOrDirectory name 2 message)) after →
+    (observe before).files.names (state.session.directory.file .lock) = none
+  lockOpen : ∀ {lock checked before after inode metadata},
+    optionalMetadataWith (source.calls.lookup (state.session.directory.file .lock)) checked =
+      .ok (some metadata) before →
+    (metadata.type == .file && metadata.numLinks == 1) = true →
+    (observe before).files.names (state.session.directory.file .lock) = some inode →
+    source.calls.openAppend (state.session.directory.file .lock) before = .ok lock after →
+    alignedAdmissionFrame view state observe visible before after ∧
+      ∃ owner, (view.descriptors before).references owner.description = [] ∧
+        attachedReadSlot view lock owner inode after
+  flock : ∀ {lock owner inode before after}, source.calls.flock lock before = .ok true after →
+    (observe before).files.names (state.session.directory.file .lock) = some inode →
+    attachedReadSlot view lock owner inode before →
+    attachedReadSlot view lock owner inode after ∧ (view.files after).owners.Owns state.session.directory owner.description
+  cache : source.init.ProjectionEffects view state.session.directory (fun atHeap => (observe atHeap).files.names)
+
+/-- Derive the read authority and cache cells at the heap handed to the
+worker by the literal successful open. -/
+theorem RawMarkedOpenInterpreter.reachesAlignedCache {state : NativeReadyState}
+    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    (effects : source.AlignedAdmissionEffects view state input reached observe visible)
+    (protectedFiles : NativeReadyProtectedStorage state (observe reached).files)
+    {returnedAt : heap} {table : DiskTable}
+    (returned : source.openTable input reached = .ok table returnedAt) :
+    ∃ cache : HeldOpenCache heap,
+      alignedAdmissionFrame view state observe visible reached cache.ready ∧
+      LiteralOpenAuthority view state.session.directory cache cache.ready ∧
+      (observe reached).files.names state.session.directory.path = some (cache.captured.inode cache.rootSlot.description) ∧
+      (observe reached).files.names (state.session.directory.file .lock) = some (cache.captured.inode cache.owner.description) ∧
+      view.active cache.ready cache.activeRef = none ∧ view.pending cache.ready cache.pendingRef = [] ∧
+      source.worker cache.directoryRef cache.activeRef cache.pendingRef state.session.directory cache.lock
+        (RawMarkedOpenInterpreter.makeCache state.session.directory cache.directoryRef cache.activeRef cache.pendingRef) cache.ready =
+        .ok table returnedAt := by
+  obtain ⟨directory, lock, lockMetadata, _, checked, probed, _, locked, root, cached, active, pending, _, _, _, prepared,
+    path, flat, probe, safe, openLock, acquire, openRoot, directoryRef, activeRef, pendingRef, worker⟩ :=
+    source.reachesHeldCache input returned
+  obtain rfl := effects.resolves path
+  have trans {before middle after} (left : alignedAdmissionFrame view state observe visible before middle)
+      (right : alignedAdmissionFrame view state observe visible middle after) :
+      alignedAdmissionFrame view state observe visible before after :=
+    ⟨left.1.trans right.1, left.2.1.trans right.2.1, right.2.2.trans left.2.2⟩
+  have rootScope : managedPath state.session.directory state.session.directory.path := .inl rfl
+  have lockScope : managedPath state.session.directory (state.session.directory.file .lock) := .inr ⟨.lock, rfl⟩
+  have probes := effects.frames.throughProbes trans path flat probe
+  have lockAtProbe := (probes.1 _ lockScope).1.trans protectedFiles.lockBound
+  have privateMetadata : ∃ metadata, lockMetadata = some metadata := by
+    cases lockMetadata with
+    | some metadata => exact ⟨metadata, rfl⟩
+    | none =>
+      obtain ⟨_, _, missing⟩ := optionalMetadata_absenceLookup _ probe
+      have frame := effects.frames.lookup missing
+      have falseName := ((frame.1 _ lockScope).1.trans (effects.lockMissing missing)).symm.trans lockAtProbe
+      cases falseName
+  obtain ⟨metadata, agrees⟩ := privateMetadata
+  obtain ⟨appendFrame, owner, _, appendedLock⟩ :=
+    effects.lockOpen (agrees ▸ probe) (safe metadata agrees) lockAtProbe openLock
+  have lockAtAppend := (appendFrame.1 _ lockScope).1.trans lockAtProbe
+  obtain ⟨heldLock, owned⟩ := effects.flock acquire lockAtAppend appendedLock
+  have throughLock := trans probes (trans appendFrame (effects.frames.flock acquire))
+  have throughCache := effects.frames.throughAllocations trans openRoot directoryRef activeRef pendingRef
+  obtain ⟨captured, slot, namedRoot, census, _, handle, cell, emptyActive, emptyPending, _, rootLive, lockLive, separate, held⟩ :=
+    OpenSyncCacheCallbacks.projectsHeldCache effects.cache heldLock owned openRoot directoryRef activeRef pendingRef
+  have ownerInode := census ▸ lockLive.2.2
+  have rootAtEntry := (throughLock.1 _ rootScope).1.symm.trans namedRoot
+  have lockAtEntry := protectedFiles.lockBound.trans (congrArg some ownerInode.symm)
+  exact ⟨⟨lock, root, cached, active, pending, owner, slot, captured, prepared⟩,
+    trans throughLock throughCache, ⟨cell, handle, rootLive, ownerInode.symm ▸ lockLive, separate, held⟩,
+    rootAtEntry, lockAtEntry, emptyActive, emptyPending, worker⟩
+
+/-- Reads preserve the immutable footprint, the logical image and the
+authority that was established when the cache was allocated. -/
+def literalOpenReadFrame (cache : HeldOpenCache heap)
+    (observe : heap → CheckpointStorageObservation) (before after : heap) : Prop :=
+  (observe before).Frames current.state.selectedRetryPath (observe after) ∧
+    (view.files after).image = (view.files before).image ∧
+    (LiteralOpenAuthority view dir cache before → LiteralOpenAuthority view dir cache after)
+
+private theorem literalReadFrame_refl
+    (cache : HeldOpenCache heap)
+    (observe : heap → CheckpointStorageObservation) (atHeap : heap) :
+    literalOpenReadFrame (current := current) (view := view) cache observe atHeap atHeap :=
+  ⟨.refl _ _, rfl, id⟩
+
+private theorem literalReadFrame_trans
+    {cache : HeldOpenCache heap} {observe : heap → CheckpointStorageObservation} {before middle after : heap}
+    (left : literalOpenReadFrame (current := current) (view := view) cache observe before middle)
+    (right : literalOpenReadFrame (current := current) (view := view) cache observe middle after) :
+    literalOpenReadFrame (current := current) (view := view) cache observe before after :=
+  ⟨left.1.trans right.1, right.2.1.trans left.2.1, right.2.2 ∘ left.2.2⟩
+
+variable (source) in
 /-- The local callback laws shared by literal aligned-open consumers.
 They describe metadata, scoped handle effects, cache accesses, syncs,
 and reference allocations. The caller supplies the actual open result
 and the selected recovery entry separately. -/
-structure RawOpenAdmissionReport.LiteralAlignedEffects
-    (raw : RawOpenAdmissionReport admission view source.calls reached)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+structure RawMarkedOpenInterpreter.LiteralAlignedEffects
+    (cache : HeldOpenCache heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray) where
-  admissionFrame : raw.CacheFrames seed
-    (alignedReadFrame (fun atHeap => (observe atHeap).files.names) visible (managedPath dir) (literalOpenReadFrame seed observe))
-  readEffects : source.AlignedReadEffects view dir seed.pendingRef (fun atHeap => (observe atHeap).files.names)
-    visible admission.view admission.root (managedPath dir) (literalOpenReadFrame seed observe)
+  readEffects : source.AlignedReadEffects view dir cache.pendingRef (fun atHeap => (observe atHeap).files.names)
+    visible namespaceView root (managedPath dir) (literalOpenReadFrame (current := current) (view := view) cache observe)
   child : ∀ start, plan.layout.first ≤ start → start ≤ plan.layout.range.through →
-    (admission.view.child admission.root (renderWalSegmentName start)).map admission.view.modelObject =
+    (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
       (observe reached).files.names ((dir).file (.walSegment start))
   laterNames : ∀ start, plan.layout.range.through < start →
-    (∃ object, admission.view.child admission.root (renderWalSegmentName start) = some object) →
+    (∃ object, namespaceView.child root (renderWalSegmentName start) = some object) →
     start ∈ (view.files reached).image.later.visible
-  openKeepsLock : ∀ {before after handle}, source.init.openDirectory (dir).path before = .ok handle after →
-    (view.handle after raw.lock).2.1 = (view.handle before raw.lock).2.1
-  newRefKeepsLock : ∀ {α : Type} (value : α) {before after ref},
-    source.init.newRef value before = .ok ref after →
-    (view.handle after raw.lock).2.1 = (view.handle before raw.lock).2.1
-  rootName : (observe reached).files.names (dir).path = some (admission.reached.inode admission.cached.description)
-  ownerName : (observe reached).files.names ((dir).file .lock) = some (admission.reached.inode admission.owner.description)
   repairEffects : ∀ {keeper slot inode readHeap prepared}, attachedReadSlot view keeper slot inode readHeap →
     (observe reached).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode →
-    (keeperCalls).modifyPending seed.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
+    (keeperCalls).modifyPending cache.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
       readHeap = .ok () prepared →
-    AlignedRepairImageEffects view keeperCalls seed.handle keeper
-      (fun before after => LiteralOpenAuthority seed before → LiteralOpenAuthority seed after)
-  recordsKeeper : ∀ {path keeper before after}, (keeperCalls).modifyPending seed.pendingRef (pushPending path keeper)
-    before = .ok () after → view.pending after seed.pendingRef = pushPending path keeper (view.pending before seed.pendingRef)
-  readsRoot : ∀ {before result issued}, (keeperCalls).getDirectory seed.directoryRef before = .ok result issued →
-    result = view.directory before seed.directoryRef ∧ view.pending issued seed.pendingRef = view.pending before seed.pendingRef
-  syncKeepsPending : ∀ {issued after}, (keeperCalls).sync seed.handle issued = .ok () after →
-    view.pending after seed.pendingRef = view.pending issued seed.pendingRef
-  readsPending : ∀ {before entries loaded}, (keeperCalls).getPending seed.pendingRef before = .ok entries loaded →
-    entries = view.pending before seed.pendingRef
+    AlignedRepairImageEffects view keeperCalls cache.handle keeper
+      (fun before after => LiteralOpenAuthority view dir cache before → LiteralOpenAuthority view dir cache after)
+  recordsKeeper : ∀ {path keeper before after}, (keeperCalls).modifyPending cache.pendingRef (pushPending path keeper)
+    before = .ok () after → view.pending after cache.pendingRef = pushPending path keeper (view.pending before cache.pendingRef)
+  readsRoot : ∀ {before result issued}, (keeperCalls).getDirectory cache.directoryRef before = .ok result issued →
+    result = view.directory before cache.directoryRef ∧ view.pending issued cache.pendingRef = view.pending before cache.pendingRef
+  syncKeepsPending : ∀ {issued after}, (keeperCalls).sync cache.handle issued = .ok () after →
+    view.pending after cache.pendingRef = view.pending issued cache.pendingRef
+  readsPending : ∀ {before entries loaded}, (keeperCalls).getPending cache.pendingRef before = .ok entries loaded →
+    entries = view.pending before cache.pendingRef
   syncStorage : ∀ (state : NativeReadyState), state.session.directory = dir → ∀ inode,
     AlignedRepairStorageEffects keeperCalls view state observe visible inode
   syncHandles : ∀ {keeper slot inode readHeap prepared}, attachedReadSlot view keeper slot inode readHeap →
     (observe reached).files.names ((dir).file (.walSegment plan.layout.keeper.first)) = some inode →
-    (keeperCalls).modifyPending seed.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
+    (keeperCalls).modifyPending cache.pendingRef (pushPending ((dir).file (.walSegment plan.layout.keeper.first)) keeper)
       readHeap = .ok () prepared →
-    AlignedRepairHandleEffects keeperCalls view ((dir).file (.walSegment plan.layout.keeper.first)) seed.handle keeper
+    AlignedRepairHandleEffects keeperCalls view ((dir).file (.walSegment plan.layout.keeper.first)) cache.handle keeper
   allocatesPhase : ∀ {installed before ref after}, source.allocatePhase (.ready installed) before = .ok ref after →
     view.phase after ref = some (.ready installed) ∧
-    CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef before after ∧
+    CacheAllocationFrame view cache.directoryRef cache.activeRef cache.pendingRef before after ∧
     (observe before).Frames (managedPath dir) (observe after) ∧ visible after = visible before
   allocatesToken : ∀ {before ref after}, source.allocateToken () before = .ok ref after →
     (∀ phase, view.phase after phase = view.phase before phase) ∧
-    CacheAllocationFrame view seed.directoryRef seed.activeRef seed.pendingRef before after ∧
+    CacheAllocationFrame view cache.directoryRef cache.activeRef cache.pendingRef before after ∧
     (observe before).Frames (managedPath dir) (observe after) ∧ visible after = visible before
 
 /-- Consume one literal aligned open from its exact checkpoint and WAL
@@ -574,10 +632,14 @@ bytes, through the two repair barriers, to the next write entry. The
 primitive laws are keyed by their actual heaps and returned handles. -/
 theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (cache : HeldOpenCache heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (request : WriteRequest) (cause : IO.Error)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (effects : raw.LiteralAlignedEffects seed plan observe visible)
+    (effects : source.LiteralAlignedEffects cache namespaceView root plan observe visible)
+    (admissionFrame : alignedAdmissionFrame view current.state observe visible reached cache.ready)
+    (authority : LiteralOpenAuthority view dir cache cache.ready)
+    (rootNamed : (observe reached).files.names (dir).path = some (cache.captured.inode cache.rootSlot.description))
+    (lockNamed : (observe reached).files.names ((dir).file .lock) = some (cache.captured.inode cache.owner.description))
     (entry : RawOpenRetryTrace.SelectedEntry view current.state target
       (fun atHeap => (observe atHeap).files.names) visible reached)
     (physical : plan.layout.VisibleWal dir (observe reached).files.names (visible reached))
@@ -588,7 +650,10 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
     (phaseEffects : OpenPhaseCellEffects view.phase get set)
     (tokenEqual : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
     {returnedAt : heap} {table : DiskTable}
-    (returned : source.openTable input reached = .ok table returnedAt) :
+    (returned : source.openTable input reached = .ok table returnedAt)
+    (workerReturn : source.worker cache.directoryRef cache.activeRef cache.pendingRef dir cache.lock
+      (RawMarkedOpenInterpreter.makeCache dir cache.directoryRef cache.activeRef cache.pendingRef) cache.ready =
+      .ok table returnedAt) :
     ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
       (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
       (keptBatch : List WAL.Write),
@@ -611,31 +676,30 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
     obtain ⟨inode, named, exactBytes⟩ := Option.map_eq_some_iff.mp (entry.marker.trans atTarget)
     exact ⟨inode, named, congrArg (fun bytes => [bytes]) exactBytes⟩
   have later (start : Nat) (beyond : plan.layout.range.through < start) :
-      admission.view.child admission.root (renderWalSegmentName start) = none := by
-    cases found : admission.view.child admission.root (renderWalSegmentName start) with
+      namespaceView.child root (renderWalSegmentName start) = none := by
+    cases found : namespaceView.child root (renderWalSegmentName start) with
     | none => rfl
     | some object =>
       have listed := effects.laterNames start beyond ⟨object, found⟩
       rw [noLater] at listed
       exact (List.not_mem_nil listed).elim
-  have admissionFrame := raw.framesThroughCache seed
-    (fun left right => ⟨left.1.trans right.1, literalReadFrame_trans left.2 right.2⟩) effects.admissionFrame
-  have workerReturn := (raw.returnsHealthyMarkedInterpreter source seed).mp returned
+  have untilHeld : alignedReadFrame (fun atHeap => (observe atHeap).files.names) visible (managedPath dir)
+      (literalOpenReadFrame (current := current) (view := view) cache observe) reached cache.ready :=
+    ⟨admissionFrame.1, admissionFrame.2.1, admissionFrame.2.2, fun _ => authority⟩
   obtain ⟨count, markerBytes, patched, logical, keeper, slot, inode, readHeap, prepared, repaired, phase, afterPhase,
     token, markerName, decoded, _, replay, named, attached, remembered, liveFrame, privateKeeper, readFrame, cacheFrame, finish,
     phaseReturn, tokenReturn, tableEq⟩ :=
-    plan.readsLiteralAlignedOpen raw.lock seed.directoryRef seed.activeRef seed.pendingRef seed.afterPending
-      (fun atHeap => (observe atHeap).files.names) visible admission.view admission.root
-      (managedPath dir) (literalReadFrame_refl seed observe) literalReadFrame_trans admissionFrame effects.readEffects entry.protectedFiles
+    plan.readsLiteralAlignedOpen cache.lock cache.directoryRef cache.activeRef cache.pendingRef cache.ready
+      (fun atHeap => (observe atHeap).files.names) visible namespaceView root
+      (managedPath dir) (literalReadFrame_refl cache observe) literalReadFrame_trans untilHeld effects.readEffects entry.protectedFiles
       entry.manifest markerLive scope (fun first _ _ => .inr ⟨.walSegment first, rfl⟩) effects.child physical exactKeeper later
       workerReturn
-  have authority := RawOpenAdmissionReport.literalAuthorityAtCache seed effects.openKeepsLock effects.newRefKeepsLock
   have preparedAuthority := cacheFrame.2.2 authority
   obtain ⟨retained, repairFrame, rootIssued, afterDirectory, entries, loaded, consumed,
     getRoot, syncRoot, getPending, findKeeper, clear, syncKeeper⟩ :=
-    plan.retainsLiteralAlignedRepair keeperCalls seed.directoryRef seed.activeRef seed.pendingRef source.remove
-      (source.stage.stage seed.pendingRef (keeperCalls).modifyPending) source.rename
-      (keeps := fun before after => LiteralOpenAuthority seed before → LiteralOpenAuthority seed after)
+    plan.retainsLiteralAlignedRepair keeperCalls cache.directoryRef cache.activeRef cache.pendingRef source.remove
+      (source.stage.stage cache.pendingRef (keeperCalls).modifyPending) source.rename
+      (keeps := fun before after => LiteralOpenAuthority view dir cache before → LiteralOpenAuthority view dir cache after)
       (fun first second => second ∘ first) (effects.repairEffects attached named remembered) preparedAuthority.directoryCell remembered
       (effects.recordsKeeper) effects.readsRoot effects.syncKeepsPending effects.readsPending finish readFrame.2.1 exactKeeper noLater entry.kept
       preparedAuthority.owned (fun kept _ => (kept preparedAuthority).owned) markerName decoded replay
@@ -648,17 +712,17 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
   have keeperEq : writer.wal.active = plan.layout.keeper := plan.keeper.symm
   have keeperPathEq : (dir).file (.walSegment writer.wal.active.first) =
       (dir).file (.walSegment plan.layout.keeper.first) := congrArg (fun item : WalSegment => (dir).file (.walSegment item.first)) keeperEq
-  let files := RawMarkedOpenInterpreter.makeCache dir seed.directoryRef seed.activeRef seed.pendingRef
-  obtain ⟨uses, atDir⟩ := RawMarkedOpenInterpreter.cacheReferences dir seed.directoryRef seed.activeRef seed.pendingRef
-  let cache : OpenSyncCacheRefs files (dir).path := ⟨seed.directoryRef, seed.activeRef, seed.pendingRef, uses, atDir⟩
+  let files := RawMarkedOpenInterpreter.makeCache dir cache.directoryRef cache.activeRef cache.pendingRef
+  obtain ⟨uses, atDir⟩ := RawMarkedOpenInterpreter.cacheReferences dir cache.directoryRef cache.activeRef cache.pendingRef
+  let refs : OpenSyncCacheRefs files (dir).path := ⟨cache.directoryRef, cache.activeRef, cache.pendingRef, uses, atDir⟩
   obtain ⟨initialized, phaseCache, phaseStorage, phaseVisible⟩ := effects.allocatesPhase phaseReturn
   obtain ⟨keepsPhase, tokenCache, tokenStorage, tokenVisible⟩ := effects.allocatesToken tokenReturn
   let allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase writer.installed repaired :=
     ⟨phase, token, afterPhase, returnedAt, phaseReturn, initialized, tokenReturn, keepsPhase phase⟩
-  let state := allocation.readyState writer dir admission.owner admission.cached cache.directory cache.active cache.pending
+  let state := allocation.readyState writer dir cache.owner cache.rootSlot refs.directory refs.active refs.pending
     phaseIdentity tokenIdentity
-  have dirCached : state.cache.directory = some (admission.reached, admission.cached, 0) := by
-    change (view.cacheAt repaired seed.directoryRef seed.activeRef seed.pendingRef).directory = _
+  have dirCached : state.cache.directory = some (cache.captured, cache.rootSlot, 0) := by
+    change (view.cacheAt repaired cache.directoryRef cache.activeRef cache.pendingRef).directory = _
     simp only [OpenCloseHeapView.cacheAt, repairedAuthority.directoryCell, repairedAuthority.rootHandle, Option.map_some]
   have rootInCensus := repairedAuthority.rootAttached.2.2
   have keeperScope : managedPath dir ((dir).file (.walSegment plan.layout.keeper.first)) := .inr ⟨_, rfl⟩
@@ -672,9 +736,9 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
   have preparedBytes := (List.cons.inj (preservedBytes inode named)).1.trans exactBytes
   have protectedRoot : current.state.selectedRetryPath (dir).path := .inr (.inl rfl)
   have protectedLock : current.state.selectedRetryPath ((dir).file .lock) := .inr (.inr (.inl rfl))
-  have atRoot := (readFrame.1.visible _ protectedRoot).1.trans (effects.rootName.trans (congrArg some rootInCensus.symm))
+  have atRoot := (readFrame.1.visible _ protectedRoot).1.trans (rootNamed.trans (congrArg some rootInCensus.symm))
   have atLock := (readFrame.1.visible _ protectedLock).1.trans
-    (effects.ownerName.trans (congrArg some repairedAuthority.ownerAttached.2.2.symm))
+    (lockNamed.trans (congrArg some repairedAuthority.ownerAttached.2.2.symm))
   have preparedDurability := durable.frame readFrame.1.visible
     (readFrame.1.weaken (fun _ same => same.symm ▸ protectedRoot))
   have valid : state.Valid := ⟨rfl, rfl, repairedAuthority.ownerAttached.2.1, repairedAuthority.rootAttached.2.1,
@@ -691,16 +755,16 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
   have keepsSeals : writer.files.kept = current.state.writer.files.kept :=
     retained.sealedFiles.trans current.readPrefix.refines.1.retained.sealedFiles.symm
   have exactReturn : source.openTable input reached =
-      .ok (RawMarkedOpenInterpreter.assemble dir raw.lock files allocation.phase allocation.token) allocation.afterToken :=
+      .ok (RawMarkedOpenInterpreter.assemble dir cache.lock files allocation.phase allocation.token) allocation.afterToken :=
     returned.trans (congrArg (fun value => EStateM.Result.ok value returnedAt) tableEq)
-  have compatible (captured : DescriptorInventory) (seen : state.cache.directory = some (captured, admission.cached, 0)) :
-      captured.inode admission.cached.description = state.census.inode admission.cached.description := by
+  have compatible (captured : DescriptorInventory) (seen : state.cache.directory = some (captured, cache.rootSlot, 0)) :
+      captured.inode cache.rootSlot.description = state.census.inode cache.rootSlot.description := by
     rw [dirCached] at seen
     obtain rfl := congrArg Prod.fst (Option.some.inj seen).symm
     exact rootInCensus.symm
-  exact plan.continuesLiteralAligned (allocation := allocation) (cache := cache)
+  exact plan.continuesLiteralAligned (allocation := allocation) (cache := refs)
     (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-    request cause (RawMarkedOpenInterpreter.assembles dir raw.lock files) retained rfl plan.targetEq entry.manifest rfl
+    request cause (RawMarkedOpenInterpreter.assembles dir cache.lock files) retained rfl plan.targetEq entry.manifest rfl
     keepsSeals repairedAuthority.ownerAttached.1 repairedAuthority.ownerAttached.2.1 repairedAuthority.rootAttached.2.1
     ⟨_, dirCached⟩ phaseCache tokenCache compatible phaseEffects tokenEqual exactReturn observe visible
     preparedDurability atRoot atLock (keeperInode := inode)
@@ -717,7 +781,6 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralAlignedWriter
 interpret one literal successful open at the resulting heap. An earlier
 write can select either marker independently of these recovery calls. -/
 theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (request : WriteRequest) (cause : IO.Error) {table : PackedTable}
     (prepared : prepareBatch current.state.writer.installed.table request.rows = some (batch, table))
@@ -735,8 +798,14 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
         current.state.writer.wal.NamespaceWindow dir firstOffset (prior ++ batch).length (observe atHeap).files.names ∧
         RawOpenRetryTrace.KeeperAt view dir target (fun atHeap => (observe atHeap).files.names) visible atHeap ∧
         current.state.SelectedRetryDurability target (observe atHeap)) attempts)
-    (effects : ∀ plan, raw.LiteralAlignedEffects seed (current := current) (batch := batch) (target := target)
-      plan observe visible)
+    (admission : source.AlignedAdmissionEffects view current.state input reached observe visible)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (rootBinding : (observe reached).files.names (dir).path = some (namespaceView.modelObject root))
+    (effects : ∀ (cache : HeldOpenCache heap) (plan : current.SelectedWritePlan batch target (view.files reached).image),
+      LiteralOpenAuthority view dir cache cache.ready →
+      namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+      source.LiteralAlignedEffects cache namespaceView root (current := current) (batch := batch) (target := target)
+        plan observe visible)
     (exactKeeper : (view.files reached).image.keeper.active = some target.trimmed)
     (noLater : (view.files reached).image.later.visible = [])
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
@@ -757,9 +826,13 @@ theorem NativeReadPosition.opensLiteralAlignedAfterWriteRetries
       start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) := by
   obtain ⟨plan, physical, entry, settled⟩ := current.preparesDurableVisibleWriteRetry prepared fits admitted
     observe visible covers initial window durable retryEffects
+  obtain ⟨held, framed, authority, rootNamed, lockNamed, _, _, worker⟩ :=
+    RawMarkedOpenInterpreter.reachesAlignedCache admission settled.protectedFiles returned
+  have rootObject := Option.some.inj (rootBinding.symm.trans rootNamed)
   obtain ⟨handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry⟩ :=
-    plan.returnsLiteralAlignedWriter seed request cause observe visible (effects plan) entry physical exactKeeper
-      noLater settled phaseIdentity tokenIdentity phaseEffects tokenEqual returned
+    plan.returnsLiteralAlignedWriter held namespaceView root request cause observe visible
+      (effects held plan authority rootObject) framed authority rootNamed lockNamed entry physical exactKeeper
+      noLater settled phaseIdentity tokenIdentity phaseEffects tokenEqual returned worker
   exact ⟨plan, handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry⟩
 
 end LiteralContinuation

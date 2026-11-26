@@ -246,9 +246,15 @@ First validate the [target execution argument](proofs/native-storage.md#target-e
   aligned report adapter was removed. The literal return now determines
   the primitive admission, lock and cache-allocation receipts. The
   aligned consumers derive the guarded marker probe from the selected
-  binding and local no-follow effects. Use those receipts to derive
-  the admitted census and cache projections from local effects.
-  Connect long and pruned recoveries to the same reached-state execution.
+  binding and local no-follow effects. For this aligned route, the
+  actual path and metadata heaps, the existing `LOCK` binding, the
+  directory open and the three reference allocations derive the
+  reached census and cache cells. The local file frame is independent
+  of that authority and carries changes to unrelated state. The
+  grouped and late write consumers use the derived cache entry. They
+  still assume an exact keeper, no later WAL names, and the local
+  Linux callback effects. Connect long and pruned recoveries to the
+  same reached-state execution.
   [Literal aligned retry](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
   [Rotation WAL names](../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
   [Fresh WAL names](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)

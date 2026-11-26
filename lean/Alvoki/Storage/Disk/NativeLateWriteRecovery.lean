@@ -185,10 +185,9 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
       offset ≤ (current.current.history ++ batch).length →
       (prior ((dir).file (.walSegment offset))).isSome =
         ((storage current.reached).files.names ((dir).file (.walSegment offset))).isSome)
-    {inventory : DescriptorInventory}
-    {admission : CensusOpenAdmissionReports input current.current.ready.state.session.directory inventory (view.files reached)}
-    (raw : RawOpenAdmissionReport admission view source.calls reached)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (admission : source.AlignedAdmissionEffects view state input reached storage visible)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (rootBinding : (storageNames reached) (dir).path = some (namespaceView.modelObject root))
     {returnedAt : heap} {reopened : DiskTable}
     (openedTable : source.openTable input reached = .ok reopened returnedAt)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
@@ -210,8 +209,10 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     (noLater : (view.files reached).image.later.visible = [])
     (openEffects : ∀ target : Target, BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first target →
       target.pair = (view.files rebooted).image.directory.active →
-      ∀ plan : (ready).SelectedWritePlan batch target (view.files reached).image,
-        raw.LiteralAlignedEffects seed plan storage visible)
+      ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
+        LiteralOpenAuthority view dir cache cache.ready →
+        namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+        source.LiteralAlignedEffects cache namespaceView root plan storage visible)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
@@ -260,9 +261,9 @@ theorem NativeOpenedPosition.reopensReadyAfterPublicationError
     nonempty returned nameEffects
   have window := reboot.walNamespace nameFrame initialWindow settledWindow
   obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical⟩ :=
-    (ready).opensLiteralAlignedAfterWriteRetries (raw := raw) seed storage visible request cause prepared fits admitted
+    (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
       covers selected window (reboot.startsDurableRetry reset selected).2 (retryEffects target admitted active)
-      (openEffects target admitted active) (exactKeeper target admitted active) noLater
+      admission namespaceView root rootBinding (openEffects target admitted active) (exactKeeper target admitted active) noLater
       phaseIdentity tokenIdentity phase ptrEq openedTable
   have whole : retained = [] ∨ retained = batch := ledger.whole _ (List.mem_singleton_self _)
   refine ⟨schedules, returned, rebootVacant, slots, target, plan, handle, start, nextCache, retained,

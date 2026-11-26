@@ -60,18 +60,19 @@ theorem NativeOpenedPosition.groupedRetryAndReads
           (current.current.history.length + request.rows.length) (names atHeap) ∧
           RawOpenRetryTrace.KeeperAt view dir (state).writer.target names visible atHeap ∧
           (state).SelectedRetryDurability (state).writer.target (storage atHeap)) attempts)
-    {inventory : DescriptorInventory}
-    {admission : CensusOpenAdmissionReports input current.current.ready.state.session.directory inventory (view.files reached)}
-    (raw : RawOpenAdmissionReport admission view source.calls reached)
-    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (admission : source.AlignedAdmissionEffects view state input reached storage visible)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (rootBinding : (names reached) (dir).path = some (namespaceView.modelObject root))
     {returnedAt : heap} {reopened : DiskTable}
     (openedTable : source.openTable input reached = .ok reopened returnedAt)
     (exactKeeper : (view.files reached).image.keeper.active = some (state).writer.target.trimmed)
     (noLater : (view.files reached).image.later.visible = [])
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     (effects : ∀ {batch table}, prepareBatch (installed).table request.rows = some (batch, table) →
-      ∀ plan : (ready).SelectedWritePlan batch (state).writer.target (view.files reached).image,
-        raw.LiteralAlignedEffects seed plan storage visible)
+      ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch (state).writer.target (view.files reached).image),
+        LiteralOpenAuthority view dir cache cache.ready →
+        namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+        source.LiteralAlignedEffects cache namespaceView root plan storage visible)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (phase : OpenPhaseCellEffects view.phase get set)
@@ -132,9 +133,9 @@ theorem NativeOpenedPosition.groupedRetryAndReads
     have upper : (current.current.history ++ batch).length = current.current.history.length + request.rows.length := by
       simp only [List.length_append, (prepareBatch_spec prepared).1]
     obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical⟩ :=
-      (ready).opensLiteralAlignedAfterWriteRetries (raw := raw) seed storage visible request cause prepared fits admitted
+      (ready).opensLiteralAlignedAfterWriteRetries storage visible request cause prepared fits admitted
         covers selected (by simpa only [upper] using window) (reboot.startsDurableRetry reset selected).2
-        (by simpa only [upper] using retryEffects) (effects prepared) exactKeeper noLater phaseIdentity tokenIdentity
+        (by simpa only [upper] using retryEffects) admission namespaceView root rootBinding (effects prepared) exactKeeper noLater phaseIdentity tokenIdentity
         phase ptrEq openedTable
     have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by

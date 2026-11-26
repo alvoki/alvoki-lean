@@ -284,29 +284,6 @@ section ActualMarkedSelection
 
 variable {heap : Type} {frame : heap → heap → Prop}
 
-private theorem optionalMetadata_success_frames
-    (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
-    {before after : heap} {metadata : Option IO.FS.Metadata}
-    (keeps : frame before (reachedState (lookup before)))
-    (returned : optionalMetadataWith lookup before = .ok metadata after) : frame before after := by
-  simp only [optionalMetadataWith, Bind.bind, EStateM.bind] at returned
-  cases observed : lookup before with
-  | error cause reached => simp [observed] at returned
-  | ok result reached =>
-    have actual : frame before reached := by simpa only [observed, reachedState] using keeps
-    simp only [observed] at returned
-    cases result with
-    | ok stat =>
-      simp only [Pure.pure, EStateM.pure, EStateM.Result.ok.injEq] at returned
-      exact returned.2 ▸ actual
-    | error cause =>
-      cases cause <;> simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw] at returned
-      rename_i name code message
-      by_cases missing : code = 2
-      · simp [missing, Pure.pure, EStateM.pure] at returned
-        exact returned.2 ▸ actual
-      · simp [missing, EStateM.throw] at returned
-
 private theorem flatGuard_passed_frames (directory : DiskDirectory)
     (lookup : EStateM IO.Error heap (Except IO.Error IO.FS.Metadata))
     {before after : heap} (keeps : frame before (reachedState (lookup before)))
@@ -316,7 +293,7 @@ private theorem flatGuard_passed_frames (directory : DiskDirectory)
   cases tested : optionalMetadataWith lookup before with
   | error cause reached => simp [tested] at returned
   | ok metadata reached =>
-    have known := optionalMetadata_success_frames lookup keeps tested
+    have known := optionalMetadata_success_frames lookup (fun ran => by simpa only [ran, reachedState] using keeps) tested
     cases metadata with
     | none =>
       simp [tested, Pure.pure, EStateM.pure] at returned
@@ -335,7 +312,8 @@ theorem markedGuards_keepFrame (directory : DiskDirectory)
     (marker : optionalMetadataWith (lookup (directory.file .walBoundary)) checked = .ok (some metadata) marked) :
     frame entry marked :=
   trans (flatGuard_passed_frames directory _ (keeps (directory.file .wal) entry) flat)
-    (optionalMetadata_success_frames _ (keeps (directory.file .walBoundary) checked) marker)
+    (optionalMetadata_success_frames _ (fun ran => by
+      simpa only [ran, reachedState] using keeps (directory.file .walBoundary) checked) marker)
 
 /-- The accepted marker used by the bounded production reader belongs to
 the reached namespace of this retry. Framing the chosen live bytes to the
