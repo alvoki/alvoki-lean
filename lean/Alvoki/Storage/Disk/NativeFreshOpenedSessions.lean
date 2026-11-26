@@ -90,6 +90,15 @@ private theorem freshEmptyWAL {state : NativeReadyState} (valid : state.Valid)
     have order := (List.pairwise_append.mp layout.ordered).2.2 segment member wal.active (List.mem_singleton_self _)
     exact Nat.not_lt_zero _ (first ▸ order.1)
 
+private theorem freshManifestAbsent {input : FilePath} {directory : DiskDirectory}
+    {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
+    (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after) :
+    opened.start.current.ready.state.writer.target.pair.manifest = none := by
+  obtain ⟨bootstrap, _, image, _⟩ := used
+  have ready := opened.start.current.ready.readPrefix.refines.1.retained.resumed.ready
+  rw [← ready.selected]
+  exact (congrArg (fun image : DirectoryPublication.Image => image.active.manifest) image).trans bootstrap.manifestAbsent
+
 private theorem renderWalSegmentName_ne_marker {name : String} (offset : Nat)
     (marker : name.toList[3]? = some '.') : renderWalSegmentName offset ≠ name := by
   intro equal
@@ -235,10 +244,8 @@ theorem readyStorage {input : FilePath} {directory : DiskDirectory}
   obtain ⟨valid, history, _⟩ := opened.start.current.ready.readPrefix.refines
   have empty : state.writer.history = [] := history.trans opened.emptyHistory
   obtain ⟨first, emptyKeeper, seals⟩ := freshEmptyWAL valid empty
-  obtain ⟨bootstrap, census, image, _, _, owner, directorySlot, _⟩ := used
-  have manifest : state.writer.target.pair.manifest = none := by
-    rw [← valid.retained.resumed.ready.selected]
-    exact (congrArg (fun image : DirectoryPublication.Image => image.active.manifest) image).trans bootstrap.manifestAbsent
+  have manifest := opened.freshManifestAbsent used
+  obtain ⟨_, census, _, _, _, owner, directorySlot, _⟩ := used
   have renamedKeeps (name) (wanted : name ∈ ["LOCK", "MANIFEST"]) :
       report.marker.renamedView.child report.captured.root name = report.captured.view.child report.captured.root name := by
     have unchanged := createdKeeps name wanted
@@ -637,7 +644,8 @@ theorem refinesReadyCalls {input : FilePath} {directory : DiskDirectory}
 
 /-- Start the first observed write at the actual returned heap of the
 fresh opener. Its local effects refer to the original cache references.
-The returned writer can carry the finite WAL window of the next request. -/
+The acknowledged batch is the entire history of the checkpoint-free
+writer, which can carry the same finite WAL window forward. -/
 theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
     {report : EmptyOpenSuccessReports input directory} {after : LockedFileState WalSegmentRotation.State}
     (used : (NativeOpenSuccessReports.empty report).UsesReachedState opened.start.current.ready.state after)
@@ -685,6 +693,9 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (observe next.reached) (inodes next.reached).visible ∧
+      (let writer := next.current.ready.state.writer
+       writer.target.pair.manifest = none ∧ writer.wal.sealed = [] ∧ writer.history = batch ∧
+       writer.target.range.through = request.rows.length) ∧
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow dir 0 through (observe start.reached) →
         start.WalNameEffects appender stager syncer cache request lookup rename observe 0 through →
         (∀ {settled value}, handle.set handle.phase (.ready value) settled = .ok () reached →
@@ -693,13 +704,22 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
           next.current.ready.state.session.directory 0 through (observe next.reached) := by
   obtain ⟨cache, sameDir, sameActive, samePending, writeEntry⟩ :=
     opened.writeStorageEntry used view resolved references atDirectory census cacheAt settled
-  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, _, ledger, physical, keepsNames⟩ :=
+  obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, _, ledger, physical,
+    preserved, keepsNames⟩ :=
     opened.start.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty writeEntry (seen cache sameDir sameActive samePending)
   obtain ⟨history, submissions, reads, _⟩ := opened.refinesLedger ledger
+  have exactHistory : next.current.history = batch := by
+    simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using history
+  obtain ⟨beforeReady, beforeHistory, _⟩ := opened.start.current.ready.readPrefix.refines
+  have seals := (freshEmptyWAL beforeReady (beforeHistory.trans opened.emptyHistory)).2.2
+  obtain ⟨afterReady, afterHistory, _⟩ := next.current.ready.readPrefix.refines
+  have batchHistory := afterHistory.trans exactHistory
+  have cutoff := afterReady.retained.resumed.through.trans
+    ((congrArg List.length batchHistory).trans (prepareBatch_spec prepared).1)
   refine ⟨opened.opened, schedule, cache, batch, table, next, sameDirectory, sameDir, sameActive, samePending, returned,
-    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, ?_, ?_, ?_, physical, ?_⟩
-  · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using history
+    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, exactHistory, ?_, ?_, physical,
+    ⟨preserved.1.trans (opened.freshManifestAbsent used), preserved.2.trans seals, batchHistory, cutoff⟩, ?_⟩
   · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.submissions] using submissions
   · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.reads] using reads
   · intro through initial names restore

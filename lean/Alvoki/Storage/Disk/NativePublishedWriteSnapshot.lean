@@ -266,7 +266,7 @@ theorem NativeOpenedPosition.acknowledgesAndReadsLatest
         [.write request (.ok sequence)] read sequence (some (read.replay reference sequence))
         current.reached last.reached := by
   obtain ⟨issuer⟩ := opened.hasLatestIssuer
-  obtain ⟨schedule, returned, batch, table, written, _, prepared, number, reachedWrite, _, installed, wrote, _, _⟩ :=
+  obtain ⟨schedule, returned, batch, table, written, _, prepared, number, reachedWrite, _, installed, wrote, _, _, _⟩ :=
     current.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty entry seen
   obtain ⟨pin, acquired, last, reference, _, _, _, readReturned, calls, _, replay, agrees, acquire, pinSequence⟩ :=

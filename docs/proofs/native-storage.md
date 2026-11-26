@@ -193,10 +193,20 @@ obligations; a Lean theorem can discharge one obligation for several claims.
 
 | Boundary | What must remain true, and why | Who establishes it → who uses it |
 |---|---|---|
-| Filesystem effects | For the paths an operation must preserve, names still bind the same inodes and their allowed contents agree. Each later crash map has one earlier witness for the **whole footprint**. Otherwise a proof could combine a manifest from one outcome with a run from another. [Scoped frame][frame] | Local effects of reads, removals and barriers → retry proofs, which compose or restrict the frame. A read-only retry preserves the durable selected files, the live keeper binding and bytes, and the presence of other canonical WAL names in the live directory. [Retry frame](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean#L394) |
+| Filesystem effects | For the paths an operation must preserve, names still bind the same inodes and their allowed contents agree. Each later crash map has one earlier witness for the **whole footprint**. Otherwise a proof could combine a manifest from one outcome with a run from another. [Scoped frame][frame] | Local effects of reads, removals and barriers → retry proofs, which compose or restrict the frame. A read-only retry preserves the durable selected files, the live keeper binding and bytes, and the presence of other canonical WAL names in the live directory. [Retry frame](https://github.com/alvoki/alvoki-lean/blob/a3629c688ea43a08d6f87aa35e695baabee0a462/lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean#L394) |
 | Storage authority | The held lock and directory handle refer to the captured objects. A single surviving namespace and its bytes determine the selected manifest, run files, WAL marker and replay range. A missing segment inside that range matters just as much as a present one. [Held authority][authority] · [Sampled replay][sample] · [WAL window][window] | Admission establishes custody. For covered publication stops, the crash-selection proof establishes the recoverable file set → the held reader checks and replays those files. |
 | Installed session | The table returned by this `open` has the phase, token and cache allocated by this repair. Its active WAL bytes and directory descriptor agree with the storage at the return heap. This is what makes the next write safe on **that handle**. [Write entry][entry] | Successful repair and reference allocation → the next writer. A newly issued pin carries the returned token. The new handle starts with empty pins. |
 | Client history | Each call extends the incoming history, submissions and observations with its own events. One replay accounts for acknowledged writes, whole uncertain batches and recorded reads. [Ledger suffix][ledger] · [Installed replay][replay] | Local operation refinements → the finite-call induction → write and snapshot guarantees. Collection also needs an eligibility proof for the removed files. Progress needs availability and scheduling assumptions. [Reclamation](#reclamation) · [Progress](#progress-and-bounds) |
+
+**The first batch before rotation.** The fresh writer has no manifest or sealed
+segments. A confirmed batch preserves those facts and sets the WAL cutoff to
+the batch length. At a power loss between calls, one surviving directory map
+and its bytes determine the read plan. Given a successful public open, the
+phase on its returned table contains the replay of that history. The physical
+premises include a settled WAL name interval through the cutoff, truthful
+directory and file reads, and reference allocation that preserves the phase.
+[First write](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+· [Reopen theorem](https://github.com/alvoki/alvoki-lean/blob/069be1e6d09dd3eba01b87d8756d454126d4ca8f/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1755)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the

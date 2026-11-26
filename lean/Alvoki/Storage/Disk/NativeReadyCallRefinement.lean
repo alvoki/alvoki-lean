@@ -525,7 +525,7 @@ private theorem NativeReturnedCall.refinesReady
         have seen : start.ObservesPublishedWrite writes.appender writes.stager writes.syncer view cache inodes runs
             storage inode buffered request writes.lookup writes.rename sequence reached :=
           ⟨files, sameStorage, raw, callbacks⟩
-        obtain ⟨_, _, batch, table, next, _, prepared, committed, atHeap, pins, _, ledger, ready, keepsNames⟩ :=
+        obtain ⟨_, _, batch, table, next, _, prepared, committed, atHeap, pins, _, ledger, ready, _, keepsNames⟩ :=
           start.acknowledgesObservedWrite writes.appender writes.stager writes.syncer view cache inodes runs
             storage inode buffered request writes.lookup writes.rename nonempty initial seen
         obtain ⟨length, replayed, rows, numbered⟩ := prepareBatch_spec prepared

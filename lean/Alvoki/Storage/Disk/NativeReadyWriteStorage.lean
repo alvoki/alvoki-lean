@@ -221,6 +221,8 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (storage next.reached) (inodes next.reached).visible ∧
+      (next.current.ready.state.writer.target.pair.manifest = (before).writer.target.pair.manifest ∧
+        next.current.ready.state.writer.wal.sealed = (before).writer.wal.sealed) ∧
       next.current.ready.state.writer.wal.segments.map WalSegment.first =
         (before).writer.wal.segments.map WalSegment.first := by
   obtain ⟨entryCensus, entryCache, old, entryKeeper, root⟩ := entry
@@ -334,7 +336,8 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     · intro event member
       obtain rfl := List.mem_singleton.mp member
       trivial
-  refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, rfl, ledger, ?_, ?_⟩
+  refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, rfl, ledger, ?_,
+    ⟨sameManifest, rfl⟩, ?_⟩
   · refine ⟨rfl, rfl, afterStorage, ?_, ?_⟩
     · intro namedInode named
       change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
@@ -407,6 +410,8 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (observe next.reached) (inodes next.reached).visible ∧
+      (next.current.ready.state.writer.target.pair.manifest = start.current.ready.state.writer.target.pair.manifest ∧
+        next.current.ready.state.writer.wal.sealed = start.current.ready.state.writer.wal.sealed) ∧
       ∀ {firstOffset through : Nat},
         (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) →
         start.current.ready.state.writer.wal.SettledNamespaceWindow directory firstOffset through (observe start.reached) →
@@ -422,10 +427,12 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
     rw [sameStorage start.reached]
     exact entry
 
-  obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger, physical, sameStarts⟩ :=
+  obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger, physical,
+    preserved, sameStarts⟩ :=
     start.acknowledgesPublishedWrite appender stager syncer view cache inodes runs files inode buffered
       request lookup rename nonempty returned atWrite effects
-  refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger, ?_, ?_⟩
+  refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger,
+    ?_, preserved, ?_⟩
   · rwa [← sameStorage next.reached]
   · intro firstOffset through covers initial nameEffects restore
     refine ⟨sameStarts.symm ▸ covers, ?_⟩

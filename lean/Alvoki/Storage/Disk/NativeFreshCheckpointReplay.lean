@@ -326,7 +326,7 @@ theorem FreshBootstrapOpenHeap.Returned.replaysAfterEarlyCheckpointStop
         InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
           last.current.ready.state.writer.installed last.current.ready.state.session := by
   obtain ⟨actual, _, cache, batch, _, next, nextDirectory, sameDirectory, sameActive, samePending, wrote, _, _, atNext, _,
-    ledger, whole, _, reads, physical, _⟩ :=
+    ledger, whole, _, reads, physical, _, _⟩ :=
     opened.acknowledgesFirstWrite used view resolved references atDirectory census cacheAt inodes runs
       (fun atHeap => (filesObserved atHeap).storageObservation) settled
       appender stager syncer inode buffered request lookup rename nonempty seen

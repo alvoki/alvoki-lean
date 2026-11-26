@@ -80,11 +80,14 @@ common cleanup carries the observed descriptor closes at that heap through
 unlock and final lock release to derive the public diagnostic and inventory.
 Several cache references may share a handle. The fsync may already have taken effect.
 
-**Next obligation.** Connect the first returned write after fresh bootstrap to
-this single-segment result on its exact heap. Derive the absent manifest,
-empty seal list and required WAL interval there. Then read a snapshot on the
-reopened handle. On the failed-barrier path, the surviving namespace and
-cleanup inventory still need to feed the next admission.
+The first write now supplies the absent manifest, empty seal list, exact batch
+and marker cutoff on its actual return heap. The fresh directory barrier and
+write frames supply the bounded WAL names at that cutoff.
+
+**Next obligation.** Read a snapshot on the single-segment reopen using its
+actual phase and token, then admit a final interrupted batch. On the
+failed-barrier path, the surviving namespace and cleanup inventory still need
+to feed the next admission.
 Further interruptions, mixed sessions and maintenance remain in the
 [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
