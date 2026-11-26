@@ -142,8 +142,8 @@ theorem readsSelected :
   have keeper := readCachedWalPayloads_singletonReturned directory through seen.first fileCalls.seal
     ((callbacks.withFileReads fileCalls).readKeeper seed.pendingRef) seen.keeper.calls.metadata
     seen.width measured.symm (by simpa only [measured] using seen.readKeeper)
-  simp only [readSelectedWithCachedExtents, marker.checked, true_and, ↓reduceIte, Bind.bind, EStateM.bind, seen.returnsListing.1,
-    seen.extent, selectedExtent, keeper, Pure.pure, EStateM.pure, through, watermark]
+  simp only [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, marker.checked, true_and, ↓reduceIte,
+    Bind.bind, EStateM.bind, seen.returnsListing.1, seen.extent, selectedExtent, keeper, Pure.pure, EStateM.pure, through, watermark]
 
 /-- The source's span guard and retained-byte selector pass. Corruption
 is checked by the ordinal decoder on exactly this keeper's bytes. -/

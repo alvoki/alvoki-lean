@@ -156,8 +156,8 @@ theorem readSelected (report : HeldWalDecodeReads directory before) :
   have calls := congrFun (readCachedWalPayloads_reportedEffects (state := FileImage) report.payloadReports)
     report.selection.afterScan
   rw [← report.sealReader, ← report.keeperReader] at calls
-  simp [readSelectedWithCachedExtents, report.selection.checked, Bind.bind, EStateM.bind, report.selection.listed,
-    report.selection.scanned, report.selection.selected, calls, Pure.pure, EStateM.pure]
+  simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, report.selection.checked, Bind.bind, EStateM.bind,
+    report.selection.listed, report.selection.scanned, report.selection.selected, calls, Pure.pure, EStateM.pure]
   rw [scanUnchanged]
 
 private theorem startsWithin (report : HeldWalDecodeReads directory before) :

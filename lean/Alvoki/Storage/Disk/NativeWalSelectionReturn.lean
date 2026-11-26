@@ -156,9 +156,9 @@ theorem SelectedWalReadReturn.classifies (directory : DiskDirectory) (watermark 
     (readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray) (entry : heap) :
     SelectedWalReadReturn directory watermark length list lstat readSeal readKeeper entry
       (readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper entry) := by
-  unfold readSelectedWithCachedExtents
+  rw [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate]
   by_cases checked : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize
-  · simp only [ite_eq_left checked, Bind.bind, EStateM.bind, Pure.pure]
+  · simp only [ite_eq_left checked, Bind.bind, EStateM.bind]
     cases listed : list directory.path entry with
     | error cause reached => exact .listingError checked listed
     | ok entries afterListing =>
@@ -181,7 +181,7 @@ theorem SelectedWalReadReturn.classifies (directory : DiskDirectory) (watermark 
           | ok reads reached =>
             obtain ⟨files, size⟩ := reads
             exact .payloadReturned selection payload (by simpa only [payload] using ordered)
-  · simpa [checked, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw] using
+  · simpa [checked, throw, throwThe, MonadExceptOf.throw, EStateM.throw] using
       (SelectedWalReadReturn.invalidMarker (directory := directory) (list := list) (lstat := lstat)
         (readSeal := readSeal) (readKeeper := readKeeper) (entry := entry) checked)
 

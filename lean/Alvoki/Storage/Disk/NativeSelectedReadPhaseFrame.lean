@@ -198,10 +198,9 @@ theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length :
     (seals : ∀ path count, KeepsReadFrame frame (readSeal path count))
     (keepers : ∀ path count size, KeepsReadFrame frame (readKeeper path count size)) :
     KeepsReadFrame frame (readSelectedWithCachedExtents directory watermark length list stat readSeal readKeeper) := by
-  unfold readSelectedWithCachedExtents
-  by_cases valid : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
-  · simp only [valid]
-    apply lists.bind trans
+  rw [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate]
+  split
+  · apply lists.bind trans
     intro entries
     apply (readsWalExtents directory (entries.toList.map (·.fileName)) refl trans stats).bind trans
     intro extents
@@ -210,9 +209,7 @@ theorem readsSelectedWal (directory : DiskDirectory) (watermark : Nat) (length :
       rintro ⟨files, size⟩
       exact .pure refl _
     · exact .throw refl _
-  · intro before
-    simpa [valid, Bind.bind, EStateM.bind, MonadExcept.throw, throwThe, MonadExceptOf.throw, EStateM.throw,
-      reachedState] using refl before
+  · exact .throw refl _
 
 end KeepsReadFrame
 

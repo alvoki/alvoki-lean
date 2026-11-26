@@ -131,16 +131,14 @@ theorem readCachedWalPayloads_payloadCallsBound (dir : DiskDirectory) (through :
 def readSelectedWithCachedExtents [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
     (watermark : Nat) (length : UInt64) (list : FilePath → m (Array IO.FS.DirEntry))
     (lstat : FilePath → m (Except IO.Error IO.FS.Metadata)) (readSeal : FilePath → Nat → m ByteArray)
-    (readKeeper : FilePath → Nat → Nat → m ByteArray) : m (WalSegmentMarkerReads × Nat) := do
-  let through := length.toNat / frameSize
-  unless length.toNat % frameSize = 0 ∧ watermark ≤ through do
-    throw (IO.userError "invalid absolute WAL segment marker")
-  let entries ← list dir.path
-  let extents ← readWalSegmentExtentsWith dir lstat (entries.toList.map (·.fileName))
-  let some (required, newer) := selectWalExtentsThrough extents watermark through
-    | throw (IO.userError "no WAL segment covers the checkpoint watermark")
-  let (files, fileSize) ← readCachedWalPayloads dir through readSeal readKeeper required
-  pure (⟨files, newer⟩, fileSize)
+    (readKeeper : FilePath → Nat → Nat → m ByteArray) : m (WalSegmentMarkerReads × Nat) :=
+  withAbsoluteWalCutoff watermark length fun through => do
+    let entries ← list dir.path
+    let extents ← readWalSegmentExtentsWith dir lstat (entries.toList.map (·.fileName))
+    let some (required, newer) := selectWalExtentsThrough extents watermark through
+      | throw (IO.userError "no WAL segment covers the checkpoint watermark")
+    let (files, fileSize) ← readCachedWalPayloads dir through readSeal readKeeper required
+    pure (⟨files, newer⟩, fileSize)
 
 private theorem readCachedWalPayloadsFrom_rejectsSeal {state : Type} (dir : DiskDirectory) (through : Nat)
     (readSeal : FilePath → Nat → EStateM IO.Error state ByteArray)
@@ -494,8 +492,8 @@ theorem readSelectedWithCachedExtents_reported (dir : DiskDirectory) (watermark 
     (reports : CachedWalPayloadReports dir (length.toNat / frameSize) readSeal readKeeper required files fileSize) :
     readSelectedWithCachedExtents dir watermark length list lstat readSeal readKeeper =
       .ok (⟨files, newer⟩, fileSize) := by
-  simp [readSelectedWithCachedExtents, checked, listed, scanned, selected, readCachedWalPayloads_reported reports,
-    Bind.bind, Except.bind, Pure.pure, Except.pure]
+  simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff, checked, listed, scanned, selected,
+    readCachedWalPayloads_reported reports, Bind.bind, Except.bind, Pure.pure, Except.pure]
 
 /-- Use the checked extent for each selected checkpoint run and each selected
 WAL segment, then use the shared replay and repair. -/
@@ -704,16 +702,16 @@ theorem readSelectedWithCachedExtents_requestBound (dir : DiskDirectory) (waterm
       (fun path count size => counted (readKeeper path count size)) before
     callsAfter observed + pendingWalUnlinks observed ≤ before + (1 + 2 * listedWalNames (list dir.path)) := by
   dsimp only
-  unfold readSelectedWithCachedExtents
+  rw [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate]
   by_cases valid : length.toNat % frameSize = 0 ∧ watermark ≤ length.toNat / frameSize
   · cases listed : list dir.path with
     | error cause =>
-      simp [valid, listed, counted, Bind.bind, EStateM.bind, callsAfter, pendingWalUnlinks, listedWalNames]
+      simp [valid, counted, Bind.bind, EStateM.bind, callsAfter, pendingWalUnlinks, listedWalNames]
     | ok entries =>
       let names := entries.toList.map IO.FS.DirEntry.fileName
       let scan := readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names
       have measured := countedExtentScan dir lstat names (before + 1)
-      simp only [ite_eq_left valid, Bind.bind, EStateM.bind, Pure.pure, counted, listed]
+      simp only [ite_eq_left valid, Bind.bind, EStateM.bind, Pure.pure, counted]
       rw [show readWalSegmentExtentsWith dir (fun path => counted (lstat path)) names (before + 1) =
         scan (before + 1) from rfl]
       change _ ≤ before + (1 + 2 * (names.filterMap parseWalSegmentName).length)
@@ -747,7 +745,7 @@ theorem readSelectedWithCachedExtents_requestBound (dir : DiskDirectory) (waterm
               (fun path count => counted (readSeal path count))
               (fun path count size => counted (readKeeper path count size)) required [] reached <;>
             rw [payload] at payloads <;> simp only [EStateM.pure, callsAfter, pendingWalUnlinks] at payloads ⊢ <;> omega
-  · simp [valid, Bind.bind, EStateM.bind, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter, pendingWalUnlinks]
+  · simp [valid, throw, throwThe, MonadExceptOf.throw, EStateM.throw, callsAfter, pendingWalUnlinks]
 
 /-- The cached WAL reader issues at most one directory listing, one metadata probe
 per canonical name, and one payload request per selected segment. Both the successful

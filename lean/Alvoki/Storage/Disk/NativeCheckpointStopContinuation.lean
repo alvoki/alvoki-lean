@@ -51,14 +51,15 @@ theorem readSelectedWithCachedExtents_projectsWalNames {heap : Type}
     readSelectedWithCachedExtents directory watermark length list lstat readSeal readKeeper before := by
   by_cases checked : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
   · cases listed : list directory.path before with
-    | error => simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, listed]
+    | error =>
+      simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, Bind.bind, EStateM.bind, checked, listed]
     | ok entries reached =>
       have names : (entries.toList.filter (fun entry => (parseWalSegmentName entry.fileName).isSome)).map
           (·.fileName) = (entries.toList.map (·.fileName)).filter (fun name => (parseWalSegmentName name).isSome) := by
         simp [List.filter_map, Function.comp_def]
-      simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, listed, Pure.pure, EStateM.pure,
-        names, ← extentsIgnoreUnparsedNames]
-  · simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, throw, throwThe,
+      simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, Bind.bind, EStateM.bind, checked, listed,
+        Pure.pure, EStateM.pure, names, ← extentsIgnoreUnparsedNames]
+  · simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, checked, throw, throwThe,
       MonadExceptOf.throw, EStateM.throw]
 
 /-- The marked WAL selector ignores MANIFEST.next at any listing position.
@@ -84,7 +85,8 @@ theorem readSelectedWithCachedExtents_ignoresStagedManifest {heap : Type}
     rw [extentsIgnoreUnparsedNames directory lstat (entriesWithScratch.toList.map (·.fileName)),
       extentsIgnoreUnparsedNames directory lstat (entries.toList.map (·.fileName)), namesWithScratch, names]
     simp [List.filter_append, stagedManifestUnparsed directory]
-  simp [readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checked, listed, listedWithScratch, inventory, Pure.pure]
+  simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, Bind.bind, EStateM.bind, checked, listed,
+    listedWithScratch, inventory, Pure.pure]
 
 /-- The reboot image used by marked recovery projects the selected files.
 The reached staging metadata can vary independently of that projection. -/

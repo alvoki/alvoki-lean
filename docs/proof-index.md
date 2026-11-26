@@ -56,6 +56,14 @@ where the schedule makes it. Compose a failed open and a later successful open t
 between them. This lets a later proof reuse the same retry argument even when another interruption
 or rejection appears. [Shared production schedule](../lean/Alvoki/Storage/Publication/DiskPublication.lean) · [Opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
 
+When several executable paths perform the same check before I/O, extract that
+decision in the production code and prove its effect once. Three WAL readers
+use the same marker guard. Its failure leaves the entry state intact. On success
+the reader receives the exact cutoff in frames. A proof about I/O costs can
+then start at the directory listing, and a proof about a rejected marker can
+stop before it. Preserve callback order and compare the native release path
+when extracting a helper. [WAL cutoff and its contract](../lean/Alvoki/Storage/Disk/WalSegmentReadIO.lean#L93)
+
 ### Review the proof boundary
 
 - Name the public outcome the change covers and the theorem that uses it. For a new case-specific

@@ -23,7 +23,8 @@ theorem readSelectedWithCachedExtents_payloadError {image : Type} (directory : D
       .error cause reached) :
     readSelectedWithCachedExtents (m := EStateM IO.Error image) directory watermark length list lstat
       readSeal readKeeper before = .error cause reached := by
-  simp [readSelectedWithCachedExtents, checked, listed, scanned, selected, payloads, Bind.bind, EStateM.bind]
+  simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, checked, listed, scanned, selected, payloads,
+    Bind.bind, EStateM.bind]
 
 /-- The reported selected paths locate the invalid extent after all canonical
 probes and any successful earlier seal reads. -/

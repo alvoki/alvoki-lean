@@ -164,8 +164,8 @@ theorem recordWalReadCalls_exact (dir : DiskDirectory) (watermark : Nat) (length
   intro keeperSize calls
   have scan := scanWalSegmentOffsets_logged dir lstat _ scanned [WalReadCall.list dir.path]
   refine ⟨?_, ?_, ?_⟩
-  · simp [recordWalReadCalls, readSelectedWithPrefix, checked, listed, addresses, read, size, covers,
-      scan.1, readWalSegmentPayloadsWith_logged dir readBin _ payloads,
+  · simp [recordWalReadCalls, readSelectedWithPrefix, withAbsoluteWalCutoff_estate, checked, listed, addresses, read,
+      size, covers, scan.1, readWalSegmentPayloadsWith_logged dir readBin _ payloads,
       logged, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, List.reverse_append, List.append_assoc, calls, keeperSize]
   · have stats : (metadataCalls dir (entries.toList.map IO.FS.DirEntry.fileName)).length ≤ entries.size := by
       simpa [metadataCalls] using List.length_filterMap_le (f := parseWalSegmentName)

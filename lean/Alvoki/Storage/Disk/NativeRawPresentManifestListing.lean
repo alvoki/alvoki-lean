@@ -201,7 +201,7 @@ theorem RawMarkedListingScanFailure.stopsAfterPresentManifest
   obtain ⟨loaded, marker, _⟩ := markerPrefix.reachesScan
   simp only [RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs, recoverSegmentedWalWith, rejectFlatWalWith,
     reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, readSelectedWithCachedExtents,
-    Bind.bind, EStateM.bind, markerPrefix.flat, markerPrefix.route, Option.isSome_none, Option.isSome_some,
+    withAbsoluteWalCutoff_estate, Bind.bind, EStateM.bind, markerPrefix.flat, markerPrefix.route, Option.isSome_none, Option.isSome_some,
     Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, loaded, marker, markerPrefix.decoded,
     markerPrefix.checked, true_and, liftExcept, Except.mapError, seen.stops]
 

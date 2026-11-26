@@ -107,8 +107,8 @@ private theorem countedListingWorker_error (metadata : CountedMetadataRead) (run
   have listed := seen.listed
   rw [seen.listing.run_error] at listed
   simp only [countedListingWorker, reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders,
-    readSelectedWithCachedExtents, Bind.bind, EStateM.bind, checkpoint, marker, seen.decoded, seen.checked,
-    true_and, ↓reduceIte, liftExcept, Except.mapError, Pure.pure, EStateM.pure, charged, listed]
+    readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, Bind.bind, EStateM.bind, checkpoint, marker,
+    seen.decoded, seen.checked, true_and, ↓reduceIte, liftExcept, Except.mapError, Pure.pure, EStateM.pure, charged, listed]
 
 private theorem markedListingError (rest : NativeMarkedListingError.Remainder) :
     seen.marked rest directory (admission.reached, admission.held) = .error seen.listing.cause (seen.atListing, admission.held) := by

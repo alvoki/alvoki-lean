@@ -251,7 +251,8 @@ private theorem walPayloadCalls (directory : DiskDirectory) (watermark : Nat) (l
       (entries.toList.map (·.fileName))) before = _
     rw [readWalSegmentExtentsWith_liftReports, scanned]
     rfl
-  simp [readSelectedWithCachedExtents, accepted, Bind.bind, EStateM.bind, exactList, exactScan, selected]
+  simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, accepted, Bind.bind, EStateM.bind,
+    exactList, exactScan, selected]
   cases read : readCachedWalPayloads directory through readSeal readKeeper required before with
   | error =>
     simpa [through, first, read, reached] using bound

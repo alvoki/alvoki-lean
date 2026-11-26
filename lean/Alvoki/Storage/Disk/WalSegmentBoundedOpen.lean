@@ -15,23 +15,21 @@ def readSelectedWithPrefix [Monad m] [MonadExceptOf IO.Error m]
     (dir : DiskDirectory) (watermark : Nat) (length : UInt64)
     (list : FilePath → m (Array IO.FS.DirEntry)) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
     (readBin : FilePath → m ByteArray) (readPrefix : FilePath → Nat → m KeeperPrefix) :
-    m (WalSegmentMarkerReads × Nat) := do
-  let through := length.toNat / frameSize
-  unless length.toNat % frameSize = 0 ∧ watermark ≤ through do
-    throw (IO.userError "invalid absolute WAL segment marker")
-  let entries ← list dir.path
-  let offsets ← scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName))
-  let some (required, newer) := selectWalSegmentReadsThrough offsets watermark through
-    | throw (IO.userError "no WAL segment covers the checkpoint watermark")
-  let some keeper := required.getLast?
-    | throw (IO.userError "no WAL segment covers the commit marker")
-  let sealed := required.dropLast
-  let payloads ← readWalSegmentPayloadsWith dir readBin sealed
-  let keeperSize := (through - keeper) * frameSize
-  let kept ← readPrefix (dir.file (.walSegment keeper)) keeperSize
-  unless kept.bytes.size = keeperSize ∧ keeperSize ≤ kept.fileSize do
-    throw (IO.userError "invalid WAL keeper prefix or physical size")
-  return (⟨sealed.zip payloads ++ [(keeper, kept.bytes)], newer⟩, kept.fileSize)
+    m (WalSegmentMarkerReads × Nat) :=
+  withAbsoluteWalCutoff watermark length fun through => do
+    let entries ← list dir.path
+    let offsets ← scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName))
+    let some (required, newer) := selectWalSegmentReadsThrough offsets watermark through
+      | throw (IO.userError "no WAL segment covers the checkpoint watermark")
+    let some keeper := required.getLast?
+      | throw (IO.userError "no WAL segment covers the commit marker")
+    let sealed := required.dropLast
+    let payloads ← readWalSegmentPayloadsWith dir readBin sealed
+    let keeperSize := (through - keeper) * frameSize
+    let kept ← readPrefix (dir.file (.walSegment keeper)) keeperSize
+    unless kept.bytes.size = keeperSize ∧ keeperSize ≤ kept.fileSize do
+      throw (IO.userError "invalid WAL keeper prefix or physical size")
+    return (⟨sealed.zip payloads ++ [(keeper, kept.bytes)], newer⟩, kept.fileSize)
 
 /-- Replay the exact strict checkpoint against the absolute marker and selected WAL. -/
 @[inline] def prepareBoundedMarkedFromReaders [Monad m] [MonadExceptOf IO.Error m] (dir : DiskDirectory)
@@ -119,7 +117,7 @@ theorem readSelectedWithPrefix_reported (dir : DiskDirectory) (watermark : Nat) 
     (covers : (length.toNat / frameSize - keeper) * frameSize ≤ kept.fileSize) :
     readSelectedWithPrefix dir watermark length list lstat readBin readPrefix =
       .ok (⟨sealed.zip files ++ [(keeper, kept.bytes)], newer⟩, kept.fileSize) := by
-  simp [readSelectedWithPrefix, checked, listed, scanned, addresses, payloads, read, size, covers,
+  simp [readSelectedWithPrefix, withAbsoluteWalCutoff, checked, listed, scanned, addresses, payloads, read, size, covers,
     Bind.bind, Except.bind, Pure.pure, Except.pure]
 
 /-- Preparation installs the selected replay and carries the admitted keeper

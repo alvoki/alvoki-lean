@@ -96,7 +96,7 @@ theorem readSelectedWithPrefix_liftReports {state : Type} (dir : DiskDirectory)
       (fun path => liftExcept (lstat path)) (fun path => liftExcept (readBin path))
       (fun path count => liftExcept (readPrefix path count)) : EStateM IO.Error state (WalSegmentMarkerReads × Nat)) =
       liftExcept (readSelectedWithPrefix dir watermark length list lstat readBin readPrefix) := by
-  unfold readSelectedWithPrefix
+  unfold readSelectedWithPrefix withAbsoluteWalCutoff
   dsimp only
   by_cases valid : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize
   · simp only [ite_eq_left valid]

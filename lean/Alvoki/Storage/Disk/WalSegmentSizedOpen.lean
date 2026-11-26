@@ -28,23 +28,21 @@ def readSelectedWithSizedSeals [Monad m] [MonadExceptOf IO.Error m]
     (list : FilePath → m (Array IO.FS.DirEntry)) (lstat : FilePath → m (Except IO.Error IO.FS.Metadata))
     (readSize : FilePath → m Nat) (readSealedPrefix : FilePath → Nat → m ByteArray)
     (readKeeperPrefix : FilePath → Nat → m KeeperPrefix) :
-    m (WalSegmentMarkerReads × Nat) := do
-  let through := length.toNat / frameSize
-  unless length.toNat % frameSize = 0 ∧ watermark ≤ through do
-    throw (IO.userError "invalid absolute WAL segment marker")
-  let entries ← list dir.path
-  let offsets ← scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName))
-  let some (required, newer) := selectWalSegmentReadsThrough offsets watermark through
-    | throw (IO.userError "no WAL segment covers the checkpoint watermark")
-  let _ :: _ := required
-    | throw (IO.userError "no WAL segment covers the commit marker")
-  let some plan := walRecoveryReadPlan through required
-    | throw selectedSpanError
-  let sealed ← readSizedWalSeals dir readSize readSealedPrefix plan.sealed
-  let kept ← readKeeperPrefix (dir.file (.walSegment plan.keeper.first)) plan.keeper.bytes
-  unless kept.bytes.size = plan.keeper.bytes ∧ plan.keeper.bytes ≤ kept.fileSize do
-    throw (IO.userError "invalid WAL keeper prefix or physical size")
-  return (⟨sealed ++ [(plan.keeper.first, kept.bytes)], newer⟩, kept.fileSize)
+    m (WalSegmentMarkerReads × Nat) :=
+  withAbsoluteWalCutoff watermark length fun through => do
+    let entries ← list dir.path
+    let offsets ← scanWalSegmentOffsets (probeWalSegmentWith dir lstat) (entries.toList.map (·.fileName))
+    let some (required, newer) := selectWalSegmentReadsThrough offsets watermark through
+      | throw (IO.userError "no WAL segment covers the checkpoint watermark")
+    let _ :: _ := required
+      | throw (IO.userError "no WAL segment covers the commit marker")
+    let some plan := walRecoveryReadPlan through required
+      | throw selectedSpanError
+    let sealed ← readSizedWalSeals dir readSize readSealedPrefix plan.sealed
+    let kept ← readKeeperPrefix (dir.file (.walSegment plan.keeper.first)) plan.keeper.bytes
+    unless kept.bytes.size = plan.keeper.bytes ∧ plan.keeper.bytes ≤ kept.fileSize do
+      throw (IO.userError "invalid WAL keeper prefix or physical size")
+    return (⟨sealed ++ [(plan.keeper.first, kept.bytes)], newer⟩, kept.fileSize)
 
 /-- The seal loop stops after the reached extent observation. It neither
 reads this malformed payload nor reaches any later seal. -/
@@ -87,7 +85,8 @@ theorem readSelectedWithSizedSeals_sealedFailure {state : Type} (dir : DiskDirec
     (failed : readSizedWalSeals dir readSize readSealedPrefix plan.sealed selectedState = .error cause final) :
     readSelectedWithSizedSeals dir watermark length list lstat readSize readSealedPrefix readKeeperPrefix initial =
       .error cause final := by
-  simp [readSelectedWithSizedSeals, checked, listed, scanned, addresses, planned, failed, Bind.bind, EStateM.bind]
+  simp [readSelectedWithSizedSeals, withAbsoluteWalCutoff_estate, checked, listed, scanned, addresses, planned, failed,
+    Bind.bind, EStateM.bind]
 
 private theorem payloadCount (dir : DiskDirectory) (readBin : FilePath → Except IO.Error ByteArray)
     {offsets : List Nat} {files : List ByteArray}
@@ -161,8 +160,8 @@ theorem readSelectedWithSizedSeals_compatible (dir : DiskDirectory) (watermark :
   have sealedRead := readSizedWalSeals_reported dir readSize readSealedPrefix (sealed.zip files) sizedSeals
   rw [readSelectedWithPrefix_reported dir watermark length list lstat readBin readKeeperPrefix
     checked listed scanned addresses payloads read keeperSize covers]
-  simp [readSelectedWithSizedSeals, checked, listed, scanned, addresses, orderedPlan, sealedRead, read,
-    keeperSize, covers, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  simp [readSelectedWithSizedSeals, withAbsoluteWalCutoff, checked, listed, scanned, addresses, orderedPlan,
+    sealedRead, read, keeperSize, covers, Bind.bind, Except.bind, Pure.pure, Except.pure]
   cases sealed <;> rfl
 
 end Alvoki.Storage.WalSegmentRepair

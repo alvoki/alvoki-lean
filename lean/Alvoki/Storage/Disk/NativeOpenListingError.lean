@@ -135,8 +135,8 @@ theorem stopsAtListing (seen : NativeMarkedListingError admission) (rest : Remai
     rw [seen.listed, seen.listing.run_error]
   rw [admission.recoverWithMarked_selects seen.flat seen.route]
   simp only [Option.isSome_some, ↓reduceIte, marked, reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders,
-    readSelectedWithCachedExtents, Bind.bind, EStateM.bind, seen.loaded, seen.markerRead, seen.decoded, seen.checked, true_and,
-    liftExcept, Except.mapError, Pure.pure, EStateM.pure, failed]
+    readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, Bind.bind, EStateM.bind, seen.loaded, seen.markerRead,
+    seen.decoded, seen.checked, true_and, liftExcept, Except.mapError, Pure.pure, EStateM.pure, failed]
 
 def recover (seen : NativeMarkedListingError admission) (rest : Remainder)
     (bootstrap : DiskDirectory → CensusDirectoryCache → EStateM IO.Error CensusOpenState Reopened)

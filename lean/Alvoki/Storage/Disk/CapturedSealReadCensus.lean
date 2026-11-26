@@ -355,8 +355,8 @@ theorem selectedWalReachesKeeper (report : CapturedMarkedReadReports admission l
       .ok extents (admission.cache, report.listing.afterClose, admission.held) := by
     rw [report.guardedWalScan (fun name member => names ▸ member), readWalSegmentExtentsWith_liftReports, scanned]
     rfl
-  simp only [readSelectedWithCachedExtents, aligned, covers, and_self, ↓reduceIte, Bind.bind, EStateM.bind,
-    report.scanWal_fromEntry, scannedState, selected, Pure.pure, EStateM.pure]
+  simp only [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, aligned, covers, and_self, ↓reduceIte,
+    Bind.bind, EStateM.bind, report.scanWal_fromEntry, scannedState, selected, Pure.pure, EStateM.pure]
   rw [payloads]
   simp only [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, CapturedKeeperOpenReports.atOpen]
   cases readCachedWalPayloads directory (count.toNat / WAL.frameSize) (readTemporarySeal report.reads released)

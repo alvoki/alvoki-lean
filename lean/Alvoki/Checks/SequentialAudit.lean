@@ -3260,6 +3260,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_rejectsSeal
 #check_axioms Alvoki.Storage.WalSegmentRepair.readCachedWalPayloads_extentFailure
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalExtentFailure.reached_eq_of_readonly
+#check_axioms Alvoki.Storage.withAbsoluteWalCutoff_estate
 #check_axioms Alvoki.Storage.WalSegmentRepair.readSelectedWithCachedExtents_extentFailure
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenExtentFailure.reopen_error
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalOpenExtentFailure.reached_eq_of_readonly

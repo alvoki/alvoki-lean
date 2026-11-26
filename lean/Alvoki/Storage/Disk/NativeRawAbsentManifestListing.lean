@@ -181,8 +181,8 @@ theorem RawMarkedListingScanFailure.stopsMarkedWorker
   have watermark : (PackedTable.empty).committed.toNat = 0 := rfl
   simp only [RawOpenAdmissionCallbacks.recoverMarkedWithCacheRefs, recoverSegmentedWalWith, rejectFlatWalWith,
     reopenMarkedBoundedWithCachedExtents, prepareBoundedMarkedFromReaders, readIntegrityCheckpointSized,
-    readSelectedWithCachedExtents, Bind.bind, EStateM.bind, markerPrefix.flat, markerRoute, Option.isSome_none,
-    Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, manifest, marker, Option.getD_none,
+    readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, Bind.bind, EStateM.bind, markerPrefix.flat, markerRoute,
+    Option.isSome_none, Option.isSome_some, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure, manifest, marker, Option.getD_none,
     watermark, markerPrefix.decoded, markerPrefix.aligned, Nat.zero_le, true_and, liftExcept, Except.mapError, seen.stops]
 
 /-- At the listing's error, the held scope disposes its synchronization

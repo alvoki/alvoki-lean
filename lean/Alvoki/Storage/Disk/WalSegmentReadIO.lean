@@ -87,6 +87,28 @@ structure WalSegmentMarkerReads where
   files : List (Nat × ByteArray)
   newer : List Nat
 
+/-- Check the absolute WAL marker before running any selected read.
+The callback receives its cutoff as an absolute frame offset. -/
+@[macro_inline] def withAbsoluteWalCutoff [Monad m] [MonadExceptOf IO.Error m]
+    (watermark : Nat) (length : UInt64) (read : Nat → m α) : m α := do
+  let through := length.toNat / WAL.frameSize
+  unless length.toNat % WAL.frameSize = 0 ∧ watermark ≤ through do
+    throw (IO.userError "invalid absolute WAL segment marker")
+  read through
+
+/-- A rejected marker stops at the entry heap, before the callback.
+An accepted marker reaches exactly the callback with the selected cutoff. -/
+theorem withAbsoluteWalCutoff_estate {heap α : Type} (watermark : Nat) (length : UInt64)
+    (read : Nat → EStateM IO.Error heap α) :
+    withAbsoluteWalCutoff watermark length read =
+      if length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize then
+        read (length.toNat / WAL.frameSize)
+      else throw (IO.userError "invalid absolute WAL segment marker") := by
+  funext before
+  by_cases checked : length.toNat % WAL.frameSize = 0 ∧ watermark ≤ length.toNat / WAL.frameSize <;>
+    simp [withAbsoluteWalCutoff, checked, Bind.bind, EStateM.bind, MonadExcept.throw, throwThe,
+      MonadExceptOf.throw, EStateM.throw]
+
 /-- Validate the marker's absolute byte count before listing. Check the
 later names by metadata too, but read only payloads through the marker. -/
 def readWalSegmentsThroughWith [Monad m] [MonadExceptOf IO.Error m] (directory : DiskDirectory)

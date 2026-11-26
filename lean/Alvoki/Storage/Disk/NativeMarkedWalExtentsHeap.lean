@@ -297,8 +297,8 @@ theorem selects (seen : MarkedWalExtentReports prepared listing)
     listed, submitted, selection, ?_⟩
   · rw [listing.openedCensus]
     exact reads.listing.sameDirectoryObject
-  · simp only [readSelectedWithCachedExtents, aligned, covers, and_self, ↓reduceIte, Bind.bind, EStateM.bind,
-      listed, submitted, selection]
+  · simp only [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, aligned, covers, and_self, ↓reduceIte,
+      Bind.bind, EStateM.bind, listed, submitted, selection]
 
 end MarkedWalExtentReports
 

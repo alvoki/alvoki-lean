@@ -61,7 +61,7 @@ theorem readSelectedWithCachedExtents_reportedEffects {state : Type} (dir : Disk
     rfl
   have exactPayload :=
     congrFun (readCachedWalPayloads_reportedEffects (state := state) reports) initial
-  simp [readSelectedWithCachedExtents, checked, Bind.bind, EStateM.bind, exactList, exactScan, selected,
-    exactPayload, Pure.pure, EStateM.pure]
+  simp [readSelectedWithCachedExtents, withAbsoluteWalCutoff_estate, checked, Bind.bind, EStateM.bind,
+    exactList, exactScan, selected, exactPayload, Pure.pure, EStateM.pure]
 
 end Alvoki.Storage.WalSegmentRepair

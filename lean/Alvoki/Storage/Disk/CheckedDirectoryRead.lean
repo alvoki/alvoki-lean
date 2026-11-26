@@ -147,7 +147,7 @@ def CachedOpenRejection.ofDirectoryReadError {directory : DiskDirectory}
     rfl
   refine ⟨attempt, cause, ?_⟩
   simp [CachedOpenAttempt.prepare, prepareBoundedMarkedFromReaders, readSelectedWithCachedExtents,
-    checkpointRead, markerRead, decoded, valid, listError, Bind.bind, EStateM.bind, liftExcept,
+    withAbsoluteWalCutoff_estate, checkpointRead, markerRead, decoded, valid, listError, Bind.bind, EStateM.bind, liftExcept,
     Except.mapError, Pure.pure, EStateM.pure]
 
 end Alvoki.Storage.DiskSession
