@@ -50,11 +50,22 @@ nonempty sequence of failed attempts, the proof identifies the input,
 diagnostic and heap of the last returned error. The selected WAL bounds
 the pending replay and keeps prior reads consistent with the earlier
 ledger. In the grouped-error case, the selected old marker omits the
-failed batch. This terminal conclusion requires no later successful open.
+failed batch. After a late publication error, both the continuing and
+terminal proofs use the same marker selected at reboot. Its cutoff fixes
+whether the history at the final failed open contains the whole pending
+batch or omits it. Both terminal proofs allow execution to end at that error.
+[Late publication recovery](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+
+At the earlier sync of `MANIFEST.next`, the returned run writes and
+first directory barrier establish storage for the previous checkpoint.
+The private staging inode protects the previously selected files through
+both modeled sync outcomes. This result assumes the local before- or
+after-effect sync contract and requires no manifest rename.
+[Checkpoint run and stage effects](../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean)
 
 A final checkpoint stop also accepts an incoming ledger and the actual
 current handle in the original managed directory, including a handle
-obtained by reopening. The same observed stop is sufficient for the
+obtained by reopening. The reached stop and poisoned phase preserve the incoming
 terminal ledger. Given the reboot and read observations, it also supplies
 the recovered position for continuing execution.
 [Failed-open endpoint](../lean/Alvoki/Storage/Disk/NativeFailedOpenTerminal.lean) ·

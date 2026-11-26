@@ -125,38 +125,6 @@ theorem NativeReadyState.crashPath_ne_stagedManifest (state : NativeReadyState) 
     · exact noSegment segment.first
   · exact runFile_ne_stagedManifest directory metadata.header.generation index
 
-/-- At a stopped staged-MANIFEST fsync the previous selected checkpoint
-and WAL are still durable. The stop is derived from the whole source call.
-Removing the pending reference and syncing its still-live descriptor use
-separate local observations at their actual heaps. -/
-theorem NativeCheckpointSourceStop.manifestSyncPreservesSelected
-    (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncStaged) reason reached)
-    (calls : CheckpointRawSyncCalls heap)
-    (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
-    (projected : view.cacheAt stop.atIssue.2 cache.directory cache.active cache.pending = stop.atIssue.1)
-    {atFsync : heap}
-    (pending : CheckpointPendingSyncAt calls view cache.pending fsync
-      (current.current.ready.state.session.directory.file .stagedManifest) stop.atIssue.2 atFsync)
-    (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
-    (observe : ∀ heap, RunDirectoryInodeView current.current.ready.state.session.directory (inodes heap) (runs heap))
-    (stable : NativeReadyStorage current.current.ready.state (observe stop.atIssue.2).storageObservation)
-    (consume : (observe stop.atIssue.2).storageObservation.Frames current.current.ready.state.crashPath
-      (observe atFsync).storageObservation)
-    (effective : Bool)
-    (effect : ∀ literal, calls.fsync literal atFsync = .error reason reached.2 →
-      let inode := (view.descriptors atFsync).inode (view.handle atFsync literal).2.1.description
-      let path := current.current.ready.state.session.directory.file .stagedManifest
-      (observe atFsync).visible path = some inode ∧
-      (∀ other, (observe atFsync).visible other = some inode → other = path) ∧
-      inodes reached.2 = (if effective then (inodes atFsync).completeFileSync inode else inodes atFsync) ∧
-      (observe reached.2).visible = (observe atFsync).visible ∧
-      (observe reached.2).crashBindings = (observe atFsync).crashBindings) :
-    NativeReadyStorage current.current.ready.state (observe reached.2).storageObservation := by
-  obtain ⟨literal, _, _, target, _, stopped, _⟩ := stop.manifestSyncIssuesRawSync calls cache projected pending
-  have frame := target.stoppedRunFrames calls stopped inodes runs observe _ effective (effect literal)
-    (fun _ selected => NativeReadyState.crashPath_ne_stagedManifest current.current.ready.state selected)
-  exact stable.frame (consume.trans frame.2)
-
 private theorem preparedGeneration {old next : Installed} {manifest : ByteArray}
     (prepared : CheckpointPreflight (.ready old) (.ok (next, manifest))) :
     next.generation.toNat = old.generation.toNat + 1 := by
