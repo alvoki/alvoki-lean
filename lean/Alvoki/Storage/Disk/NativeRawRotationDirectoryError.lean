@@ -48,6 +48,17 @@ structure OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync
   consume : raw.setPending cache.pending (entries.filter (fun item => item.1 != directory.file (.walSegment first)))
     loaded = .ok () issued
   sync : raw.fsync handle issued = .ok () synced
+  absent : filePrefix.observed = none
+  creates : let path := directory.file (.walSegment first)
+    calls.create path filePrefix.afterRead = (do
+      let handle ← create.create path
+      create.remember cache.pending (pushPending path handle)) filePrefix.afterRead
+  dispatches : let path := directory.file (.walSegment first)
+    calls.sync path filePrefix.beforeSync = raw.group directory.path cache.directory cache.active cache.pending
+      #[path] filePrefix.beforeSync
+  selects : entries.find? (fun item => item.1 == directory.file (.walSegment first)) =
+    some (directory.file (.walSegment first), handle)
+
 
 /-- The reached absent branch uses exclusive creation. Invert the
 existing two callbacks and derive that the pending hit selects the very
@@ -91,26 +102,24 @@ theorem OpenRotationCallbacks.SuccessorFilePrefix.reachesExclusiveSync
       simp [pushPending, path]
     have grouped : raw.group directory.path cache.directory cache.active cache.pending #[path] filePrefix.beforeSync =
         .ok () synced := fileSync.symm.trans filePrefix.sync
-    obtain ⟨entries, loaded, issued, read, _, consume, fsync⟩ :=
+    obtain ⟨entries, loaded, issued, read, firstHit, consume, fsync⟩ :=
       raw.pendingGroupReturned (file_ne_directory directory (.walSegment first)) (fun read => selected read) grouped
-    exact ⟨⟨handle, opened, entries, loaded, issued, exclusive, remembered, read, consume, fsync⟩⟩
+    exact ⟨⟨handle, opened, entries, loaded, issued, exclusive, remembered, read, consume, fsync,
+      absent, creation, fileSync, firstHit⟩⟩
 
 end FilePrefix
 
 /-- The literal rotation propagates the failed cached root fsync at its
-returned heap. The active-cache clear and final ready setter lie beyond
-this failure. Scope facts use only the callbacks that reached this heap. -/
+returned heap. The active stat supplies the guard before poisoning. The
+active-cache clear and final ready setter lie beyond this failure. -/
 theorem NativeOpenedPosition.rotationReturnsDirectoryError
     {heap : Type} {opened : NativeOpenedHandle heap} (current : NativeOpenedPosition opened)
     (calls : OpenRotationCallbacks heap) (raw : RawSyncCalls heap)
     (cache : OpenSyncCacheRefs opened.files opened.directory.path)
-    (lookup : FilePath → Except IO.Error IO.FS.Metadata)
+    (guard : BatchActiveGuard opened.directory current.current.ready.state.writer.installed)
     {poisoned afterFileSync issued reached : heap} {handle : IO.FS.Handle} {cause : IO.Error}
     (nonempty : current.current.ready.state.writer.installed.activeFirst <
       current.current.ready.state.writer.installed.walBytes / WAL.frameSize)
-    (checked : checkActiveSegmentWith (m := EStateM IO.Error heap)
-      opened.directory current.current.ready.state.writer.installed (fun path => liftExcept (lookup path))
-      current.reached = .ok () current.reached)
     (poisonedAt : opened.set opened.phase .poisoned current.reached = .ok () poisoned)
     (filePrefix : calls.SuccessorFilePrefix opened.directory
       (current.current.ready.state.writer.installed.walBytes / WAL.frameSize) poisoned afterFileSync)
@@ -120,7 +129,7 @@ theorem NativeOpenedPosition.rotationReturnsDirectoryError
     (failed : raw.fsync handle issued = .error cause reached) :
     UsesRotationSchedule opened.table opened.directory opened.phase cache.active cache.pending cache.directory ∧
     opened.contents poisoned opened.phase = some .poisoned ∧
-    calls.run opened lookup cache.active current.reached =
+    calls.run opened guard.lookup cache.active current.reached =
       .error (IO.userError s!"sync failed for '{opened.directory.path}': {cause}") reached ∧
     ∀ {frame : heap → heap → Prop}
       (_trans : ∀ {before middle after}, frame before middle → frame middle after → frame before after),
@@ -140,6 +149,7 @@ theorem NativeOpenedPosition.rotationReturnsDirectoryError
       .error (IO.userError s!"sync failed for '{opened.directory.path}': {cause}") reached := by
     rw [rootSync, (raw.rootBarrier cache loaded).2, failed]
   have stopped := filePrefix.returnsDirectoryError rootError
+  have checked := guard.checked current.reached
   refine ⟨rotationSchedule opened.uses cache.references cache.atRoot, same ▸ storedPoison, ?_, ?_⟩
   · simp only [OpenRotationCallbacks.run, rotateWalSchedule, Bind.bind, EStateM.bind, original, Phase.installed,
       Pure.pure, EStateM.pure, nonempty, ↓reduceIte, checked, publishPrepared, poisonedAt, stopped]

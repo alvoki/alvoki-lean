@@ -44,7 +44,7 @@ structure BatchActiveGuard (directory : DiskDirectory) (installed : Installed) w
   privateFile : metadata.numLinks = 1
   extent : metadata.byteSize.toNat = installed.walBytes - installed.activeFirst * WAL.frameSize
 
-private theorem BatchActiveGuard.checked {image : Type} {directory : DiskDirectory} {installed : Installed}
+theorem BatchActiveGuard.checked {image : Type} {directory : DiskDirectory} {installed : Installed}
     (guard : BatchActiveGuard directory installed) (before : image) :
     checkActiveSegmentWith (m := EStateM IO.Error image) directory installed
       (fun path => liftExcept (guard.lookup path)) before = .ok () before := by

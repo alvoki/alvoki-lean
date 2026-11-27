@@ -98,18 +98,18 @@ the final directory fsync returns an error, the same file prefix leads to
 the exact diagnostic and poisoned return heap under local callback effects.
 [Rotation boundaries](proofs/native-storage.md#refinement-boundaries)
 
-After an exclusive create, the file sync uses the handle that the rotation
-stored in the pending cache. If the subsequent directory sync fails, explicit
-close preserves the live empty successor. The released heap's names and inode
-bytes supply the WAL catalog, marker and lock for a successful literal open.
-On power loss, one sampled map can instead select the previous keeper. The
-same checkpoint-free reader serves both paths. [Rotation boundaries](proofs/native-storage.md#refinement-boundaries)
+After the first confirmed batch, a failed rotation-directory fsync can be
+followed through explicit close and a successful live open on the released
+heap. The close uses the observed descriptor drops. The reopened session reads
+the original batch from the visible marker and WAL segments. A power loss
+instead samples one surviving directory map. Both paths use the same reader.
+[Fresh write through live reopen](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
-**Next obligation.** Join the fresh first write, its failed rotation and the
-next session on one source execution. The close proof still takes a projection
-of the failed heap onto the rotation model. Derive that projection from the
-same primitive receipts that produced the error, including the descriptor
-inventory and the visible prior WAL files. Further mixed calls, interruptions
+**Next obligation.** Derive the modeled rotation failure itself from the same
+exclusive-create and directory-fsync execution. The live proof still takes the
+parent/child bindings and the descriptor-drop account at the boundary. For a
+power loss, identify the issued root handle with the held directory and apply
+its durability law to the same sampled map. Further mixed calls, interruptions
 and maintenance remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).

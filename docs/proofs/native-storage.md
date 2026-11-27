@@ -263,6 +263,15 @@ under the file-sync law. Publishing its name is a separate directory effect.
 | Explicit close and successful open | Close releases the lock and preserves the visible empty successor. The close heap supplies the visible marker, WAL bytes and names, including the gaps between segments. Older descriptor aliases may remain. |
 | Power loss and successful open | One surviving directory map selects either the old active segment or the empty successor. If the successor survives, the old segment is the last seal. Both choices encode the same history. |
 
+For the live path after the first write, the acknowledged batch supplies
+the protected files and exact WAL name interval. The rotation callbacks
+supply the poisoned phase, lock slot, descriptor drops and visible files.
+Close clears the cache it observes after unlock. The live reader therefore
+needs no comparison of crash maps. The modeled rotation failure still
+supplies the parent and created child and the expected drop sequence.
+[Fresh composition](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
+[Error and close](../../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
+
 Both paths use the same literal reader on the files visible at admission.
 The file-to-inode projection, directory enumeration and primitive storage
 effects are filesystem premises. The reboot path also consumes a reset

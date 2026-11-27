@@ -8,6 +8,7 @@ import Alvoki.Storage.Disk.NativeRawWriteRootStop
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.NativeRotationWalReplay
+import Alvoki.Storage.Disk.NativeRawRotationLiveReopen
 
 namespace Alvoki.Storage.DiskSession
 
@@ -833,6 +834,110 @@ theorem readsAfterCreatedRotation {stream : Type} (wrote : observedFirstWrite)
     [.acknowledgedBatch batch] [] batch
   rw [← submitted, ← noReads, ← batchHistory]
   exact @readsAfterOpen stream source modeledFiles rebooted namespaceView root sample reset cutoff noManifest
+
+include covered in
+/-- A returned rotation error after the first acknowledgement leaves the
+same batch available to a live open after the explicit close. -/
+theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
+    (source : RawMarkedOpenInterpreter heap stream) (rotation : OpenRotationCallbacks heap)
+    (closeView : OpenCloseHeapView heap RotationCreateFiles)
+    (unlock : IO.FS.Handle → EStateM IO.Error heap Unit)
+    (setCell : {α : Type} → IO.Ref α → α → EStateM IO.Error heap Unit) :
+    ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
+      (batch : List WAL.Write) (preparedTable : PackedTable) (next : NativeOpenedPosition opened.handle),
+      let state := next.current.ready.state
+      let dir := state.session.directory
+      let usedCache : OpenSyncCacheRefs opened.handle.files opened.handle.directory.path :=
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          congrArg DiskDirectory.path opened.start.directory ▸ cache.atRoot⟩
+      call entry = .ok opened.handle.table opened.start.reached ∧
+      request.runOnRawOpenPhase directory lookup (appender.run seed.activeRef) (stager.run seed.pendingRef)
+        (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
+        rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
+      prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (batch, preparedTable) ∧
+      sequence = preparedTable.committed ∧ sequence.toNat = batch.length ∧ next.reached = reached ∧
+      opened.start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
+      ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 request.rows.length)
+        (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
+            (storage preReady) (storage reached))
+        {cause : IO.Error} {poisoned synced issued failed afterUnlock : heap} {root : IO.FS.Handle}
+        (failure : NativeRotationDirectoryFailure state (some cause))
+        (_poisonedAt : opened.handle.set opened.handle.phase .poisoned next.reached = .ok () poisoned)
+        (filePrefix : rotation.SuccessorFilePrefix opened.handle.directory state.writer.rotationInstalled.activeFirst poisoned synced)
+        (file : filePrefix.ExclusiveSync stager syncer usedCache)
+        (_rootRoute : rotation.sync opened.handle.directory.path synced =
+          syncer.group opened.handle.directory.path usedCache.directory usedCache.active usedCache.pending
+            #[opened.handle.directory.path] synced)
+        (_loaded : syncer.readDirectory usedCache.directory synced = .ok (some root) issued)
+        (_rootFailed : syncer.fsync root issued = .error cause failed)
+        (_rotationEffects : NativeRotationCloseEffects next failure usedCache closeView file issued failed)
+        (drops : CloseCacheField → List LockReferenceDrop)
+        (_unlocked : unlock opened.handle.lock failed = .ok () afterUnlock)
+        (_unlockEffect : (closeView.files failed).owners.Owns dir state.session.descriptor →
+          (closeView.handle failed opened.handle.lock).2.1 ∈ (closeView.descriptors failed).slots →
+          (closeView.handle failed opened.handle.lock).2.1.description = state.session.descriptor →
+          unlock opened.handle.lock failed = .ok () afterUnlock →
+          closeView.phase afterUnlock opened.handle.phase = some .poisoned ∧
+          closeView.files afterUnlock = ⟨(closeView.files failed).image, (closeView.files failed).owners.set (dir.file .lock) none⟩ ∧
+          closeView.descriptors afterUnlock = closeView.descriptors failed)
+        (clears : OpenCloseClears drops closeView ⟨opened.handle.get, unlock, setCell⟩
+          opened.handle.phase usedCache.active usedCache.pending usedCache.directory afterUnlock),
+        let released := clears.afterPhase
+        let observed := (closeView.files released).image
+        let live := fun h => (closeView.files h).image.inodes.visible
+        let openView := closeView.withFileProjection (fun h => ⟨modeledFiles h, (closeView.files h).owners⟩)
+        let successor := state.writer.rotationInstalled.activeFirst
+        ∀ (_atEntry : ∀ name, checkpointFreeWalChild state.writer.history.length name →
+            names next.reached ⟨dir.path.toString ++ "/" ++ name⟩ =
+              (failure.parent.files.view.child failure.parent.root name).map failure.parent.files.view.modelObject)
+          (_atClose : ∀ name, checkpointFreeWalChild state.writer.history.length name →
+            names released ⟨dir.path.toString ++ "/" ++ name⟩ =
+              (observed.view.child failure.parent.root name).map observed.view.modelObject)
+          (_rootPath : names released dir.path = (failure.reported.pathObject dir.path).map observed.view.modelObject)
+          (_pairAt : (modeledFiles released).directory.active =
+            ⟨(names released (dir.file .manifest)).map (live released),
+              (names released (dir.file .walBoundary)).map (live released)⟩)
+          (_keeperAt : (modeledFiles released).keeper.active =
+            (names released (dir.file (.walSegment successor))).map (live released)),
+          rotation.run opened.handle failure.lookup usedCache.active next.reached =
+            .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {cause}") failed ∧
+          opened.handle.table.close = closeSchedule opened.handle.phase.get (fun _ => opened.handle.lock.unlock)
+            (usedCache.active.set none) (usedCache.pending.set []) (usedCache.directory.set none)
+            (opened.handle.phase.set .closed) ∧
+          closeSchedule (opened.handle.get opened.handle.phase) (fun _ => unlock opened.handle.lock)
+            (setCell usedCache.active none) (setCell usedCache.pending []) (setCell usedCache.directory none)
+            (setCell opened.handle.phase .closed) failed = .ok () released ∧
+          source.ReadsClientHistoryAtOpen openView dir storage live released observed.view failure.parent.root
+            [.acknowledgedBatch batch] [] batch := by
+  obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
+    _, batchHistory, ledger, physical, ⟨noManifest, noSeals, history, _⟩, carries⟩ :=
+    opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
+      liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+      modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
+  refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, exactHeap, ledger, ?_⟩
+  intro firstNames restore cause poisoned synced issued failed afterUnlock root failure poisonedAt
+    filePrefix file rootRoute loaded rootFailed rotationEffects drops unlocked unlockEffect clears
+  intro released observed live openView successor atEntry atClose rootPath pairAt keeperAt
+  obtain ⟨returned, phase, censusAtFailure, owner, held, fileView, bytes⟩ := next.rotationErrorCloseProjection
+    rotation stager syncer _ closeView failure poisonedAt filePrefix file rootRoute loaded rootFailed rotationEffects
+  have liveAtFailure := And.intro fileView bytes
+  obtain ⟨close, rawClose, closed, _⟩ := next.closesAfterRotationDirectoryError rotation _ closeView unlock setCell
+    failure returned phase censusAtFailure liveAtFailure owner held drops unlocked unlockEffect clears
+  have catalog := (carries request.rows.length covered firstNames restore).2.1
+  rw [← (prepareBatch_spec prepared).1, ← history] at catalog
+  obtain ⟨_, _, _, readsAfterOpen⟩ := closed.readsAfterRotationDirectoryError («storage» := storage) failure _ liveAtFailure
+    physical.physical.toNativeReadyProtectedStorage (by simp [noSeals]) catalog atEntry atClose rootPath
+    modeledFiles pairAt keeperAt noManifest source
+  simp only [returned, Option.some.injEq, Prod.mk.injEq, true_and] at rawClose
+  obtain ⟨_, submissions, reads, _⟩ := opened.refinesLedger ledger
+  have submitted : next.current.submissions = [.acknowledgedBatch batch] := by
+    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.submissions, List.append_nil] using submissions
+  have noReads : next.current.ready.reads = [] := by
+    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.reads, List.append_nil] using reads
+  refine ⟨returned, close, rawClose, ?_⟩
+  rw [← submitted, ← noReads, ← batchHistory]
+  exact @readsAfterOpen
 
 /-- The actual first acknowledgement starts the interrupted second
 write. One reboot sample selects its replay and the subsequent lookup

@@ -127,24 +127,32 @@ theorem returnsAfterUnlock {before : heap}
     simp_all [closeSchedule, Phase.close, Bind.bind, EStateM.bind, seen.activeCleared,
       seen.pendingCleared, seen.directoryCleared, seen.closed]
 
-end OpenCloseClears
+/-- A successful unlock preserves the live image and inventory while releasing
+the lock. Start the clear sequence with the cache actually left by unlock:
+all three fields are overwritten before close returns. -/
+theorem closesObserved {before : heap} {priorPhase : Phase Installed}
+    (seen : OpenCloseClears drops view calls phase active pending cachedDirectory unlocked)
+    (loaded : calls.getPhase phase before = .ok priorPhase before) (openPhase : priorPhase ≠ .closed)
+    (returned : calls.unlock lock before = .ok () unlocked)
+    (phaseAfter : view.phase unlocked phase = some priorPhase)
+    (filesAfter : view.files unlocked =
+      ⟨(view.files before).image, (view.files before).owners.set (directory.file .lock) none⟩)
+    (descriptorsAfter : view.descriptors unlocked = view.descriptors before) :
+    closeSchedule (calls.getPhase phase) (fun _ => calls.unlock lock)
+      (calls.set active none) (calls.set pending []) (calls.set cachedDirectory none)
+      (calls.set phase .closed) before = .ok () seen.afterPhase ∧
+    view.ClosedFrom phase active pending cachedDirectory directory drops before seen.afterPhase := by
+  let observed : CloseState image :=
+    ⟨priorPhase, ⟨(view.cacheAt unlocked cachedDirectory active pending, (view.files before).image),
+      (view.files before).owners.set (directory.file .lock) none⟩, view.descriptors before⟩
+  have atUnlock : view.Matches phase active pending cachedDirectory unlocked observed :=
+    ⟨phaseAfter, rfl, filesAfter, descriptorsAfter⟩
+  obtain ⟨run, closed⟩ := seen.returnsAfterUnlock loaded openPhase returned atUnlock
+  exact ⟨run, closed.1, closed.2.1, closed.2.2.1, by
+    simpa only [observed, CachedCloseState.finishClears, CachedCloseState.drop,
+      DescriptorInventory.afterDrops_append, List.append_assoc] using closed.2.2.2⟩
 
-/-- Reindex the reported drops to the literal starting heap. An
-explicit unlock releases the old lock even if an alias remains live. -/
-theorem OpenCloseHeapView.Matches.closedFrom {view : OpenCloseHeapView heap image} {before after : heap}
-    {drops : CloseCacheField → List LockReferenceDrop}
-    (atStart : view.Matches phase active pending cachedDirectory before start)
-    (atClose : view.Matches phase active pending cachedDirectory after ((start.release directory writer).finishClears drops))
-    (held : start.files.owners.Owns directory writer) :
-    view.ClosedFrom phase active pending cachedDirectory directory drops before after := by
-  obtain ⟨phaseClosed, empty, files, inventory⟩ := atClose
-  refine ⟨phaseClosed, empty, ?_, ?_⟩
-  · rw [atStart.2.2.1]
-    simpa only [CachedCloseState.finishClears, CachedCloseState.drop, CachedCloseState.release,
-      LockOwners.release_owned held] using files
-  · rw [atStart.2.2.2]
-    simpa only [CachedCloseState.finishClears, CachedCloseState.drop, CachedCloseState.release,
-      DescriptorInventory.afterDrops_append, List.append_assoc] using inventory
+end OpenCloseClears
 
 /-- The raw phase read and unlock, with the slot and three cache
 references of the same table. The error projection is local to this

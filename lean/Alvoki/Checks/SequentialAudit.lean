@@ -2132,7 +2132,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseObservation.returns
 #check_axioms Alvoki.Storage.DiskSession.CachedCloseReports.closesViaOpenReferences
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseClears.returnsAfterUnlock
-#check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.Matches.closedFrom
+#check_axioms Alvoki.Storage.DiskSession.OpenCloseClears.closesObserved
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.closesOnOpenedReferences
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesAndReopens
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedTrace.closesThenAdmitsAligned
@@ -2706,6 +2706,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.acknowledgesFirstWriteWithWindow
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterInterruptedSecondBatch
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterCreatedRotation
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterFailedRotation
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.replaysFirstAcknowledgedWrite
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid
@@ -2769,6 +2770,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.protectedAfterRotation
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.rotationProtectedPaths
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.closesAfterRotationDirectoryError
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotationErrorCloseProjection
 #check_axioms Alvoki.Storage.DiskSession.NativeCreatedRotationContinuation.writeStorageEntry
 #check_axioms Alvoki.Storage.DiskSession.NativeExistingRotationContinuation.writeStorageEntry
 #check_axioms Alvoki.Storage.WalSegmentImage.namespaceWindowAfterRotation
@@ -2875,6 +2877,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeWritePreflightObservation.returnsWithCache
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.preflightsWrite
 #check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.ofChecked
+#check_axioms Alvoki.Storage.DiskSession.BatchActiveGuard.checked
 #check_axioms Alvoki.Storage.DiskSession.WriteCallPublication.acknowledgesReturnedCommit
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.classifiesReadyReturn
 #check_axioms Alvoki.Storage.DiskSession.ObservedBatchPublication.projectsReturn
