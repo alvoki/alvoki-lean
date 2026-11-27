@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeCheckpointStopContinuation
 import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
-import Alvoki.Storage.Disk.NativeRawManifestStatError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestStatError
 
 namespace Alvoki.Storage.DiskSession
 

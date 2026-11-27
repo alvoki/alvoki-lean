@@ -361,10 +361,10 @@ import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
 import Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
 import Alvoki.Storage.Disk.NativeRawManifestChunkError
 import Alvoki.Storage.Disk.NativeRawManifestOpenError
-import Alvoki.Storage.Disk.NativeRawManifestStatError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
-import Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
-import Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawSelectedMarkerStatError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawSelectedMarkerDecodeError
 import Alvoki.Storage.Disk.Proofs.WAL.NativeRawAlignedWalDecodeError
 import Alvoki.Storage.Disk.Proofs.WAL.NativeFinalizedWalDecodeError
 import Alvoki.Storage.Disk.NativePopulatedOpenCleanup

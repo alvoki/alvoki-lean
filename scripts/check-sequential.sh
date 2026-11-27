@@ -275,10 +275,10 @@ lake env leanchecker Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
 lake env leanchecker Alvoki.Storage.Disk.NativeRawCheckpointChunkError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawManifestChunkError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawManifestOpenError
-lake env leanchecker Alvoki.Storage.Disk.NativeRawManifestStatError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestStatError
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointOpenChronology
-lake env leanchecker Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
-lake env leanchecker Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawSelectedMarkerStatError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawSelectedMarkerDecodeError
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.NativeRawAlignedWalDecodeError
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.NativeFinalizedWalDecodeError
 lake env leanchecker Alvoki.Storage.Disk.NativePopulatedOpenCleanup

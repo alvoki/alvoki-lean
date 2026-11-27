@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
-import Alvoki.Storage.Disk.NativeRawManifestStatError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
 import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
 import Alvoki.Storage.Disk.NativeMutatingOpenRetries
