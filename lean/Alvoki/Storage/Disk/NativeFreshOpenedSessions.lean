@@ -493,10 +493,6 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
   · intro through initial names restore
     exact (keepsNames (fun offset _ => Nat.zero_le offset) initial names restore).2
 
-/-- The names checked to start a writer and bound its next WAL extent. -/
-def bootstrapWriteChild (through : Nat) (name : String) : Prop :=
-  name ∈ ["LOCK", "MANIFEST", "WAL.commit"] ∨ ∃ start ≤ through, name = renderWalSegmentName start
-
 section BootstrapWriteEntry
 
 variable {input : FilePath} {directory : DiskDirectory}
@@ -517,7 +513,7 @@ variable {input : FilePath} {directory : DiskDirectory}
     (rootNames : let issued := (files raw.afterRename).storageObservation
       issued.files.names directory.path = some (report.captured.view.modelObject report.captured.root) ∧
       ∀ names ∈ issued.crashNames, names directory.path = issued.files.names directory.path)
-    (liveChildren : ∀ name, bootstrapWriteChild through name →
+    (liveChildren : ∀ name, checkpointFreeWalChild through name →
       (files raw.afterRename).visible ⟨directory.path.toString ++ "/" ++ name⟩ =
         (report.marker.renamedView.child report.captured.root name).map report.marker.renamedView.modelObject)
     (directoryEffect :
@@ -525,7 +521,7 @@ variable {input : FilePath} {directory : DiskDirectory}
         report.marker.renamedView.modelObject report.captured.root →
       calls.fsync seed.handle raw.afterRename = .ok () raw.markerDirectory.reached →
       CheckpointRunsDirectoryEffect directory.path
-        (fun path => ∃ name, bootstrapWriteChild through name ∧ path = ⟨directory.path.toString ++ "/" ++ name⟩)
+        (fun path => ∃ name, checkpointFreeWalChild through name ∧ path = ⟨directory.path.toString ++ "/" ++ name⟩)
         (files raw.afterRename).storageObservation (files raw.markerDirectory.reached).storageObservation)
     {allocatePhase : Phase Installed → EStateM IO.Error heap (IO.Ref (Phase Installed))}
     {allocateToken : Unit → EStateM IO.Error heap (IO.Ref Unit)}
@@ -571,7 +567,7 @@ theorem readyStorageAndWindow :
     intro names survives
     obtain ⟨prior, priorAllowed, same, _⟩ := barrier.survivors names survives
     exact same.trans ((rootNames.2 prior priorAllowed).trans (congrFun barrier.visible _).symm)
-  have children (name : String) (inScope : bootstrapWriteChild through name) :
+  have children (name : String) (inScope : checkpointFreeWalChild through name) :
       let path : FilePath := ⟨directory.path.toString ++ "/" ++ name⟩
       let object := report.marker.renamedView.modelObject
       (storage raw.markerDirectory.reached).files.names path =

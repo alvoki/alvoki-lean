@@ -7,6 +7,11 @@ namespace Alvoki.Storage.DiskSession
 
 open System SyncHandleRouting WalSegmentCommit WalSegmentRepair CheckpointPublication
 
+/-- The checkpoint-free WAL namespace covers the authority files and every
+canonical segment name through the cutoff, including absent offsets. -/
+def checkpointFreeWalChild (through : Nat) (name : String) : Prop :=
+  name ∈ ["LOCK", "MANIFEST", "WAL.commit"] ∨ ∃ start ≤ through, name = renderWalSegmentName start
+
 /-- Presence of canonical WAL names in a given replay window. Older names
 may already have been collected. Names beyond the window belong to later
 repair. Inode identity and bytes have independent invariants. -/

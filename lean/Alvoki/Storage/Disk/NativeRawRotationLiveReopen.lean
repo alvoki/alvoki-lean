@@ -23,10 +23,6 @@ local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointSto
 local notation "visible" => fun h =>
   WalInodeImage.visible (RotationCreateFiles.inodes (LockedFileState.image (OpenCloseHeapView.files view h)))
 
-/-- The child names inspected by the checkpoint-free live reader. -/
-def RotationCreateFiles.liveWalReadChild (through : Nat) (name : String) : Prop :=
-  name ∈ ["LOCK", "MANIFEST", "WAL.commit"] ∨ ∃ start ≤ through, name = renderWalSegmentName start
-
 /-- Close preserves the visible successor even if the failed directory
 barrier left it absent from a crash map. The same rooted close observation
 supplies the WAL reads of a successful literal reopen. -/
@@ -38,10 +34,10 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     (atFailure : view.Matches opened.phase cache.active cache.pending cache.directory failed failure.closeState)
     (prior : NativeReadyProtectedStorage old ⟨names current.reached, fun inode => [failure.parent.files.inodes.visible inode]⟩)
     (catalog : (old).writer.wal.NamespaceWindow dir 0 limit (names current.reached))
-    (atEntry : ∀ name, RotationCreateFiles.liveWalReadChild limit name →
+    (atEntry : ∀ name, checkpointFreeWalChild limit name →
       names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ =
         (failure.parent.files.view.child failure.parent.root name).map failure.parent.files.view.modelObject)
-    (atClose : ∀ name, RotationCreateFiles.liveWalReadChild limit name →
+    (atClose : ∀ name, checkpointFreeWalChild limit name →
       names released ⟨(dir).path.toString ++ "/" ++ name⟩ =
         ((view.files released).image.view.child failure.parent.root name).map (view.files released).image.view.modelObject)
     (rootPath : names released (dir).path =
@@ -72,7 +68,7 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     rfl
   have observedImage : observed = failure.reported.after := image
   obtain ⟨_, _, root, _, _, _, lockName, _, successor, _, _⟩ := failure.custody valid
-  have present (name : String) (inScope : RotationCreateFiles.liveWalReadChild limit name)
+  have present (name : String) (inScope : checkpointFreeWalChild limit name)
       (apart : name ≠ renderWalSegmentName newStart) :
       names released ⟨(dir).path.toString ++ "/" ++ name⟩ =
         names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ := by
