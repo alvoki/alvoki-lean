@@ -12,7 +12,7 @@ fi
 export LC_ALL=C LEAN_PATH="$out"
 prefix=$(lean --print-prefix)
 lean_bin="$prefix/bin/lean"
-lake build crc32cArchive
+lake build crc32cArchive >&2
 sources=()
 compile() {
   local module=$1

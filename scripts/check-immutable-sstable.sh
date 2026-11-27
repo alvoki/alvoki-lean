@@ -11,7 +11,7 @@ prefix=$(lean --print-prefix)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 export LEAN_PATH="$out"
-lake build crc32cArchive
+lake build crc32cArchive >&2
 table=Alvoki/Experiments/SSTable
 sources=()
 compile() {
