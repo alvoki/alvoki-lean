@@ -127,9 +127,12 @@ parent directory after the builder returns. The creation law now consumes
 `buildFileWith_refines` on the reported writer run. It derives the image and
 synced inode used to justify the prepared artifact. The directory report
 preserves that inode and publishes its name. The L0 row cursor proof
-explains the exact encoded suffix and EOF. `tableOpenAt` uses the ID-derived
-name and the inode selected at scoped open to apply the primitive read
-effects. `table_open_published_inode` checks the typed producer-to-reader
+explains the exact encoded suffix and EOF.
+[DurableCatalog](DurableCatalog.lean) relates logical rows to their table
+ID, durable name, inode, bytes and proven image. The creation proof
+produces the new binding, and the catalog insertion lemma retains the
+older bindings. Lookup consumes that invariant and the scoped descriptor's
+inode selection and read effects. `table_open_published_inode` checks the typed producer-to-reader
 handoff with `buildFileWith_open_represents`. Checked open validates metadata.
 Row validation occurs on demand.
 
@@ -183,8 +186,14 @@ projections. A process exit keeps the reached image. Power loss selects a
 survivor. Both permitted manifest choices are durable against the same
 retained WAL and table catalog by `flushPublicationChoices`. A failed open
 keeps recovery admissible. A successful open pins its version for another
-open, including across another restart. The proof interprets the component
-reports. Connecting the reached Linux state to those reports remains open.
+open, including across another restart.
+[RestartRefinement](RestartRefinement.lean) derives both logical choices
+from the reached scan and table creation, takes publication reports from
+the same manifest interpretation and uses the existing L0 recovery and
+client trace after restart. Manifest reopen, WAL reopen and table checks
+frame the durable catalog through each recovery attempt. Connecting the
+reached Linux state to the primitive reports and namespace frames
+remains open.
 
 The interpretation needs the active image projection, installation of the
 reached image and frames for the WAL and table namespaces. The reports

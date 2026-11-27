@@ -38,18 +38,18 @@ cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixtur
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
 compile "$l0/NativeBridge" proof
 compile "$l0/LifecycleRefinement" proof
-compile "$l0/ManifestRecovery" proof
+compile "$l0/RestartRefinement" proof
 compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts ManifestComposition ManifestRecovery NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.NativeBridge
-import Alvoki.Experiments.L0.ManifestRecovery
+import Alvoki.Experiments.L0.RestartRefinement
 import Alvoki.Experiments.L0.ScheduleSteps
 import Alvoki.Experiments.L0.Lifecycle
 import Alvoki.Experiments.L0.LifecycleRefinement
@@ -111,7 +111,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms freeTableId_spec
 #check_axioms createTableAt_success
 #check_axioms createTableAt_bindings
-#check_axioms createTableUnder_image
+#check_axioms TableCreationEvidence.published
+#check_axioms TableCreationEvidence.catalogAfter
 #check_axioms rowSupply_step
 #check_axioms nextTableRow_cons
 #check_axioms nextTableRow_nil
@@ -123,6 +124,9 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.StateWithImage.interpretation
 #check_axioms ManifestComposition.recoverPublication
 #check_axioms ManifestComposition.reopenAfterRestart
-#check_axioms tableOpenAt
-#check_axioms TableRead.effect
+#check_axioms TableNamespace.lookup
+#check_axioms CallbackEvidence.lookupFromCatalog
+#check_axioms TableNamespace.Represents.frame
+#check_axioms recoverKeepsCatalog
+#check_axioms recoverReachedFlush
 LEAN

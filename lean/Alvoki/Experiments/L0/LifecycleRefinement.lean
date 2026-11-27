@@ -10,14 +10,14 @@ variable {callbacks : Callbacks (EStateM String S) W}
 variable {unavailable : String}
 local notation "ops" => callbacksWithPhase callbacks unavailable
 variable {selected : S → Selected}
-variable {fileBytes : S → UInt64 → Option ByteArray}
+variable {namespaceState : TableNamespace (Phase W × S)}
 
 /-- One reached recovery result justifies both the actual scope's publication
 of the recovered session and the client trace step. Phase writes leave the
 storage carrier untouched. -/
 theorem recovery_online
     (prior : Execution.Run events none (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (ran : recover ops (.opening, before) = .ok session after)
     (use : StorageM (Phase W × S) α)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) (unlock : StorageM (Phase W × S) Unit) :
@@ -39,7 +39,7 @@ theorem recovery_online
 detaches the handle even when closing the WAL or releasing the lock fails. -/
 theorem recovery_offline
     (prior : Execution.Run events none (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (ran : recover ops (.opening, before) = .error error after)
     (use : StorageM (Phase W × S) α)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) (unlock : StorageM (Phase W × S) Unit)
@@ -56,7 +56,7 @@ theorem recovery_offline
 phase custody, as does hiding the previous session before the call. -/
 theorem write_online
     (prior : Execution.Run events (some old) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (change : Change)
     (ran : write ops old change (.updating handle, before) = .ok next after)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) :
@@ -73,7 +73,7 @@ theorem write_online
 
 theorem write_offline
     (prior : Execution.Run events (some old) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (change : Change)
     (ran : write ops old change (.updating handle, before) = .error error after)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit)
@@ -86,7 +86,7 @@ theorem write_offline
 
 theorem flush_online
     (prior : Execution.Run events (some old) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (ran : flush ops old (.updating handle, before) = .ok next after)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) :
     Execution.Run (events ++ [.flushed]) (some next) (selected after.2) ∧
@@ -102,7 +102,7 @@ theorem flush_online
 
 theorem flush_offline
     (prior : Execution.Run events (some old) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (ran : flush ops old (.updating handle, before) = .error error after)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit)
     (closeFrame : ∀ handle storage, reached (closeWal handle (.offline, storage)) = (.offline, storage)) :
@@ -115,7 +115,7 @@ theorem flush_offline
 
 theorem get_online
     (prior : Execution.Run events (some session) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (ran : get ops session key (.online handle session, before) =
       .ok value after) (invalid : String) :
     Execution.Run (events ++ [.got key value]) (some session) (selected after.2) ∧
@@ -131,7 +131,7 @@ theorem get_online
 
 theorem get_online_error
     (prior : Execution.Run events (some session) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
     (ran : get ops session key (.online handle session, before) =
       .error error after) (invalid : String) :
     Execution.Run events (some session) (selected after.2) ∧

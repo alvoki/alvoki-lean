@@ -33,6 +33,13 @@ private def interruption (executable library cut : String) : IO Unit :=
     let active := root / "manifest" / "BLOB"
     let expected : L0Manifest.Version :=
       if cut == "table" then ⟨[0], 1⟩ else ⟨[1, 0], 3⟩
+    let required := tablePath (root / "tables") (if cut == "table" then 0 else 1)
+    let hidden := root / "tables" / "hidden-required"
+    let published ← IO.mkRef false
+    IO.FS.rename required hidden
+    try expectError (Native.withOpen root fun _ => published.set true)
+    finally IO.FS.rename hidden required
+    check (!(← published.get)) "failed restart published an L0 session"
     for _ in [0, 1] do
       Native.withOpen root fun db => do
         check (L0Manifest.decode (← IO.FS.readBinFile active) == some expected)
