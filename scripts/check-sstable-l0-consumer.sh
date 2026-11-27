@@ -61,6 +61,13 @@ lean_lib L0ConsumerCheck where
 lean_exe l0ConsumerCheck where
   root := `Alvoki.Experiments.L0.SSTableConsumerCheck
 LEAN
-lake build Alvoki.Experiments.L0.SSTableConsumerProof
+lake build Alvoki.Experiments.L0.SSTableConsumerProof Alvoki.Checks.Audit.AxiomPolicy
 lake env leanchecker Alvoki.Experiments.L0.SSTableConsumerProof
+lake env lean --stdin <<'LEAN'
+import Alvoki.Checks.Audit.AxiomPolicy
+import Alvoki.Experiments.L0.SSTableConsumerProof
+
+#check_axioms l0_lookup_built_table
+#check_axioms l0_lookup_selected_data_read_error
+LEAN
 lake exe l0ConsumerCheck
