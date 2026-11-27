@@ -516,7 +516,7 @@ fsync on the held directory settles the protected names. The first reboot select
 the failed-attempt and read frames carry both to authorization. The frame
 through the public error carries checkpoint durability to the next sample.
 `startsRecoveryAfterFailedPrune` composes those facts under the local file effects.
-[Prune scope](../../lean/Alvoki/Storage/Disk/NativeMarkedFirstUnlinkError.lean) · [Two-reboot theorem](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+[Prune scope](../../lean/Alvoki/Storage/Disk/Proofs/Recovery/NativeMarkedFirstUnlinkError.lean) · [Two-reboot theorem](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 For an immediate successful open after that sample, the named directory observation
 supplies its root and canonical WAL bindings. The common open proof derives the

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedFirstBarrierRetries
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstBarrierRetries
 
 namespace Alvoki.Storage.DiskSession
 

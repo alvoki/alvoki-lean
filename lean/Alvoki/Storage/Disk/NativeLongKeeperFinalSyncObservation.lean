@@ -5,7 +5,7 @@ import Alvoki.Storage.Disk.NativeLongKeeperStorage
 import Alvoki.Storage.Disk.NativeLongKeeperPending
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
-import Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstUnlinkError
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 import Alvoki.Storage.Disk.NativeWalPublicationTail
 import Alvoki.Storage.Disk.NativeLateWriteRecovery

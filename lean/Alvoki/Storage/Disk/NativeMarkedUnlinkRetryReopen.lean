@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstUnlinkError
 import Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen
 
 namespace Alvoki.Storage.DiskSession
