@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.RetainedAppendRecovery
+import Alvoki.Storage.Disk.Proofs.Append.RetainedAppendRecovery
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
 

@@ -4,12 +4,12 @@ import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionRetry
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLiveReopen
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionCachedReopen
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedRunCollection
-import Alvoki.Storage.Disk.SegmentedAppendRecovery
-import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendRecovery
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.SegmentedCleanReopen
-import Alvoki.Storage.Disk.SegmentedDelayedAppendReopen
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedDelayedAppendReopen
 import Alvoki.Storage.Disk.SegmentedDelayedKeeperPowerLoss
 import Alvoki.Storage.Disk.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
-import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendPowerLoss
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession

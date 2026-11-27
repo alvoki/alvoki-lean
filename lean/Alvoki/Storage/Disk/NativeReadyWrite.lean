@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
-import Alvoki.Storage.Disk.AppendHandleCustody
+import Alvoki.Storage.Disk.Proofs.Append.AppendHandleCustody
 
 namespace Alvoki.Storage.DiskSession
 

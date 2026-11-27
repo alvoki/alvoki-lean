@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.AppendCutSession
+import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
 import Alvoki.Storage.Disk.DescriptorInventory
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 

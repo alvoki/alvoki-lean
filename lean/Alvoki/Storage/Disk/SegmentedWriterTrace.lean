@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.SegmentedAppendTrace
-import Alvoki.Storage.Disk.RetainedAppendReports
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendTrace
+import Alvoki.Storage.Disk.Proofs.Append.RetainedAppendReports
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedWriterEntry
 import Alvoki.Storage.Disk.SegmentedWriterMaintenance

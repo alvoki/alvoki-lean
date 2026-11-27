@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
 import Alvoki.Storage.Disk.NativeLongKeeperSuffixStageHeap
 import Alvoki.Storage.Disk.NativeRawSync
-import Alvoki.Storage.Disk.AppendGroupedReports
+import Alvoki.Storage.Disk.Proofs.Append.AppendGroupedReports
 
 namespace Alvoki.Storage.DiskSession
 

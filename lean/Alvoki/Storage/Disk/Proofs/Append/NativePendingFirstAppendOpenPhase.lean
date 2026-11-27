@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativePendingFirstAppend
+import Alvoki.Storage.Disk.Proofs.Append.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativePendingMarkerRenameOpenPhase
 
 namespace Alvoki.Storage.DiskSession

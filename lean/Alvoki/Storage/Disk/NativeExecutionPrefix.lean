@@ -8,7 +8,7 @@ import Alvoki.Storage.Disk.Proofs.Rotation.NativePendingRotation
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileStop
-import Alvoki.Storage.Disk.NativePendingFirstAppend
+import Alvoki.Storage.Disk.Proofs.Append.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerRename
 import Alvoki.Storage.Disk.NativePendingMarkerDirectory

@@ -8,8 +8,8 @@ import Alvoki.Storage.Disk.NativeOpenedEarlyCheckpointReport
 import Alvoki.Storage.Disk.NativeOpenedUncertainWriteReport
 import Alvoki.Storage.Disk.NativeUncertainWriteExitTableOpen
 import Alvoki.Storage.Disk.NativeOpenedStoppedMarkerReport
-import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
-import Alvoki.Storage.Disk.NativeStoppedFirstAppendExitTableOpen
+import Alvoki.Storage.Disk.Proofs.Append.NativeOpenedFirstAppendReport
+import Alvoki.Storage.Disk.Proofs.Append.NativeStoppedFirstAppendExitTableOpen
 import Alvoki.Storage.Disk.NativeRawContendedAliasOpen
 import Alvoki.Storage.Disk.NativeOpenedStoppedObsoleteRunReport
 import Alvoki.Storage.Disk.NativeOpenedProcessExitReport

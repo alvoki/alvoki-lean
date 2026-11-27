@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointLockHandoff
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
-import Alvoki.Storage.Disk.ReopenedSegmentAppend
+import Alvoki.Storage.Disk.Proofs.Append.ReopenedSegmentAppend
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
-import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
-import Alvoki.Storage.Disk.NativeWalAppend
+import Alvoki.Storage.Disk.Proofs.Append.NativeOpenedFirstAppendReport
+import Alvoki.Storage.Disk.Proofs.Append.NativeFirstAppendExitReopen
+import Alvoki.Storage.Disk.Proofs.Append.NativeWalAppend
 
 namespace Alvoki.Storage.DiskSession
 

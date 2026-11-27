@@ -8,9 +8,9 @@ import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.SegmentedWriterMaintenance
-import Alvoki.Storage.Disk.SegmentedBatchAppend
-import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
-import Alvoki.Storage.Disk.BatchAppendReopenAdmission
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedBatchAppend
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedBatchAppendProcessExit
+import Alvoki.Storage.Disk.Proofs.Append.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.WalBatchSession
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationReopenAdmission

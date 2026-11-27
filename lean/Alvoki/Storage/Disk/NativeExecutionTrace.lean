@@ -42,8 +42,8 @@ import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryReboot
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileReboot
-import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
-import Alvoki.Storage.Disk.NativeFirstAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.NativeFirstAppendExitReopen
+import Alvoki.Storage.Disk.Proofs.Append.NativeFirstAppendPowerLoss
 import Alvoki.Storage.Disk.NativeInterruptedCloseReopen
 import Alvoki.Storage.Disk.NativePoisonedCloseReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut

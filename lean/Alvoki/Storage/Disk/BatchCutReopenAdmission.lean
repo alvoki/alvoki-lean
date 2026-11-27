@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskOpenAdmission
-import Alvoki.Storage.Disk.SegmentedBatchAppend
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedBatchAppend
 
 namespace Alvoki.Storage.DiskSession
 

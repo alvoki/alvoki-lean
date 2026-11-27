@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.AppendCutSession
-import Alvoki.Storage.Disk.ReopenedSegmentAppend
+import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
+import Alvoki.Storage.Disk.Proofs.Append.ReopenedSegmentAppend
 
 namespace Alvoki.Storage.DiskSession
 

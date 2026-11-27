@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout
-import Alvoki.Storage.Disk.AppendCutSession
+import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
 
 namespace Alvoki.Storage.DiskSession
 

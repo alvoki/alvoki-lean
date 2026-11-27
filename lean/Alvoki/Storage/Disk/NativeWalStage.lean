@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeWalAppend
+import Alvoki.Storage.Disk.Proofs.Append.NativeWalAppend
 import Alvoki.Storage.Disk.NativeRawSync
 import Alvoki.Storage.Disk.NativeStagingAcquisition
 

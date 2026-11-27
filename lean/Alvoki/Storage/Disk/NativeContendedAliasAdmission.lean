@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeRawOpenReturn
 import Alvoki.Storage.Disk.NativeOpenErrorLockFinalization
-import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
+import Alvoki.Storage.Disk.Proofs.Append.NativeFirstAppendExitReopen
 
 namespace Alvoki.Storage.DiskSession
 

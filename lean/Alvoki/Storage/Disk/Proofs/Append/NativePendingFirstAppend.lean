@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
-import Alvoki.Storage.Disk.BatchAppendRecoveryPrefix
+import Alvoki.Storage.Disk.Proofs.Append.BatchAppendRecoveryPrefix
 import Alvoki.Storage.Disk.SnapshotReadHistoryBounds
 
 namespace Alvoki.Storage.DiskSession

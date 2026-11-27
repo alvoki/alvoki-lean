@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationAuthorityRetry
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationReopenTrace
-import Alvoki.Storage.Disk.ReopenedSegmentAppend
+import Alvoki.Storage.Disk.Proofs.Append.ReopenedSegmentAppend
 
 namespace Alvoki.Storage.DiskSession
 

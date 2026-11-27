@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.AppendHandleCustody
+import Alvoki.Storage.Disk.Proofs.Append.AppendHandleCustody
 import Alvoki.Storage.Disk.ClientWriteTrace
 
 namespace Alvoki.Storage.DiskSession

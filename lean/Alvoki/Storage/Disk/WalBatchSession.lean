@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.WalBatchCommitReports
 import Alvoki.Storage.Disk.RetainedWriterReopen
-import Alvoki.Storage.Disk.SegmentedAppendRecovery
+import Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendRecovery
 
 namespace Alvoki.Storage.DiskSession
 

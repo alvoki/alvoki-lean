@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeStoppedFirstAppendTableOpen
+import Alvoki.Storage.Disk.Proofs.Append.NativeStoppedFirstAppendTableOpen
 
 namespace Alvoki.Storage.DiskSession
 

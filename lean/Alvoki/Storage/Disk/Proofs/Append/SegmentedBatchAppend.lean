@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.WalBatchCommitReports
 import Alvoki.Storage.Disk.RetainedWriterState
-import Alvoki.Storage.Disk.AppendGroupedReports
+import Alvoki.Storage.Disk.Proofs.Append.AppendGroupedReports
 import Alvoki.Storage.Disk.WalBatchSession
 import Alvoki.Storage.Disk.SingleWritePreflight
 

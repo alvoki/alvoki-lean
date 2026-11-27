@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.WalBatchAppendPowerLoss
-import Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.WalBatchAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.WalSegmentCachedAppendPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WalBatchCommitEffects
-import Alvoki.Storage.Disk.WalSegmentAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendPowerLoss
 
 namespace Alvoki.Storage.DiskSession.FirstAppendCut
 

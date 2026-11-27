@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalBatchAppendPowerLoss
+import Alvoki.Storage.Disk.Proofs.Append.WalBatchAppendPowerLoss
 
 namespace Alvoki.Storage.DiskSession.FirstAppendCut
 

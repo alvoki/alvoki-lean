@@ -38,7 +38,7 @@ literal handle and diagnostic. `RawWalAppendCalls.projects` uses per-primitive o
 store law at the reached success or failure. Clearing or replacing the cell can release a stream,
 so its projected result can change the files as well as the cache. The runtime law still has to
 account for local and cached reference releases and their filesystem effects. The proof composes
-the append result before marker publication. [Production cache schedules](../../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Raw append projection](../../lean/Alvoki/Storage/Disk/NativeWalAppend.lean)
+the append result before marker publication. [Production cache schedules](../../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Raw append projection](../../lean/Alvoki/Storage/Disk/Proofs/Append/NativeWalAppend.lean)
 The append buffer and flush observations now give the exact old keeper bytes plus the submitted bytes
 on the selected inode. The cache assignment preserves the flushed payload. These laws apply to a
 clean cached handle or one opened on the existing keeper.
@@ -641,7 +641,7 @@ before an error, or a successful open exposes the recovered history. Subsequent 
 that decision. Until then the invariant carries the allowed alternatives and accounts for effects
 that narrow them. The runtime, FFI and filesystem assumptions remain explicit at the source
 boundary. The traces and invariants
-can be verification-only. [Append and retry selections](../../lean/Alvoki/Storage/Disk/AppendRetrySession.lean)
+can be verification-only. [Append and retry selections](../../lean/Alvoki/Storage/Disk/Proofs/Append/AppendRetrySession.lean)
 
 For a failed storage call, prove the error at its return and the state
 that the next restart sees. A read-only open failure frames the selected

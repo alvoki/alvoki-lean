@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeContendedAliasAdmission
-import Alvoki.Storage.Disk.NativeStoppedAppendFinalizedRetry
+import Alvoki.Storage.Disk.Proofs.Append.NativeStoppedAppendFinalizedRetry
 
 namespace Alvoki.Storage.DiskSession
 

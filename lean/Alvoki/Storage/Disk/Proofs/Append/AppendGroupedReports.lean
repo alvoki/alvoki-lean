@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.AppendLockHandoff
+import Alvoki.Storage.Disk.Proofs.Append.AppendLockHandoff
 import Alvoki.Storage.Disk.WriteGroupFsync
 
 namespace Alvoki.Storage.DiskSession

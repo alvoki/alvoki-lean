@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.WalSegmentAppendRepair
+import Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendRepair
 import Alvoki.Storage.Disk.WalSegmentCheckpointReopen
-import Alvoki.Storage.Disk.ReopenedSegmentAppend
+import Alvoki.Storage.Disk.Proofs.Append.ReopenedSegmentAppend
 
 namespace Alvoki.Storage
 

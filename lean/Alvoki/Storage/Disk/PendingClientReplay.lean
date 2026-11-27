@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.ReturnedWriteRecovery
-import Alvoki.Storage.Disk.BatchAppendRecoveryPrefix
+import Alvoki.Storage.Disk.Proofs.Append.BatchAppendRecoveryPrefix
 
 namespace Alvoki.Storage.DiskSession
 

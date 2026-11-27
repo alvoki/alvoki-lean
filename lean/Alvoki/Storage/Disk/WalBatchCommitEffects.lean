@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.WalBatch
-import Alvoki.Storage.Disk.WalSegmentAppendRepair
+import Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendRepair
 import Alvoki.Storage.Disk.SegmentedRetryTrace
-import Alvoki.Storage.Disk.AppendCutSession
+import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
 
 namespace Alvoki.Storage.WalSegmentCommit
 
