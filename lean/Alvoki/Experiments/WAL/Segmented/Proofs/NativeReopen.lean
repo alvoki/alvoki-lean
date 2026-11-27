@@ -238,6 +238,22 @@ namespace WalRecoverySlice.Segmented.Model
 open System
 open Persistence
 
+private theorem reopenPhase_run (owned : store) (callbacks : Ops M) (s : State) :
+    (Native.reopenPhaseWith callbacks owned).run s =
+      match (Segmented.reopen callbacks).run s with
+      | .ok (.ok session) after => .ok (.ok (.ready owned session)) after
+      | .ok (.error err) after => .ok (.error err) after
+      | .error token after => .error token after := by
+  cases ran : (Segmented.reopen callbacks).run s with
+  | error =>
+    simp [Native.reopenPhaseWith, Bind.bind, ExceptT.run, ExceptT.bind,
+      ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢
+    rw [ran]
+  | ok response _ =>
+    cases response <;>
+      simp [Native.reopenPhaseWith, Bind.bind, ExceptT.run, ExceptT.bind,
+        ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢ <;> rw [ran] <;> rfl
+
 /-- The shared phase wrapper preserves the disk proof of the existing model
 schedule and ties the public scan to the exact installed session. -/
 theorem reopenPhase_refines (owned : store) (callbacks : Ops M) (s : State)
@@ -252,23 +268,8 @@ theorem reopenPhase_refines (owned : store) (callbacks : Ops M) (s : State)
       Native.scanWith (m := Except String) (.ready owner session) = .ok session.view
     | .ok (.ok _) _ => False
     | .ok (.error _) after | .error _ after => Recoverable known request after.disk := by
-  have phase :
-      (Native.reopenPhaseWith callbacks owned).run s =
-        match (Segmented.reopen callbacks).run s with
-        | .ok (.ok session) after => .ok (.ok (.ready owned session)) after
-        | .ok (.error err) after => .ok (.error err) after
-        | .error token after => .error token after := by
-    cases ran : (Segmented.reopen callbacks).run s with
-    | error =>
-      simp [Native.reopenPhaseWith, Bind.bind, ExceptT.run, ExceptT.bind,
-        ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢
-      rw [ran]
-    | ok response _ =>
-      cases response <;>
-        simp [Native.reopenPhaseWith, Bind.bind, ExceptT.run, ExceptT.bind,
-          ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢ <;> rw [ran] <;> rfl
   dsimp only
-  rw [phase]
+  rw [reopenPhase_run]
   cases issued : (Segmented.reopen callbacks).run s with
   | error => rw [issued] at physical; exact physical
   | ok response _ =>
@@ -378,8 +379,11 @@ def nativeOpenChild (root : FilePath) (reports : Nat → Nat → SingleFile.Open
   child s id (nativeChildWorker (Native.segmentPath root id) policy (reports s.step id))
     Decoded.cursor Decoded.batches
 
+def HealthyChildren (reports : Nat → Nat → SingleFile.OpenReports) : Prop :=
+  ∀ step id, reports step id = {}
+
 theorem nativeOpenChild_effects (root : FilePath) (reports : Nat → Nat → SingleFile.OpenReports) :
-    OpenChildEffects (nativeOpenChild root reports) False where
+    OpenChildEffects (nativeOpenChild root reports) (HealthyChildren reports) where
   frame _ _ _ named := child_frame named _ _ _
   settled {policy id s history} named entry bounded fits := by
     have frame := child_reached named
@@ -411,7 +415,15 @@ theorem nativeOpenChild_effects (root : FilePath) (reports : Nat → Nat → Sin
         have eq : ready.recovered.batches = observed := by
           simpa [nativeChildWorker, ExceptT.run, opened, Persistence.acknowledged] using ack
         exact eq.symm.trans (nativeChild_selected dir r entry chosen opened)
-  healthy _ _ impossible := impossible.elim
+  healthy {policy id s known pending} named entry healthy := by
+    let dir := Native.segmentPath root id
+    obtain ⟨ready, after, opened⟩ :=
+      SingleFile.openExisting_healthy dir policy (s.disk.segment id) entry.dirty
+    refine ⟨ready.recovered.batches, ?_⟩
+    change returned (child s id (nativeChildWorker dir policy (reports s.step id))
+      Decoded.cursor Decoded.batches) = _
+    rw [child_returned named, healthy s.step id]
+    simp [nativeChildWorker, ExceptT.run, opened, Persistence.acknowledged]
 
 /-- Interpret the native child wrapper on the protected, validated namespace.
 The single-file producer supplies the scanned value. Child references are
@@ -597,8 +609,89 @@ def nativeReopenOps (root : FilePath) (r : RootReports)
     removeSegment := rootRemove root r
     openSegment := nativeChildDispatch root childReports }
 
+/-- A fault-free root does not require an empty retired directory. The
+checked listing may contain any number of members. -/
+structure HealthyRoot (r : RootReports) : Prop where
+  read : ∀ step, r.controlRead step = none
+  listing : ∀ step, r.listFault step = none
+  barrier : ∀ step, r.sync step = .after none
+  present : ∀ step id, r.presenceFault step id = none
+  inspect : ∀ step id, ∃ names, r.members step id = .ok names
+  unlink : ∀ step path, r.unlinkFault step path = none
+  rmdir : ∀ step id, ∃ persist, r.rmdir step id = .after persist none
+
+private theorem rootBind_ok {a : M α} {b : α → M β} {s t : State} {value : α}
+    (ran : a.run s = .ok (.ok value) t) : (a >>= b).run s = (b value).run t := by
+  simp only [ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind] at ran ⊢
+  rw [ran]
+  rfl
+
+private theorem rootRemove_healthy (root : FilePath) (r : RootReports)
+    (healthy : HealthyRoot r) (id : Nat) (s : State) :
+    ∃ t, (rootRemove root r id).run s = .ok (.ok ()) t := by
+  obtain ⟨members, inspected⟩ := healthy.inspect s.step id
+  obtain ⟨persist, removed⟩ := healthy.rmdir s.step id
+  unfold rootRemove Native.removeSegmentWith rootPresent
+  by_cases named : id ∈ s.disk.liveNames
+  · simp only [ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind,
+      healthy.present, healthy.unlink, inspected, removed, read, named, decide_true, ↓reduceIte]
+    have loop (names : List String) (t : State) : ∃ after,
+        (names.foldlM (m := M) (fun (_ : Unit) _ u => read none (.ok ()) u) ()).run t =
+          .ok (.ok ()) after := by
+      induction names generalizing t with
+      | nil => exact ⟨t, rfl⟩
+      | cons name tail ih =>
+        change ∃ after, ((show M Unit from fun u => read none (.ok ()) u) >>= _).run t = _
+        rw [rootBind_ok (show (ExceptT.run (show M Unit from fun u => read none (.ok ()) u) t) = _ from rfl)]
+        exact ih t.tick
+    have folded := Array.foldlM_toList (m := M) (xs := members) (init := ())
+      (f := fun (_ : Unit) (_ : String) t => read none (.ok ()) t)
+    obtain ⟨after, done⟩ := loop members.toList s.tick.tick
+    rw [folded] at done
+    simp only [ExceptT.run, read] at done
+    unfold Array.forM
+    rw [done]
+    exact ⟨_, rfl⟩
+  · simp only [ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind,
+      healthy.present, read, named, decide_false, Bool.false_eq_true, ↓reduceIte]
+    exact ⟨_, rfl⟩
+
+private theorem rootSync_healthy (root : FilePath) (r : RootReports)
+    (healthy : HealthyRoot r) (s : State) :
+    (rootSync root r).run s = .ok (.ok ()) {s.tick with disk := s.disk.syncRoot} := by
+  change rootSync root r s = _
+  unfold rootSync
+  rw [(nativeRootBarrier root (r.sync s.step) s).1, healthy.barrier]
+  rfl
+
+private theorem collectNative_healthy (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (healthy : HealthyRoot r) (c : Control) (s : State) :
+    ∃ t, (Segmented.collect (nativeReopenOps root r reports) c).run s = .ok (.ok ()) t := by
+  let callbacks := nativeReopenOps root r reports
+  have listed : callbacks.listSegments.run s = .ok (.ok s.disk.liveNames) s.tick := by
+    change read (r.listFault s.step) (rootListing s.disk.liveNames) s = _
+    rw [healthy.listing, rootListing_eq]
+    rfl
+  have remove (ids : List Nat) (t : State) :
+      ∃ u, (Segmented.removeRetired callbacks c.firstNeeded ids).run t = .ok (.ok ()) u := by
+    induction ids generalizing t with
+    | nil => exact ⟨t, rfl⟩
+    | cons id tail ih =>
+      by_cases retired : id < c.firstNeeded
+      · simp only [Segmented.removeRetired, retired, ↓reduceIte]
+        obtain ⟨u, done⟩ := rootRemove_healthy root r healthy id t
+        change (callbacks.removeSegment id).run t = _ at done
+        rw [rootBind_ok done]
+        exact ih u
+      · simpa only [Segmented.removeRetired, retired, ↓reduceIte] using ih t
+  unfold Segmented.collect
+  rw [rootBind_ok listed]
+  obtain ⟨u, done⟩ := remove s.disk.liveNames s.tick
+  rw [rootBind_ok done]
+  exact ⟨_, rootSync_healthy root r healthy u⟩
+
 theorem nativeRootEffects (root : FilePath) (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports) :
-    OpenRootEffects (nativeReopenOps root r reports) False where
+    OpenRootEffects (nativeReopenOps root r reports) (HealthyRoot r) where
   collection := {
     list s := by
       change DiskPost _ _ (read (r.listFault s.step) (rootListing s.disk.liveNames) s)
@@ -628,10 +721,10 @@ theorem nativeRootEffects (root : FilePath) (r : RootReports) (reports : Nat →
       · rename_i fits
         rw [Native.readControl_canonical root c fits.1 fits.2.1 fits.2.2]
         exact ⟨rfl, rfl⟩
-      · exact ⟨rfl, id⟩
-    | some fault => cases fault <;> exact ⟨rfl, id⟩
-  syncHealthy _ impossible := impossible.elim
-  collectHealthy _ _ impossible := impossible.elim
+      · rfl
+    | some fault => cases fault <;> rfl
+  syncHealthy s healthy := ⟨_, rootSync_healthy root r healthy s⟩
+  collectHealthy c s healthy := collectNative_healthy root r reports healthy c s
 
 theorem reopen_nativeRoot {known request} (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (s : State) (prior : Recoverable known request s.disk) :
@@ -642,6 +735,29 @@ theorem reopen_nativeRoot {known request} (root : FilePath) (r : RootReports)
     exact nativeChildDispatch_eq root reports policy id
   exact reopenWithEffects_refines (nativeRootEffects root r reports)
     (dispatch.symm ▸ nativeOpenChild_effects root reports) s prior
+
+/-- Progress assumes the actual primitive reports are healthy and the
+protected CONTROL binding is representable in its on-disk codec. -/
+theorem reopen_nativeHealthy (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
+    (prior : Recoverable known request s.disk) (rootOK : HealthyRoot r)
+    (childrenOK : HealthyChildren reports)
+    (representable : ∀ c, s.disk.liveControl = some c →
+      c.capacity ≤ 255 ∧ c.active ≤ ControlCodec.wordMax ∧ c.discarded ≤ ControlCodec.wordMax) :
+    ∃ next after, (Segmented.reopen (nativeReopenOps root r reports)).run s = .ok (.ok next) after := by
+  have dispatch : (nativeReopenOps root r reports).openSegment = nativeOpenChild root reports := by
+    funext policy id
+    exact nativeChildDispatch_eq root reports policy id
+  apply reopenWithEffects_healthy (nativeRootEffects root r reports)
+    (dispatch.symm ▸ nativeOpenChild_effects root reports) s prior rootOK childrenOK
+  obtain ⟨c, found, _⟩ := prior.live
+  refine ⟨c, ?_⟩
+  change returned (read (r.controlRead s.step) (rootControl root s.disk) s) = _
+  rw [rootOK.read]
+  have fits := representable c found
+  simp only [rootControl, found, fits]
+  rw [Native.readControl_canonical root c fits.1 fits.2.1 fits.2.2]
+  rfl
 
 theorem reopenPhase_nativeRoot (owned : store) (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
@@ -699,6 +815,27 @@ theorem nativeInstallModel_refines (owned : store) (root : FilePath) (r : RootRe
     cases value with
     | error => rw [ran] at opened; exact opened
     | ok phase => rw [ran] at opened; cases phase <;> exact opened
+
+/-- A healthy interpreted open installs the very session used by scan. -/
+theorem nativeInstallModel_healthy (owned : store) (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
+    (prior : Recoverable known request s.disk) (rootOK : HealthyRoot r)
+    (childrenOK : HealthyChildren reports)
+    (representable : ∀ c, s.disk.liveControl = some c →
+      c.capacity ≤ 255 ∧ c.active ≤ ControlCodec.wordMax ∧ c.discarded ≤ ControlCodec.wordMax) :
+    ∃ session after,
+      (nativeInstallModel owned (nativeReopenOps root r reports)).run s =
+        .ok (.ok (.ready owned session, ())) after ∧
+      Installed session after.disk ∧
+      Native.scanWith (m := Except String) (.ready owned session) = .ok session.view := by
+  obtain ⟨session, after, reopened⟩ :=
+    reopen_nativeHealthy root r reports s prior rootOK childrenOK representable
+  have result : (nativeInstallModel owned (nativeReopenOps root r reports)).run s =
+      .ok (.ok (.ready owned session, ())) after := by
+    rw [nativeInstallModel_eq, reopenPhase_run, reopened]
+  have proved := nativeInstallModel_refines owned root r reports s prior
+  rw [result] at proved
+  exact ⟨session, after, result, proved.2.1, proved.2.2.2⟩
 
 /-- The same continuation applies to every publication cut that reports an
 error. The interpreted native reopen runs on each reached disk. -/

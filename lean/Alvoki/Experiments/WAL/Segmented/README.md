@@ -163,7 +163,10 @@ error. The child dispatch proof models successful path and policy checks and
 uses the same returned child value for installation and scan. Its disk
 interpreter erases reference and close effects. The remaining lifecycle proof
 must track actual child reference ownership, root acquisition and cleanup
-through every outcome, and discharge progress under healthy effects.
+through every outcome. `nativeInstallModel_healthy` now proves progress and
+the matching scan under healthy single-file and root reports and a
+representable CONTROL binding. Collection accepts arbitrary successfully
+inspected members, including nonempty retired directories.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be

@@ -430,6 +430,40 @@ theorem openExisting_worker (dir : FilePath) (policy : Policy) (r : OpenReports)
       exact ⟨source.1.imp (congrArg (settleFiles r.afterWorker))
         (congrArg (settleFiles r.afterWorker)), source.2⟩
 
+/-- Under the no-fault primitive reports, acquisition, scheduled recovery
+and the two namespace barriers all return successfully. -/
+theorem openExisting_healthy (dir : FilePath) (policy : Policy) (image : Image)
+    (dirty : Dirty policy known pending image) :
+    ∃ ready after, openExistingModel dir policy {} {image} = .ok (.ok ready) after := by
+  obtain ⟨decoded, after, worker⟩ := dirty.healthy_reopen
+  have scheduled : (recoverScheduled healthyReopen {} policy).run image = .ok (.ok decoded) after := by
+    rw [recoverScheduled_eq]
+    exact worker
+  let reports : OpenReports := {}
+  let before : OpenImage := {image}
+  let locked : OpenImage := {before with held := true}
+  have acquire : (acquireWith (openEffects policy reports) dir).run before =
+      .ok (.ok .lock) locked := rfl
+  have files : (openFilesWith (openEffects policy reports) dir).run locked =
+      .ok (.ok (expectedFiles policy)) locked := by cases policy <;> rfl
+  have recover : (workerEffect reports policy .reader .writer (markersFor policy)).run locked =
+      .ok (.ok decoded) {locked with image := after} := by
+    have ran :
+        (workerEffect reports policy .reader .writer (markersFor policy)).run locked =
+          match (recoverScheduled healthyReopen {} policy).run image with
+          | .ok response reached => .ok response {locked with image := reached}
+          | .error token reached => .error token {locked with image := reached} := by
+      simp [workerEffect, ExceptT.run]
+      rfl
+    rw [ran, scheduled]
+  have sync : (settleWith (openEffects policy reports) dir .policy).run {locked with image := after} =
+      .ok (.ok ()) {locked with image := after, policyDurable := true, namesDurable := true} := rfl
+  change ∃ ready reached, settleResult [] (openAttempt dir policy reports before) = .ok (.ok ready) reached
+  unfold openAttempt
+  simp only [openExistingWith, runBind, acquire, attempt_run, installWith, files, expectedFiles,
+    recover, sync, run_pure]
+  exact ⟨_, _, rfl⟩
+
 /-- The reference-allocation primitive is interpreted by its initial content. -/
 def storedPhase (ready : Opened OpenTarget (AppendFiles OpenTarget)) : Phase OpenTarget (AppendFiles OpenTarget) :=
   (storeReadyWith (m := Id) pure (pure ()) ready).1

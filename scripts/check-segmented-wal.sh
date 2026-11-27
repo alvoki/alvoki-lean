@@ -123,6 +123,7 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.installPhase_reached
 #check_axioms Model.reopenPhase_nativeRoot
 #check_axioms Model.nativeInstallModel_refines
+#check_axioms Model.nativeInstallModel_healthy
 #check_axioms Model.nativeRemoveSegment
 #check_axioms Model.nativeRootBarrier
 #check_axioms Model.repeatOpenAfterFailedDiscard

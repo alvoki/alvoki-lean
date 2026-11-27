@@ -162,7 +162,7 @@ structure OpenRootEffects (callbacks : Ops M) (healthyRoot : Prop) : Prop where
   collection : CollectionEffects callbacks
   control : ∀ s c, s.disk.liveControl = some c →
     DiskPost (fun value d => value = c ∧ d = s.disk)
-      (fun d => d = s.disk ∧ ¬ healthyRoot) (callbacks.readControl.run s)
+      (· = s.disk) (callbacks.readControl.run s)
   syncHealthy : ∀ s, healthyRoot → ∃ t, callbacks.syncRoot.run s = .ok (.ok ()) t
   collectHealthy : ∀ c s, healthyRoot →
     ∃ t, (Segmented.collect callbacks c).run s = .ok (.ok ()) t
@@ -220,9 +220,7 @@ private theorem modelRootEffects (e : Effects) (call : Policy → Nat → M (Lis
     rw [found]
     cases fx : e.controlRead s.step with
     | none => exact ⟨rfl, rfl⟩
-    | some fault =>
-      have ne : e ≠ healthy := by rintro rfl; cases fx
-      cases fault <;> exact ⟨rfl, ne⟩
+    | some fault => cases fault <;> rfl
   syncHealthy s := by rintro rfl; exact ⟨_, rfl⟩
   collectHealthy c s eq := by
     rw [collect_reopenOps]
@@ -232,7 +230,8 @@ private theorem modelRootEffects (e : Effects) (call : Policy → Nat → M (Lis
 private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEffects callbacks healthyRoot) {healthyCall : Prop}
     (effects : OpenChildEffects callbacks.openSegment healthyCall) (s : State) (prior : Recoverable k req s.disk) :
     ∃ c final, PermittedView k req (historyView c final) ∧
-      readOutcome (fun t => Opened c final t.disk) (fun t => Recoverable k req t.disk ∧ ¬ (healthyRoot ∧ healthyCall))
+      readOutcome (fun t => Opened c final t.disk) (fun t => Recoverable k req t.disk ∧ ¬ (healthyRoot ∧ healthyCall ∧
+        ∃ c, returned (callbacks.readControl.run s) = some c))
         (sessionOf c final) ((Segmented.reopen callbacks).run s) := by
   obtain ⟨c, found, h, p, r, allow⟩ := prior.live
   obtain ⟨_, choice, bounded, selected⟩ := r.active.selectedBatches
@@ -245,11 +244,11 @@ private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEf
     _ _ ⟨finish.capacityPositive, finish.capacityFits⟩ finish.lower finish.upper finish.discardedFits
   · have facts := root.control s c found
     cases ran : callbacks.readControl.run s with
-    | error => rw [ran] at facts; exact ⟨facts.1.symm ▸ prior, fun h => facts.2 h.1⟩
+    | error => rw [ran] at facts; exact ⟨facts.symm ▸ prior, fun h => by obtain ⟨_, impossible⟩ := h.2.2; cases impossible⟩
     | ok value _ =>
       rw [ran] at facts
       cases value with
-      | error => exact ⟨facts.1.symm ▸ prior, fun h => facts.2 h.1⟩
+      | error => exact ⟨facts.symm ▸ prior, fun h => by obtain ⟨_, impossible⟩ := h.2.2; cases impossible⟩
       | ok => exact ⟨facts.2, facts.1⟩
   · intro t same
     have synced : Opening c h p (s.disk.segment c.active) t.disk.syncRoot := by
@@ -281,18 +280,18 @@ private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEf
     · exact fun v ret => ⟨result.1, (result.2.1 v ret).trans (earlier id lt).symm⟩
     · intro no
       refine ⟨result.1.recoverable allow, fun eq => ?_⟩
-      obtain ⟨v, ok⟩ := result.2.2 eq.2
+      obtain ⟨v, ok⟩ := result.2.2 eq.2.1
       change returned ((callbacks.openSegment c.policy id).run t) = none at no
       rw [no] at ok
       contradiction
   · intro t o
     have proof := active_step effects o allow lift (slice.symm ▸ selected)
     cases h : (callbacks.openSegment c.policy c.active).run t with
-    | error => rw [h] at proof; exact ⟨proof.1, fun h => proof.2 h.2⟩
+    | error => rw [h] at proof; exact ⟨proof.1, fun h => proof.2 h.2.1⟩
     | ok value _ =>
       rw [h] at proof
       cases value with
-      | error => exact ⟨proof.1, fun h => proof.2 h.2⟩
+      | error => exact ⟨proof.1, fun h => proof.2 h.2.1⟩
       | ok => exact proof
   · intro t o
     have proof := collect_step root t o (allow final permitted)
@@ -333,16 +332,32 @@ theorem reopen_refines {k req} (e : Effects) (s : State) (prior : Recoverable k 
       (Recoverable k req) ((Segmented.reopen (ops e)).run s) :=
   reopenWithChild_refines e (modelChildEffects e) s prior
 
+/-- Local progress premises lift through the same schedule proof as safety. -/
+theorem reopenWithEffects_healthy {k req callbacks healthyRoot healthyCall}
+    (root : OpenRootEffects callbacks healthyRoot)
+    (child : OpenChildEffects callbacks.openSegment healthyCall)
+    (s : State) (prior : Recoverable k req s.disk)
+    (rootOK : healthyRoot) (childrenOK : healthyCall)
+    (readOK : ∃ c, returned (callbacks.readControl.run s) = some c) :
+    ∃ next after, (Segmented.reopen callbacks).run s = .ok (.ok next) after := by
+  obtain ⟨_, _, _, post⟩ := reopen_source root child s prior
+  cases hr : (Segmented.reopen callbacks).run s with
+  | error _ _ => rw [hr] at post; exact False.elim (post.2 ⟨rootOK, childrenOK, readOK⟩)
+  | ok result t =>
+    cases result with
+    | error => rw [hr] at post; exact False.elim (post.2 ⟨rootOK, childrenOK, readOK⟩)
+    | ok v => exact ⟨v, t, rfl⟩
+
 /-- Once faults cease, the actual source reopen finishes after any permitted prefix. -/
 theorem reopen_healthy {k req} (s : State) (prior : Recoverable k req s.disk) :
     ∃ next after, ((Segmented.reopen (ops healthy)).run s) = .ok (.ok next) after := by
-  obtain ⟨_, _, _, post⟩ := reopen_source (modelRootEffects healthy _) (modelChildEffects healthy) s prior
-  change readOutcome _ _ _ ((Segmented.reopen (ops healthy)).run s) at post
-  cases hr : (Segmented.reopen (ops healthy)).run s with
-  | error _ _ => rw [hr] at post; exact False.elim (post.2 ⟨rfl, rfl⟩)
-  | ok result t =>
-    cases result with
-    | error => rw [hr] at post; exact False.elim (post.2 ⟨rfl, rfl⟩)
-    | ok v => exact ⟨v, t, rfl⟩
+  apply reopenWithEffects_healthy (modelRootEffects healthy _) (modelChildEffects healthy) s prior rfl rfl
+  obtain ⟨c, found, _⟩ := prior.live
+  refine ⟨c, ?_⟩
+  change returned (read none (match s.disk.liveControl with
+    | some c => .ok c
+    | none => .error "missing control") s) = _
+  rw [found]
+  rfl
 
 end WalRecoverySlice.Segmented.Model
