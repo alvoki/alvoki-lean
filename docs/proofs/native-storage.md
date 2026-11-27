@@ -711,8 +711,10 @@ determine the logical repair trace for either final-barrier effect. Cleanup
 preserves the acquired inode and its durable bytes. At the cutoff the sampled
 retry observations supply the entry for the shared marked opener. Both error
 paths use the same local staging effects to preserve the selected retry files.
-The same pre-fsync proof carries bounded names for a successful scratch sync,
-or the old keeper’s durable bytes and joint namespace on a failed sync.
+The pre-fsync proof derives the bytes at flush from the empty exclusive file
+and the write. Registration preserves the scratch image. Local frames carry
+bounded names for a successful sync, or the old keeper’s durable bytes and
+joint namespace on a failed sync.
 The latter footprint includes immutable children and every actually pruned
 name, including removals beyond the reader’s interval.
 [Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)

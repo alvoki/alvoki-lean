@@ -1133,6 +1133,17 @@ local notation "scratchFrame" => fun start finish =>
   CheckpointSurvivingFiles.Frames (· = keeperPath) (liveFiles start) (liveFiles finish) ∧
   walNameFrame start finish ∧ retryFrame start finish
 
+private def withoutScratch (files : LockedFileState FileImage) : LockedFileState FileImage :=
+  { files with image := files.image.withScratch none }
+
+omit extents in
+private theorem restoresScratch {before after : LockedFileState FileImage} {staged : Option (ByteArray × Bool)}
+    (others : withoutScratch after = withoutScratch before) (scratchContents : after.image.keeper.staged = staged) :
+    after = { before with image := before.image.withScratch staged } := by
+  subst staged
+  exact congrArg (fun f : LockedFileState FileImage =>
+    { f with image := f.image.withScratch after.image.keeper.staged }) others
+
 local notation "stagePaths" => fun path => path = keeperPath ∨
   (NativeReadyState.selectedRetryPath state path ∧ path ≠ DiskDirectory.path dir) ∨
   ∃ n, ((firstOffset ≤ n ∧ n ≤ through) ∨ n ∈ Plan.newer (CanonicalKeeperLayout.boundedPlan layout)) ∧
@@ -1190,9 +1201,13 @@ theorem MarkedWalExtentReports.extendsStageSyncError
     (flushedBytes : source.stage.flush file written = .ok () flushed)
     (remembered : (callbacks).modifyPending seed.pendingRef (pushPending scratch file) flushed = .ok () recorded)
     (stored : view.pending recorded seed.pendingRef = pushPending scratch file (view.pending flushed seed.pendingRef))
-    (stageEffect : stageWrite scratch layout.keeper.bytes pruned = .ok () recorded →
-      view.files recorded = { view.files pruned with image := (liveImage pruned).withScratch (some (layout.keeper.bytes, false)) } ∧
-      scratchFrame pruned recorded)
+    (stageFrames : source.stage.StagingWriteFrames callbacks scratch (· = keeperPath) view storage seed.pendingRef
+      (fun a b => withoutScratch (view.files b) = withoutScratch (view.files a) ∧ scratchFrame a b))
+    (flushImage : ∀ {slot inode}, ScopedStagingFile scratch (· = keeperPath) view storage file slot inode written →
+      source.stage.flush file written = .ok () flushed →
+      (liveImage flushed).keeper.staged = some (visible flushed inode, false))
+    (recordImage : (callbacks).modifyPending seed.pendingRef (pushPending scratch file) flushed = .ok () recorded →
+      (liveImage recorded).keeper.staged = (liveImage flushed).keeper.staged)
     {entries : List (FilePath × IO.FS.Handle)}
     (read : (callbacks).getPending seed.pendingRef recorded = .ok entries loaded)
     (loadEffect : entries = view.pending recorded seed.pendingRef ∧ view.files loaded = view.files recorded ∧
@@ -1296,14 +1311,19 @@ theorem MarkedWalExtentReports.extendsStageSyncError
     (congrArg (fun image => image.later.visible) pruneImage)
     pruneFrame.2.1 (pruneFrame.1.visiblePayload (names := retryNames) (bytes := visible) rfl)
     pruneFrame.2.2 NativeReadyState.SelectedRetryFrame.trans
-  have staged := source.stage.stageReturns acquired wrote flushedBytes remembered
-  obtain ⟨writtenImage, stagedFrame⟩ := stageEffect staged
   have chosen : entries.find? (fun entry => entry.1 == scratch) = some (scratch, file) := by
     rw [loadEffect.1, stored]
     simp [pushPending]
-  obtain ⟨slot, replacement, opened, _, _, issued, payload, prefixFrames, _⟩ :=
+  obtain ⟨slot, replacement, opened, afterWrite, _, issued, payload, flushedPayload, registeredFrames, prefixFrames, _⟩ :=
     source.stage.issuesStagedFile callbacks staging (fun result _ => result)
       acquired wrote flushedBytes remembered read chosen cleared
+  obtain ⟨otherFiles, stagedFrame⟩ := registeredFrames stageFrames
+    (fun h => ⟨rfl, fun _ _ => ⟨rfl, fun _ _ => rfl⟩, fun _ => rfl,
+      NativeReadyState.SelectedRetryFrame.refl state (storage h) (visible h)⟩)
+    (fun left right => ⟨right.1.trans left.1, compose left.2 right.2⟩)
+  have scratchContents := (recordImage remembered).trans (flushImage afterWrite flushedBytes)
+  rw [flushedPayload] at scratchContents
+  have writtenImage := restoresScratch otherFiles scratchContents
   have capturedInode : inode = replacement := captured.trans (opened.1.1.symm ▸ opened.1.2.2)
   have descriptor : RawFsyncTarget view created consumed file :=
     ⟨issued.1.1.trans opened.1.1.symm, issued.1.1.symm ▸ issued.1.2.1,
