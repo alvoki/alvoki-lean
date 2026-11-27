@@ -94,6 +94,7 @@ open WalRecoverySlice.Segmented
 #check_axioms appendActive_refines
 #check_axioms append_refines
 #check_axioms append_exhausted
+#check_axioms append_returned_representable
 #check_axioms append_returned_position
 #check_axioms Model.reopen_refines
 #check_axioms Model.reopen_healthy
@@ -115,6 +116,7 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.release_reached
 #check_axioms Native.openRootDirectory_usesCanonicalPath
 #check_axioms Native.segmentId_sound
+#check_axioms Native.segmentId_canonical
 #check_axioms Native.listedIds_exact
 #check_axioms Native.installPhase_reached
 #check_axioms Model.reopenPhase_nativeChild

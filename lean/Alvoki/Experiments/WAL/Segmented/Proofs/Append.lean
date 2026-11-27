@@ -138,4 +138,18 @@ theorem append_returned_position (effects : Model.Effects) (session : Session) (
     omega
   · contradiction
 
+/-- An acknowledged absolute position fits the wire field used for release. -/
+theorem append_returned_representable (effects : Model.Effects) (session : Session) (p : Bytes)
+    (state after : State) (next : Session) (installed : Installed session state.disk)
+    (returned : (Segmented.append (Model.ops effects) session p).run state = .ok (.ok next) after) :
+    next.tailPosition ≤ Contract.maxPosition := by
+  rw [append_returned_position effects session p state after next installed returned]
+  have result := append_refines effects session p state installed
+  rw [returned] at result
+  have applied := result.2
+  simp only [Contract.Request.apply] at applied
+  split at applied
+  · omega
+  · contradiction
+
 end WalRecoverySlice.Segmented
