@@ -2255,6 +2255,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.settledCrashFilesAfterFailedWalUnlink
 #check_axioms Alvoki.Storage.DiskSession.WalRootSyncEffect.crashFilesBeforeEffect
 #check_axioms Alvoki.Storage.DiskSession.WalRootSyncEffect.keepsSettledCrashFiles
+#check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.selectsSettledKeeper
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.startsRecoveryAfterFramedPrune
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_errorDuringUnlinks
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_errorDuringPrune
@@ -4141,6 +4142,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.SelectedWriteReboot.interruptedPlan
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
+#check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.NameFrame.trans
+#check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.NameFrame.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.frame

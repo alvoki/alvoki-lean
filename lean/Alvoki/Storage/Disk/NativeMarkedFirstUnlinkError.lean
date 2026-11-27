@@ -124,6 +124,33 @@ theorem CheckpointStorageObservation.CrashFileFrame.afterReturnedWalUnlinks
     (fun _ _ => ()) (initial := ()) (.refl _ _)
     (fun listed called accepted framed => framed.trans (unlink (offTarget _ listed) called accepted)) unlinks
 
+/-- Before keeper rename, every crash choice names one old inode. Its
+sampled bytes and the immutable children on that same map determine the
+ordinary retry entry, both during pruning and after a scratch-file error. -/
+theorem RawWriteRebootEntry.selectsSettledKeeper
+    {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap FileImage}
+    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {failed rebooted : heap} {target : Target} {old : Nat}
+    (seen : RawWriteRebootEntry state view observe (fun h => (observe h).files.names) visible failed rebooted)
+    (first : target.first = state.writer.wal.active.first)
+    (manifest : target.pair.manifest = state.writer.target.pair.manifest)
+    (durable : state.SelectedRetryDurability target (observe failed))
+    (bound : ∀ names ∈ (observe failed).crashNames, names (state.session.directory.file (.walSegment target.first)) = some old)
+    (accepted : ∀ bytes ∈ (observe failed).files.bytes old, target.Accepts (some bytes))
+    (children : ∀ path, state.selectedRetryPath path → path ≠ state.session.directory.path →
+      (observe rebooted).files.names path = (observe failed).files.names path) :
+    (observe rebooted).files.names (state.session.directory.file (.walSegment target.first)) = some old ∧
+      target.Accepts (some (visible rebooted old)) ∧
+      RawOpenRetryTrace.SelectedEntry view state target (fun h => (observe h).files.names) visible rebooted ∧
+      TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+      (view.descriptors rebooted).slots = [] := by
+  let path := state.session.directory.file (.walSegment target.first)
+  have named := bound _ seen.chosen
+  have sampled := seen.samplesWal path old
+    (.inr (.inr (congrArg (fun n => state.session.directory.file (.walSegment n)) first))) named
+  exact ⟨named, accepted _ sampled, seen.selectsRetryAfterRepair first manifest durable children
+    (fun names possible => ⟨old, bound names possible, accepted⟩)⟩
+
 /-- The second reboot uses its sampled protected files to select the same
 target and its sampled namespace to discover any later WAL names. Only
 the inventory through the selected marker is preserved across pruning. -/
@@ -147,17 +174,14 @@ theorem RawWriteRebootEntry.startsRecoveryAfterFramedPrune
       RawOpenRetryTrace.RecoveryObservations view state target observe visible firstOffset target.range.through rebooted := by
   let directory := state.session.directory
   obtain ⟨inode, bound, accepted⟩ := keeper
-  have keeperChoices : RawOpenRetryTrace.KeeperCrashChoices directory target (observe failed) := by
-    intro names survives
-    let path := directory.file (.walSegment target.first)
-    have inside : state.pruneRecoveryScope target.range.through path := .inr ⟨_, target.firstCovered, rfl⟩
-    have named := (survivors.names names survives path inside).trans bound
-    exact ⟨inode, named, fun payload member =>
-      accepted payload (survivors.bytes names survives path inside inode named payload member)⟩
-  obtain ⟨selected, vacant, empty⟩ := seen.selectsRetryAfterRepair first sameManifest durable
-    (fun path protectedPath notRoot =>
+  let path := directory.file (.walSegment target.first)
+  have inside : state.pruneRecoveryScope target.range.through path := .inr ⟨_, target.firstCovered, rfl⟩
+  have oldBound names allowed := (survivors.names names allowed path inside).trans bound
+  have oldBytes := (survivors.visible path inside).2 inode bound
+  obtain ⟨_, _, selected, vacant, empty⟩ := seen.selectsSettledKeeper first sameManifest durable oldBound
+    (fun bytes member => accepted bytes (oldBytes ▸ member)) (fun path protectedPath notRoot =>
       (survivors.names _ seen.chosen path (.inl ⟨protectedPath, notRoot⟩)).trans
-        (survivors.visible path (.inl ⟨protectedPath, notRoot⟩)).1.symm) keeperChoices
+        (survivors.visible path (.inl ⟨protectedPath, notRoot⟩)).1.symm)
   have chosenWindow := window.frame (by
     intro start _ within
     let path := directory.file (.walSegment start)

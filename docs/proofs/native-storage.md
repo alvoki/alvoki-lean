@@ -958,9 +958,10 @@ requires a sampled durable directory map and byte contents.
 [Early write recovery](../../lean/Alvoki/Storage/Disk/NativeEarlyWriteRecovery.lean)
 
 A marked repair that fails after changing files supplies its reached image through the same
-worker and finalizers as the read-only error path. A staged-file fsync error retains the original keeper through public cleanup and
-extends the live retry ledger for windows ending at the committed cutoff or earlier. The
-observed fsync effect determines scratch durability. A later final-directory error follows
+worker and finalizers as the read-only error path. After a staged-file fsync error, the prune barrier and subsequent namespace frames keep the
+original keeper and the selected immutable children on the same sampled reboot map. The
+map retains the bounded WAL inventory and omits every name removed by the pass. Only scratch
+durability depends on the file-fsync effect. A later final-directory error follows
 a successful keeper rename and admits the corresponding directory crash choices.
 The retry fold retains the selected target and unchanged file footprint while the next reader
 plan uses the last returned keeper and later names. The kernel argument tracks reported

@@ -56,17 +56,18 @@ The cache allocations and reached marked reads carry the entry image through
 the keeper's release into both repair-error proofs.
 [Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-If the staged `WAL.next` fsync reports an error, the open consumes the matching
-pending entries and syncs the descriptor it just wrote. The canonical keeper
-retains its binding and bytes through cleanup. The live retry ledger covers a
-WAL window ending at or before the committed cutoff. Scratch durability follows
-the observed effect even when both outcomes return the same error.
+If the `WAL.next` fsync fails, the canonical keeper remains in place. The
+preceding prune barrier settled the directory. Frames through staging, fsync
+and cleanup carry those bindings to a sampled reboot: it sees the old keeper
+with an accepted payload, the selected immutable children, the bounded WAL
+inventory and the absence of every name actually pruned. The inventory interval
+ends at or before the commit cutoff. Scratch durability may take either outcome.
 
-**Next source boundary.** Carry this staged-file error across a sampled reboot.
-Connect the pruned directory map and durable choices for the old keeper to the
-next open. The staging inode in the final-directory-error report still needs a
-separate identity observation.
-[Staged-file sync error](../lean/Alvoki/Storage/Disk/NativeLongKeeperStageSyncError.lean)
+**Next source boundary.** Derive the scratch inode’s separation from the keeper
+at fsync from the exclusive creation and the reached pending-cache operations.
+The final-directory-error report also still identifies the staged inode by a
+separate observation.
+[Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

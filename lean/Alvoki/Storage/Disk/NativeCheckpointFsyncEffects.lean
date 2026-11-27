@@ -45,14 +45,48 @@ theorem CheckpointStorageObservation.Frames.weaken {entry reached : CheckpointSt
     obtain ⟨prior, earlier, same⟩ := frame.survivors names allowed
     exact ⟨prior, earlier, fun path keep => same path (included path keep)⟩
 
+/-- Changes outside the selected paths may create a crash choice from the earlier
+live map or from an earlier crash map. One predecessor covers the entire scope. -/
+structure CheckpointStorageObservation.NameFrame (scope : FilePath → Prop)
+    (before after : CheckpointStorageObservation) : Prop where
+  live : ∀ path, scope path → after.files.names path = before.files.names path
+  survivors : ∀ names ∈ after.crashNames, ∃ prior, (prior = before.files.names ∨ prior ∈ before.crashNames) ∧
+    ∀ path, scope path → names path = prior path
+
+theorem CheckpointStorageObservation.NameFrame.trans {scope : FilePath → Prop}
+    {first middle last : CheckpointStorageObservation}
+    (left : first.NameFrame scope middle) (right : middle.NameFrame scope last) : first.NameFrame scope last := by
+  refine ⟨fun path inside => (right.live path inside).trans (left.live path inside), ?_⟩
+  intro names possible
+  obtain ⟨intermediate, prior | prior, same⟩ := right.survivors names possible
+  · subst intermediate
+    exact ⟨_, .inl rfl, fun path inside => (same path inside).trans (left.live path inside)⟩
+  · obtain ⟨original, allowed, kept⟩ := left.survivors intermediate prior
+    exact ⟨original, allowed, fun path inside => (same path inside).trans (kept path inside)⟩
+
+theorem CheckpointStorageObservation.NameFrame.settledFrom {scope : FilePath → Prop}
+    {before after : CheckpointStorageObservation} (frame : before.NameFrame scope after)
+    (settled : ∀ names ∈ before.crashNames, ∀ path, scope path → names path = before.files.names path) :
+    ∀ names ∈ after.crashNames, ∀ path, scope path → names path = before.files.names path := by
+  intro names possible path inside
+  obtain ⟨prior, rfl | previous, same⟩ := frame.survivors names possible
+  · exact same path inside
+  · exact (same path inside).trans (settled prior previous path inside)
+
+theorem CheckpointStorageObservation.Frames.nameFrame {entry reached : CheckpointStorageObservation}
+    {scope : FilePath → Prop} (frame : entry.Frames scope reached) : entry.NameFrame scope reached :=
+  ⟨fun path inside => (frame.visible path inside).1, fun names possible => by
+    obtain ⟨prior, allowed, kept⟩ := frame.survivors names possible
+    exact ⟨prior, .inr allowed, kept⟩⟩
+
 /-- Settlement of a footprint survives a joint namespace frame. -/
 theorem CheckpointStorageObservation.Frames.settledFrom {entry reached : CheckpointStorageObservation}
     {footprint : FilePath → Prop} (frame : entry.Frames footprint reached)
     (settled : ∀ names ∈ entry.crashNames, ∀ path, footprint path → names path = entry.files.names path) :
     ∀ names ∈ reached.crashNames, ∀ path, footprint path → names path = reached.files.names path := by
   intro names allowed path selected
-  obtain ⟨prior, earlier, same⟩ := frame.survivors names allowed
-  exact (same path selected).trans ((settled prior earlier path selected).trans (frame.visible path selected).1.symm)
+  exact (frame.nameFrame.settledFrom settled names allowed path selected).trans
+    (frame.nameFrame.live path selected).symm
 
 /-- Preserve the durable contents of every inode reachable at a scoped
 path in a surviving namespace. The live file frame alone only covers
