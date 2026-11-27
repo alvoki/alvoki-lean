@@ -24,8 +24,9 @@ private def footer (layout : Layout) (blockSize count : Nat) : ByteArray :=
 
 /-- Pad every block, including the final one, to the declared physical size.
 The placement extension is checked independently of the packed row codec. -/
-def buildFile (path : System.FilePath) (keyWidth valueWidth blockSize : Nat)
-    (tableId : UInt64) (nextRow : IO (Option Entry)) : IO Nat :=
+private def buildFileWithSync (path : System.FilePath) (keyWidth valueWidth blockSize : Nat)
+    (tableId : UInt64) (nextRow : IO (Option Entry))
+    (syncOutput : IO.FS.Handle → IO Unit) : IO Nat :=
   withFreshOutput path (fun handle => do
     let layout := layoutFor keyWidth valueWidth blockSize tableId
     unless valid layout blockSize do throw (IO.userError "invalid aligned SSTable block size")
@@ -46,7 +47,15 @@ def buildFile (path : System.FilePath) (keyWidth valueWidth blockSize : Nat)
       writeBlock (encodeBlock layout state.blocks state.pending)
     handle.write (footer layout blockSize state.count)
     handle.flush
-    return state.count) (fun _ => pure ())
+    return state.count) syncOutput
+
+def buildFile (path : System.FilePath) (keyWidth valueWidth blockSize : Nat)
+    (tableId : UInt64) (nextRow : IO (Option Entry)) : IO Nat :=
+  buildFileWithSync path keyWidth valueWidth blockSize tableId nextRow (fun _ => pure ())
+
+def buildFileSynced (path : System.FilePath) (keyWidth valueWidth blockSize : Nat)
+    (tableId : UInt64) (nextRow : IO (Option Entry)) : IO Nat :=
+  buildFileWithSync path keyWidth valueWidth blockSize tableId nextRow syncFileHandle
 
 /-- Present the original block codec with its logical byte positions.
 Each underlying data request reads an entire physical block. Padding has
@@ -77,5 +86,11 @@ def openSource (source : Source (EIO String)) :
       let block ← source.readAt (ordinal * blockSize) blockSize
       unless block.size = blockSize do throw "short aligned SSTable block"
       return block.extract 0 length })
+
+def openSourceChecked (source : Source (EIO String)) (expectedTableId : UInt64) :
+    EIO String (Layout × Nat × Source (EIO String)) := do
+  let result ← openSource source
+  unless result.1.tableId = expectedTableId do throw "fixed SSTable table ID mismatch"
+  return result
 
 end ImmutableSSTable.Fixed.Aligned

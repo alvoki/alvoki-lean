@@ -96,3 +96,57 @@ a consistent latency gain from alignment. Both readers used buffered
 positional IO, and the aligned adapter also slices each physical read
 back to the packed payload and checksum. A physical IO comparison would
 require device-level accounting and a workload on the target filesystem.
+
+## Consolidation proposal
+
+Keep the packed fixed-width layout as the candidate for a first implementation
+alongside the existing variable-width reader. One-row groups already cover the
+direct-addressed row case. Keep exact padding and checksum policies other than
+lazy validation in the experiments until a caller needs them. Independent
+mixed widths, block-based iterators and more alignment measurements on a
+target filesystem remain follow-up work.
+
+Use the executable fixed reader's checked block load as the producer of
+verified payloads. With row search and local reuse, the proof obligation is
+that the one retained block agrees with that producer for its ordinal.
+Erasing this local state then gives the current indexed-read oracle and
+reuses the existing lookup proof. With two-level search, add the lemma that
+the first block whose last key is at least the query contains the global
+lower bound. Reuse the existing partition theorem for the block and in-block
+searches. In either case the chosen executable search must be the lookup
+used by the returned handle and the proof of its `Table.Represents` field.
+
+Generated Lean 4.36 C specializes FNV-1a's byte loop to an unboxed `uint64_t`
+accumulator, a `size_t` index, and a byte load, XOR and multiply per iteration.
+The multiply depends on the previous byte's result. Block checks also build
+a short context buffer, and the decoder extracts the payload before hashing.
+Hardware CRC32C could process words with x86 SSE4.2 or ARM CRC instructions.
+Benchmark that against a portable Lean reference before changing the wire
+checksum. Specify the input context, polynomial, initial and final XORs,
+byte order and test vectors. A native implementation would need a portable
+fallback and an explicit correctness boundary against that reference.
+
+### Search comparison
+
+Use the first command in this guide to reproduce the added
+`lookup-block-*` workloads. Five warm-cache trials on the same host
+compared the two searches with lazy checks on the same fixed-format files.
+[Raw search trials](block-search-trials.csv)
+
+| Rows per block | Row search with reuse | Two-level search | Block reads per lookup, row / two-level |
+| --- | ---: | ---: | ---: |
+| 1 | 6.77 µs | 6.43 µs | 13.45 / 13.45 |
+| 63 | 11.94 µs | 11.65 µs | 7.93 / 7.59 |
+| 255 | 25.20 µs | 24.57 µs | 5.70 / 5.67 |
+| 1,023 | 55.82 µs | 65.28 µs | 3.52 / 4.07 |
+
+The timings are mixed lookup medians. Keep row search with reuse as the
+consolidation candidate. It already gives comparable results at the smaller
+sizes and needs only the retained-block invariant above. The two-level
+experiment reads the last key from the data block. An index of fence keys
+would be a different experiment with additional persistent metadata.
+
+Both alignment writers now sync through the descriptor that wrote and flushed
+the image, before opening a read handle. The corrected sequence was exercised
+with three trials. The original measurements are retained above.
+[Raw trials with original-descriptor sync](aligned-synced-trials.csv)

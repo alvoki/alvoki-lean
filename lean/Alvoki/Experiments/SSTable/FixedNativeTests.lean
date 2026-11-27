@@ -99,6 +99,14 @@ private def checkExtent (dir : System.FilePath) : IO Unit := do
     check ((← ok (table.seek (byte 255))) == count) "fixed seek past end"
     check ((← ok (table.seek ⟨#[127, 0]⟩)) == 128) "fixed query need not match stored width"
 
+    let handle ← IO.FS.Handle.mk path .read
+    let source := handleSource handle
+    let (opened, count) ← ok (Fixed.openLayout source)
+    for query in [ByteArray.empty, byte 0, byte 127, ⟨#[127, 0]⟩, byte 128, byte 130, byte 255] do
+      let expected ← ok (table.lookup query)
+      check ((← ok (Fixed.lookupByBlock source .lazy opened count query)) == expected)
+        "block search disagrees with row lookup"
+
 private def checkRelocation (dir : System.FilePath) : IO Unit := do
   let path := dir / "position"
   let otherPath := dir / "identity"
@@ -205,6 +213,37 @@ private def checkAlignment (dir : System.FilePath) : IO Unit := do
   let (layout, count, source) ← ok (Fixed.Aligned.openSource (Source.memory badBlock))
   expectError (Fixed.readEntry source layout count 255) "aligned bad block admitted"
 
+private def checkWholeFileSubstitution (dir : System.FilePath) : IO Unit := do
+  let expected := layout.tableId
+  let other := expected + 1
+  let path := dir / "bound-table"
+  let replacement := dir / "replacement"
+  discard <| build path layout [row 1]
+  discard <| build replacement { layout with tableId := other } [row 2]
+  let original ← ok (Fixed.openNativeChecked path expected)
+  check ((← ok (original.next 0)) == some (row 1, 1)) "checked original table"
+  IO.FS.rename replacement path
+  expectError (Fixed.openNativeChecked path expected) "checked open accepted a substituted table"
+  let substituted ← ok (Fixed.openNativeChecked path other)
+  check ((← ok (substituted.next 0)) == some (row 2, 1)) "substituted table must be valid in its own right"
+
+  let createAligned (file : System.FilePath) (id : UInt64) := do
+    let remaining ← IO.mkRef (some (row 1))
+    Fixed.Aligned.buildFileSynced file 1 2 4096 id do
+      let entry ← remaining.get
+      remaining.set none
+      return entry
+  let aligned := dir / "bound-aligned"
+  discard <| createAligned aligned expected
+  discard <| createAligned replacement other
+  let openAligned (id : UInt64) : IO (Except String (Fixed.Layout × Nat × Source (EIO String))) := do
+    let handle ← IO.FS.Handle.mk aligned .read
+    (Fixed.Aligned.openSourceChecked (handleSource handle) id).toBaseIO
+  check ((← openAligned expected).isOk) "checked original aligned table"
+  IO.FS.rename replacement aligned
+  check (!(← openAligned expected).isOk) "checked aligned open accepted substitution"
+  check ((← openAligned other).isOk) "replacement aligned table must be valid"
+
 def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkGolden dir
   checkExtent dir
@@ -213,6 +252,7 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkRequiredRead
   checkValidationPolicies dir
   checkAlignment dir
+  checkWholeFileSubstitution dir
   IO.println "immutable fixed SSTable native fixtures passed"
 
 end ImmutableSSTable.FixedNativeTests

@@ -155,6 +155,9 @@ private def runSample (dir : System.FilePath) (rows trial : Nat) (queries : Arra
         measureLookups (s!"lookup-reuse-{label}")
           (Fixed.lookupWithReuse source policy layout count)
           (Fixed.lookupWithReuse instrumented policy layout count) validations
+        measureLookups (s!"lookup-block-{label}")
+          (Fixed.lookupByBlock source policy layout count)
+          (Fixed.lookupByBlock instrumented policy layout count) validations
         measureRead rows trial format (s!"scan-next-{label}") rows bytes reads
           (scan table) (scan countTable) scanSum validations
         measureRead rows trial format (s!"scan-block-{label}") rows bytes reads
@@ -179,11 +182,10 @@ private def runAlignment (rows queries trials : Nat) : IO Unit := IO.FS.withTemp
         if index == rows then return none
         cursor.set (index + 1)
         return some (row index)
-      let written ← if aligned then Fixed.Aligned.buildFile path 8 8 4096 27 nextRow
-        else Fixed.buildFile path ⟨8, 8, 255, 27⟩ nextRow
+      let written ← if aligned then Fixed.Aligned.buildFileSynced path 8 8 4096 27 nextRow
+        else Fixed.buildFileSynced path ⟨8, 8, 255, 27⟩ nextRow
       unless written == rows do throw (IO.userError "alignment benchmark build count")
       let handle ← IO.FS.Handle.mk path .read
-      syncFileHandle handle
       let source := handleSource handle
       let fileBytes ← ok source.size
       let reads ← IO.mkRef (0, 0)

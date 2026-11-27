@@ -30,4 +30,11 @@ def openTable [Monad m] [MonadExceptOf String m] (source : Source m) : m (Table 
   let (layout, count) ← openLayout source
   return Table.ofReader count (readEntry source layout count)
 
+/-- Check the caller's expected ID before exposing a table handle. -/
+def openTableChecked [Monad m] [MonadExceptOf String m] (source : Source m)
+    (expectedTableId : UInt64) : m (Table m) := do
+  let (layout, count) ← openLayout source
+  unless layout.tableId = expectedTableId do throw "fixed SSTable table ID mismatch"
+  return Table.ofReader count (readEntry source layout count)
+
 end ImmutableSSTable.Fixed

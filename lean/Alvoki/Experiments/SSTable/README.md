@@ -137,6 +137,14 @@ verifies the packed block payload using the existing checksum, and padding
 is ignored. The aligned adapter is exercised by native fixtures and the
 benchmark.
 
+Use `Fixed.openNativeChecked` when the expected table ID is available from
+the caller's catalog or manifest. It checks the footer ID before returning the
+handle, without scanning the blocks. The aligned experiment has the same check
+in `Fixed.Aligned.openSourceChecked`. Assign a fresh ID to each table generation
+to detect substitution by another intact file. Reuse of an ID leaves same-ID
+substitution undetectable. The check is an identity comparison and does not
+authenticate file contents.
+
 ## Roadmap
 
 A minimal LSM can build sorted, unique byte rows, publish the completed file
