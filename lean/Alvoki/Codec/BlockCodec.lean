@@ -1,4 +1,4 @@
-import PackedRun
+import Alvoki.Codec.PackedRun
 import Alvoki.Codec.ByteWords
 
 namespace Alvoki.Packed

@@ -1,5 +1,5 @@
 import Optimizations
-import PackedRun
+import Alvoki.Codec.PackedRun
 
 namespace Alvoki.Packed
 open Alvoki.Opt

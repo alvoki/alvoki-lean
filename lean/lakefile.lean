@@ -29,7 +29,8 @@ lean_lib OptProofs where
 lean_lib Packed
 
 @[default_target]
-lean_lib PackedRun
+lean_lib PackedRun where
+  roots := #[`Alvoki.Codec.PackedRun]
 
 lean_lib PackedView where
   roots := #[`Alvoki.Codec.PackedView]
@@ -65,7 +66,8 @@ lean_lib Compaction where
 lean_lib SpanMerge where
   roots := #[`Alvoki.Experiments.Merge.SpanMerge]
 
-lean_lib BlockCodec
+lean_lib BlockCodec where
+  roots := #[`Alvoki.Codec.BlockCodec]
 
 lean_lib CompactionModel where
   roots := #[`Alvoki.Compaction.Model]

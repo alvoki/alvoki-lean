@@ -1,4 +1,4 @@
-import BlockCodec
+import Alvoki.Codec.BlockCodec
 
 namespace Alvoki.Packed
 open Alvoki.Opt

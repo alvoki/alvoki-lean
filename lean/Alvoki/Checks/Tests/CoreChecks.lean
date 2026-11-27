@@ -1,4 +1,4 @@
-import BlockCodec
+import Alvoki.Codec.BlockCodec
 
 open Alvoki Alvoki.Packed
 

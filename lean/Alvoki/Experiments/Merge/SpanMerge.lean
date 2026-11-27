@@ -1,4 +1,4 @@
-import PackedRun
+import Alvoki.Codec.PackedRun
 
 namespace Alvoki.Packed
 open Alvoki.Opt Alvoki.ScopedBytes MergeModel

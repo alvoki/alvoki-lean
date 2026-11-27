@@ -12,7 +12,7 @@ export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
   lake env leanc @.lake/build/bin/alvoki-merge-phases.rsp .lake/fixed-copy.o \
     -Wl,--wrap=lean_byte_array_copy_slice -o .lake/build/bin/alvoki-merge-phases-fixed
   python3 runtime-experiment/inline.py
-  for module in MergePhases PackedRun; do
+  for module in MergePhases Alvoki/Codec/PackedRun; do
     lake env leanc -O3 -DNDEBUG -DLEAN_EXPORTING -ffunction-sections -fdata-sections -fPIC -fvisibility=hidden -fstack-clash-protection -ffp-contract=off       -c ".lake/fixed-inline/$module.c" -o ".lake/fixed-inline/$module.o"
   done
   lake env leanc @.lake/fixed-inline/link.rsp -o .lake/build/bin/alvoki-merge-phases-inline
