@@ -1,7 +1,7 @@
 # ALVSST05 benchmark matrix
 
 ```sh
-taskset -c 0 bash scripts/check-unified-sstable.sh --bench
+taskset -c 0 bash scripts/check-immutable-sstable.sh --bench
 ```
 
 Run from the repository root on Linux x86-64 with the pinned Lean toolchain,
@@ -11,8 +11,10 @@ with lazy verification and the same two-level index.
 
 Each file holds 65,537 ordered rows. Fixed fields contain 8 bytes. Variable
 keys contain 8–15 bytes and variable values 8–23 bytes, using deterministic
-suffixes. ALVSST03 receives the exact same bytes for each row in its paired
-case and uses its existing FNV-1a format. Each case runs the same deterministic
+suffixes. The ALVSST03 comparison in the earlier matrix used the same input
+bytes for each paired case. Reproduce that baseline at
+[commit cb35d0f5](https://github.com/alvoki/alvoki-lean/tree/cb35d0f5).
+The current runner exercises ALVSST05. Each case runs the same deterministic
 sequence of 4,096 mixed lookups, plus the hit and miss subsets separately.
 The scan walks all rows via the public `next` operation.
 

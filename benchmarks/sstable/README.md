@@ -6,7 +6,9 @@ measure the earlier ALVSST03 and ALVSST04 FNV-1a layouts. The alignment,
 validation-policy and two-level data-block search numbers describe those
 historical layouts.
 
-Run from the repository root with the pinned Lean toolchain and a C compiler.
+Reproduce the historical FNV-1a measurements at
+[commit cb35d0f5](https://github.com/alvoki/alvoki-lean/tree/cb35d0f5), from the
+repository root with the pinned Lean toolchain and a C compiler.
 
 ```sh
 taskset -c 0 bash benchmarks/sstable/run-fixed.sh 8193 512 5 > policy-trials.csv

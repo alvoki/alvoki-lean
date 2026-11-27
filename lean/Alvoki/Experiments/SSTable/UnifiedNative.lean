@@ -6,9 +6,9 @@ import Alvoki.Experiments.SSTable.Native
 namespace ImmutableSSTable.Unified
 
 def openNativeChecked (path : System.FilePath) (expectedId : UInt64) :
-    EIO String (Handle (EIO String)) := do
+    EIO String (Table (EIO String)) := do
   let handle ← (IO.FS.Handle.mk path .read).toEIO toString
-  openChecked (handleSource handle) nativeCRC32C expectedId
+  openTableChecked (handleSource handle) nativeCRC32C expectedId
 
 private def buildFileWithSync (path : System.FilePath) (layout : Layout)
     (nextRow : IO (Option Entry)) (options : BuildOptions)

@@ -311,12 +311,8 @@ private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCas
       source.readAt offset count
   }
   let openFor := fun input => do
-    if configuration.label == "ALVSST03" then
-      let table ← openTable input
-      return (table.lookup, table.next)
-    else
-      let handle ← Unified.openChecked input Unified.nativeCRC32C layout.tableId
-      return (handle.lookup, handle.next)
+    let table ← Unified.openTableChecked input Unified.nativeCRC32C layout.tableId
+    return (table.lookup, table.next)
   for trial in [:3] do
     let start ← IO.monoNanosNow
     discard <| ok (openFor source)
@@ -336,23 +332,20 @@ def benchmark : IO Unit := IO.FS.withTempDir fun dir => do
       ("fixed-fixed", some 8, some 8), ("fixed-variable", some 8, none),
       ("variable-fixed", none, some 8), ("variable-variable", none, none)] do
     let layout : Unified.Layout := ⟨keyWidth, valueWidth, 84⟩
-    for (dataTarget, leafTarget) in [(0, 0), (1024, 1024), (4096, 1024), (16384, 1024), (4096, 4096)] do
-      let legacy := dataTarget == 0
+    for (dataTarget, leafTarget) in [(1024, 1024), (4096, 1024), (16384, 1024), (4096, 4096)] do
       let path := dir / s!"{name}-{dataTarget}-{leafTarget}"
       let provider ← benchRows layout rows
       let start ← IO.monoNanosNow
-      let count ← if legacy then buildFile path provider
-        else Unified.buildFile path layout provider { dataTarget, leafTarget }
+      let count ← Unified.buildFile path layout provider { dataTarget, leafTarget }
       let buildTime := (← IO.monoNanosNow) - start
       check (count == rows) "benchmark build count"
       let image ← IO.FS.readBinFile path
-      let (leaves, blocks) ← if legacy then pure (#[], #[]) else readIndexes image
+      let (leaves, blocks) ← readIndexes image
       let configuration : BenchmarkCase :=
-        ⟨if legacy then "ALVSST03" else "ALVSST05", name, dataTarget, leafTarget,
+        ⟨"ALVSST05", name, dataTarget, leafTarget,
           leaves.size, blocks.size, image.size⟩
       report configuration "build" rows 0 buildTime
-      let indexStart := image.size - footerSize - 8 * (rows + 1)
-      let isIndex : Nat → Bool := if legacy then fun offset => decide (indexStart ≤ offset) else fun offset => leaves.any (·.offset == offset)
+      let isIndex : Nat → Bool := fun offset => leaves.any (·.offset == offset)
       benchmarkCase path configuration layout rows isIndex scanSum
       IO.FS.removeFile path
 

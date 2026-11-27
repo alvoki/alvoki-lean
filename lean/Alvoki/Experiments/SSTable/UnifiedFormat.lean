@@ -18,7 +18,7 @@ instance (layout : Layout) : Decidable layout.Valid := by
 def Layout.hasOffsets (layout : Layout) : Bool :=
   layout.keyWidth.isNone || layout.valueWidth.isNone
 
-private def Layout.keyLengthSize (layout : Layout) : Nat :=
+def Layout.keyLengthSize (layout : Layout) : Nat :=
   if layout.keyWidth.isNone && layout.valueWidth.isNone then 8 else 0
 
 def rowFits (layout : Layout) (row : Entry) : Bool :=
@@ -27,7 +27,7 @@ def rowFits (layout : Layout) (row : Entry) : Bool :=
 def entrySize (layout : Layout) (row : Entry) : Nat :=
   layout.keyLengthSize + row.key.size + row.value.size
 
-private def appendEntry (layout : Layout) (output : ByteArray) (row : Entry) : ByteArray :=
+def appendEntry (layout : Layout) (output : ByteArray) (row : Entry) : ByteArray :=
   let output :=
     if layout.keyLengthSize = 0 then output
     else Alvoki.pushWordFast output row.key.size.toUInt64
@@ -74,7 +74,7 @@ def openData (layout : Layout) (count : Nat) (bytes : ByteArray) : Except String
     unless bytes.size = count * rowSize do throw "invalid SSTable fixed data extent"
     return ⟨layout, count, bytes.size, bytes⟩
 
-private def Data.rowSpan (data : Data) (i : Nat) : Except String (Nat × Nat) := do
+def Data.rowSpan (data : Data) (i : Nat) : Except String (Nat × Nat) := do
   unless i < data.count do throw "SSTable block cursor out of bounds"
   if data.layout.hasOffsets then
     let left := data.payloadSize + 8 * i
@@ -86,11 +86,10 @@ private def Data.rowSpan (data : Data) (i : Nat) : Except String (Nat × Nat) :=
     let rowSize := data.layout.keyWidth.getD 0 + data.layout.valueWidth.getD 0
     return (i * rowSize, (i + 1) * rowSize)
 
-/-- Split a row at its layout-dependent key boundary, without exposing
-directory bytes as row data. -/
-def Data.readRow (data : Data) (i : Nat) : Except String Entry := do
-  let (start, stop) ← data.rowSpan i
-  let (keyStart, keyStop) ← match data.layout.keyWidth, data.layout.valueWidth with
+/-- Split the fields within a previously checked row span. -/
+@[inline] def readRowInSpan (layout : Layout) (bytes : ByteArray) (start stop : Nat) :
+    Except String Entry := do
+  let (keyStart, keyStop) ← match layout.keyWidth, layout.valueWidth with
     | some width, _ => do
       unless width ≤ stop - start do throw "invalid SSTable data key width"
       pure (start, start + width)
@@ -100,10 +99,15 @@ def Data.readRow (data : Data) (i : Nat) : Except String Entry := do
     | none, none => do
       let keyStart := start + 8
       unless keyStart ≤ stop do throw "invalid SSTable data key length field"
-      let width := (Alvoki.word data.bytes start).toNat
+      let width := (Alvoki.word bytes start).toNat
       unless width ≤ stop - keyStart do throw "invalid SSTable data key length"
       pure (keyStart, keyStart + width)
-  return ⟨data.bytes.extract keyStart keyStop, data.bytes.extract keyStop stop⟩
+  return ⟨bytes.extract keyStart keyStop, bytes.extract keyStop stop⟩
+
+/-- Read a row from the data region at its layout-dependent boundaries. -/
+def Data.readRow (data : Data) (i : Nat) : Except String Entry := do
+  let (start, stop) ← data.rowSpan i
+  readRowInSpan data.layout data.bytes start stop
 
 structure Ref where
   lastKey : ByteArray
@@ -113,11 +117,11 @@ structure Ref where
   count : Nat
   deriving DecidableEq
 
-private def refPrefixSize : Nat := 40
+def refPrefixSize : Nat := 40
 
 def indexEntrySize (lastKey : ByteArray) : Nat := refPrefixSize + lastKey.size
 
-private def appendRef (output : ByteArray) (ref : Ref) : ByteArray :=
+def appendRef (output : ByteArray) (ref : Ref) : ByteArray :=
   let output := Alvoki.pushWordFast output ref.offset.toUInt64
   let output := Alvoki.pushWordFast output ref.size.toUInt64
   let output := Alvoki.pushWordFast output ref.firstRow.toUInt64
@@ -128,7 +132,8 @@ private def appendRef (output : ByteArray) (ref : Ref) : ByteArray :=
 def encodeIndex (refs : Array Ref) : ByteArray :=
   refs.foldl appendRef ByteArray.empty
 
-private def decodeRefs (bytes : ByteArray) (atByte : Nat) (refs : Array Ref) :
+/-- Decode the remaining references from the byte position, extending `refs`. -/
+def decodeRefs (bytes : ByteArray) (atByte : Nat) (refs : Array Ref) :
     Nat → Except String (Array Ref)
   | 0 =>
     if atByte = bytes.size then .ok refs else .error "short SSTable index reference"
@@ -170,12 +175,12 @@ def magic : ByteArray := "ALVSST05".toUTF8
 
 def footerBodySize : Nat := 56
 
-private def variableWidth : UInt64 := 0xffffffffffffffff
+def variableWidth : UInt64 := 0xffffffffffffffff
 
-private def encodeWidth (width : Option Nat) : UInt64 :=
+def encodeWidth (width : Option Nat) : UInt64 :=
   width.map Nat.toUInt64 |>.getD variableWidth
 
-private def decodeWidth (width : UInt64) : Option Nat :=
+def decodeWidth (width : UInt64) : Option Nat :=
   if width = variableWidth then none else some width.toNat
 
 def encodeFooterBody (footer : Footer) : ByteArray :=

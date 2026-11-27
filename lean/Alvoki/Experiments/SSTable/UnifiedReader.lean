@@ -7,12 +7,12 @@ namespace ImmutableSSTable.Unified
 when needed. The source must remain immutable while the handle is live. -/
 structure Handle (m : Type → Type) where private mk ::
   rowCount : Nat
-  private source : Source m
-  private crc : Checksum
-  private layout : Layout
-  private root : Array Ref
+  source : Source m
+  crc : Checksum
+  layout : Layout
+  root : Array Ref
 
-private def readPacket [Monad m] [MonadExceptOf String m] (source : Source m)
+def readPacket [Monad m] [MonadExceptOf String m] (source : Source m)
     (crc : Checksum) (tableId kind : UInt64) (offset size endAt : Nat) : m ByteArray := do
   unless checksumSize ≤ size ∧ size ≤ maxRowSize ∧ offset + size ≤ endAt do
     throw "invalid SSTable packet extent"
@@ -20,16 +20,17 @@ private def readPacket [Monad m] [MonadExceptOf String m] (source : Source m)
   unless bytes.size = size do throw "short SSTable packet read"
   liftDecode (decodePacket crc tableId kind offset bytes)
 
-private def checkChildren (refs : Array Ref) (first count endAt : Nat) : Except String Unit := do
-  let mut expected := first
-  for ref in refs do
-    unless ref.firstRow = expected ∧ ref.offset + ref.size ≤ endAt do
-      throw "invalid SSTable child extent"
-    expected := expected + ref.count
-  unless expected = first + count do throw "invalid SSTable child row count"
+/-- Decoded indexes already check positive counts and adjacent row ranges,
+as well as increasing, nonoverlapping file extents. Check their outer bounds. -/
+def checkChildren (refs : Array Ref) (first count endAt : Nat) : Except String Unit := do
+  let some start := refs[0]? | throw "empty SSTable index"
+  let some last := refs.back? | throw "empty SSTable index"
+  unless start.firstRow = first ∧ last.firstRow + last.count = first + count ∧
+      last.offset + last.size ≤ endAt do
+    throw "invalid SSTable child extent"
 
-def openChecked [Monad m] [MonadExceptOf String m] (source : Source m)
-    (crc : Checksum) (expectedId : UInt64) : m (Handle m) := do
+def readFooter [Monad m] [MonadExceptOf String m] (source : Source m)
+    (crc : Checksum) : m (Footer × Nat) := do
   let size ← source.size
   let footerSize := footerBodySize + checksumSize
   unless footerSize ≤ size ∧ size ≤ maxFileSize do throw "invalid SSTable extent"
@@ -38,6 +39,11 @@ def openChecked [Monad m] [MonadExceptOf String m] (source : Source m)
   unless bytes.size = footerSize do throw "short SSTable footer read"
   let body ← liftDecode (decodePacket crc 0 4 0 bytes)
   let footer ← liftDecode (decodeFooterBody body)
+  return (footer, endAt)
+
+def openChecked [Monad m] [MonadExceptOf String m] (source : Source m)
+    (crc : Checksum) (expectedId : UInt64) : m (Handle m) := do
+  let (footer, endAt) ← readFooter source crc
   unless footer.layout.tableId = expectedId do throw "SSTable table ID mismatch"
   if footer.count = 0 then
     unless endAt = 0 do throw "invalid empty SSTable extent"
@@ -48,10 +54,10 @@ def openChecked [Monad m] [MonadExceptOf String m] (source : Source m)
   liftDecode (checkChildren root 0 footer.count footer.rootOffset)
   return ⟨footer.count, source, crc, footer.layout, root⟩
 
-private def findRef (refs : Array Ref) (before : Ref → Bool) : Option Ref :=
+def findRef (refs : Array Ref) (before : Ref → Bool) : Option Ref :=
   refs[Alvoki.lowerBound (fun i => (refs[i]?).elim false before) 0 refs.size]?
 
-private def Handle.readLeaf [Monad m] [MonadExceptOf String m] (handle : Handle m)
+def Handle.readLeaf [Monad m] [MonadExceptOf String m] (handle : Handle m)
     (parent : Ref) : m (Array Ref) := do
   let raw ← readPacket handle.source handle.crc handle.layout.tableId 2
     parent.offset parent.size maxFileSize
@@ -61,7 +67,7 @@ private def Handle.readLeaf [Monad m] [MonadExceptOf String m] (handle : Handle 
     throw "SSTable index fence mismatch"
   return refs
 
-private def Handle.readData [Monad m] [MonadExceptOf String m] (handle : Handle m)
+def Handle.readData [Monad m] [MonadExceptOf String m] (handle : Handle m)
     (ref : Ref) : m Data := do
   let raw ← readPacket handle.source handle.crc handle.layout.tableId 1
     ref.offset ref.size maxFileSize
@@ -70,7 +76,7 @@ private def Handle.readData [Monad m] [MonadExceptOf String m] (handle : Handle 
   unless last.key = ref.lastKey do throw "SSTable data fence mismatch"
   return data
 
-private def Handle.locate [Monad m] [MonadExceptOf String m] (handle : Handle m)
+def Handle.locate [Monad m] [MonadExceptOf String m] (handle : Handle m)
     (key : ByteArray) : m (Option (Ref × Data × Nat)) := do
   let before := fun (ref : Ref) => decide (ref.lastKey < key)
   let some parent := findRef handle.root before | return none
@@ -102,5 +108,13 @@ def Handle.next [Monad m] [MonadExceptOf String m] (handle : Handle m)
   let data ← handle.readData ref
   let row ← liftDecode (data.readRow (index - ref.firstRow))
   return some (row, index + 1)
+
+/-- The public handle uses these exact indexed operations. -/
+def Handle.table [Monad m] [MonadExceptOf String m] (handle : Handle m) : Table m :=
+  ⟨handle.rowCount, handle.lookup, handle.seek, handle.next⟩
+
+def openTableChecked [Monad m] [MonadExceptOf String m] (source : Source m)
+    (crc : Checksum) (expectedId : UInt64) : m (Table m) := do
+  return (← openChecked source crc expectedId).table
 
 end ImmutableSSTable.Unified
