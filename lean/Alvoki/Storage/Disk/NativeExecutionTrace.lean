@@ -52,7 +52,7 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
 import Alvoki.Storage.Disk.NativeRotationErrorReopen
 import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
 
-import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries
 import Alvoki.Storage.Disk.NativeContendedAliasAdmission
 
 namespace Alvoki.Storage.DiskSession

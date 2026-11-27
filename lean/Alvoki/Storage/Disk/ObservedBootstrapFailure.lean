@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.ObservedBootstrapCache
-import Alvoki.Storage.Disk.BoundedOpenReadFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.BoundedOpenReadFailure
 
 namespace Alvoki.Storage.WalSegmentRepair
 

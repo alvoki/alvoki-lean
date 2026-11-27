@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.FailedMarkerReadCensus
+import Alvoki.Storage.Disk.Proofs.Recovery.FailedMarkerReadCensus
 import Alvoki.Storage.Disk.CapturedMarkedReads
 
 namespace Alvoki.Storage.DiskSession

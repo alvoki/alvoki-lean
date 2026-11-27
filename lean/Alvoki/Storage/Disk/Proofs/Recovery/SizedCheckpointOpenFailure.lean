@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.BoundedOpenReadFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.BoundedOpenReadFailure
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
 
 namespace Alvoki.Storage.WalSegmentRepair

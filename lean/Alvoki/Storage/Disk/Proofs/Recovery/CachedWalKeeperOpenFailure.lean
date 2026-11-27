@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CachedWalOpenFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalOpenFailure
 import Alvoki.Storage.Disk.SyncHandleRouting
 
 namespace Alvoki.Storage.SyncHandleRouting

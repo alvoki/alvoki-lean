@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.CachedOpenRejection
-import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedOpenRejection
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalKeeperOpenFailure
 
 namespace Alvoki.Storage.DiskSession
 

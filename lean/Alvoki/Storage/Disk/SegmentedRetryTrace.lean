@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.LockDescriptionLifetime
-import Alvoki.Storage.Disk.BoundedReopenFailure
-import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.BoundedReopenFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalMarkerOpenFailure
 
 namespace Alvoki.Storage.WalSegmentRepair
 

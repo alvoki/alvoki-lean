@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries
 
 namespace Alvoki.Storage.DiskSession
 

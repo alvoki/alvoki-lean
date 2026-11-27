@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CachedOpenRejection
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedOpenRejection
 import Alvoki.Storage.Disk.OptionalFileRead
 
 namespace Alvoki.WAL.Boundary

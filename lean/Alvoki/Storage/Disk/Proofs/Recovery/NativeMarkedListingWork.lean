@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.FailedCheckpointDigestCensus
+import Alvoki.Storage.Disk.Proofs.Recovery.FailedCheckpointDigestCensus
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenListingError
 import Alvoki.Storage.Disk.Proofs.Recovery.MetadataRecoveryChunkWork
 

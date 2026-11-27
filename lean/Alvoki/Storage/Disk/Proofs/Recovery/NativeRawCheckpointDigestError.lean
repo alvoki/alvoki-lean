@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.FailedCheckpointDigestCensus
-import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+import Alvoki.Storage.Disk.Proofs.Recovery.FailedCheckpointDigestCensus
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries
 import Alvoki.Storage.Disk.NativeMarkedTableOpen
 
 namespace Alvoki.Storage.DiskSession

@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
 import Alvoki.Storage.Disk.NativeRawUncertainWrite
 import Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
-import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries
 import Alvoki.Storage.Disk.WalSegmentRepairEffects
 
 namespace Alvoki.Storage.DiskSession

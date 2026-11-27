@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CachedWalMarkerOpenFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalMarkerOpenFailure
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointDigestError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawPresentManifestListing
 

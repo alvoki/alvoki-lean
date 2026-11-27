@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.Proofs.Recovery.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyClose
 
-import Alvoki.Storage.Disk.NativeCacheOpenRejection
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeCacheOpenRejection
 
 namespace Alvoki.Storage.DiskSession
 

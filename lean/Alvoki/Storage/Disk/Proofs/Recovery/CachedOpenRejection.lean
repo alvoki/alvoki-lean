@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.SizedCheckpointOpenFailure
 
 namespace Alvoki.Storage.DiskSession
 
