@@ -11,7 +11,7 @@ import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.WalBatch
 import Alvoki.Storage.Disk.WalSegmentCommit
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
-import Alvoki.Storage.Disk.WalSegmentCollectionPlan
+import Alvoki.Storage.Disk.WAL.CollectionPlan
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
 import Alvoki.Storage.Publication.CheckpointPublication

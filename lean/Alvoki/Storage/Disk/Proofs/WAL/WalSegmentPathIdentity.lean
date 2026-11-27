@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentCollection
+import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollection
 import Alvoki.Storage.Disk.WalSegmentFileName
 
 namespace Alvoki.Storage

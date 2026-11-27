@@ -506,7 +506,9 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionKe
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionRetryPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointRetained
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentUnlinkSchedule
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionPlan
+lake env leanchecker Alvoki.Storage.Publication.DirectoryBindings
+lake env leanchecker Alvoki.Storage.Disk.WAL.CollectionRange
+lake env leanchecker Alvoki.Storage.Disk.WAL.CollectionPlan
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollectionMetadata
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.WalCollectionPreflight
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.WalCollectionFirstUnlink
@@ -595,7 +597,7 @@ lake env leanchecker Alvoki.Storage.Disk.RetainedWalReplay
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.RetainedWalBoundary
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentFileName
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentPathIdentity
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollection
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollection
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRecovery
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationIO
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation

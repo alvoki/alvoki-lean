@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.RecoverySizedReads
 import Alvoki.Storage.Disk.RecoveryRequestCount
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
-import Alvoki.Storage.Disk.WalSegmentCollectionPlan
+import Alvoki.Storage.Disk.WAL.CollectionPlan
 
 namespace Alvoki.Storage.WalSegmentRepair
 

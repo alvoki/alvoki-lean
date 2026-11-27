@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.Proofs.Checkpoint.MarkedCheckpointReady
 import Alvoki.Storage.Disk.Proofs.Read.RecoveredPinRefinement
 import Alvoki.Storage.Disk.Proofs.WAL.RetainedWalBoundary
 import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointLineage
-import Alvoki.Storage.Disk.WalSegmentCollection
+import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollection
 
 namespace Alvoki.Storage
 
