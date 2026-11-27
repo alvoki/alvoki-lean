@@ -95,16 +95,35 @@ private def refuseNonempty (dir : FilePath) : IO Unit := do
     throw <| IO.userError "initialization changed existing segment"
   if ← (dir / "policy").pathExists then throw <| IO.userError "created policy in nonempty directory"
 
+private def refuseOldPolicy (dir : FilePath) (policy : Policy) : IO Unit := do
+  -- Reconstruct a valid old directory with one acknowledged batch [9].
+  let stamp := if policy == .boundary then "v2 boundary" else "v1 log"
+  IO.FS.writeFile (dir / "policy") stamp
+  let segment : ByteArray := ⟨#[42, 1, 1, 1, 118, 9, 153]⟩
+  IO.FS.writeBinFile (dir / "segment") segment
+  if policy == .boundary then
+    IO.FS.writeBinFile (dir / "commit.0") ⟨#[77, 1, 1, 0, 0, 0, 162]⟩
+    IO.FS.writeBinFile (dir / "commit.1") ⟨#[77, 1, 1, 1, 0, 7, 126]⟩
+  let opened ← (SingleFile.openExisting dir).toBaseIO
+  unless opened matches .error (.userError "unrecognized WAL policy") do
+    throw <| IO.userError s!"failed to reject old policy {stamp}"
+  unless (← IO.FS.readBinFile (dir / "segment")) == segment do
+    throw <| IO.userError "old segment changed during rejected open"
+
 /-- The runner limits regular files to 1024 bytes and ignores SIGXFSZ. The
-27th frame can write only its first 36 bytes before the OS rejects the rest. -/
+first 19 frames occupy 988 bytes. Only 36 bytes of the 20th frame fit. -/
 private def partialWrite (dir : FilePath) (policy : Policy) : IO Unit := do
   let h ← SingleFile.create dir policy
-  let batches := (List.range 26).map fun i => List.replicate 32 i.toUInt8
+  let batches := (List.range 19).map fun i => List.replicate 32 i.toUInt8
   for batch in batches do SingleFile.append h batch
-  let uncertain ← (SingleFile.append h (List.replicate 32 99)).toBaseIO
+  let segment := dir / "segment"
+  let confirmed ← IO.FS.readBinFile segment
+  unless confirmed.size == 988 do throw <| IO.userError "unexpected confirmed segment size"
+  let submitted := List.replicate 32 99
+  let uncertain ← (SingleFile.append h submitted).toBaseIO
   unless uncertain matches .error _ do throw <| IO.userError "expected a write error"
-  unless (← IO.FS.readBinFile (dir / "segment")).size == 1024 do
-    throw <| IO.userError "expected a partial frame on disk"
+  unless (← IO.FS.readBinFile segment) == confirmed ++ encodeBytes ((frame 20 submitted).take 36) do
+    throw <| IO.userError "expected 36 bytes of frame 20 after the confirmed prefix"
   SingleFile.close h
   let recovered ← SingleFile.openExisting dir
   unless (← SingleFile.scan recovered) == batches do throw <| IO.userError "lost ACK after partial write"
@@ -127,5 +146,6 @@ def main (args : List String) : IO Unit := do
   for policy in [WalRecoverySlice.Policy.logOnly, .boundary] do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.fixture dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.handleRegressions dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
   IO.FS.withTempDir WalRecoveryFiles.refuseNonempty
   IO.println "WAL recovery file fixtures passed"

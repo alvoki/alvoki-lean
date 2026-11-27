@@ -33,7 +33,7 @@ private theorem Written.slotOutcome (written : Written) (old : Bytes) (endPos se
     · exact .inr (.inl ⟨count, rfl⟩)
     · cases residue with
       | none => exact .inr (.inl ⟨count, rfl⟩)
-      | some m => exact .inr (.inr (decodeMarker_bad_check _ _ _ _ _ _ _ _ m.damaged))
+      | some m => exact .inr (.inr (decodeMarker_bad_check _ _ _ _ _ _ _ _ m.checkLength m.damaged))
 
 private theorem Image.marker_updated (image : Image) (slot : Nat) (file : FileImage) :
     (image.withMarker slot file).marker slot = file := by

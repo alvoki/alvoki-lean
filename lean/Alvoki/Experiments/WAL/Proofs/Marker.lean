@@ -2,7 +2,7 @@ import Alvoki.Experiments.WAL.Recovery
 
 namespace WalRecoverySlice
 
-/-- The bounded cursor fields round-trip through the seven on-disk bytes. -/
+/-- The bounded cursor fields round-trip through the fourteen on-disk bytes. -/
 theorem decodeMarker_encode (offset seq : Nat) (hs : seq < 256) (ho : offset < 65536)
     (empty : seq = 0 ↔ offset = 0) :
     decodeMarker (seq % 2) (encodeMarker offset seq) = .ok (some ⟨offset, seq⟩) := by
@@ -16,12 +16,12 @@ theorem decodeMarker_encode (offset seq : Nat) (hs : seq < 256) (ho : offset < 6
   · have hp : offset > 0 := by omega
     simp [decodeMarker, encodeMarker, markerSize, seqByte, high, low, combine, hp, Nat.pos_of_ne_zero hz] <;> rfl
 
-/-- An in-place partial overwrite may leave all seven bytes readable. A bad
-check byte still excludes this slot, independently of the six field values. -/
-theorem decodeMarker_bad_check (slot : Nat) (magic format gen seq hi lo check : UInt8)
-    (bad : check ≠ (checksum [magic, format, gen, seq, hi, lo]).toUInt8) :
-    decodeMarker slot [magic, format, gen, seq, hi, lo, check] = .ok none := by
-  simp [decodeMarker, markerSize, bad] <;> rfl
+/-- Any full-length torn overwrite with an incorrect checksum is rejected as a
+candidate, independently of its six cursor fields. -/
+theorem decodeMarker_bad_check (slot : Nat) (magic format gen seq hi lo : UInt8) (check : Bytes)
+    (size : check.length = 8) (bad : check ≠ checksumBytes [magic, format, gen, seq, hi, lo]) :
+    decodeMarker slot ([magic, format, gen, seq, hi, lo] ++ check) = .ok none := by
+  simp [decodeMarker, markerSize, size, bad] <;> rfl
 
 /-- A detectable incomplete overwrite of the other slot preserves the valid cursor. -/
 theorem selectMarker_one {a b : Bytes} {m : Marker}

@@ -6,13 +6,19 @@ inductive Policy where | logOnly | boundary deriving BEq, Repr
 abbrev Bytes := List UInt8
 
 private def maxPayload := 32
-private def frameOverhead := 6 -- four header fields and two check bytes
+private def frameOverhead := 20 -- four header bytes and two eight-byte checksums
 
-def checksum (xs : Bytes) : Nat := xs.foldl (fun a b => (a * 31 + b.toNat) % 251) 7
+/-- Eight little-endian bytes of Lean's standard 64-bit list hash. -/
+def checksumBytes (xs : Bytes) : Bytes :=
+  let h : UInt64 := hash xs
+  [h.toUInt8, (h >>> 8).toUInt8, (h >>> 16).toUInt8, (h >>> 24).toUInt8,
+   (h >>> 32).toUInt8, (h >>> 40).toUInt8, (h >>> 48).toUInt8, (h >>> 56).toUInt8]
+
+@[simp] theorem checksumBytes_length (xs : Bytes) : (checksumBytes xs).length = 8 := rfl
 
 def frame (seq : Nat) (payload : Bytes) : Bytes :=
   let header : Bytes := [42, 1, seq.toUInt8, payload.length.toUInt8]
-  header ++ [(checksum header).toUInt8] ++ payload ++ [(checksum (header ++ payload)).toUInt8]
+  header ++ checksumBytes header ++ payload ++ checksumBytes (header ++ payload)
 
 /-- Append position established by a successful append or open, for this segment only. -/
 structure Cursor where
@@ -36,30 +42,31 @@ def scan (bytes : Bytes) (limit : Nat) (policy : Policy) : Except String Decoded
       else Except.error reason
     match rest with
     | [] => return complete ()
-    | magic :: gen :: seqByte :: lenByte :: headerCheck :: tail =>
+    | magic :: gen :: seqByte :: lenByte :: tail =>
       let header := [magic, gen, seqByte, lenByte]
-      if headerCheck != (checksum header).toUInt8 then
+      let headerCheck := tail.take 8
+      let body := tail.drop 8
+      if headerCheck != checksumBytes header then
         return ← torn "damaged header" (maxPayload + frameOverhead)
       if magic != 42 || gen != 1 || seqByte.toNat != seq then throw "gap or generation mismatch"
       let len := lenByte.toNat
       if len > maxPayload then throw "invalid batch length"
-      let (payload, trailer) := tail.splitAt len
+      let (payload, trailer) := body.splitAt len
       let total := len + frameOverhead
-      let check :: remaining := trailer | return ← torn "short batch" total
-      if check != (checksum (header ++ payload)).toUInt8 then
+      if trailer.take 8 != checksumBytes (header ++ payload) then
         return ← torn "damaged batch" total
-      loop fuel (pos + total) (seq + 1) remaining (payload :: acc)
+      loop fuel (pos + total) (seq + 1) (trailer.drop 8) (payload :: acc)
     | _ => return ← torn "short header" frameOverhead
   let selected := bytes.take limit
   if selected.length != limit then throw "missing bytes"
   loop (limit + 1) 0 1 selected []
 
-def markerSize : Nat := 7
+def markerSize : Nat := 14
 
-/-- Seven-byte fixed record; checksum is a torn-write detector, not authentication. -/
+/-- Six cursor fields followed by an eight-byte little-endian checksum. -/
 def encodeMarker (endPos lastSeq : Nat) : Bytes :=
-  let fields : Bytes := [77, 1, 1, lastSeq.toUInt8, (endPos / 256).toUInt8, (endPos % 256).toUInt8]
-  fields ++ [(checksum fields).toUInt8]
+  let fields : Bytes := [77, 2, 1, lastSeq.toUInt8, (endPos / 256).toUInt8, (endPos % 256).toUInt8]
+  fields ++ checksumBytes fields
 
 structure Marker where
   endPos : Nat
@@ -69,13 +76,14 @@ structure Marker where
 wrong format, generation, slot, or empty-cursor fields is a protocol error. -/
 def decodeMarker (slot : Nat) (bytes : Bytes) : Except String (Option Marker) := do
   if bytes.length > markerSize then throw "oversized marker file"
+  if bytes.length < markerSize then return none
   match bytes with
-  | [magic, format, generation, seq, hi, lo, check] =>
+  | magic :: format :: generation :: seq :: hi :: lo :: check =>
     let fields : Bytes := [magic, format, generation, seq, hi, lo]
-    if check != (checksum fields).toUInt8 then return none
+    if check != checksumBytes fields then return none
     let n := seq.toNat
     let offset := hi.toNat * 256 + lo.toNat
-    if magic != 77 || format != 1 || generation != 1 || n % 2 != slot ||
+    if magic != 77 || format != 2 || generation != 1 || n % 2 != slot ||
         !((n == 0 && offset == 0) || (n > 0 && offset > 0)) then
       throw "invalid marker fields"
     return some ⟨offset, n⟩

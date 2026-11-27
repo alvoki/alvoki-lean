@@ -80,7 +80,7 @@ def Primitive.syncResult (outcome : Primitive) (image : Image) (file : FileImage
   | .after none => .ok (.ok ()) (replace { file with durable := file.live })
   | .after (some abort) => abort.result (replace { file with durable := file.live })
 
-/-- A full-length torn slot can contain arbitrary fields whose check byte fails.
+/-- A full-length torn slot can contain arbitrary fields whose stored hash fails validation.
 This admits, in particular, the new prefix plus old suffix of an in-place overwrite. -/
 structure DamagedMarker where
   magic : UInt8
@@ -89,11 +89,12 @@ structure DamagedMarker where
   sequence : UInt8
   high : UInt8
   low : UInt8
-  check : UInt8
-  damaged : check ≠ (checksum [magic, format, generation, sequence, high, low]).toUInt8
+  check : Bytes
+  checkLength : check.length = 8
+  damaged : check ≠ checksumBytes [magic, format, generation, sequence, high, low]
 
 def DamagedMarker.bytes (m : DamagedMarker) : Bytes :=
-  [m.magic, m.format, m.generation, m.sequence, m.high, m.low, m.check]
+  [m.magic, m.format, m.generation, m.sequence, m.high, m.low] ++ m.check
 
 def markerFragment (residue : Option DamagedMarker) (_old fragment : Bytes) : Bytes :=
   if fragment.length = markerSize then fragment else (residue.map DamagedMarker.bytes).getD fragment

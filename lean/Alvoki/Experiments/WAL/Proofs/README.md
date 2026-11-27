@@ -4,6 +4,8 @@ Start with the [batch-level client contract](../Contract.lean). It defines the
 histories a writer may observe. [`Run.refines`](Execution.lean) checks that every
 modeled trace of the [single-file WAL](../README.md) obeys it.
 `Run.healthy_open` establishes that recovery can return once the faults stop.
+The [policy comparison](Policy.lean) shows which complete suffix each mode
+adopts and how an intact marker detects a missing published suffix.
 
 An open writer holds a settled history. An abandoned writer can leave two
 possible histories, distinguished by the last outstanding batch.

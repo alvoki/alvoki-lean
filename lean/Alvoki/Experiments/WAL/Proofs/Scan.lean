@@ -8,8 +8,17 @@ def encodeFrames (first : Nat) : List Bytes → Bytes
   | payload :: rest => frame first payload ++ encodeFrames (first + 1) rest
 
 theorem frame_length (seq : Nat) (payload : Bytes) :
-    (frame seq payload).length = payload.length + 6 := by
+    (frame seq payload).length = payload.length + 20 := by
   simp [frame]
+  omega
+
+private theorem checksum_take (xs : Bytes) : (checksumBytes xs).take 8 = checksumBytes xs := by
+  rw [← checksumBytes_length xs]
+  exact List.take_length
+
+private theorem checksum_drop (xs : Bytes) : (checksumBytes xs).drop 8 = [] := by
+  rw [← checksumBytes_length xs]
+  exact List.drop_length
 
 private theorem step_frame (policy : Policy) (fuel pos seq : Nat) (payload rest : Bytes)
     (acc : List Bytes) (fits : seq ≤ 255) (bounded : payload.length ≤ 32) :
@@ -19,7 +28,7 @@ private theorem step_frame (policy : Policy) (fuel pos seq : Nat) (payload rest 
   have lenByte : payload.length.toUInt8.toNat = payload.length :=
     Nat.mod_eq_of_lt (by omega : payload.length < 256)
   rw [frame_length, scan.loop.eq_def]
-  simp [frame, List.append_assoc, seqByte, lenByte, List.splitAt_eq]
+  simp [frame, List.append_assoc, seqByte, lenByte, List.splitAt_eq, List.take_append, List.drop_append, checksum_take, checksum_drop]
   split <;> rename_i h
   · change 32 < payload.length at h
     omega
@@ -107,34 +116,50 @@ theorem scan_preserves_encoded_prefix {batches : List Bytes} {bytes suffix : Byt
     rw [fuel, consume_frames _ _ _ _ _ _ _ (by omega) bounded] at success
     simpa using scanLoop_prefix success
 
+private theorem torn_short (fuel pos seq : Nat) (p : Bytes) (tail : Bytes) (acc : List Bytes)
+    (short : tail.length < p.length + 16) (fits : seq ≤ 255) (bounded : p.length ≤ 32) :
+    scan.loop .logOnly (fuel + 1) pos seq
+      ([42, 1, seq.toUInt8, p.length.toUInt8] ++ tail) acc =
+      .ok ⟨acc.reverse, ⟨pos, seq⟩⟩ := by
+  have seqByte : seq.toUInt8.toNat = seq := Nat.mod_eq_of_lt (by omega : seq < 256)
+  have lenByte : p.length.toUInt8.toNat = p.length := Nat.mod_eq_of_lt (by omega : p.length < 256)
+  rw [scan.loop.eq_def]
+  have sizeHeader : (42 :: 1 :: seq.toUInt8 :: p.length.toUInt8 :: tail).length ≤ 32 + 20 := by simp; omega
+  have sizeBatch : (42 :: 1 :: seq.toUInt8 :: p.length.toUInt8 :: tail).length ≤ p.length + 20 := by simp; omega
+  have noBound : ¬ p.length > 32 := by omega
+  have missingCheck (xs : Bytes) : (tail.drop (8 + p.length)).take 8 ≠ checksumBytes xs := by
+    intro h
+    have hlen := congrArg List.length h
+    simp only [List.length_take, checksumBytes_length, List.length_drop] at hlen
+    omega
+  change tail.length + 1 + 1 + 1 + 1 ≤ 32 + 20 at sizeHeader
+  change tail.length + 1 + 1 + 1 + 1 ≤ p.length + 20 at sizeBatch
+  simp [seqByte, lenByte, missingCheck]
+  repeat' first | split | rfl
+  all_goals
+    rename_i h
+    simp only [show (Policy.logOnly == Policy.logOnly) = true from rfl, true_and] at h
+    first
+    | change 32 < p.length at h; omega
+    | change ¬ (tail.length + 1 + 1 + 1 + 1 ≤ p.length + 20) at h; omega
+    | change ¬ (tail.length + 1 + 1 + 1 + 1 ≤ 32 + 20) at h; omega
+    | change tail.length + 1 + 1 + 1 + 1 ≤ p.length + 20 at h; contradiction
+    | change tail.length + 1 + 1 + 1 + 1 ≤ 32 + 20 at h; contradiction
+
 private theorem torn_frame (fuel pos seq : Nat) (p : Bytes) (acc : List Bytes)
     (cut : Nat) (short : cut < (frame seq p).length) (fits : seq ≤ 255)
     (bounded : p.length ≤ 32) :
     scan.loop .logOnly (fuel + 1) pos seq ((frame seq p).take cut) acc =
       .ok ⟨acc.reverse, ⟨pos, seq⟩⟩ := by
-  have seqByte : seq.toUInt8.toNat = seq := Nat.mod_eq_of_lt (by omega : seq < 256)
-  have lenByte : p.length.toUInt8.toNat = p.length :=
-    Nat.mod_eq_of_lt (by omega : p.length < 256)
-  rw [scan.loop.eq_def]
   match cut with
-  | 0 | 1 | 2 | 3 | 4 => rfl
-  | k + 5 =>
+  | 0 | 1 | 2 | 3 => rfl
+  | k + 4 =>
     rw [frame_length] at short
-    have within : k ≤ p.length := by omega
-    have tail (trailer : UInt8) : (p ++ [trailer]).take k = p.take k := by
-      simp [List.take_append, Nat.sub_eq_zero_of_le within]
-    have dropped : (p.take k).drop p.length = [] := List.drop_eq_nil_iff.mpr (by simp; omega)
-    simp [frame, tail, seqByte, lenByte, dropped, Nat.min_eq_left within]
-    split <;> rename_i h
-    · change 32 < p.length at h
-      omega
-    · split
-      · rfl
-      · rename_i h
-        simp at h
-        have impossible := h rfl
-        change p.length + 6 < k + 1 + 1 + 1 + 1 + 1 at impossible
-        omega
+    have t := torn_short fuel pos seq p
+      ((checksumBytes [42, 1, seq.toUInt8, p.length.toUInt8] ++ p ++
+        checksumBytes ([42, 1, seq.toUInt8, p.length.toUInt8] ++ p)).take k) acc
+      (by simp only [List.length_take, List.length_append, checksumBytes_length]; omega) fits bounded
+    simpa [frame, List.take_succ_cons, List.append_assoc] using t
 
 /-- Every proper byte prefix of the next genuine frame can be discarded on a
 log-only reopen, even after the entire header and payload reached the disk. -/

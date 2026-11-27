@@ -5,8 +5,7 @@ namespace WalRecoverySlice.Persistence
 /-- Fresh durable files after initialization of the caller-owned directory. -/
 def freshImage : Image :=
   let empty := encodeMarker 0 0
-  let spare := List.replicate markerSize 0
-  ⟨⟨[], []⟩, ⟨empty, empty⟩, ⟨spare, spare⟩⟩
+  ⟨⟨[], []⟩, ⟨empty, empty⟩, ⟨[], []⟩⟩
 
 /-- Format rejection happens before the first filesystem primitive. -/
 theorem append_rejected (policy : Policy) (effects : Effects) (cursor : Cursor) (payload : Bytes)

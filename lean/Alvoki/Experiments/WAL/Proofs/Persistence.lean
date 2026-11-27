@@ -74,7 +74,7 @@ def Ready (policy : Policy) (image : Image) (batches : List Bytes) : Prop :=
 
 theorem encoded_history_size (batches : List Bytes) (first : Nat)
     (bounded : ∀ b ∈ batches, b.length ≤ 32) :
-    (encodeFrames first batches).length ≤ 38 * batches.length := by
+    (encodeFrames first batches).length ≤ 52 * batches.length := by
   induction batches generalizing first with
   | nil => simp [encodeFrames]
   | cons head rest ih =>
@@ -202,11 +202,7 @@ private theorem select_newest {image : Image} {slot : Nat} {selected : Marker} {
 
 private theorem decodeMarker_short (slot : Nat) {bytes : Bytes} (short : bytes.length < markerSize) :
     decodeMarker slot bytes = .ok none := by
-  unfold decodeMarker
-  simp only [ite_eq_right (Nat.not_lt_of_ge (Nat.le_of_lt short))]
-  split
-  · simp [markerSize] at short
-  · rfl
+  simp [decodeMarker, short, Nat.not_lt_of_ge (Nat.le_of_lt short)] <;> rfl
 
 private theorem emptyFrames_iff (batches : List Bytes) :
     batches.length = 0 ↔ (encodeFrames 1 batches).length = 0 := by

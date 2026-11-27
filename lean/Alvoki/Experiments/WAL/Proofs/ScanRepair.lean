@@ -14,12 +14,15 @@ private theorem boundaryLoop_end {fuel pos seq : Nat} {rest : Bytes}
     repeat' first | split at success | contradiction | simp_all only [Except.pure, pure]
     all_goals try {cases success; simp_all}
     all_goals
-      rename_i rest magic gen seqByte lenByte headerCheck tail h1 h2 h3 trailer check remaining heq h4
+      rename_i rest magic gen seqByte lenByte tail h1 h2 h3 h4
       have endEq := ih success
-      have lenEq := congrArg List.length heq
-      simp only [List.splitAt_eq, List.length_drop, List.length_cons] at lenEq
+      simp only [bne_iff_ne] at h4
+      have heq := Classical.not_not.mp h4
+      have hlen := congrArg List.length heq
+      simp only [List.length_take, checksumBytes_length, List.splitAt_eq, List.length_drop] at hlen
+      change d.cursor.endPos = pos + (lenByte.toNat + 20) + _ at endEq
+      simp only [List.splitAt_eq, List.length_drop] at endEq
       simp only [List.length_cons] at ⊢
-      change d.cursor.endPos = pos + (_ + 6) + _ at endEq
       omega
 
 private theorem loop_repair {policy : Policy} {fuel pos seq : Nat} {rest : Bytes}
@@ -43,49 +46,63 @@ private theorem loop_repair {policy : Policy} {fuel pos seq : Nat} {rest : Bytes
       | succ k => rw [scan.loop.eq_def]; rfl
     }
     all_goals
-      rename_i rest magic gen seqByte lenByte headerCheck tail h1 h2 h3 trailer check remaining heq h4
+      rename_i rest magic gen seqByte lenByte tail h1 h2 h3 h4
       have recResult := ih success
-      change pos + (lenByte.toNat + 6) ≤ d.cursor.endPos ∧ d.cursor.endPos ≤ pos + (lenByte.toNat + 6) + remaining.length ∧ _ at recResult
-      have dropEq : tail.drop lenByte.toNat = check :: remaining := by simpa [List.splitAt_eq] using heq
-      have lenEq := congrArg List.length dropEq
-      simp only [List.length_drop, List.length_cons] at lenEq
-      have tailEq : tail = tail.take lenByte.toNat ++ check :: remaining := by
-        have t := List.take_append_drop lenByte.toNat tail
-        rw [dropEq] at t
-        exact t.symm
-      have takeLen : (tail.take lenByte.toNat).length = lenByte.toNat := by
-        simp only [List.length_take]
-        omega
+      change pos + (lenByte.toNat + 20) ≤ d.cursor.endPos ∧ d.cursor.endPos ≤ pos + (lenByte.toNat + 20) + _ ∧ _ at recResult
+      simp only [bne_iff_ne] at h4
+      have checkEq := Classical.not_not.mp h4
+      have checkLength := congrArg List.length checkEq
+      simp only [List.length_take, checksumBytes_length, List.splitAt_eq, List.length_drop] at checkLength
+      let payload := (tail.drop 8).take lenByte.toNat
+      let check := ((tail.drop 8).drop lenByte.toNat).take 8
+      let remaining := ((tail.drop 8).drop lenByte.toNat).drop 8
+      have headLen : (tail.take 8).length = 8 := by simp only [List.length_take]; omega
+      have payloadLen : payload.length = lenByte.toNat := by dsimp [payload]; simp only [List.length_take, List.length_drop]; omega
+      have checkLen : check.length = 8 := by dsimp [check]; simp only [List.length_take, List.length_drop]; omega
+      have tailEq : tail = tail.take 8 ++ payload ++ check ++ remaining := by
+        have a := List.take_append_drop 8 tail
+        have b := List.take_append_drop lenByte.toNat (tail.drop 8)
+        have c := List.take_append_drop 8 ((tail.drop 8).drop lenByte.toNat)
+        dsimp [payload, check, remaining]
+        rw [← c] at b
+        rw [← b] at a
+        simpa [List.append_assoc] using a.symm
       constructor
       · omega
       constructor
-      · simp only [List.length_cons]
+      · simp only [List.length_cons, List.splitAt_eq, List.length_drop] at recResult ⊢
         omega
       · intro fuel' enough
         cases fuel' with
         | zero => omega
         | succ k =>
-          let n := d.cursor.endPos - (pos + (lenByte.toNat + 6))
-          have diff : d.cursor.endPos - pos = 5 + lenByte.toNat + 1 + n := by dsimp [n]; omega
-          have pref : (magic :: gen :: seqByte :: lenByte :: headerCheck :: tail).take (d.cursor.endPos - pos) =
-              [magic, gen, seqByte, lenByte, headerCheck] ++ tail.take lenByte.toNat ++ [check] ++ remaining.take n := by
+          let n := d.cursor.endPos - (pos + (lenByte.toNat + 20))
+          have diff : d.cursor.endPos - pos = 4 + 8 + lenByte.toNat + 8 + n := by dsimp [n]; omega
+          have pref : (magic :: gen :: seqByte :: lenByte :: tail).take (d.cursor.endPos - pos) =
+              [magic, gen, seqByte, lenByte] ++ tail.take 8 ++ payload ++ check ++ remaining.take n := by
             rw [diff, tailEq]
-            have form : 5 + lenByte.toNat + 1 + n = Nat.succ (Nat.succ (Nat.succ (Nat.succ (Nat.succ (lenByte.toNat + 1 + n))))) := by omega
+            have form : 4 + 8 + lenByte.toNat + 8 + n = Nat.succ (Nat.succ (Nat.succ (Nat.succ (8 + lenByte.toNat + 8 + n)))) := by omega
             rw [form]
             simp only [List.take_succ_cons]
-            simp only [List.take_append, takeLen]
-            rw [List.take_of_length_le (by rw [takeLen]; omega)]
-            simp [List.take_take, Nat.add_assoc, Nat.add_comm 1 n]
+            simp [List.take_append, headLen, payloadLen, checkLen, List.take_of_length_le, Nat.add_assoc]
           rw [pref, scan.loop.eq_def]
           simp only [List.cons_append, List.nil_append]
-          simp only [h1, h2, h3, ite_false]
-          simp only [List.splitAt_eq] at h4 recResult
+          have headTake : (tail.take 8).take 8 = tail.take 8 := by apply List.take_of_length_le; omega
+          have headDrop : (tail.take 8).drop 8 = [] := by apply List.drop_eq_nil_iff.mpr; omega
+          have payloadTake : payload.take lenByte.toNat = payload := by rw [← payloadLen]; exact List.take_length
+          have payloadDrop : payload.drop lenByte.toNat = [] := by rw [← payloadLen]; exact List.drop_length
+          have checkTake : check.take 8 = check := by rw [← checkLen]; exact List.take_length
+          have checkDrop : check.drop 8 = [] := by rw [← checkLen]; exact List.drop_length
+          simp only [List.splitAt_eq] at checkEq recResult
+          have cEq : check = checksumBytes ([magic, gen, seqByte, lenByte] ++ payload) := by
+            simpa [check, payload] using checkEq
           have nh : n < k := by omega
           have checkRec := recResult.2.2 k (by change n < k; exact nh)
-          change scan.loop policy k (pos + (lenByte.toNat + 6)) (seq + 1) (remaining.take n) (tail.take lenByte.toNat :: acc) = .ok d at checkRec
-          simp [List.splitAt_eq, takeLen, h1, h2, h3] at *
-          simp only [h4, ite_eq_left]
-          change scan.loop policy k (pos + (lenByte.toNat + 6)) (seq + 1) (remaining.take n) (tail.take lenByte.toNat :: acc) = .ok d
+          change scan.loop policy k (pos + (lenByte.toNat + 20)) (seq + 1) (remaining.take n) (payload :: acc) = .ok d at checkRec
+          simp [List.splitAt_eq, headLen, payloadLen, checkLen,
+            headTake, headDrop, payloadTake, payloadDrop, checkTake, checkDrop, h1, h2, h3] at *
+          simp only [cEq, ite_eq_left]
+          change scan.loop policy k (pos + (lenByte.toNat + 20)) (seq + 1) (remaining.take n) (payload :: acc) = .ok d
           exact checkRec
 
 theorem scan_repair_stable {bytes : Bytes} {limit : Nat} {policy : Policy} {decoded : Decoded}

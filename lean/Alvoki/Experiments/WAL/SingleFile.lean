@@ -81,8 +81,8 @@ private def acquire (dir : FilePath) : IO IO.FS.Handle := do
 
 private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle := do
   let policy ← match ← IO.FS.readFile (dir / "policy") with
-    | "v1 log" => pure Policy.logOnly
-    | "v2 boundary" => pure Policy.boundary
+    | "v3 log" => pure Policy.logOnly
+    | "v3 boundary" => pure Policy.boundary
     | _ => throw <| IO.userError "unrecognized WAL policy"
   let reader ← openStream (dir / "segment") .readWrite
   let writer ← openStream (dir / "segment") .append
@@ -114,11 +114,11 @@ def create (dir : FilePath) (policy : Policy) : IO Handle := do
     let entries ← dir.readDir
     if entries.any (fun entry => entry.fileName != "lock") then
       throw <| IO.userError "WAL directory is not empty"
-    writeAndSync (dir / "policy") (if policy == .boundary then "v2 boundary" else "v1 log").toUTF8
+    writeAndSync (dir / "policy") (if policy == .boundary then "v3 boundary" else "v3 log").toUTF8
     writeAndSync (dir / "segment") ByteArray.empty
     if policy == .boundary then
       writeAndSync (dir / "commit.0") (encodeBytes (encodeMarker 0 0))
-      writeAndSync (dir / "commit.1") (encodeBytes (List.replicate markerSize 0))
+      writeAndSync (dir / "commit.1") ByteArray.empty
     install dir lock
   catch e =>
     lock.unlock
