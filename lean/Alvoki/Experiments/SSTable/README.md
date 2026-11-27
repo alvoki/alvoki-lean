@@ -102,15 +102,14 @@ remain assumptions of the native adapter and its caller.
 
 ## Roadmap
 
-The next refinement milestone is to migrate the
-[L0 adapter](https://github.com/alvoki/alvoki-lean/pull/5) to checked open.
-It is complete when the L0 publication and reopen proof supplies the catalog
-ID and the immutable-source premise for the actual reopened descriptor.
-Work from the original write descriptor, its flush and sync, and the
-directory barrier. Follow the shared native and model schedules down to
-filesystem primitives as in [DurableBlob](../DurableBlob/README.md).
-Publication and merging belong to L0. The caller bounds live descriptors
-and root buffers across tables and measures lookup through its scoped open.
+The component refinement milestone connects successful native build and
+checked open to the model theorem. SSTable owns the proof that the row stream
+produces the exact flushed bytes, that file sync acts on the original inode,
+and that healthy positional reads on the acquired descriptor serve that inode.
+The [L0 adapter](https://github.com/alvoki/alvoki-lean/pull/5) supplies the
+expected catalog ID, durable directory binding and file lifetime. L0 publication
+and reopen must establish that the selected name resolves to the inode produced
+by the builder. The caller bounds live descriptors and root buffers across tables.
 
 As part of the future work on a common filesystem model, investigate whether
 durable immutable file creation and [DurableBlob](../DurableBlob/README.md)
