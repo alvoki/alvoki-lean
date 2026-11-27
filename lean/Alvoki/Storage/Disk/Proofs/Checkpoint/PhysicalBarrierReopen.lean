@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
-import Alvoki.Storage.Disk.Checkpoint.Reopen.HeldInstallation
+import Alvoki.Storage.Disk.Proofs.Checkpoint.BarrierRetryObservations
+import Alvoki.Storage.Disk.Proofs.Checkpoint.Reopen.HeldInstallation
 import Alvoki.Storage.Disk.Proofs.Session.CapturedAlignedInstallation
 
 namespace Alvoki.Storage.DiskSession

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
+import Alvoki.Storage.Disk.Proofs.Checkpoint.BarrierRetryObservations
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawUncertainWrite
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedOpenInterpreter
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries

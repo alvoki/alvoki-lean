@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.LockedOpenFileReads
+import Alvoki.Storage.Disk.Proofs.Recovery.LockedOpenFileReads
 import Alvoki.Storage.Disk.WalSegmentReadIO
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.WalSegmentFileName

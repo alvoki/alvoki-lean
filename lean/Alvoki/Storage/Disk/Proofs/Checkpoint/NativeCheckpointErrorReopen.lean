@@ -2,7 +2,7 @@ import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointDirectoryError
 import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedReadPrefix
 import Alvoki.Storage.Disk.Proofs.Read.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.Proofs.Session.ClientCachedClose
-import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.PhysicalBarrierReopen
 
 namespace Alvoki.Storage.DiskSession
 

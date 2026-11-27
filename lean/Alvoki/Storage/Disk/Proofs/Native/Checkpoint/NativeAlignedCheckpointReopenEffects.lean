@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.PhysicalBarrierReopen
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedTableOpen
 
 namespace Alvoki.Storage.DiskSession

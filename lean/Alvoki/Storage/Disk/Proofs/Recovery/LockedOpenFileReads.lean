@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.DiskLockLifecycle
-import Alvoki.Storage.Disk.OptionalFileRead
+import Alvoki.Storage.Disk.Proofs.Filesystem.DiskLockLifecycle
+import Alvoki.Storage.Disk.Proofs.Recovery.OptionalFileRead
 
 namespace Alvoki.Storage
 

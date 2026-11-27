@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.LockedOpenFileReads
+import Alvoki.Storage.Disk.Proofs.Recovery.LockedOpenFileReads
 import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointLineage
 
 namespace Alvoki.Storage

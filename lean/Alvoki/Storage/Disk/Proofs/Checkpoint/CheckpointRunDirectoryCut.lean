@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
+import Alvoki.Storage.Disk.Proofs.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunPrefixReports
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunPrefixCustody
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointPowerLoss

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.Checkpoint.Run.ScheduleStop
+import Alvoki.Storage.Disk.Proofs.Checkpoint.Run.ScheduleStop
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedPosition
 
 namespace Alvoki.Storage.DiskSession

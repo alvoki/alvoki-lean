@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeAlignedMarkedWorker
 import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperSettlementHeap
 import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeWalPayloadReturn
-import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
+import Alvoki.Storage.Disk.Proofs.Checkpoint.BarrierRetryObservations
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.OptionalFileRead
+import Alvoki.Storage.Disk.Proofs.Recovery.OptionalFileRead
 import Alvoki.Storage.Disk.Proofs.Session.VersionedReadyMaintenance
 import Alvoki.Storage.Disk.Proofs.Collection.VersionedRunCollection
 

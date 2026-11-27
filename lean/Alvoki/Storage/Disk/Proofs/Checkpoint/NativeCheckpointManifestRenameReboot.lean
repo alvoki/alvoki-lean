@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointErrorPowerLoss
-import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.PhysicalBarrierReopen
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.DiskLockLifecycle
+import Alvoki.Storage.Disk.Proofs.Filesystem.DiskLockLifecycle
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentOpenFastEffects
 
 namespace Alvoki.Storage.DiskSession

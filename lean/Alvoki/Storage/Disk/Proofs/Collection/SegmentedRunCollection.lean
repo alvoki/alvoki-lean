@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
-import Alvoki.Storage.Disk.OptionalFileRead
+import Alvoki.Storage.Disk.Proofs.Recovery.OptionalFileRead
 import Alvoki.Storage.Disk.Proofs.Collection.LockedRunCollection
 
 namespace Alvoki.Storage.DiskSession

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRawSyncStop
-import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
+import Alvoki.Storage.Disk.Proofs.Checkpoint.BarrierRetryObservations
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunPrefixCustody
 
 namespace Alvoki.Storage.DiskSession

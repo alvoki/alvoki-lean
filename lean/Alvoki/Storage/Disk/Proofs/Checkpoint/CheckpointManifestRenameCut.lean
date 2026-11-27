@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.Checkpoint.Manifest.RenamePrefix
+import Alvoki.Storage.Disk.Proofs.Checkpoint.Manifest.RenamePrefix
 
 namespace Alvoki.Storage.DiskSession
 

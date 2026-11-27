@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeReadyClose
 import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedReadPrefix
-import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.PhysicalBarrierReopen
 
 namespace Alvoki.Storage.DiskSession
 
