@@ -267,8 +267,8 @@ lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
 lake env leanchecker Alvoki.Storage.Disk.NativeLongKeeperFinalSyncObservation
 lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
-lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedListingRetry
-lake env leanchecker Alvoki.Storage.Disk.NativeRawPresentManifestListing
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedListingRetry
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawPresentManifestListing
 lake env leanchecker Alvoki.Storage.Disk.NativeRawCheckpointDigestError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawCheckpointExtentError
 lake env leanchecker Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
@@ -284,7 +284,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.NativeFinalizedWalDecodeErro
 lake env leanchecker Alvoki.Storage.Disk.NativePopulatedOpenCleanup
 lake env leanchecker Alvoki.Storage.Disk.NativeRawMarkerChunkError
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawFinalizedManifestError
-lake env leanchecker Alvoki.Storage.Disk.NativeRawAbsentManifestListing
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawAbsentManifestListing
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFlatWalOpenError
 lake env leanchecker Alvoki.Storage.Disk.NativeCacheOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.NativeRawDirectoryCacheRejection

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeFinalizedOpenRetries
-import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawAbsentManifestListing
 
 namespace Alvoki.Storage.DiskSession
 

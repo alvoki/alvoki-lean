@@ -353,8 +353,8 @@ import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncObservation
 import Alvoki.Storage.Disk.NativeFinalizedRetryAlignedOpen
 import Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
-import Alvoki.Storage.Disk.NativeFinalizedListingRetry
-import Alvoki.Storage.Disk.NativeRawPresentManifestListing
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedListingRetry
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawPresentManifestListing
 import Alvoki.Storage.Disk.NativeRawCheckpointDigestError
 import Alvoki.Storage.Disk.NativeRawCheckpointExtentError
 import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
@@ -370,7 +370,7 @@ import Alvoki.Storage.Disk.Proofs.WAL.NativeFinalizedWalDecodeError
 import Alvoki.Storage.Disk.NativePopulatedOpenCleanup
 import Alvoki.Storage.Disk.NativeRawMarkerChunkError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawFinalizedManifestError
-import Alvoki.Storage.Disk.NativeRawAbsentManifestListing
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawAbsentManifestListing
 import Alvoki.Storage.Disk.NativeRawFlatWalOpenError
 import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeRawDirectoryCacheRejection
