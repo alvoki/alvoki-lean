@@ -64,12 +64,16 @@ tail it installs a trimmed replacement. The returned writer and its fresh
 pins start the same write and snapshot proof in both cases. The ledger
 carries the interrupted batch as one unanswered submission.
 
-**Next obligation.** Connect a failed repair to the next live open when
-the directory contained extra WAL names. Start with a directory sync that
-reports failure after all suffix unlinks returned. The next live open
-must see the removals. What survives another reboot depends on whether
-the directory barrier took effect.
-[Failed repair effects](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+If all later WAL files have been unlinked and the following directory
+sync reports an error, the next live open sees the pruned names. The
+failed call supplies its exact cleanup heap to the retry. The directory
+barrier's observed effect determines which earlier names a reboot may
+restore. [Failed repair effects](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
+**Next obligation.** Carry a failed unlink in the middle of the suffix
+into the same live retry. Earlier successful removals must stay absent.
+The failed victim may still exist, and unvisited names must remain
+eligible for the next repair.
 
 [Filesystem premises](proofs/native-storage.md#premise-provenance)
 · [Verification commands](../README.md#reproduce-on-linux-x86-64)

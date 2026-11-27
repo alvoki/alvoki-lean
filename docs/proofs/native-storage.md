@@ -500,7 +500,12 @@ After all unlinks return, the directory barrier can report an error before or af
 taking effect. Before the effect, a surviving map keeps the protected bindings of a
 predecessor. After the effect, it reflects the live directory at fsync. In either case,
 `SettledCrashFiles` relates each sampled name and payload through the marker to the
-protected files at prune authorization.
+protected files at prune authorization. A live retry starts at the public
+error's cleanup heap. The accepted unlinks determine its later WAL names
+for either barrier outcome. The selected keeper and its visible bytes
+supply the entry for the next attempt. See `extendsFailedPruneBarrier`
+in the [repair proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean).
+
 An unlink error uses the same relation. The unlink loop carries it over each actual
 result, including the reached heap of the failed removal, then cleanup carries it to
 the public error return. The reboot reader uses the sampled map for the later suffix as well. The successful authorization

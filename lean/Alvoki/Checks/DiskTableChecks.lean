@@ -1240,7 +1240,7 @@ private def checkProductionWalRotation (root : FilePath) (failDirectory : Bool) 
   expectFiles finalFrame 3
 
 private inductive SparsePruneCut where
-  | directory
+  | directory (afterSync : Bool)
   | unlinkBefore
   | unlinkAfter
 
@@ -1289,10 +1289,13 @@ private def checkPublicSparsePruneRetry (root : FilePath) (cut : SparsePruneCut)
     -- Discardable files need valid names and regular bindings, with unchecked payloads.
     IO.FS.writeBinFile path path.toString.toUTF8
   match cut with
-  | .directory =>
-    let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 1)
-    check (!opened && syncs == [dir.toString, dir.toString])
-      "public reopen did not stop at the directory sync after pruning the sparse suffix"
+  | .directory afterSync =>
+    let (reported, syncs) ← probeDisk bin dir (some dir) "--check-open-directory-sync-error" (skipFailures := 1)
+      (failureMode := if afterSync then .afterSync else .beforeSync)
+    let barriers := [dir.toString, dir.toString]
+    let expected := if afterSync then barriers ++ [s!"synced before error: {dir}"] else barriers
+    check (reported && syncs == expected)
+      "public reopen did not report EIO at the expected post-prune directory sync"
     expectLater []
   | .unlinkBefore | .unlinkAfter =>
     let afterEffect := cut matches .unlinkAfter
@@ -2316,6 +2319,14 @@ private def checkRecoveredBatchProbe (path : FilePath) (sequence outcome : Strin
 def main (args : List String) : IO Unit := do
   match args with
   | ["--open-once", dir] => (← DiskTable.open ⟨dir⟩).close
+  | ["--check-open-directory-sync-error", dir] =>
+    match ← (DiskTable.open ⟨dir⟩).toBaseIO with
+    | .error (.userError message) =>
+      check (message.startsWith s!"sync failed for '{dir}':") "open changed the directory sync diagnostic"
+    | .error cause => throw cause
+    | .ok db =>
+      db.close
+      throw (IO.userError "open accepted the directory sync error")
   | ["--check-open-eio", dir] =>
     match ← (DiskTable.open ⟨dir⟩).toBaseIO with
     | .error (.hardwareFault 5 _) => pure ()
@@ -2506,7 +2517,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkWalSegmentRepair
     for failDirectory in [false, true] do
       IO.FS.withTempDir (checkProductionWalRotation · failDirectory)
-    for cut in [SparsePruneCut.directory, .unlinkBefore, .unlinkAfter] do
+    for cut in [SparsePruneCut.directory false, .directory true, .unlinkBefore, .unlinkAfter] do
       IO.FS.withTempDir (checkPublicSparsePruneRetry · cut)
     IO.FS.withTempDir checkFirstBoundedCheckpointOpen
     IO.FS.withTempDir checkRetrySync
