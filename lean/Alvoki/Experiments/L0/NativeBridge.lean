@@ -1,5 +1,5 @@
 import Alvoki.Experiments.L0.NativeFacts
-import Alvoki.Experiments.L0.RecoveryChoices
+import Alvoki.Experiments.L0.ManifestComposition
 import Alvoki.Experiments.L0.TableAllocationProofs
 import Alvoki.Experiments.L0.TableProofs
 
@@ -22,23 +22,6 @@ theorem WalReceipt.effect (receipt : WalReceipt before after batch) :
   | issued prior completed old new =>
     rw [← old, ← new]
     exact wal_append prior completed
-
-/-- A successful publication's byte trace and the decoder observation of
-the version in the durable image. -/
-inductive ManifestReceipt (proposed actual : L0Manifest.Version) : Prop where
-  | issued
-      (run : DurableBlob.Run (L0Manifest.encode .empty)
-        (events ++ [.published (L0Manifest.encode proposed)]) true image)
-      (submitted : ∀ event ∈ events ++ [.published (L0Manifest.encode proposed)],
-        event.Submitted (fun bytes => ∃ v, v.Valid ∧ L0Manifest.encode v = bytes))
-      (decoded : L0Manifest.decode image.active = some actual) :
-      ManifestReceipt proposed actual
-
-theorem ManifestReceipt.effect (receipt : ManifestReceipt proposed actual)
-    (valid : proposed.Valid) : actual = proposed := by
-  cases receipt with
-  | issued run submitted decoded =>
-    exact Option.some.inj (decoded.symm.trans (manifest_publish run submitted valid))
 
 /-- The actual read descriptor serves the durable image from the same table
 binding. The image comes from the shared builder on the logical rows. -/
@@ -139,7 +122,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
     | .ok view after => WalOpenReceipt (selected s).view view ∧ selected after = selected s
     | .error _ after => selected after = selected s
   reopenManifest : ∀ s, match ops.manifest.reopen s with
-    | .ok version after => ManifestOpenReceipt (selected s).version version ∧ selected after = selected s
+    | .ok version after => version = (selected s).version ∧ selected after = selected s
     | .error _ after => selected after = selected s
   append : ∀ s batch, match ops.append batch s with
     | .ok _ after => WalReceipt (selected s).view (selected after).view batch ∧
@@ -150,7 +133,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (selected after).tables = (selected s).tables)
   create : Nonempty (TableCreationEvidence ops.tables.create selected)
   publish : ∀ s proposal, proposal.Valid → match ops.manifest.publish proposal s with
-    | .ok _ after => ManifestReceipt proposal (selected after).version ∧
+    | .ok _ after => (selected after).version = proposal ∧
         (selected after).view = (selected s).view ∧ (selected after).tables = (selected s).tables
     | .error _ after => selected after = selected s ∨
         (RecoveryChoices.Retry (.online (selected s).view)
@@ -185,13 +168,7 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
       rw [ran] at read
       exact ⟨read.1.effect, read.2⟩
     | error error after => simpa [ran] using read
-  reopenManifest s := by
-    have read := evidence.reopenManifest s
-    cases ran : ops.manifest.reopen s with
-    | ok value after =>
-      rw [ran] at read
-      exact ⟨read.1.effect, read.2⟩
-    | error error after => simpa [ran] using read
+  reopenManifest := evidence.reopenManifest
   append s batch := by
     have receipt := evidence.append s batch
     cases ran : ops.append batch s with
@@ -214,7 +191,7 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
     cases ran : ops.manifest.publish proposal s with
     | ok value after =>
       rw [ran] at receipt
-      exact selected_eq receipt.2.1 (receipt.1.effect valid) receipt.2.2
+      exact selected_eq receipt.2.1 receipt.1 receipt.2.2
     | error error after =>
       rw [ran] at receipt
       rcases receipt with same | ⟨retry, tables⟩

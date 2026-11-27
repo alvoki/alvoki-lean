@@ -99,10 +99,10 @@ installs the offline phase.
 [ScheduleSteps](ScheduleSteps.lean) takes the result of each reached
 operation directly to an `Execution.Run` step. The model uses these same
 lemmas. [NativeBridge](NativeBridge.lean) derives the operation laws from
-component observations. WAL and manifest receipts identify the actual
-modeled sessions or byte traces and use their public refinement theorems
-for the returned values. `RecoveryChoices` discharges uncertain effects
-from the public steps.
+component observations. WAL receipts identify the modeled sessions.
+[ManifestComposition](ManifestComposition.lean) derives the typed result and
+selected manifest directly from the DurableBlob primitive interpreter.
+`RecoveryChoices` discharges uncertain effects from the public steps.
 
 The native wrapper and the lifecycle proofs run the same `Cell.withSession`
 and `Cell.update` schedules, and get uses the same online guard as its
@@ -133,12 +133,12 @@ and uses the descriptor acquired by the scoped read.
 
 The remaining IO premises are local: stat reports the occupied name,
 exclusive creation preserves unrelated names, the file and directory
-barriers establish the bindings, and the acquired descriptor serves the
-bound bytes. Native WAL and blob syscall observations must match their
-existing component models. Turning all of those Linux primitive
-observations into component receipts is still a refinement obligation. The runtime supplies reference-cell, error,
-lock and descriptor effects under stable, exclusive ownership. The Lean
-proofs do not interpret Linux syscalls.
+barriers establish the bindings, and the acquired descriptor serves the bound bytes. The blob producer
+runs the shared schedule over Linux primitive reports. Applying its
+result to an L0 IO call requires the reached reports, the manifest
+projection, and namespace frames. The runtime supplies reference-cell,
+error, lock and descriptor effects under stable, exclusive ownership.
+The WAL and native SSTable producer connections remain open.
 
 Bootstrap, WAL release, orphan collection, snapshots, concurrency,
 compaction and automatic flush are separate work.
@@ -169,19 +169,20 @@ same returned WAL handle on scan and append. Close after an uncertain
 operation preserves the pending request via the existing offline stop step.
 If a component opened successfully and a later L0 callback failed, record
 the successful component open followed by stop. A scan failure after a
-successful WAL open follows this rule too. L0 supplies isolation frames
-between component namespaces, including on cleanup. Manifest decoding,
-L0 phase custody, and table directory isolation stay in L0. Native-to-model correspondence for WAL and DurableBlob is separate
-component work. The interim receipt adapters can be replaced by these
-producer results when available.
+successful WAL open follows this rule too. L0 needs isolation frames between component namespaces, including on
+cleanup. `publishSelected` derives the manifest part of the L0 state
+update and takes only the unrelated WAL and table frames plus the active
+image projection. `reopenSelected` derives the returned typed version and
+its settled binding. These theorems operate on primitive reports.
+Constructing those reports at the actual L0 callback boundary and
+establishing filesystem-wide namespace isolation remain open.
 
-## Process interruption follow-up
+## Process interruption checks
 
-Add a subprocess cut after durable table creation and before manifest
-publication. Reopen twice and check that the old watermark remains usable,
-the orphan is skipped by allocation, and committed writes and tombstones
-are recovered from the retained WAL. Add a second cut after manifest rename
-and before directory sync. Reopen twice and check the watermark chosen by
-the first successful reopen and the logical database. These cases exercise
-process death and lock and descriptor release. They do not simulate power
-loss or discard filesystem cache.
+The Linux native fixture cuts the child process after the table directory
+sync and before manifest publication, or immediately after manifest rename
+and before its directory sync. In each case two successful reopens check
+the watermark, acknowledged values and tombstones. After the table cut,
+a retry also checks that allocation skips and preserves the orphan. The
+fixture exercises process exit and release of the root lock. The kernel
+retains its filesystem cache, so the rename case expects the new manifest.

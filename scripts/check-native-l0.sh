@@ -33,14 +33,15 @@ l0=Alvoki/Experiments/L0
 compile "$l0/NativeTests" native
 cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,sstable}.c \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
-"$out/native-l0"
+cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixture.so"
+"$out/native-l0" "$out/l0_interrupt_fixture.so"
 compile "$l0/NativeBridge" proof
 compile "$l0/LifecycleRefinement" proof
 compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts ManifestComposition NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
@@ -58,9 +59,12 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms wal_append
 #check_axioms wal_scan
 #check_axioms wal_open
-#check_axioms manifest_open
-#check_axioms manifest_trace
-#check_axioms manifest_publish
+#check_axioms ManifestComposition.reopen
+#check_axioms ManifestComposition.publish
+#check_axioms ManifestComposition.initialOpenPublish
+#check_axioms ManifestComposition.reopenSelected
+#check_axioms ManifestComposition.publishSelected
+#check_axioms ManifestComposition.retryAfterPublication
 #check_axioms CallbackEvidence.laws
 #check_axioms Execution.Run.refines
 #check_axioms Execution.Run.recoverOk
