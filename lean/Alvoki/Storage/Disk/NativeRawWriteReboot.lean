@@ -81,7 +81,7 @@ def DirectoryReadNamespace.laterWalStarts (namespaceView : DirectoryReadNamespac
   ((namespaceView.names root).filterMap parseWalSegmentName).eraseDups.mergeSort.filter fun start =>
     decide (through < start)
 
-private theorem DirectoryReadNamespace.mem_laterWalStarts
+theorem DirectoryReadNamespace.mem_laterWalStarts
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode) (through start : Nat) :
     start ∈ namespaceView.laterWalStarts root through ↔
       through < start ∧ ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by

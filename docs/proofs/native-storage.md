@@ -303,8 +303,13 @@ enumeration and reads. For a writable reopen, the reboot also resets the
 marker and seals to the sampled bytes and settles the parent binding of the
 directory. Failed attempts must preserve these durable observations. The
 literal WAL reader then supplies the held cache and keeper to the ordinary
-write and snapshot proof. Its remaining file-model inputs include agreement
-with the projected seals and coverage of later WAL names by the held scan.
+write and snapshot proof. Bindings and visible bytes supply the marker, keeper and seals. The
+bounded catalog rules out holes being mistaken for seals. Beyond the
+cutoff, the captured listing supplies candidate names. Physical presence
+at the completed scan must agree with the canonical names actually listed.
+The repair tracks their bindings as it prunes, under the local unlink
+and barrier effects. These arguments cover the reopened session's ready
+calls through writes and snapshots.
 [Writable reopen](../../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean) · [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)

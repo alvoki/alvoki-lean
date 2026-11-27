@@ -904,12 +904,7 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
             names released ⟨dir.path.toString ++ "/" ++ name⟩ =
               (observed.view.child directoryObject name).map observed.view.modelObject)
           (_entryBytes : ∀ path, path = dir.file (.walSegment state.writer.wal.active.first) ∨ path = dir.file .walBoundary →
-            ∀ inode, names next.reached path = some inode → live next.reached inode = visible next.reached inode)
-          (_pairAt : (modeledFiles released).directory.active =
-            ⟨(names released (dir.file .manifest)).map (live released),
-              (names released (dir.file .walBoundary)).map (live released)⟩)
-          (_keeperAt : (modeledFiles released).keeper.active =
-            (names released (dir.file (.walSegment successor))).map (live released)),
+            ∀ inode, names next.reached path = some inode → live next.reached inode = visible next.reached inode),
           rotation.run opened.handle guard.lookup usedCache.active next.reached =
             .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {cause}") failed ∧
           opened.handle.table.close = closeSchedule opened.handle.phase.get (fun _ => opened.handle.lock.unlock)
@@ -918,7 +913,7 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
           closeSchedule (opened.handle.get opened.handle.phase) (fun _ => unlock opened.handle.lock)
             (setCell usedCache.active none) (setCell usedCache.pending []) (setCell usedCache.directory none)
             (setCell opened.handle.phase .closed) failed = .ok () released ∧
-          source.ReadsClientHistoryAtOpen openView dir storage live released observed.view directoryObject
+          source.ReadsClientHistoryAtOpen (openView.withObservedWalFiles dir successor names live) dir storage live released observed.view directoryObject
             [.acknowledgedBatch batch] [] batch := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
     _, batchHistory, ledger, physical, liveMarker, ⟨noManifest, noSeals, history, _⟩, carries⟩ :=
@@ -928,7 +923,7 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
   refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, exactHeap, ledger, ?_⟩
   intro firstNames restore cause poisoned synced issued failed afterUnlock root directoryObject guard poisonedAt
     filePrefix file rootRoute loaded rootFailed rotationEffects drops unlocked unlockEffect clears
-  intro released observed live openView successor atEntry atClose entryBytes pairAt keeperAt
+  intro released observed live openView successor atEntry atClose entryBytes
   have positive : 0 < next.current.ready.state.writer.history.length := by
     rw [history, (prepareBatch_spec prepared).1]
     exact List.length_pos_iff.mpr nonempty
@@ -949,7 +944,7 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
   obtain ⟨_, readsAfterOpen⟩ := closed.readsAfterRotationDirectoryError («storage» := storage) _ nonemptyWal
     directoryObject child created empty kept physical.physical
     (fun inode bound => (entryBytes _ (.inl rfl) inode bound).trans (physical.keeper inode bound))
-    markerAtEntry (by simp [noSeals]) catalog atEntry atClose modeledFiles pairAt keeperAt noManifest source
+    markerAtEntry (by simp [noSeals]) catalog atEntry atClose modeledFiles noManifest source
   simp only [returned, Option.some.injEq, Prod.mk.injEq, true_and] at rawClose
   obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger ledger
   refine ⟨returned, close, rawClose, ?_⟩
@@ -1006,13 +1001,9 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
               {errors : List (FilePath × IO.Error)} {retryAt : heap}
               (attempts : source.FailedCalls rebooted errors retryAt)
               (_effects : attempts.PreserveWalFiles (directory := dir) selected.writer.history.length names visible),
-              (∀ (_pairAt : (OpenCloseHeapView.files clientView retryAt).image.directory.active =
-                ⟨(names retryAt (dir.file .manifest)).map (visible retryAt),
-                  (names retryAt (dir.file .walBoundary)).map (visible retryAt)⟩)
-                (_keeperAt : (OpenCloseHeapView.files clientView retryAt).image.keeper.active =
-                  (names retryAt (dir.file (.walSegment selected.writer.wal.active.first))).map (visible retryAt)),
-              source.ReadsClientHistoryAtOpen clientView dir storage visible retryAt namespaceView root
-                [.acknowledgedBatch batch] [] batch) ∧
+              source.ReadsClientHistoryAtOpen
+                ((clientView).withObservedWalFiles dir selected.writer.wal.active.first names visible)
+                dir storage visible retryAt namespaceView root [.acknowledgedBatch batch] [] batch ∧
               ∀ (_restored : ∀ child, selected.writer.walOpenDurablePath dir child → child ≠ dir.path →
                   ∀ object, names rebooted child = some object →
                     (storage rebooted).files.bytes object = [visible rebooted object])
@@ -1048,12 +1039,12 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
   have filesAtRetry := bootFiles.afterFailedCalls ready.layout attempts effects
   have missing := (congrArg DirectoryPublication.Bindings.manifest pair).trans noManifest
   constructor
-  · intro pairAt keeperAt
-    have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
+  · have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
       (source := source) (view := clientView) («storage» := storage) («visible» := visible) (entry := retryAt)
       (namespaceView := namespaceView) (root := root) (ready := ready) (missing := missing)
-      (files := filesAtRetry) (pairAt := pairAt) (keeperAt := keeperAt)
-    have replay := @Eq.mp _ _ (congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen clientView
+      (files := filesAtRetry)
+    have replay := @Eq.mp _ _ (congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen
+      ((clientView).withObservedWalFiles next.current.ready.state.session.directory selected.writer.wal.active.first names visible)
       next.current.ready.state.session.directory selected.writer.wal.active.first storage visible retryAt namespaceView root writes)
       (sameHistory.trans history)) (@openedRetry)
     obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger ledger
@@ -1066,10 +1057,11 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
     have durable := bootFiles.durabilityAfterRebootRetries (source := source)
       («storage» := storage) («visible» := visible) (rebooted := rebooted) (entry := retryAt)
       ready restored rootSettled attempts (fun prior inside returned => kept prior inside returned)
+    intro input admitted returnedAt table returned
     exact RawMarkedOpenInterpreter.opensRetainedWalForCalls (source := source) (view := clientView)
       (entry := retryAt) (namespaceView := namespaceView) (root := root)
       seen.keeperPhysical.inodes runs storage ready missing filesAtRetry durable
-      (sameHistory.trans next.current.ready.readPrefix.refines.2.1) ledger
+      (sameHistory.trans next.current.ready.readPrefix.refines.2.1) ledger admitted returned
 
 /-- The actual first acknowledgement starts the interrupted second
 write. One reboot sample selects its replay and the subsequent lookup

@@ -1964,6 +1964,68 @@ structure SegmentedWriterState.VisibleWalFiles (writer : SegmentedWriterState) (
     (bindings (directory.file (.walSegment segment.first))).map contents = some segment.bytes
   active : (bindings (directory.file (.walSegment writer.wal.active.first))).map contents = some writer.wal.active.bytes
 
+/-- Project retained seals from the observed name and byte maps. -/
+abbrev observedKeptWal (directory : DiskDirectory) (keeper : Nat)
+    (bindings : FilePath → Option Nat) (contents : Nat → ByteArray) (start : Nat) : Option ByteArray :=
+  if start < keeper then (bindings (directory.file (.walSegment start))).map contents else none
+
+/-- Read the active pair and WAL bytes at the selected offsets from
+the physical files at each heap. The base view supplies crash alternatives,
+scratch files, later names and the handle and ownership observations. -/
+def OpenCloseHeapView.withObservedWalFiles (view : OpenCloseHeapView heap FileImage)
+    (directory : DiskDirectory) (keeper : Nat)
+    (bindings : heap → FilePath → Option Nat) (contents : heap → Nat → ByteArray) :
+    OpenCloseHeapView heap FileImage :=
+  view.withFileProjection fun atHeap =>
+    let files := view.files atHeap
+    let read := fun path => (bindings atHeap path).map (contents atHeap)
+    { files with image := {
+        files.image with
+        directory.active := ⟨read (directory.file .manifest), read (directory.file .walBoundary)⟩
+        keeper.active := read (directory.file (.walSegment keeper))
+        kept := observedKeptWal directory keeper (bindings atHeap) (contents atHeap) } }
+
+/-- Below the active keeper, the complete namespace fixes presence and each
+retained seal fixes its bytes. Missing offsets stay absent from the map. -/
+theorem SegmentedWriterState.VisibleWalFiles.keptWalFromNames
+    {directory : DiskDirectory} {writer : SegmentedWriterState} {descriptor : Nat}
+    {bindings : FilePath → Option Nat} {contents : Nat → ByteArray}
+    (files : writer.VisibleWalFiles directory bindings contents)
+    (ready : writer.RetainedReady directory descriptor) :
+    observedKeptWal directory writer.wal.active.first bindings contents =
+      (writer.wal.checkpointReopenFiles writer.wal.directory none).kept := by
+  funext start
+  change observedKeptWal directory writer.wal.active.first bindings contents start =
+    (writer.wal.sealed.find? (fun item => item.first == start)).map WalSegment.bytes
+  have beforeKeeper := (List.pairwise_append.mp ready.layout.ordered).2.2
+  by_cases named : ∃ segment ∈ writer.wal.sealed, segment.first = start
+  · obtain ⟨segment, member, rfl⟩ := named
+    have before := (beforeKeeper segment member writer.wal.active (by simp)).1
+    have ordered := (List.pairwise_append.mp ready.layout.ordered).1.imp (fun lt => lt.1)
+    rw [observedKeptWal, ite_eq_left before, WalSegment.findSealedStart ordered member, Option.map_some]
+    exact files.seals segment member
+  · have missing : writer.wal.sealed.find? (fun item => item.first == start) = none := by
+      rw [List.find?_eq_none]
+      intro segment member equal
+      exact named ⟨segment, member, beq_iff_eq.mp equal⟩
+    rw [missing, Option.map_none, observedKeptWal]
+    split
+    · rename_i before
+      have absent : bindings (directory.file (.walSegment start)) = none := by
+        cases bound : bindings (directory.file (.walSegment start)) with
+        | none => rfl
+        | some inode =>
+          have high := Nat.le_trans (Nat.le_of_lt before)
+            (ready.layout.firstAtOrBeforeEnd (List.mem_append_right _ (List.mem_singleton_self _)))
+          have occurs := (files.catalog start (Nat.zero_le _) high).mp (by simp [bound])
+          obtain ⟨segment, member, equal⟩ := List.mem_map.mp occurs
+          rcases List.mem_append.mp member with sealed | active
+          · exact (named ⟨segment, sealed, equal⟩).elim
+          · obtain rfl := List.mem_singleton.mp active
+            exact (Nat.ne_of_lt before equal.symm).elim
+      rw [absent, Option.map_none]
+    · rfl
+
 /-- Preserve the three administrative files and the canonical WAL names
 through the recorded cutoff across a read-only attempt. -/
 abbrev VisibleWalFrame (directory : DiskDirectory) (through : Nat)
@@ -2050,19 +2112,18 @@ named files. Only the active pair and keeper of the opener's image matter. -/
 theorem RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
     {directory : DiskDirectory} {entry : heap} {writer : SegmentedWriterState} {descriptor : Nat}
     (ready : writer.RetainedReady directory descriptor) (missing : writer.target.pair.manifest = none)
-    (files : writer.VisibleWalFiles directory (names entry) (visible entry))
-    (pairAt : (view.files entry).image.directory.active =
-      ⟨(names entry (directory.file .manifest)).map (visible entry),
-        (names entry (directory.file .walBoundary)).map (visible entry)⟩)
-    (keeperAt : (view.files entry).image.keeper.active =
-      (names entry (directory.file (.walSegment writer.wal.active.first))).map (visible entry)) :
-    source.ReplaysWalBeforeCheckpointAtOpen view directory writer.wal.active.first
-      storage visible entry namespaceView root writer.history := by
-  obtain ⟨layout, target, atKeeper, _, wal, following⟩ := files.alignedLayout ready missing pairAt keeperAt
+    (files : writer.VisibleWalFiles directory (names entry) (visible entry)) :
+    source.ReplaysWalBeforeCheckpointAtOpen (view.withObservedWalFiles directory writer.wal.active.first names visible)
+      directory writer.wal.active.first storage visible entry namespaceView root writer.history := by
+  let reader := view.withObservedWalFiles directory writer.wal.active.first names visible
+  change source.ReplaysWalBeforeCheckpointAtOpen reader directory writer.wal.active.first storage visible entry
+    namespaceView root writer.history
+  obtain ⟨layout, target, atKeeper, _, wal, following⟩ :=
+    files.alignedLayout (image := (reader.files entry).image) ready missing rfl rfl
   obtain ⟨_, lockBound⟩ := files.lock
   rw [← atKeeper]
   exact @RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
-    (source := source) (namespaceView := namespaceView) (root := root)
+    (source := source) (view := reader) (namespaceView := namespaceView) (root := root)
     (layout := layout) (lockBound := lockBound)
     (missing := (congrArg (fun t : Target => t.pair.manifest) target).trans missing) (manifestAbsent := files.manifest)
     (markerBytes := files.marker.trans (congrArg (fun t : Target => t.pair.walBoundary) target).symm)

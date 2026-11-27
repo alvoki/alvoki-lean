@@ -52,17 +52,12 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
       names released ⟨(dir).path.toString ++ "/" ++ name⟩ =
         ((view.files released).image.view.child root name).map (view.files released).image.view.modelObject)
     (images : heap → FileImage)
-    (pairAt : (images released).directory.active =
-      ⟨(names released ((dir).file .manifest)).map (visible released),
-        (names released ((dir).file .walBoundary)).map (visible released)⟩)
-    (keeperAt : (images released).keeper.active =
-      (names released ((dir).file (.walSegment newStart))).map (visible released))
     (noManifest : (old).writer.target.pair.manifest = none)
     (source : RawMarkedOpenInterpreter heap stream) :
     let observed := (view.files released).image
     let openView := view.withFileProjection (fun h => ⟨images h, (view.files h).owners⟩)
     TryLockObserves (view.files released).owners dir (.ok true) ∧
-    source.ReadsClientHistoryAtOpen openView dir storage visible released observed.view root
+    source.ReadsClientHistoryAtOpen (openView.withObservedWalFiles dir newStart names visible) dir storage visible released observed.view root
       current.current.submissions current.current.ready.reads current.current.history := by
   intro observed openView
   let valid := current.current.ready.readPrefix.refines.1
@@ -172,11 +167,11 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     (view := openView) (storage := storage) («visible» := visible) (entry := released)
     (ready := ready) (missing := noManifest)
     (files := ⟨⟨_, lockBound⟩, manifestAbsent, marker, newCatalog, seals, active⟩)
-    (pairAt := pairAt) (keeperAt := keeperFirst.symm ▸ keeperAt)
   obtain ⟨_, history, pending⟩ := current.current.ready.readPrefix.refines
   have finalReplay := @Eq.mp _ _ (congrArg
-    (fun writes => source.ReplaysWalBeforeCheckpointAtOpen openView dir writer.wal.active.first
+    (fun writes => source.ReplaysWalBeforeCheckpointAtOpen (openView.withObservedWalFiles dir writer.wal.active.first names visible) dir writer.wal.active.first
       storage visible released observed.view root writes) history) (@replay)
+  rw [keeperFirst] at finalReplay
   have retainedChild : ∀ start ≤ current.current.history.length,
       (observed.view.child root (renderWalSegmentName start)).map observed.view.modelObject =
         names released ((dir).file (.walSegment start)) :=

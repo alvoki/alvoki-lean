@@ -132,10 +132,17 @@ actual opener supplies its lock, cache and keeper to the same finite write
 and snapshot proof used after checkpoint recovery. Its ledger starts with
 the original acknowledged batch. [Writable reopen](../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean)
 
-**Next obligation.** Derive the opener's projected sealed files and later
-WAL names at the retry entry from the reached filesystem observations.
-A failed attempt that changes selected files during repair needs a local
-transition that establishes the next attempt's entry.
+Both live and rebooted WAL readers project the marker and keeper bytes
+from the reached path bindings. The writable opener also derives the seals
+below the keeper, including gaps. A complete listing on its held directory
+identifies the later canonical names. Subsequent lookups track which of
+those names still exist after removal.
+
+**Next obligation.** Connect a failed repair that has already removed a later
+segment to the next literal open and writable session. Use a history in
+which the later segment is reachable. Establish
+its entry from the reached unlink and directory barrier, including the case
+where the barrier takes effect and returns an error.
 The filesystem's survival and byte-sampling laws
 remain explicit. Further mixed calls, interruptions and maintenance
 remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).

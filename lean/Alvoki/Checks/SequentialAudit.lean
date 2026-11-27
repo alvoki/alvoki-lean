@@ -2769,6 +2769,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.samplesFailedRotationDirectory
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.VisibleWalFiles.alignedLayout
+#check_axioms Alvoki.Storage.DiskSession.observedKeptWal
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.VisibleWalFiles.keptWalFromNames
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.opensRetainedWalForCalls
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.visibleWalAtRotationSample

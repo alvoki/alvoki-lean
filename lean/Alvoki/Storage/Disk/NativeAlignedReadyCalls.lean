@@ -175,6 +175,17 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
     exact (frames names fromOpen).restrictUpper
       (by simpa only [startHistory, OpenReferenceAllocations.readyState] using Nat.add_le_add_right budget extra)
 
+/-- Repair can unlink canonical names from the captured listing. Looking up
+each candidate again at the reached heap reflects an accepted removal. -/
+def OpenCloseHeapView.withLaterWalFromScan (view : OpenCloseHeapView heap FileImage)
+    (directory : DiskDirectory) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (through : Nat) (bindings : heap → FilePath → Option Nat) : OpenCloseHeapView heap FileImage :=
+  view.withFileProjection fun atHeap =>
+    let files := view.files atHeap
+    let later := (namespaceView.laterWalStarts root through).filter fun start =>
+      (bindings atHeap (directory.file (.walSegment start))).isSome
+    { files with image.later.visible := later }
+
 /-- Continue from one retained WAL namespace through the literal open and
 start supported calls on the allocated table. The repair and allocation
 laws are indexed by the exact cache and keeper reached by the open. -/
@@ -187,18 +198,9 @@ abbrev RawMarkedOpenInterpreter.WritesAfterWalOpen
   let names := fun atHeap => (observe atHeap).files.names
   let visible := fun atHeap => (inodes atHeap).visible
   let scope := writer.walOpenDurablePath directory
-  ∀ (_pairAt : (view.files entry).image.directory.active =
-      ⟨(names entry (directory.file .manifest)).map (visible entry),
-        (names entry (directory.file .walBoundary)).map (visible entry)⟩)
-    (_keeperAt : (view.files entry).image.keeper.active =
-      (names entry (directory.file (.walSegment writer.wal.active.first))).map (visible entry))
-    (_sealsAt : (view.files entry).image.kept = (writer.wal.checkpointReopenFiles writer.wal.directory none).kept)
-    (_suffix : ∀ ordinal ∈ (view.files entry).image.later.visible, writer.history.length < ordinal ∧
-      ∃ object, namespaceView.child root (renderWalSegmentName ordinal) = some object)
-    (_complete : ∀ ordinal, writer.history.length < ordinal →
-      (∃ inode, names entry (directory.file (.walSegment ordinal)) = some inode) →
-      ∃ object, namespaceView.child root (renderWalSegmentName ordinal) = some object)
-    {input : FilePath} (_admission : source.ObservedAdmissionEffects view directory scope input entry observe visible)
+  let view := (view.withObservedWalFiles directory writer.wal.active.first names visible).withLaterWalFromScan
+    directory namespaceView root writer.history.length names
+  ∀ {input : FilePath} (_admission : source.ObservedAdmissionEffects view directory scope input entry observe visible)
     {returnedAt : heap} {table : DiskTable} (_returned : source.openTable input entry = .ok table returnedAt)
     (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
@@ -212,11 +214,8 @@ abbrev RawMarkedOpenInterpreter.WritesAfterWalOpen
         (_child : ∀ start ≤ writer.history.length,
           (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
             names entry (directory.file (.walSegment start)))
-        (_laterAbsent : ∀ {before entries listed}, source.directoryCalls.run directory.path before = .ok entries listed →
-          (⟨names entry, fun inode => [visible entry inode]⟩ : CheckpointSurvivingFiles).Frames
-            (managedPath directory) ⟨names listed, fun inode => [visible listed inode]⟩ →
-          MarkedWalExtentReports.TruthfulAbsenceOn (writer.history.length < ·) source.fileCalls directory
-            namespaceView root (entries.toList.map (·.fileName)) listed)
+        (_physicalScan : source.directoryCalls.ObservesWalNames directory _reads.streamObject root names
+          (writer.history.length < ·))
         (_repair : source.ObservedAlignedRepairEffects (view := view) cache directory layout entry observe visible)
         (_allocates : source.LiteralAllocationEffects view directory cache observe visible layout.keeper.first),
         ∃ (repaired : heap) (reopened : SegmentedWriterState)
@@ -244,25 +243,47 @@ theorem RawMarkedOpenInterpreter.opensRetainedWalForCalls
     {previous origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent}
     (sameHistory : writer.history = previous.history) (prior : origin.LedgerSuffix earlier previous) :
     source.WritesAfterWalOpen view directory writer entry namespaceView root origin earlier inodes runs observe := by
-  intro pairAt keeperAt sealsAt suffix complete input admission returnedAt table returned
+  intro input admission returnedAt table returned
     phaseIdentity tokenIdentity get set phaseEffects ptrEq
-  obtain ⟨layout, target, keeper, aligned, wal, following⟩ := files.alignedLayout ready missing pairAt keeperAt
+  let projected := (view.withObservedWalFiles directory writer.wal.active.first names visible).withLaterWalFromScan
+    directory namespaceView root writer.history.length names
+  obtain ⟨layout, target, keeper, aligned, wal, following⟩ :=
+    files.alignedLayout (image := (projected.files entry).image) ready missing rfl rfl
+  have sealsAt : (projected.files entry).image.kept = (writer.wal.checkpointReopenFiles writer.wal.directory none).kept :=
+    files.keptWalFromNames ready
   obtain ⟨inode, lock⟩ := files.lock
   obtain ⟨cache, frame, authority, rootNamed, lockNamed, _, _, worker⟩ := source.reachesAlignedCache admission lock returned
   refine ⟨layout, cache, target, keeper, authority, ?_⟩
-  intro reads child laterAbsent repair allocates
+  intro reads child physicalScan repair allocates
   have absent := (congrArg (fun target : Target => target.pair.manifest) target).trans missing
   have marker := files.marker.trans (congrArg (fun target : Target => target.pair.walBoundary) target).symm
-  have literal := (source.readsLiteralWalOnly layout cache absent files.manifest marker
+  have laterAtScan {before listed : heap} {entries : Array IO.FS.DirEntry}
+      (listedAt : source.directoryCalls.run directory.path before = .ok entries listed)
+      (start : Nat) (later : layout.range.through < start) :
+      (∃ object, namespaceView.child root (renderWalSegmentName start) = some object) ↔
+        (names listed (directory.file (.walSegment start))).isSome = true :=
+    source.directoryCalls.liveWalChildren directory namespaceView root reads.streamObject physicalScan listedAt
+      (fun _ _ opened => reads.streamRoot opened)
+      (fun _ _ _ _ opened read closed => reads.complete opened read closed) start (layout.through ▸ later)
+  obtain ⟨literal, ⟨_, listed, _, scan, entryToScan⟩⟩ := source.readsLiteralWalOnly layout cache absent files.manifest marker
     observedOpenReadFrame.refl (fun first last => first.trans last) (frame.entersReader authority) reads following
     (fun start _ bound => child start (layout.through ▸ bound))
-    (fun {before entries listed} scan kept => by
-      rw [layout.through]
-      exact @laterAbsent before entries listed scan kept) wal worker).1
+    (fun scanned _ => source.fileCalls.absenceOnFromNamePresence directory names visible namespaceView root
+      (managedPath directory) (fun _ _ => ⟨rfl, fun _ _ => rfl⟩)
+      (fun path before => (reads.statFrame path before).1) reads.statMissing
+      (fun start _ => .inr ⟨.walSegment start, rfl⟩) (laterAtScan scanned)) wal worker
   have completeLater (start : Nat) (beyond : layout.range.through < start)
       (found : ∃ inode, names entry (directory.file (.walSegment start)) = some inode) :
-      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object :=
-    complete start (layout.through ▸ beyond) found
+      ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
+    apply (laterAtScan scan start beyond).mpr
+    have kept : names listed (directory.file (.walSegment start)) = names entry (directory.file (.walSegment start)) :=
+      (entryToScan _ (.inr ⟨.walSegment start, rfl⟩)).1
+    rw [kept]
+    exact Option.isSome_iff_exists.mpr found
+  have suffix (start : Nat) (member : start ∈ (projected.files entry).image.later.visible) :
+      layout.range.through < start ∧ ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
+    rw [layout.through]
+    exact (namespaceView.mem_laterWalStarts root writer.history.length start).mp (List.mem_filter.mp member).1
   let published : CheckpointPublication.Image := ⟨.settled none, fun _ _ => none⟩
   obtain ⟨repaired, reopened, allocation, installed, ⟨seen⟩⟩ :=
     source.retainsLiteralAlignedReturn directory layout
@@ -270,7 +291,7 @@ theorem RawMarkedOpenInterpreter.opensRetainedWalForCalls
       ready.resumed.ordered ready.layout ready.valid ready.spans (ready.walPair.trans (congrArg Target.pair target).symm)
       (congrArg WalSegment.first keeper) aligned cache authority observe visible namespaceView root scope literal rfl
       (by simpa only [CanonicalKeeperLayout.target, aligned, ByteArray.append_empty] using layout.visible)
-      sealsAt (fun start member => (suffix start member).imp_left (fun beyond => layout.through.symm ▸ beyond))
+      sealsAt suffix
       repair.toLiteralAlignedFinishEffects allocates phaseIdentity tokenIdentity
   let state := allocation.readyState reopened directory cache.owner cache.rootSlot
     cache.directoryRef cache.activeRef cache.pendingRef phaseIdentity tokenIdentity
