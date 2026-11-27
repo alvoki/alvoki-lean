@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Manifest
-import ByteWords
+import Alvoki.Codec.ByteWords
 
 namespace Alvoki.Manifest
 open Alvoki.ByteWords

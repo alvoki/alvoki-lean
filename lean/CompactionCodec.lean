@@ -1,5 +1,5 @@
 import Compaction
-import ByteWords
+import Alvoki.Codec.ByteWords
 
 namespace Alvoki.Compaction
 open Alvoki.ByteWords

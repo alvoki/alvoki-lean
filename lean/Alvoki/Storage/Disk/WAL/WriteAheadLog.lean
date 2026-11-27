@@ -1,4 +1,4 @@
-import ByteWords
+import Alvoki.Codec.ByteWords
 
 namespace Alvoki.WAL
 open Alvoki.ByteWords
