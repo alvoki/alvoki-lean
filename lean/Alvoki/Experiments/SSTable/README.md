@@ -145,6 +145,9 @@ to detect substitution by another intact file. Reuse of an ID leaves same-ID
 substitution undetectable. The check is an identity comparison and does not
 authenticate file contents.
 
+The [unified prototype](UNIFIED.md) explores a root and leaf index for all
+four field-width combinations.
+
 ## Roadmap
 
 A minimal LSM can build sorted, unique byte rows, publish the completed file
