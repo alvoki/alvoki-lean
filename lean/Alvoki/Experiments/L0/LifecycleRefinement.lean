@@ -6,7 +6,9 @@ namespace ExperimentalL0.Lifecycle
 open Proof
 
 variable {W S : Type}
-variable {ops : Components (StorageM (Phase W × S))}
+variable {callbacks : Callbacks (EStateM String S) W}
+variable {unavailable : String}
+local notation "ops" => callbacksWithPhase callbacks unavailable
 variable {selected : S → Selected}
 variable {fileBytes : S → UInt64 → Option ByteArray}
 
@@ -16,16 +18,22 @@ storage carrier untouched. -/
 theorem recovery_online
     (prior : Execution.Run events none (selected before))
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
-    (ran : recover ops (.opening, before) = .ok session (.recovering handle, after))
+    (ran : recover ops (.opening, before) = .ok session after)
     (use : StorageM (Phase W × S) α)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) (unlock : StorageM (Phase W × S) Unit) :
-    Execution.Run (events ++ [.reopened]) (some session) (selected after) ∧
+    ∃ handle, after.1 = .recovering handle ∧
+      Execution.Run (events ++ [.reopened]) (some session) (selected after.2) ∧
       Cell.withSession stateCell invalid (recover ops) use closeWal unlock (.opening, before) =
         finish (ε := String) use (finish (ε := String) (Cell.close stateCell closeWal) unlock)
-          (.online handle session, after) :=
-  ⟨Execution.Run.recoverOk (s := (.opening, before)) prior evidence.laws ran,
+          (.online handle session, after.2) := by
+  obtain ⟨handle, attached⟩ := recover_attached callbacks unavailable before session after ran
+  obtain ⟨phase, storage⟩ := after
+  change phase = .recovering handle at attached
+  subst phase
+  exact ⟨handle, rfl,
+    Execution.Run.recoverOk (s := (.opening, before)) prior evidence.laws ran,
     successful_recovery_publishes (recover ops) use invalid closeWal unlock handle session
-      before after ran⟩
+      before storage ran⟩
 
 /-- Failed recovery records only an offline client step. Phase cleanup
 detaches the handle even when closing the WAL or releasing the lock fails. -/
@@ -50,13 +58,18 @@ theorem write_online
     (prior : Execution.Run events (some old) (selected before))
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
     (change : Change)
-    (ran : write ops old change (.updating handle, before) = .ok next (.updating handle, after))
+    (ran : write ops old change (.updating handle, before) = .ok next after)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) :
-    Execution.Run (events ++ [.written change]) (some next) (selected after) ∧
+    Execution.Run (events ++ [.written change]) (some next) (selected after.2) ∧
       Cell.update stateCell invalid (fun session => write ops session change) closeWal
-        (.online handle old, before) = .ok () (.online handle next, after) :=
-  ⟨Execution.Run.writeOk (s := (.updating handle, before)) prior evidence.laws ran,
-    update_success _ invalid closeWal handle old next before after ran⟩
+        (.online handle old, before) = .ok () (.online handle next, after.2) := by
+  have frame := write_keepsPhase callbacks unavailable old change (.updating handle, before)
+  rw [ran] at frame
+  rcases after with ⟨phase, storage⟩
+  change phase = .updating handle at frame
+  subst phase
+  exact ⟨Execution.Run.writeOk (s := (.updating handle, before)) prior evidence.laws ran,
+    update_success _ invalid closeWal handle old next before storage ran⟩
 
 theorem write_offline
     (prior : Execution.Run events (some old) (selected before))
@@ -74,13 +87,18 @@ theorem write_offline
 theorem flush_online
     (prior : Execution.Run events (some old) (selected before))
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
-    (ran : flush ops old (.updating handle, before) = .ok next (.updating handle, after))
+    (ran : flush ops old (.updating handle, before) = .ok next after)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) :
-    Execution.Run (events ++ [.flushed]) (some next) (selected after) ∧
+    Execution.Run (events ++ [.flushed]) (some next) (selected after.2) ∧
       Cell.update stateCell invalid (flush ops) closeWal
-        (.online handle old, before) = .ok () (.online handle next, after) :=
-  ⟨Execution.Run.flushOk (s := (.updating handle, before)) prior evidence.laws ran,
-    update_success _ invalid closeWal handle old next before after ran⟩
+        (.online handle old, before) = .ok () (.online handle next, after.2) := by
+  have frame := flush_keepsPhase callbacks unavailable old (.updating handle, before)
+  rw [ran] at frame
+  rcases after with ⟨phase, storage⟩
+  change phase = .updating handle at frame
+  subst phase
+  exact ⟨Execution.Run.flushOk (s := (.updating handle, before)) prior evidence.laws ran,
+    update_success _ invalid closeWal handle old next before storage ran⟩
 
 theorem flush_offline
     (prior : Execution.Run events (some old) (selected before))
@@ -99,22 +117,32 @@ theorem get_online
     (prior : Execution.Run events (some session) (selected before))
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
     (ran : get ops session key (.online handle session, before) =
-      .ok value (.online handle session, after)) (invalid : String) :
-    Execution.Run (events ++ [.got key value]) (some session) (selected after) ∧
+      .ok value after) (invalid : String) :
+    Execution.Run (events ++ [.got key value]) (some session) (selected after.2) ∧
       Cell.useSession stateCell invalid (fun live => get ops live key)
-        (.online handle session, before) = .ok value (.online handle session, after) :=
-  ⟨Execution.Run.getOk (s := (.online handle session, before)) prior evidence.laws ran,
+        (.online handle session, before) = .ok value (.online handle session, after.2) := by
+  have frame := get_keepsPhase callbacks unavailable session key (.online handle session, before)
+  rw [ran] at frame
+  rcases after with ⟨phase, storage⟩
+  change phase = .online handle session at frame
+  subst phase
+  exact ⟨Execution.Run.getOk (s := (.online handle session, before)) prior evidence.laws ran,
     (useSession_online _ invalid handle session before).trans ran⟩
 
 theorem get_online_error
     (prior : Execution.Run events (some session) (selected before))
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) (fileBytes ∘ Prod.snd))
     (ran : get ops session key (.online handle session, before) =
-      .error error (.online handle session, after)) (invalid : String) :
-    Execution.Run events (some session) (selected after) ∧
+      .error error after) (invalid : String) :
+    Execution.Run events (some session) (selected after.2) ∧
       Cell.useSession stateCell invalid (fun live => get ops live key)
-        (.online handle session, before) = .error error (.online handle session, after) :=
-  ⟨Execution.Run.getError (s := (.online handle session, before)) prior evidence.laws ran,
+        (.online handle session, before) = .error error (.online handle session, after.2) := by
+  have frame := get_keepsPhase callbacks unavailable session key (.online handle session, before)
+  rw [ran] at frame
+  rcases after with ⟨phase, storage⟩
+  change phase = .online handle session at frame
+  subst phase
+  exact ⟨Execution.Run.getError (s := (.online handle session, before)) prior evidence.laws ran,
     (useSession_online _ invalid handle session before).trans ran⟩
 
 end ExperimentalL0.Lifecycle

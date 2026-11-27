@@ -1,5 +1,6 @@
 import Alvoki.Experiments.L0.TableAllocation
 import Alvoki.Experiments.L0.ComponentContract
+import Alvoki.Experiments.L0.TableRowProofs
 
 namespace ExperimentalL0
 
@@ -121,5 +122,29 @@ theorem createTableAt_bindings
         rw [frame] at kept
         simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, allocated, done, barrier]
         exact ⟨kept.1, kept.2.1, absent s id free.1, synced.2 id rows built.2, kept.2.2⟩
+
+/-- Connect the exact L0 supplier and ID to the durable directory binding.
+The remaining build premise is the SSTable sink/output effect on the
+reached path. The directory premise is the filesystem name barrier. -/
+theorem createTableUnder_image {id : UInt64}
+    {dir : System.FilePath} {occupied : System.FilePath → StorageM σ Bool}
+    {build : System.FilePath → Rows → StorageM σ Unit}
+    {syncDirectory : System.FilePath → StorageM σ Unit}
+    (syncedFile durableFile : σ → System.FilePath → Option ByteArray)
+    (buildResult : ∀ path input before after, build path input before = .ok () after →
+      ∃ count bytes, syncedFile after path = some bytes ∧
+        ImmutableSSTable.modelBuild ((readSupplied input.length).run input).1 = .ok (count, bytes))
+    (directoryEffect : ∀ before after, syncDirectory dir before = .ok () after →
+      ∀ id bytes, syncedFile before (tablePath dir id) = some bytes →
+        durableFile after (tablePath dir id) = some bytes)
+    (created : createTableUnder dir occupied build syncDirectory rows s = .ok id after) :
+    ∃ count bytes, durableFile after (tablePath dir id) = some bytes ∧
+      ImmutableSSTable.modelBuild
+        (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) := by
+  obtain ⟨_, written, _, built, barrier⟩ := createTableAt_success created
+  obtain ⟨count, bytes, synced, image⟩ := buildResult _ _ _ _ built
+  have exactInput := (supplied_builder_input rows).2
+
+  exact ⟨count, bytes, directoryEffect _ _ barrier id bytes synced, exactInput.symm.trans image⟩
 
 end ExperimentalL0

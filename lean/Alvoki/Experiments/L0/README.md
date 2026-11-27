@@ -108,6 +108,9 @@ The native wrapper and the lifecycle proofs run the same `Cell.withSession`
 and `Cell.update` schedules, and get uses the same online guard as its
 proof. [LifecycleRefinement](LifecycleRefinement.lean) uses one reached
 result for both the phase transition and the generic client trace step.
+The native callback record gives component actions no access to the L0
+phase cell. The shared interpreter proves phase preservation for write,
+flush and get, and derives the recovered WAL attachment on success.
 Recovery failure skips the client callback,
 moves the cell offline before attempting WAL close, and attempts unlock even
 if close fails. Cleanup preserves the original error. Successful recovery
@@ -121,7 +124,12 @@ and index extent. Row validation occurs on demand.
 [TableAllocation](TableAllocation.lean) is the native create schedule. Its
 proofs show that probing picks a free ID and that a returned ID implies that
 the builder received the original rows and that the directory barrier
-succeeded after the synced build.
+succeeded after the synced build. The native row supplier shares
+`nextTableRow` with the supplier proof, which proves the exact encoded stream
+and EOF. The path-indexed creation proof uses that stream and the reached
+build and directory effects to name the durable builder image.
+`tableOpenAt` constructs the check witness at that same ID-derived path
+and uses the descriptor acquired by the scoped read.
 
 The remaining IO premises are local: stat reports the occupied name,
 exclusive creation preserves unrelated names, the file and directory
@@ -141,6 +149,31 @@ fixture, kernel checks and axiom audit. The native fixture rotates the
 WAL, flushes multiple tables, checks persistent tombstones and WAL-suffix
 replay, retries a failed table open, and checks that a required read
 error never returns an older value.
+
+## Producer boundary for native components
+
+These are proposed producer signatures in terms of the existing public
+states and events. Each premise about a call means a report of the actual
+native call, at its reached handle or binding, under that component's
+primitive filesystem assumptions. The component owns that interpretation.
+
+| Component operation | Minimal result used by L0 |
+| --- | --- |
+| WAL `openExisting` and `scan` | `Step offline (.opened view) (.online view)` for the acquired handle and its scanned view. A scan of a ready handle observes that same view. A failed reopen exposes no ready handle and preserves the admissible choices. |
+| WAL `append batch` | `Step (.online prior) (.ack (.append batch)) (.online next)` on success. An uncertain append yields the existing offline step with that one pending request. Later reopen supplies its selected view. L0 discards the position in the append reply. |
+| DurableBlob `reopen` | `Step offline (.opened bytes) (.ready bytes)` for the exact returned and durably settled bytes. A failed reopen exposes no value and preserves the admissible choices. |
+| DurableBlob `publish bytes` | `Step (.ready old) (.published bytes) (.ready bytes)` on success, or the existing uncertain step for those same proposed bytes. Later reopen supplies the selected bytes. |
+
+The producer starts from the initialized component trace and identifies the
+same returned WAL handle on scan and append. Close after an uncertain
+operation preserves the pending request via the existing offline stop step.
+If a component opened successfully and a later L0 callback failed, record
+the successful component open followed by stop. A scan failure after a
+successful WAL open follows this rule too. L0 supplies isolation frames
+between component namespaces, including on cleanup. Manifest decoding,
+L0 phase custody, and table directory isolation stay in L0. Native-to-model correspondence for WAL and DurableBlob is separate
+component work. The interim receipt adapters can be replaced by these
+producer results when available.
 
 ## Process interruption follow-up
 

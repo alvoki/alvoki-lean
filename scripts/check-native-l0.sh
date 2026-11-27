@@ -40,7 +40,7 @@ compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
@@ -77,6 +77,10 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.Proof.update_error
 #check_axioms Lifecycle.Proof.reopen_attaches_before_scan
 #check_axioms Lifecycle.Proof.reopen_open_failure
+#check_axioms Lifecycle.Proof.recover_attached
+#check_axioms Lifecycle.Proof.write_keepsPhase
+#check_axioms Lifecycle.Proof.flush_keepsPhase
+#check_axioms Lifecycle.Proof.get_keepsPhase
 #check_axioms Lifecycle.recovery_online
 #check_axioms Lifecycle.recovery_offline
 #check_axioms Lifecycle.write_online
@@ -96,7 +100,13 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms freeTableId_spec
 #check_axioms createTableAt_success
 #check_axioms createTableAt_bindings
+#check_axioms createTableUnder_image
+#check_axioms rowSupply_step
+#check_axioms nextTableRow_cons
+#check_axioms nextTableRow_nil
+#check_axioms supplied_builder_input
 #check_axioms TableCreationEvidence.effect
 #check_axioms TableOpen.represents
+#check_axioms tableOpenAt
 #check_axioms TableRead.effect
 LEAN

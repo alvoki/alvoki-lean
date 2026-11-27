@@ -1,4 +1,5 @@
 import Alvoki.Experiments.L0.TableSchedule
+import Alvoki.Experiments.L0.TableRows
 import Alvoki.Experiments.L0.TableAllocation
 import Alvoki.Experiments.L0.Lifecycle
 import Alvoki.Experiments.DurableBlob.Native
@@ -13,8 +14,6 @@ private abbrev FileM := ExceptT String IO
 @[extern "alvoki_fsync"]
 private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 
-private def tablePath (dir : FilePath) (id : UInt64) : FilePath := dir / s!"table-{id.toNat}"
-
 private def pathExists (path : FilePath) : IO Bool := do
   try
     let _ ← path.symlinkMetadata
@@ -23,19 +22,15 @@ private def pathExists (path : FilePath) : IO Bool := do
     | .noFileOrDirectory .. => return false
     | err => throw err
 
-private def buildSynced (dir : FilePath) (id : UInt64) (rows : Rows) : IO Unit := do
+private def buildSynced (path : FilePath) (rows : Rows) : IO Unit := do
   let remaining ← IO.mkRef rows
-  let _ ← ImmutableSSTable.buildFileSynced (tablePath dir id) do
-    match ← remaining.get with
-    | [] => return none
-    | row :: tail =>
-      remaining.set tail
-      return some (ImmutableSSTable.Entry.encode keyCodec mutationCodec row)
+  let _ ← ImmutableSSTable.buildFileSynced path
+    (nextTableRow remaining.get remaining.set)
 
 private def createTable (dir : FilePath) (rows : Rows) : FileM UInt64 :=
-  createTableAt (fun id => liftM (pathExists (tablePath dir id)))
-    (fun id entries => liftM (buildSynced dir id entries))
-    (liftM (IO.FS.withFile dir .read syncHandle)) rows
+  createTableUnder dir (fun path => liftM (pathExists path))
+    (fun path entries => liftM (buildSynced path entries))
+    (fun parent => liftM (IO.FS.withFile parent .read syncHandle)) rows
 
 private def checked (operation : FileM α) : IO α := do
   match ← operation.run with
@@ -47,39 +42,39 @@ private def checked (operation : FileM α) : IO α := do
 operation retains it, so the runtime can close it on success or error. -/
 private def withTable (dir : FilePath) (id : UInt64)
     (use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α) : FileM α :=
-  let path := tablePath dir id
-  withTableDescriptor (liftM path.symlinkMetadata)
-    (fun action => ExceptT.mk (IO.FS.withFile path .read fun handle => (action handle).run))
-    (fun handle => nativeTableAction handle use)
+  withTableAt (fun path => liftM path.symlinkMetadata)
+    (fun path action => ExceptT.mk (IO.FS.withFile path .read fun handle => (action handle).run))
+    dir id (fun handle => nativeTableAction handle use)
 
 private def tables (dir : FilePath) : Tables FileM where
   create := createTable dir
   check id := withTable dir id (fun _ => pure ())
   lookup id key := withTable dir id (·.lookup key)
 
-private def requireWal (phase : IO.Ref (Phase Wal)) : IO Wal := do
-  let some handle := (← phase.get).wal | throw (IO.userError "WAL is offline")
-  return handle
-
 private def phaseCell (phase : IO.Ref (Phase Wal)) : Cell IO Wal where
   read := phase.get
   swap := phase.swap
 
-private def callbackComponents (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
+private def componentCell (phase : IO.Ref (Phase Wal)) : Cell FileM Wal where
+  read := liftM (phase.get : IO (Phase Wal))
+  swap := fun next => liftM (phase.swap next : IO (Phase Wal))
+
+private def storageCallbacks (root : FilePath) : Callbacks FileM Wal :=
   let blob := DurableBlob.native (root / "manifest")
   {
-    append batch := liftM do
-      let _ ← WalRecoverySlice.Segmented.Native.append (← requireWal phase) batch
-    scan := liftM do WalRecoverySlice.Segmented.Native.scan (← requireWal phase)
-    reopenWal := liftM <| (phaseCell phase).reopenWal (IO.userError "L0 cannot open a WAL")
-      (WalRecoverySlice.Segmented.Native.openExisting (root / "wal"))
-      WalRecoverySlice.Segmented.Native.scan
+    append handle batch := liftM do
+      let _ ← WalRecoverySlice.Segmented.Native.append handle batch
+    scan handle := liftM (WalRecoverySlice.Segmented.Native.scan handle)
+    openWal := liftM (WalRecoverySlice.Segmented.Native.openExisting (root / "wal"))
     manifest := L0Manifest.backend id {
       publish := fun bytes => liftM (blob.publish bytes)
       reopen := liftM blob.reopen
     }
     tables := tables (root / "tables")
   }
+
+private def callbackComponents (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
+  (componentCell phase).components "L0 cannot use the WAL in this phase" (storageCallbacks root)
 
 structure Handle where private mk ::
   private ops : Components FileM

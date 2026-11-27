@@ -1,4 +1,4 @@
-import Alvoki.Experiments.L0.Basic
+import Alvoki.Experiments.L0.TableSchedule
 
 namespace ExperimentalL0
 
@@ -20,5 +20,13 @@ def createTableAt [Monad m] [MonadExceptOf String m] (occupied : UInt64 → m Bo
   buildSynced id rows
   syncDirectory
   return id
+
+/-- Probe and build the identical ID-derived path, then sync its parent. -/
+def createTableUnder [Monad m] [MonadExceptOf String m]
+    (dir : System.FilePath) (occupied : System.FilePath → m Bool)
+    (buildSynced : System.FilePath → Rows → m Unit)
+    (syncDirectory : System.FilePath → m Unit) (rows : Rows) : m UInt64 :=
+  createTableAt (fun id => occupied (tablePath dir id))
+    (fun id entries => buildSynced (tablePath dir id) entries) (syncDirectory dir) rows
 
 end ExperimentalL0

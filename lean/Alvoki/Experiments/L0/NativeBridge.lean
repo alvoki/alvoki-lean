@@ -47,22 +47,36 @@ structure TableSource (file : Option ByteArray) (rows : Rows) (handle : IO.FS.Ha
     (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) ∧
     (ImmutableSSTable.handleSource handle).Serves bytes
 
-/-- A successful open keeps the source and the observation of the shared
-open schedule together. -/
-inductive TableOpen (file : Option ByteArray) (rows : Rows) : Prop where
-  | opened (source : TableSource file rows handle)
-      (returned : withTableSource (ImmutableSSTable.handleSource handle) (fun _ => pure ()) = pure ()) :
-      TableOpen file rows
+/-- A healthy acquired source is sufficient to derive the typed open. -/
+def TableOpen (file : Option ByteArray) (rows : Rows) : Prop :=
+  ∃ handle, TableSource file rows handle
+
+/-- Produce the check result and its witness using the same ID and handle.
+Stat and descriptor acquisition are premises about the reached path. -/
+theorem tableOpenAt {dir : System.FilePath} {id : UInt64}
+    {stat : System.FilePath → ExceptT String IO IO.FS.Metadata}
+    {withRead : System.FilePath → (IO.FS.Handle → ExceptT String IO Unit) → ExceptT String IO Unit}
+    (report : stat (tablePath dir id) = pure metadata) (valid : isTableFile metadata = true)
+    (scope : withRead (tablePath dir id) (fun handle => nativeTableAction handle (fun _ => pure ())) =
+      nativeTableAction acquired (fun _ => pure ()))
+    (files : System.FilePath → Option ByteArray)
+    (binding : files (tablePath dir id) = some bytes)
+    (built : ImmutableSSTable.modelBuild
+      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+    (serves : (ImmutableSSTable.handleSource acquired).Serves bytes) :
+    withTableAt stat withRead dir id (fun handle => nativeTableAction handle (fun _ => pure ())) =
+      pure () ∧ TableOpen (files (tablePath dir id)) rows :=
+  ⟨native_table_descriptor_checked report valid scope built serves,
+    acquired, ⟨count, bytes, binding, built, serves⟩⟩
 
 theorem TableOpen.represents (receipt : TableOpen file rows) :
     ∃ (handle : IO.FS.Handle) (table : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation),
       table.Represents (· < ·) rows ∧
       withTableSource (ImmutableSSTable.handleSource handle) (fun opened => pure opened) = pure table := by
-  cases receipt with
-  | @opened handle source _ =>
-    obtain ⟨_, _, _, built, serves⟩ := source.image
-    obtain ⟨table, represents, opened⟩ := native_table_source_built handle built serves
-    exact ⟨handle, table, represents, opened _⟩
+  obtain ⟨handle, source⟩ := receipt
+  obtain ⟨_, _, _, built, serves⟩ := source.image
+  obtain ⟨table, represents, opened⟩ := native_table_source_built handle built serves
+  exact ⟨handle, table, represents, opened _⟩
 
 /-- A healthy lookup records the result of the very same open/read
 schedule used by the native adapter. -/

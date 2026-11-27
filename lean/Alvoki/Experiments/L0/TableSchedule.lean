@@ -2,6 +2,9 @@ import Alvoki.Experiments.L0.Codecs
 import Alvoki.Experiments.SSTable.Native
 
 namespace ExperimentalL0
+open System
+
+def tablePath (dir : FilePath) (id : UInt64) : FilePath := dir / s!"table-{id.toNat}"
 
 /-- Open and use the table on the source supplied by the adapter. In the
 native adapter, that source retains the read descriptor for this call. -/
@@ -21,6 +24,13 @@ def withTableDescriptor [Monad m] [MonadExceptOf String m]
   let metadata ← stat
   if isTableFile metadata then withRead use
   else throw "expected a singly linked regular SSTable"
+
+/-- Both syscalls use the name derived from the same requested ID. -/
+def withTableAt [Monad m] [MonadExceptOf String m]
+    (stat : FilePath → m IO.FS.Metadata) (withRead : FilePath → (handle → m α) → m α)
+    (dir : FilePath) (id : UInt64) (use : handle → m α) : m α :=
+  let path := tablePath dir id
+  withTableDescriptor (stat path) (withRead path) use
 
 /-- Lift the shared typed operation without exporting the descriptor. Native
 callers restrict its result to a mutation observation or unit. -/
