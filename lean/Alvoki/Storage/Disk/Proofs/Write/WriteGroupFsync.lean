@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.SyncHandleEffects
-import Alvoki.Storage.Disk.WalSegmentCommitEffects
+import Alvoki.Storage.Disk.Proofs.Filesystem.SyncHandleEffects
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCommitEffects
 
 namespace Alvoki.Storage.SyncHandleRouting
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.RunUnlinkSchedule
+import Alvoki.Storage.Disk.Proofs.Collection.RunUnlinkSchedule
 
 namespace Alvoki.Storage
 open System CheckpointPublication

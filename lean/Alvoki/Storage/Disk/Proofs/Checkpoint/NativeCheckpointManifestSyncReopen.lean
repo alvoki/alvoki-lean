@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestSyncError
-import Alvoki.Storage.Disk.NativeExecutionClose
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeExecutionClose
 import Alvoki.Storage.Disk.Checkpoint.Reopen.HeldInstallation
 
 namespace Alvoki.Storage.DiskSession

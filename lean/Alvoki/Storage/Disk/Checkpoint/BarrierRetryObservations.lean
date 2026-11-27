@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.FileObservationFrame
+import Alvoki.Storage.Disk.Proofs.Filesystem.FileObservationFrame
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 
 namespace Alvoki.Storage.DiskSession

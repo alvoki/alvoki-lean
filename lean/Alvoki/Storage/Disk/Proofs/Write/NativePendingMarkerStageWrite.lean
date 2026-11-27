@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativePendingStagedMarkerSync
 
 namespace Alvoki.Storage.DiskSession
 

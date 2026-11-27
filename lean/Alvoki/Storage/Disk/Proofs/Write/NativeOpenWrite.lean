@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeOpenAcquire
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenAcquire
 import Alvoki.Storage.Disk.Proofs.Write.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.Proofs.Write.NativeWritePreflight
 import Alvoki.Storage.Disk.Proofs.Write.NativeWriteClassification

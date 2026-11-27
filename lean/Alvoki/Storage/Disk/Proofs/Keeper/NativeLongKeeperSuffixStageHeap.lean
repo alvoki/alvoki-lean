@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperReadHeap
-import Alvoki.Storage.Disk.NativeStagingAcquisition
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeStagingAcquisition
 
 namespace Alvoki.Storage.DiskSession
 

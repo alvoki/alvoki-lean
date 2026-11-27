@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMutatingOpenRetries
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMutatingOpenRetries
 
 namespace Alvoki.Storage.DiskSession
 

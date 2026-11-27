@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeGroupedWalRetryTarget
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteReboot
 
 namespace Alvoki.Storage.DiskSession

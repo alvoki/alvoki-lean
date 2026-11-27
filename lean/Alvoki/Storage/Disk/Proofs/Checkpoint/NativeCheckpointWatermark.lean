@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.CheckpointManifestRenameCut
-import Alvoki.Storage.Disk.NativeReadyCheckpoint
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRenameCut
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestRenameReboot
 
 namespace Alvoki.Storage.DiskSession

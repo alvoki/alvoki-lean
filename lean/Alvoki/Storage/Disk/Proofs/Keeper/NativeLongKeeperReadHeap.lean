@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeMarkedCheckpointHeap
 import Alvoki.Storage.Disk.Proofs.Keeper.NativePrunedAlignedKeeperCache
 import Alvoki.Storage.Disk.Proofs.Keeper.CapturedLongKeeperInstallation
 

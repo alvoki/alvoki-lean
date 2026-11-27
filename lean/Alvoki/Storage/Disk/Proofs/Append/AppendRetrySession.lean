@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
-import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedDelayedDirectorySync
 
 namespace Alvoki.Storage.DiskSession
 

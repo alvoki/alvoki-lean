@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointHeldOpen
 import Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork
-import Alvoki.Storage.Disk.SelectedRecoveryPayload
+import Alvoki.Storage.Disk.Proofs.Recovery.SelectedRecoveryPayload
 
 namespace Alvoki.Storage.WalSegmentRepair
 

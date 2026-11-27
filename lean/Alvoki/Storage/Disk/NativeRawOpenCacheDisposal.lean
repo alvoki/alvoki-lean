@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeRawOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 

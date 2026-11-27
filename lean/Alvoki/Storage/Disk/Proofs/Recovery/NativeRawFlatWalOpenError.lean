@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawRecoveryReturn
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeRawRecoveryReturn
 
 namespace Alvoki.Storage.DiskSession
 

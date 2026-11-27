@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Write.NativeGroupedWriteReboot
-import Alvoki.Storage.Disk.NativeSourceLedger
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeSourceLedger
 
 namespace Alvoki.Storage.DiskSession
 

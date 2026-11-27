@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeOpenRotation
-import Alvoki.Storage.Disk.NativeWalStage
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeWalStage
 
 namespace Alvoki.Storage.DiskSession
 

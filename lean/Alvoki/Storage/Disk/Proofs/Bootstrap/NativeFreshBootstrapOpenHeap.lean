@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Bootstrap.NativeBootstrapMarkerPhysical
 import Alvoki.Storage.Disk.Proofs.Bootstrap.NativeBootstrapOpenHeap
-import Alvoki.Storage.Disk.NativeAlignedOpenHeap
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeAlignedOpenHeap
 
 namespace Alvoki.Storage.DiskSession
 

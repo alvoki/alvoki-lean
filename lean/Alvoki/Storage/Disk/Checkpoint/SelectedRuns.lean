@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentRetryReads
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRetryReads
 
 namespace Alvoki.Storage.DiskSession
 

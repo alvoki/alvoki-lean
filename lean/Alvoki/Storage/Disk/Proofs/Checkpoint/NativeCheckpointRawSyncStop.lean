@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeOpenCheckpointScheduleStop
-import Alvoki.Storage.Disk.NativeRawSync
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeOpenCheckpointScheduleStop
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeRawSync
 
 namespace Alvoki.Storage.DiskSession
 

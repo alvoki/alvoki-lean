@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CachedWalChunkReports
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalChunkReports
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
 
 namespace Alvoki.Storage

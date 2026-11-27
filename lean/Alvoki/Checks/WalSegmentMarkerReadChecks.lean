@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentMarkerRead
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentMarkerRead
 
 open Alvoki Alvoki.Storage
 

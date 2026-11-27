@@ -1,8 +1,8 @@
-import Alvoki.Storage.Disk.NativeWalGroupedTail
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeWalGroupedTail
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteReboot
 import Alvoki.Storage.Disk.Proofs.Write.NativeAlignedWriteRecovery
-import Alvoki.Storage.Disk.NativeFailedOpenTerminalLedger
-import Alvoki.Storage.Disk.NativeReadyCallRefinement
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeFailedOpenTerminalLedger
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeReadyCallRefinement
 
 namespace Alvoki.Storage.DiskSession
 

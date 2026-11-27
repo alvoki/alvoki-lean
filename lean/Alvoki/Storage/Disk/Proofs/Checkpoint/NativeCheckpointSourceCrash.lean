@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointFsyncEffects
-import Alvoki.Storage.Disk.NativeReadyPowerLoss
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeReadyPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

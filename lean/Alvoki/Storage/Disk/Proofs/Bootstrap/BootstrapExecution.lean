@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.BatchRecoveryPrefix
-import Alvoki.Storage.Disk.BatchInterruptionDispatch
+import Alvoki.Storage.Disk.Proofs.Session.BatchRecoveryPrefix
+import Alvoki.Storage.Disk.Proofs.Session.BatchInterruptionDispatch
 import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapKeeperMarkerHandoff
 import Alvoki.Storage.Disk.Proofs.Read.ClientSnapshotTransitions
 import Alvoki.Storage.Disk.Proofs.Read.NativeReadyReadPrefix

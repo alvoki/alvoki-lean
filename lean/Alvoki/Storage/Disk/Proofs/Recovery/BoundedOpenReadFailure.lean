@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.SegmentedSessionInstall
-import Alvoki.Storage.Disk.WalSegmentBoundedOpenEffects
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedSessionInstall
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentBoundedOpenEffects
 
 namespace Alvoki.Storage.WalSegmentRepair
 

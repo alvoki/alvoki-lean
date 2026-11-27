@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.SegmentedRotationStep
-import Alvoki.Storage.Disk.DiskCleanReopenAdmission
+import Alvoki.Storage.Disk.Proofs.Session.DiskCleanReopenAdmission
 
 namespace Alvoki.Storage.DiskSession
 

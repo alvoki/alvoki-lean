@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDurability
-import Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryCut
 import Alvoki.Storage.Disk.Checkpoint.Reopen.HeldInstallation
 
 namespace Alvoki.Storage.DiskSession

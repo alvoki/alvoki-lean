@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.DescriptorInventory
+import Alvoki.Storage.Disk.Proofs.Filesystem.DescriptorInventory
 
 namespace Alvoki.Storage.DiskSession
 

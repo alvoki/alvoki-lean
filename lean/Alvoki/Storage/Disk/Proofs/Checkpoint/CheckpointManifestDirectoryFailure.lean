@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryCut
 import Alvoki.Storage.Disk.SegmentedFailureRelease
 
 namespace Alvoki.Storage.DiskSession

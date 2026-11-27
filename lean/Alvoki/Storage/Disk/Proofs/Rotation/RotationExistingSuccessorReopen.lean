@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationExistingSuccessor
-import Alvoki.Storage.Disk.CapturedAlignedInstallation
-import Alvoki.Storage.Disk.PendingClientReplay
+import Alvoki.Storage.Disk.Proofs.Session.CapturedAlignedInstallation
+import Alvoki.Storage.Disk.Proofs.Recovery.PendingClientReplay
 
 namespace Alvoki.Storage.DiskSession
 

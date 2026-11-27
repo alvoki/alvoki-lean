@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
-import Alvoki.Storage.Disk.SegmentedRetryTrace
-import Alvoki.Storage.Disk.WalSegmentCheckpointReopen
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRetryTrace
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointReopen
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotationReopen
 
 namespace Alvoki.Storage.WalSegmentRotation

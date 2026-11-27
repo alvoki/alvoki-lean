@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Write.NativePendingMarkerStageWrite
-import Alvoki.Storage.Disk.NativePendingMarkerRenameOpenPhase
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativePendingMarkerRenameOpenPhase
 
 namespace Alvoki.Storage.DiskSession
 

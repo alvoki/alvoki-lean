@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.CheckpointManifestDirectoryCut
-import Alvoki.Storage.Disk.PendingClientReplay
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryCut
+import Alvoki.Storage.Disk.Proofs.Recovery.PendingClientReplay
 
 namespace Alvoki.Storage.DiskSession
 

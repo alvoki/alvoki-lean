@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedScanFrame
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedScanFrame
 
 namespace Alvoki.Storage.DiskSession
 

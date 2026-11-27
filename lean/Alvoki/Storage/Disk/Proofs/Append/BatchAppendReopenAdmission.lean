@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.DiskOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Session.DiskOpenAdmission
 import Alvoki.Storage.Disk.Proofs.Append.SegmentedBatchAppendPowerLoss
 import Alvoki.Storage.Disk.Proofs.Append.WalBatchAppendProcessExit
 

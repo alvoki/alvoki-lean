@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeReadyCheckpoint
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 
 namespace Alvoki.Storage.DiskSession

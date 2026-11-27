@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstBarrierWork
-import Alvoki.Storage.Disk.StagedHandleCustody
+import Alvoki.Storage.Disk.Proofs.Filesystem.StagedHandleCustody
 
 namespace Alvoki.Storage.DiskSession
 

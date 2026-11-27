@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationSessionHandoff
-import Alvoki.Storage.Disk.SegmentedRetryTrace
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRetryTrace
 
 namespace Alvoki.Storage.DiskSession
 

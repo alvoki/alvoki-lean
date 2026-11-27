@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.ReachableWalSeals
+import Alvoki.Storage.Disk.Proofs.WAL.ReachableWalSeals
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
 
 namespace Alvoki.Storage.DiskSession

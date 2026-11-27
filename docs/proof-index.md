@@ -32,7 +32,7 @@ The end-to-end theorem crosses all four boundaries by composition. Each local pr
 implementation detail needed at its own boundary. For example, proving that the replay algorithm
 returns the right rows for an input byte array still leaves an essential equality to prove. Those must
 be the bytes read from the selected inode by the opener that returned the table. Reuse the existing
-trace induction and bounded-read contracts as consumers of that evidence. [Reached execution and replay](../lean/Alvoki/Storage/Disk/NativeExecutionPrefix.lean) · [Exact prefix reads](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
+trace induction and bounded-read contracts as consumers of that evidence. [Reached execution and replay](../lean/Alvoki/Storage/Disk/Proofs/Native/Execution/NativeExecutionPrefix.lean) · [Exact prefix reads](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
 
 ### Choose an invariant that can be carried forward
 
@@ -48,13 +48,13 @@ have closed. Both preserve the prior checkpoint selection. A rename error requir
 selection proof because the chosen crash image can retain the old manifest even if the replacement
 was visible. The consolidation target is one proof from selected reads to the exact returned table,
 shared by all three paths. That proof must accept each allowed selection with its
-own watermark and bytes. [Run fsync stop](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointRunFileStop.lean) · [First directory fsync stop](../lean/Alvoki/Storage/Disk/NativeStoppedRunDirectoryTableOpen.lean) · [Manifest rename error](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointManifestRenameTableOpen.lean)
+own watermark and bytes. [Run fsync stop](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointRunFileStop.lean) · [First directory fsync stop](../lean/Alvoki/Storage/Disk/Proofs/Native/Open/NativeStoppedRunDirectoryTableOpen.lean) · [Manifest rename error](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointManifestRenameTableOpen.lean)
 
 Prove outcomes over the same production schedule and prefer induction over its actual sequence of
 operations or retries. Put the distinction between completed return, pending call and interruption
 where the schedule makes it. Compose a failed open and a later successful open through the state
 between them. This lets a later proof reuse the same retry argument even when another interruption
-or rejection appears. [Shared production schedule](../lean/Alvoki/Storage/Publication/DiskPublication.lean) · [Opened-session induction](../lean/Alvoki/Storage/Disk/NativeOpenedRestartSessions.lean)
+or rejection appears. [Shared production schedule](../lean/Alvoki/Storage/Publication/DiskPublication.lean) · [Opened-session induction](../lean/Alvoki/Storage/Disk/Proofs/Native/Open/NativeOpenedRestartSessions.lean)
 
 When several executable paths perform the same check before I/O, extract that
 decision in the production code and prove its effect once. Three WAL readers
@@ -76,7 +76,7 @@ when extracting a helper. [WAL cutoff and its contract](../lean/Alvoki/Storage/D
 - When extracting a shared lemma, try it on two different concrete callers. Look for a duplicated
   argument that disappears or an existing invariant that a new case can reuse directly. Keep
   differences that affect callers or recovery. For example, an identical EIO before or after a
-  directory sync can admit different crash images. [Obsolete-run barrier errors](../lean/Alvoki/Storage/Disk/NativeObsoleteRunBarrierError.lean)
+  directory sync can admit different crash images. [Obsolete-run barrier errors](../lean/Alvoki/Storage/Disk/Proofs/Native/Recovery/NativeObsoleteRunBarrierError.lean)
 - When a new case repeats a downstream proof, check whether the existing lemma can consume
   the invariant established by both cases. Keep differences local to the step that needs them.
   Judge each new local lemma by the premise it discharges, the public outcome it adds, or the
@@ -85,7 +85,7 @@ when extracting a helper. [WAL cutoff and its contract](../lean/Alvoki/Storage/D
   and crash outcomes, including returned errors and interruptions. Recovery completion can assume
   that required I/O succeeds and resources are available. Eventual reclamation can assume eligible
   data stays eligible and a later maintenance pass reaches an effective directory barrier.
-  Name removal and release of allocated blocks need distinct evidence. [Recovery progress](../lean/Alvoki/Storage/Disk/CachedRecoveryProgress.lean) · [Reclamation contract](proof-roadmap.md#garbage-collection-contract)
+  Name removal and release of allocated blocks need distinct evidence. [Recovery progress](../lean/Alvoki/Storage/Disk/Proofs/Recovery/CachedRecoveryProgress.lean) · [Reclamation contract](proof-roadmap.md#garbage-collection-contract)
 - Check dependencies on the integrated theorem, including the kernel and axiom audit. Use native
   fixtures to test the adapter at the reported boundaries. Track the proof's scope by which
   executable outcomes it covers and which premises it discharges. Keep ghost histories and other
@@ -101,9 +101,9 @@ when extracting a helper. [WAL cutoff and its contract](../lean/Alvoki/Storage/D
 | Representation refinement | [Memtable contract](../lean/Alvoki/Storage/Table/MemTableContract.lean#L18) · [Packed table refinement](../lean/Alvoki/Storage/Table/PackedTable.lean#L118) · [Successful snapshot write](../lean/Alvoki/Storage/Table/SnapshotTable.lean#L133) | Project each representation to a common ordered history. Prove operation results against it once, then use those results in client proofs. |
 | Finite checks for all snapshots | [Purge check and snapshot boundaries](../lean/Alvoki/Storage/Table/SequentialPurge.lean#L47) | Between consecutive version boundaries, visibility is constant. The logical purge check therefore reduces a claim over all supported snapshots to finitely many checks. |
 | Callback schedules and failure prefixes | [Publication schedule](../lean/Alvoki/Storage/Publication/DiskPublication.lean#L4) · [Reported prefixes](../lean/Alvoki/Storage/Publication/DiskPublicationModel.lean#L8) · [Manifest rename prefix](../lean/Alvoki/Storage/Disk/Checkpoint/Manifest/RenamePrefix.lean) · [Correlated crash images](../lean/Alvoki/Storage/Publication/DirectoryPublicationModel.lean#L42) | Account for completed effects and whether the failing action took effect. Keep outcomes for different names correlated through directory barriers and retries. |
-| Lock ownership and reference lifetime | [Lock descriptions](../lean/Alvoki/Storage/Disk/LockDescriptionLifetime.lean#L6) · [Close and handoff](../lean/Alvoki/Storage/Disk/LockDescriptionLifetime.lean#L204) | Prove a common handoff for an exact reached file image. Explicit close and observed final reference drop expose the same image to the next cooperating lock acquisition. |
+| Lock ownership and reference lifetime | [Lock descriptions](../lean/Alvoki/Storage/Disk/Proofs/Filesystem/LockDescriptionLifetime.lean#L6) · [Close and handoff](../lean/Alvoki/Storage/Disk/Proofs/Filesystem/LockDescriptionLifetime.lean#L204) | Prove a common handoff for an exact reached file image. Explicit close and observed final reference drop expose the same image to the next cooperating lock acquisition. |
 | Selected files and returned reads | [Selected run maps](../lean/Alvoki/Storage/Disk/Checkpoint/SelectedRuns.lean) · [Held directory observations](../lean/Alvoki/Storage/Disk/Proofs/Recovery/HeldDirectoryReadObservations.lean) · [Marked authorization](../lean/Alvoki/Storage/Disk/Proofs/Recovery/ListedDirectoryAuthorization.lean) · [Guarded snapshots](../lean/Alvoki/Storage/Disk/Proofs/Read/CachedRetrySnapshotReads.lean) | Agreement at the manifest's selected indices preserves the loaded checkpoint. Join those byte reads, listing and first barrier under a common observed directory, then carry the returned session into point and range refinement. |
-| Recovery and trace induction | [Bounded checkpoint retry](../lean/Alvoki/Storage/Disk/CheckpointRetrySession.lean#L93) · [Writer trace](../lean/Alvoki/Storage/Disk/SegmentedDatabaseTrace.lean#L295) | Compose operation-specific effects, recovery outcomes and the invariant that each next step requires. This is the bridge from individual cuts to database histories. |
+| Recovery and trace induction | [Bounded checkpoint retry](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/CheckpointRetrySession.lean#L93) · [Writer trace](../lean/Alvoki/Storage/Disk/Proofs/Recovery/SegmentedDatabaseTrace.lean#L295) | Compose operation-specific effects, recovery outcomes and the invariant that each next step requires. This is the bridge from individual cuts to database histories. |
 | Bounded acquisition | [WAL callback trace](../lean/Alvoki/Storage/Disk/Proofs/WAL/WalSegmentReadWork.lean) · [Checkpoint read sizes](../lean/Alvoki/Storage/Disk/IntegrityCheckpointSizedRead.lean) | Count requests in the actual read schedule and tie each admitted byte range to the selected marker or manifest. Compare the exact accepted input with the existing integrity and replay model. |
 
 The filesystem results use the stated callback and crash assumptions. The [axiom audit](../lean/Alvoki/Checks/AxiomPolicy.lean) checks theorem dependencies. The [native fixtures](../scripts/check-sequential.sh) exercise the adapter's callback behavior and process-death cases.
@@ -111,6 +111,6 @@ The filesystem results use the stated callback and crash assumptions. The [axiom
 ## Where to reuse next
 
 1. **Package successful retry outcomes.** [Held checkpoint installation](../lean/Alvoki/Storage/Disk/Checkpoint/Reopen/HeldInstallation.lean) connects retry lineage and exact file reads to the returned ready session. The prior-manifest and live-manifest proofs share it after establishing which manifest choices they admit. [Append retry installation](../lean/Alvoki/Storage/Disk/Proofs/Append/AppendRetrySession.lean) applies the pattern across full-chain and retained-WAL recovery, with each route keeping its own WAL invariant.
-2. **Track WAL provenance alongside retained readiness.** The [mixed database trace](../lean/Alvoki/Storage/Disk/SegmentedDatabaseTrace.lean) and [single-writer trace](../lean/Alvoki/Storage/Disk/Proofs/Write/SegmentedWriterTrace.lean) now share the induction within each trace family. The full-chain guarantee is recovered from its explicitly propagated evidence.
+2. **Track WAL provenance alongside retained readiness.** The [mixed database trace](../lean/Alvoki/Storage/Disk/Proofs/Recovery/SegmentedDatabaseTrace.lean) and [single-writer trace](../lean/Alvoki/Storage/Disk/Proofs/Write/SegmentedWriterTrace.lean) now share the induction within each trace family. The full-chain guarantee is recovered from its explicitly propagated evidence.
 3. **Use operation results as the proof boundary.** [PackedTable](../lean/Alvoki/Storage/Table/PackedTable.lean) specifies the successful restore, write, flush and compact results once. Row bounds, logical refinement and checkpoint proofs consume those results. The [range congruence lemma](../lean/Alvoki/Storage/Table/SequentialModel.lean) gives a similar boundary for interval-local read facts.
 4. **Keep generic schedule facts below storage.** [DiskPublicationModel](../lean/Alvoki/Storage/Publication/DiskPublicationModel.lean#L155) currently combines generic state-machine prefix reasoning with a WAL replay specialization. Move the specialization to the WAL layer so the reusable prefix lemmas can have a narrow import boundary.

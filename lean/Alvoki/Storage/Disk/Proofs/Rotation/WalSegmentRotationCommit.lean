@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentCommitEffects
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCommitEffects
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation
 
 namespace Alvoki.Storage.WalSegmentRotation

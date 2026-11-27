@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.Proofs.Write.NativeOpenWrite
-import Alvoki.Storage.Disk.NativeOpenedPosition
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedPosition
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteCustody
-import Alvoki.Storage.Disk.NativeWalPublicationTail
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeWalPublicationTail
 
 namespace Alvoki.Storage.DiskSession
 

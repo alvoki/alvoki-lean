@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeGroupedWalRetryTarget
-import Alvoki.Storage.Disk.NativeSourceLedger
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeGroupedWalRetryTarget
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeSourceLedger
 
 namespace Alvoki.Storage.DiskSession
 

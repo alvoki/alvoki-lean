@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.ListedDirectoryAuthorization
-import Alvoki.Storage.Disk.LongWalBindingPublication
+import Alvoki.Storage.Disk.Proofs.WAL.LongWalBindingPublication
 
 namespace Alvoki.Storage.DiskSession
 

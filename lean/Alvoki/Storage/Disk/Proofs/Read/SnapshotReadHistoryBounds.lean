@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.PendingClientReplay
+import Alvoki.Storage.Disk.Proofs.Recovery.PendingClientReplay
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeInactiveSessionCalls
-import Alvoki.Storage.Disk.NativeReadyProcessExit
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeInactiveSessionCalls
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeReadyProcessExit
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotationPowerLoss
-import Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout
-import Alvoki.Storage.Disk.DiskOpenAdmission
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointRetryLayout
+import Alvoki.Storage.Disk.Proofs.Session.DiskOpenAdmission
 import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterReopen
 
 namespace Alvoki.Storage.DiskSession

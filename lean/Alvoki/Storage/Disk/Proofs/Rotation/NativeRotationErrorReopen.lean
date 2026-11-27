@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.NativePendingRotation
-import Alvoki.Storage.Disk.NativeExecutionClose
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeExecutionClose
 
 namespace Alvoki.Storage.DiskSession
 

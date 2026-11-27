@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeOpenCacheReferences
-import Alvoki.Storage.Disk.NativeRawSync
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenCacheReferences
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeRawSync
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunDirectoryCut
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.WalSegmentCommitEffects
-import Alvoki.Storage.Disk.WalSegmentRepairEffects
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCommitEffects
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRepairEffects
 
 namespace Alvoki.Storage.WalSegmentRepair
 

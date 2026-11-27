@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestChunkError
-import Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedOpenInterpreter
 
 namespace Alvoki.Storage.DiskSession
 

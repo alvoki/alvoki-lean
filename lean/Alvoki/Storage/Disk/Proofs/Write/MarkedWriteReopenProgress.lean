@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.MarkedOpenControl
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedOpenControl
 
 namespace Alvoki.WAL.Boundary
 

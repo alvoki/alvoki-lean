@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedSessionInstall
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedSessionInstall
 
 namespace Alvoki.Storage.WalSegmentRepair
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeExecutionPrefix
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeExecutionPrefix
 
 namespace Alvoki.Storage.DiskSession
 

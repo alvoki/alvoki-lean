@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationReopenAdmission
-import Alvoki.Storage.Disk.BatchRecoveryPrefix
+import Alvoki.Storage.Disk.Proofs.Session.BatchRecoveryPrefix
 
 namespace Alvoki.Storage.DiskSession
 

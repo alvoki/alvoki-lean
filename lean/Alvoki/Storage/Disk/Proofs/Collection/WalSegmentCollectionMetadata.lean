@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Write.SegmentedRetainedWriter
-import Alvoki.Storage.Disk.WalSegmentUnlinkSchedule
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentUnlinkSchedule
 import Alvoki.Storage.Disk.WalSegmentCollectionPlan
 
 namespace Alvoki.Storage

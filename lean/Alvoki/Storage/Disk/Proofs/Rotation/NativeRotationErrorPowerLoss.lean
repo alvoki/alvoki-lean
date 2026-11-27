@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationErrorReopen
-import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedReadyPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

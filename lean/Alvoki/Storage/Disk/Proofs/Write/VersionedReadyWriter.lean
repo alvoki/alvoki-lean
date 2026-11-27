@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.MarkedDatabaseTrace
-import Alvoki.Storage.Disk.VersionedCheckpointReopen
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedDatabaseTrace
+import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointReopen
 
 namespace Alvoki.WAL.Boundary
 open Storage CheckpointPublication Manifest

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.BatchRecoveryPrefix
+import Alvoki.Storage.Disk.Proofs.Session.BatchRecoveryPrefix
 import Alvoki.Storage.Disk.Proofs.Write.ClientWriteTrace
 
 namespace Alvoki.Storage.DiskSession

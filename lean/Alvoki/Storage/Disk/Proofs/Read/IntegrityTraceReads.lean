@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.IntegrityDatabaseTrace
+import Alvoki.Storage.Disk.Proofs.Session.IntegrityDatabaseTrace
 
 namespace Alvoki.WAL.Boundary
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Write.BatchGroupedWriteError
-import Alvoki.Storage.Disk.NativePendingMarkerSync
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativePendingMarkerSync
 
 namespace Alvoki.Storage.DiskSession
 

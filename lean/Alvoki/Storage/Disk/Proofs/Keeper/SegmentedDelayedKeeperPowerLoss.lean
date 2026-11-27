@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Append.RetainedAppendRecovery
 import Alvoki.Storage.Disk.Proofs.Keeper.SegmentedKeeperReachedReplacement
-import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession
 

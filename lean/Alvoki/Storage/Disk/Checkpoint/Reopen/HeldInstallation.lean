@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointHeldOpen
-import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedCheckpointRecovery
 
 namespace Alvoki.Storage.DiskSession
 

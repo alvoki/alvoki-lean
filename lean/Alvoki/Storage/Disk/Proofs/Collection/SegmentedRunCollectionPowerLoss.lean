@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.DiskOpenAdmission
-import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
+import Alvoki.Storage.Disk.Proofs.Session.DiskOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedReadyPowerLoss
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedRunCollection
 
 namespace Alvoki.Storage.DiskSession

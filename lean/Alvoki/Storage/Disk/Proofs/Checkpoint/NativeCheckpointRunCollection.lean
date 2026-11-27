@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Collection.NativeObsoleteRunCollection
-import Alvoki.Storage.Disk.NativeRunMaintenanceReopen
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeRunMaintenanceReopen
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.NativeReadyCheckpoint
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.Proofs.Read.NativeReadRecoveryTrace
-import Alvoki.Storage.Disk.CheckpointRunDirectoryCut
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 
 namespace Alvoki.Storage.DiskSession

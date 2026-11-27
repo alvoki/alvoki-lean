@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Bootstrap.NativeBootstrapMarkerBeforeEffectMarkedReboot
-import Alvoki.Storage.Disk.NativeOpenedRestartSessions
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedRestartSessions
 
 namespace Alvoki.Storage.DiskSession
 

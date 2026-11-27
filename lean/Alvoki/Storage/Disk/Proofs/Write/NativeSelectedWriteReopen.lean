@@ -1,7 +1,7 @@
-import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeAlignedCheckpointReopenEffects
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteReboot
-import Alvoki.Storage.Disk.NativeMarkedEntryObservations
-import Alvoki.Storage.Disk.NativeMarkedOpenInterpreter
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedEntryObservations
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedOpenInterpreter
 import Alvoki.Storage.Disk.Proofs.Write.NativeWriteCrashReads
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 

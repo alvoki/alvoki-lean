@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Bootstrap.NativeReusedBootstrapKeeperHeap
-import Alvoki.Storage.Disk.NativeRawOpenAdmission
-import Alvoki.Storage.Disk.NativeAlignedOpenHeap
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeRawOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeAlignedOpenHeap
 
 namespace Alvoki.Storage.DiskSession
 

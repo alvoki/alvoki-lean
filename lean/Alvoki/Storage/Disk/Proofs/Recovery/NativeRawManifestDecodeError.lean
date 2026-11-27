@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeManifestDecodeError
-import Alvoki.Storage.Disk.NativeMarkedTableOpen
-import Alvoki.Storage.Disk.NativeRawOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedTableOpen
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeRawOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 

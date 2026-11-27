@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
-import Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
+import Alvoki.Storage.Disk.Proofs.WAL.WalSealedUnlinkSurvivors
 
 namespace Alvoki.Storage.DiskSession
 

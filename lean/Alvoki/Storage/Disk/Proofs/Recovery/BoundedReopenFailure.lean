@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.BoundedOpenReadFailure
-import Alvoki.Storage.Disk.WalSegmentOpenFastEffects
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentOpenFastEffects
 
 namespace Alvoki.Storage.WalSegmentRepair
 

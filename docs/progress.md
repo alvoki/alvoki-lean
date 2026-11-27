@@ -9,9 +9,9 @@ entry and a bounded WAL namespace. On the covered mixed-call paths, the actual
 phase read, cache and ledger connect writes and snapshots to rotation or checkpoint.
 After a failed rotation, a surviving directory map and a complete bounded scan
 determine the selected seals, keeper and any names to prune.
-[Fresh execution](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
+[Fresh execution](../lean/Alvoki/Storage/Disk/Proofs/Native/Open/NativeFreshOpenedSessions.lean) ·
 [Rotation](../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRotationWalReplay.lean) ·
-[Checkpoint](../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
+[Checkpoint](../lean/Alvoki/Storage/Disk/Proofs/Native/Checkpoint/NativeFreshFinalCheckpoint.lean)
 
 **Which writes survive.** An append interrupted before marker publication retains
 the previous history under the descriptor and byte-prefix assumptions. A late
@@ -31,7 +31,7 @@ sequence. The reached callbacks still supply the marked probes, phase
 initialization and preservation, and token comparison for that lookup.
 [Public append and continuation](../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawWriteRootStop.lean) ·
 [Literal reader and repair](../lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean) ·
-[Aligned public open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
+[Aligned public open](../lean/Alvoki/Storage/Disk/Proofs/Native/Open/NativeMarkedOpenInterpreter.lean)
 
 **What another open sees.** A live retry starts at the public failure's cleanup
 heap. Each accepted suffix removal stays visible as an absent name. If a removal
@@ -45,14 +45,14 @@ map admitted by the observed durability effects.
 the marked branch, a worker error comes from preparation, repair or installation.
 If repair ran, its plan, keeper extent and entry heap come from the successful
 reader of that worker. The failed-retry proof uses this same boundary.
-[Worker classification](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
-[Measured preparation](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedWorker.lean)
+[Worker classification](../lean/Alvoki/Storage/Disk/Proofs/Native/Open/NativeMarkedOpenInterpreter.lean) ·
+[Measured preparation](../lean/Alvoki/Storage/Disk/Proofs/Native/Recovery/NativeAlignedMarkedWorker.lean)
 
 For a failed marked worker, observing its successful keeper rename connects the
 same measured preparation, staged-file sync and final directory error to cleanup
 and a subsequent sampled reboot. The rename observation is cleared before
 installation. Frames apply to the staging and rename heaps reached by that open.
-[Worker observation](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
+[Worker observation](../lean/Alvoki/Storage/Disk/Proofs/Native/Open/NativeMarkedOpenInterpreter.lean) ·
 [Retry and reboot](../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean)
 
 The marked open carries its allocated directory slot to the final fsync. The

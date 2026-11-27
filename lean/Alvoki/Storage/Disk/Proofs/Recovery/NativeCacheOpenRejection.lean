@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.DirectoryCacheOpenAdmissionError
-import Alvoki.Storage.Disk.LockCensusOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Filesystem.LockCensusOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 

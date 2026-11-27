@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.MarkedDatabaseTrace
-import Alvoki.Storage.Disk.SegmentedSessionInstall
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedDatabaseTrace
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedSessionInstall
 
 namespace Alvoki.Storage.DiskSession
 

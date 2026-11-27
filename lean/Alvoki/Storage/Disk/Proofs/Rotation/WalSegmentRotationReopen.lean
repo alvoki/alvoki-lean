@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.WalSegmentFirstReplay
-import Alvoki.Storage.Disk.WalSegmentOpenFastEffects
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentFirstReplay
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentOpenFastEffects
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation
 
 namespace Alvoki.Storage.WalSegmentRotation

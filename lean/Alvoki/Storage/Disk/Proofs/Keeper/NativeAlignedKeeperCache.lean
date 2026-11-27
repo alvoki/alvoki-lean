@@ -1,7 +1,7 @@
-import Alvoki.Storage.Disk.NativeOpenCacheReferences
-import Alvoki.Storage.Disk.CapturedAlignedInstallation
-import Alvoki.Storage.Disk.NativeRawSync
-import Alvoki.Storage.Disk.NativeFileEffectProjection
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenCacheReferences
+import Alvoki.Storage.Disk.Proofs.Session.CapturedAlignedInstallation
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeRawSync
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeFileEffectProjection
 
 namespace Alvoki.Storage.DiskSession
 

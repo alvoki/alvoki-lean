@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CapturedCheckpointReadCensus
+import Alvoki.Storage.Disk.Proofs.Session.CapturedCheckpointReadCensus
 import Alvoki.Storage.Disk.Proofs.Recovery.FailedMarkerReadCensus
 import Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 

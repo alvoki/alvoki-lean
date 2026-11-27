@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Checkpoint.SelectedRuns
 import Alvoki.Storage.Disk.Proofs.Recovery.HeldWalInstallation
-import Alvoki.Storage.Disk.WalSegmentCheckpointRetained
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointRetained
 
 namespace Alvoki.Storage.DiskSession
 

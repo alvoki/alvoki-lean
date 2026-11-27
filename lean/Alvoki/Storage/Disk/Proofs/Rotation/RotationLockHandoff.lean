@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointLockHandoff
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointLockHandoff
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation
 
 namespace Alvoki.Storage.WalSegmentRotation

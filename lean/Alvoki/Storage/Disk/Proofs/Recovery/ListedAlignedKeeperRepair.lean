@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.ListedDirectoryAuthorization
-import Alvoki.Storage.Disk.AlignedWalChunkSync
+import Alvoki.Storage.Disk.Proofs.Session.AlignedWalChunkSync
 
 namespace Alvoki.Storage.DiskSession
 

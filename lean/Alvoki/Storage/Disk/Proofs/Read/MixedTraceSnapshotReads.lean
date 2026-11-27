@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedBatchDatabaseTrace
 
 namespace Alvoki.Storage.DiskSession
 

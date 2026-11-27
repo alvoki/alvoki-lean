@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeCacheOpenRejection
-import Alvoki.Storage.Disk.NativeRawOpenPrefixReturn
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeRawOpenPrefixReturn
 
 namespace Alvoki.Storage.DiskSession
 

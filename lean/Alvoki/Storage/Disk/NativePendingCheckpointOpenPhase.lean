@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.NativeOpenCheckpoint
-import Alvoki.Storage.Disk.NativeOpenedPosition
-import Alvoki.Storage.Disk.NativePendingCheckpoint
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeOpenCheckpoint
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedPosition
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativePendingCheckpoint
 
 namespace Alvoki.Storage.DiskSession
 

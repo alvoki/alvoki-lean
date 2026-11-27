@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeMarkedReadPrefix
-import Alvoki.Storage.Disk.PoisonedBatchClose
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedReadPrefix
+import Alvoki.Storage.Disk.Proofs.Session.PoisonedBatchClose
 
 namespace Alvoki.Storage.DiskSession
 

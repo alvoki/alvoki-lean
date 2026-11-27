@@ -1,8 +1,8 @@
-import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeQuietPowerLossTableOpen
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestStatError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointChunkError
-import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
-import Alvoki.Storage.Disk.NativeMutatingOpenRetries
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenAdmissionStorage
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMutatingOpenRetries
 import Alvoki.Storage.Disk.Proofs.Read.NativeSelectedReadPhaseFrame
 
 namespace Alvoki.Storage.DiskSession

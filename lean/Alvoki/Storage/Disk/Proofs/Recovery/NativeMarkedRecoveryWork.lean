@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.CheckpointHeldOpenWork
-import Alvoki.Storage.Disk.NativeMarkedReadPrefix
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedReadPrefix
 import Alvoki.Storage.Disk.Proofs.Recovery.MetadataRecoveryChunkWork
 
 namespace Alvoki.Storage.DiskSession

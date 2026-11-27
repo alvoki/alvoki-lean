@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.CachedWalChunkReports
-import Alvoki.Storage.Disk.CheckedDirectoryRead
-import Alvoki.Storage.Disk.DiskOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalChunkReports
+import Alvoki.Storage.Disk.Proofs.Session.CheckedDirectoryRead
+import Alvoki.Storage.Disk.Proofs.Session.DiskOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 

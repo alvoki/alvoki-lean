@@ -1,0 +1,326 @@
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedCheckpointStep
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRetryTrace
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointRetryLayout
+import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
+
+namespace Alvoki.Storage.DiskSession
+
+open WalSegmentRepair CheckpointPublication
+open WAL.Boundary (CheckpointRepresentsPrefix)
+
+/-- The checkpoint has passed preparation and issued its current file
+operation. The earlier callbacks returned successfully. The physical
+observation records whether the current operation's modeled effect took
+place before power loss. The current operation has no returned outcome. -/
+structure CheckpointPowerCut (directory : DiskDirectory) (before : SegmentedWriterState) where
+  checkpoint : SegmentedCheckpointReport directory before
+  flushed : (flushForCheckpoint before.installed.table id : Except String PackedTable) = .ok checkpoint.table
+  generationFits : before.installed.generation.toNat + 1 < UInt64.size
+  runCountFits : checkpoint.table.runs.length < UInt64.size
+  encoded : encodeCheckpointIntegrityManifest checkpoint.table (SegmentedCheckpointReport.generation before) =
+    .ok checkpoint.manifest
+  completed : List CheckpointPublication.Step
+  current : CheckpointPublication.Step
+  remaining : List CheckpointPublication.Step
+  schedule : CheckpointPublication.steps checkpoint.table.runs.length = completed ++ current :: remaining
+  observed : ReachedFileReports checkpoint.report checkpoint.perform completed 0
+  state : Nat
+  returned : (completed.forM checkpoint.perform) 0 = .ok () state
+  tookEffect : Bool
+  atCut : checkpoint.cut = state + (if tookEffect then 1 else 0)
+
+namespace CheckpointPowerCut
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState}
+
+theorem preflight (cut : CheckpointPowerCut directory before) :
+    CheckpointPreflight (.ready before.installed) (.ok (cut.checkpoint.prepared, cut.checkpoint.manifest)) :=
+  cut.checkpoint.preflight cut.flushed cut.generationFits cut.runCountFits cut.encoded
+
+/-- Only the current, already-issued primitive can add to the returned prefix. -/
+theorem reachedCount (cut : CheckpointPowerCut directory before) :
+    cut.checkpoint.cut = cut.completed.length + (if cut.tookEffect then 1 else 0) ∧
+    cut.checkpoint.cut ≤ (CheckpointPublication.steps cut.checkpoint.table.runs.length).length := by
+  have count : cut.state = cut.completed.length := by
+    simpa only [Nat.zero_add] using cut.observed.success_length cut.returned
+  have exactCut := cut.atCut
+  rw [count] at exactCut
+  refine ⟨exactCut, ?_⟩
+  rw [exactCut, cut.schedule, List.length_append, List.length_cons]
+  split <;> omega
+
+/-- The publication projection changes directory metadata. It carries
+the existing keeper, every sealed file, and later-name inventory. -/
+def physical (before : SegmentedWriterState) (published : CheckpointPublication.Image) : FileImage :=
+  { before.files with directory := (published.segmentedCheckpointView before.wal).directory }
+
+/-- The operation's physical cut starts with the writer's exact WAL files. -/
+theorem physical_eq (published : CheckpointPublication.Image)
+    (ready : before.RetainedReady directory descriptor) :
+    let wal := published.segmentedCheckpointView before.wal
+    physical before published = wal.checkpointReopenFiles wal.directory before.files.keeper.staged := by
+  intro wal
+  have bytes : before.target.trimmed = before.wal.active.bytes := by
+    rw [ready.resumed.contents, ready.active, ready.layout.activeBytes]
+  have visible := ready.resumed.ready.keeper
+  have stable := ready.resumed.ready.keeperDurable
+  rw [bytes] at visible stable
+  have keeper : before.files.keeper =
+      { Publication.Image.settled (some before.wal.active.bytes) with staged := before.files.keeper.staged } := by
+    change before.files.keeper =
+      ⟨some before.wal.active.bytes, [some before.wal.active.bytes], before.files.keeper.staged⟩
+    rw [← stable, ← visible]
+  obtain ⟨visible, stable⟩ := ready.resumed.ready.pruned
+  have later : before.files.later = .settled [] := by
+    change before.files.later = ⟨[], [[]]⟩
+    rw [← stable, ← visible]
+  change (⟨wal.directory, before.files.kept, before.files.keeper, before.files.later⟩ : FileImage) =
+    ⟨wal.directory, (before.wal.checkpointReopenFiles before.wal.directory none).kept,
+      { Publication.Image.settled (some before.wal.active.bytes) with staged := before.files.keeper.staged },
+      .settled []⟩
+  rw [ready.sealedFiles, keeper, later]
+
+theorem selectedGeneration {durable binding checkpoint}
+    (selected : SelectedIntegrityCheckpoint durable binding checkpoint) :
+    ((binding.mapM fun bytes =>
+      (Manifest.IntegrityCheckpoint.decode bytes).map (·.header.generation)).map (·.getD 0) : Except String UInt64) =
+      .ok (checkpoint.getD (.empty, 0)).2 := by
+  cases selected with
+  | absent => rfl
+  | present decoded _ _ => rw [Option.mapM, decoded]; rfl
+
+/-- The manifest selected by the retained writer cannot refer to the next in-range generation. -/
+theorem freshGeneration (ready : before.RetainedReady directory descriptor)
+    (fits : before.installed.generation.toNat + 1 < UInt64.size) :
+    before.published.UnreachableVersioned (SegmentedCheckpointReport.generation before) := by
+  have visible : before.published.manifest.active = before.target.pair.manifest := by
+    rw [ready.manifestFiles]
+    exact congrArg DirectoryPublication.Bindings.manifest ready.resumed.ready.selected
+  have settled : before.published.manifest.crashImages = [before.published.manifest.active] := by
+    simp [ready.manifestFiles, DirectoryPublication.Image.project, ready.resumed.ready.settled,
+      ready.resumed.ready.selected]
+  have loaded : (before.published.manifest.active = none ∧ before.installed.generation = 0) ∨
+      ∃ bytes selected, before.published.manifest.active = some bytes ∧
+        Manifest.VersionedCheckpoint.decode bytes = .ok selected ∧
+        before.installed.generation = selected.header.generation := by
+    have generation := CheckpointPowerCut.selectedGeneration ready.resumed.selected
+    rw [← ready.resumed.generation, ← visible] at generation
+    cases binding : before.published.manifest.active with
+    | none =>
+      rw [binding] at generation
+      exact .inl ⟨rfl, (Except.ok.inj generation).symm⟩
+    | some bytes =>
+      rw [binding, Option.mapM] at generation
+      cases strict : Manifest.IntegrityCheckpoint.decode bytes with
+      | error cause => simp [strict, Functor.map, Except.map] at generation
+      | ok manifest =>
+        rw [strict] at generation
+        exact .inr ⟨bytes, .integrity manifest, rfl, Manifest.VersionedCheckpoint.decode_integrity strict,
+          (Except.ok.inj generation).symm⟩
+  intro bytes chosen manifest decoded
+  exact before.published.nextVersionedGeneration_unreachable_after_reopen before.installed.generation loaded fits
+    bytes (by simpa only [CheckpointPublication.Image.settleVisible, Publication.Image.settled, ← settled] using chosen)
+    manifest decoded
+
+end CheckpointPowerCut
+
+/-- Successful preflight gives the exact encoding and strict decoder
+result for the prepared runs, with the size bounds used by publication. -/
+theorem CheckpointPreflight.preparedManifestEncoding {old next : Installed} {manifest : ByteArray}
+    {model : Sequential.SnapshotTable UInt64}
+    (prepared : CheckpointPreflight (.ready old) (.ok (next, manifest)))
+    (refined : old.table.Refines model) (bounds : PackedTable.RowBounds old.table) :
+    let payloads := next.table.runs.map (·.run.bytes)
+    let metadata := Manifest.IntegrityCheckpoint.fromRuns (checkpointHeader next.table next.generation) payloads
+    (∀ bytes ∈ payloads, bytes.size < UInt64.size) ∧
+      manifest = metadata.encode ∧ Manifest.IntegrityCheckpoint.decode manifest = .ok metadata := by
+  intro payloads metadata
+  obtain ⟨flushed, _, countFits, _⟩ := prepared.preparedFacts
+  have encoded : encodeCheckpointIntegrityManifest next.table next.generation = .ok manifest := by
+    cases prepared with
+    | prepared _ _ encoded => exact encoded
+  have runBytesFit : ∀ bytes ∈ next.table.runs.map (·.run.bytes), bytes.size < UInt64.size := by
+    by_cases bounded : (next.table.runs.map (·.run.bytes)).all
+        (fun bytes => decide (bytes.size < UInt64.size)) = true
+    · exact fun bytes member => of_decide_eq_true (List.all_eq_true.mp bounded bytes member)
+    · simp [encodeCheckpointIntegrityManifest, bounded, Bind.bind, Except.bind] at encoded
+  have written := (WrittenCheckpoint.of_flushForCheckpoint flushed refined countFits
+    bounds.runs bounds.memory next.generation).1
+  have exactManifest : manifest = metadata.encode :=
+    Except.ok.inj (encoded.symm.trans (encodeCheckpointIntegrityManifest_exact next.generation runBytesFit))
+  have decodedNew : Manifest.IntegrityCheckpoint.decode manifest = .ok metadata := by
+    rw [exactManifest]
+    exact Manifest.IntegrityCheckpoint.decode_encode metadata written.validFloor
+      (by simpa [metadata, payloads, Manifest.IntegrityCheckpoint.fromRuns] using written.count)
+  exact ⟨runBytesFit, exactManifest, decodedNew⟩
+
+/-- The returned target identifies the watermark of the actual selected
+manifest. A newly prepared manifest covers the complete prior history. -/
+theorem CheckpointPreflight.reopenedWatermark
+    {directory : DiskDirectory} {before : SegmentedWriterState} {owner : Nat}
+    {prepared : Installed} {manifest : ByteArray} {target : Target}
+    (checkpoint : CheckpointPreflight (.ready before.installed) (.ok (prepared, manifest)))
+    (ready : before.RetainedReady directory owner)
+    (selected : target.pair.manifest = before.target.pair.manifest ∨ target.pair.manifest = some manifest) :
+    before.target.range.watermark ≤ target.range.watermark ∧
+    (target.pair.manifest = before.target.pair.manifest → target.range.watermark = before.target.range.watermark) ∧
+    (target.pair.manifest = some manifest → target.range.watermark = before.history.length) := by
+  obtain ⟨flushed, _, countFits, _⟩ := checkpoint.preparedFacts
+  obtain ⟨_, refinement, represented⟩ := ready.resumed.canonical
+  obtain ⟨_, clock, _⟩ := WrittenCheckpoint.of_flushForCheckpoint flushed refinement countFits
+    ready.resumed.bounds.runs ready.resumed.bounds.memory prepared.generation
+  have decoded := (checkpoint.preparedManifestEncoding refinement ready.resumed.bounds).2.2
+  have published : selectedCheckpointWatermark (some manifest) = some before.history.length :=
+    selectedCheckpointWatermark_present_iff.mpr
+      ⟨_, decoded, (congrArg UInt64.toNat (clock.trans refinement.committed)).trans represented.committed_count⟩
+  have actual := (DirectoryPublication.Bindings.walRange_accounting target.decoded).1
+  have old (chosen : target.pair.manifest = before.target.pair.manifest) :
+      target.range.watermark = before.target.range.watermark := by
+    rw [chosen, (DirectoryPublication.Bindings.walRange_accounting before.target.decoded).1] at actual
+    exact (Option.some.inj actual).symm
+  have new (chosen : target.pair.manifest = some manifest) : target.range.watermark = before.history.length := by
+    rw [chosen, published] at actual
+    exact (Option.some.inj actual).symm
+  refine ⟨?_, old, new⟩
+  rcases selected with prior | recent
+  · exact Nat.le_of_eq (old prior).symm
+  · rw [new recent, ← ready.resumed.through]
+    exact (DirectoryPublication.Bindings.walRange_accounting before.target.decoded).2.1
+
+/-- The exact prepared plan and its modeled publication determine the
+selected checkpoint and replay for each admissible manifest. The
+publication equation supplies the modeled prefix. -/
+theorem CheckpointPreflight.publicationReplays {directory : DiskDirectory}
+    {before : SegmentedWriterState} {writer : Nat} {next : Installed} {manifest : ByteArray}
+    {cut : Nat} {published : Image}
+    (prepared : CheckpointPreflight (.ready before.installed) (.ok (next, manifest)))
+    (ready : before.RetainedReady directory writer)
+    (executed : before.published.executeVersioned
+      (.integrity ⟨checkpointHeader next.table next.generation, next.table.runs.map (·.run.bytes)⟩) cut =
+      some published) :
+    let wal := published.segmentedCheckpointView before.wal
+    wal.ReadLayout before.history ∧ wal.Valid before.history ∧
+      ∀ pair, wal.Selects pair →
+        pair.walBoundary = before.wal.directory.active.walBoundary ∧
+        published.AcceptsVersioned before.history.length.toUInt64 (CheckpointRepresentsPrefix before.history)
+          pair.manifest ∧
+        ∃ range, pair.walRange = some range ∧ range.through = before.history.length ∧
+          ∃ checkpoint table model, SelectedIntegrityCheckpoint published.durable pair.manifest checkpoint ∧
+            (((checkpoint.getD (.empty, 0)).2 = before.installed.generation ∧
+                pair.manifest = before.wal.directory.active.manifest) ∨
+              ((checkpoint.getD (.empty, 0)).2 = next.generation ∧ pair.manifest = some manifest)) ∧
+            recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok table ∧
+            table.committed.toNat = before.history.length ∧ table.Refines model ∧
+            RepresentsWalHistory before.history model := by
+  obtain ⟨model, refined, represented⟩ := ready.resumed.canonical
+  have marker := congrArg Publication.Image.active ready.resumed.markerImage
+  change before.files.directory.active.walBoundary =
+    some (WAL.Boundary.encode (WAL.encode before.history).size.toUInt64) at marker
+  rw [ready.directoryFiles] at marker
+  have priorGeneration := CheckpointPowerCut.selectedGeneration ready.resumed.selected
+  rw [← ready.resumed.generation, ← ready.walPair] at priorGeneration
+  have projected : before.published.manifest = before.wal.directory.project .manifest := by
+    rw [← ready.directoryFiles]
+    exact ready.manifestFiles
+  have strict (bytes : ByteArray) (binding : before.wal.directory.active.manifest = some bytes) :
+      ∃ manifest, Manifest.IntegrityCheckpoint.decode bytes = .ok manifest := by
+    have generation := priorGeneration
+    rw [binding] at generation
+    cases decoded : Manifest.IntegrityCheckpoint.decode bytes with
+    | error cause => simp [decoded, Option.mapM, Functor.map, Except.map] at generation
+    | ok parsed => exact ⟨parsed, rfl⟩
+  obtain ⟨_, _, _, count, _, _, counted⟩ := DirectoryPublication.Bindings.walRange_accounting before.target.decoded
+  have bytes : (WAL.encode before.history).size = count.toNat := by
+    rw [counted, ready.resumed.through, WAL.encode_size, Nat.mul_comm]
+  have walFits : (WAL.encode before.history).size < UInt64.size := bytes.symm ▸ count.toNat_lt_size
+  obtain ⟨flushed, generationFits, countFits, _⟩ := prepared.preparedFacts
+  have generation : next.generation = SegmentedCheckpointReport.generation before := by
+    cases prepared
+    rfl
+  obtain ⟨runBytesFit, exactManifest, decodedNew⟩ :=
+    prepared.preparedManifestEncoding refined ready.resumed.bounds
+  have fresh : before.published.UnreachableVersioned next.generation :=
+    generation.symm ▸ CheckpointPowerCut.freshGeneration ready generationFits
+  obtain ⟨layout, valid, inputs⟩ := segmentedCheckpoint_cut ready.layout ready.valid ready.walDirectorySettled
+    marker walFits projected (ready.walPair.symm ▸ ready.resumed.accepted) strict refined represented ready.resumed.bounds
+    flushed countFits next.generation fresh runBytesFit executed
+  refine ⟨layout, valid, ?_⟩
+  intro pair chosen
+  obtain ⟨marker, choice, accepted, _, range, _, decoded, through, _⟩ := inputs pair chosen
+  have watermark := (DirectoryPublication.Bindings.walRange_accounting decoded).1
+  obtain ⟨checkpoint, table, replayModel, selected, replayed, committed, _, refines, represents, _⟩ :=
+    selectedCheckpoint_replays watermark accepted walFits ready.resumed.ordered
+  have decided : ((checkpoint.getD (.empty, 0)).2 = before.installed.generation ∧
+        pair.manifest = before.wal.directory.active.manifest) ∨
+      ((checkpoint.getD (.empty, 0)).2 = next.generation ∧ pair.manifest = some manifest) := by
+    have read := CheckpointPowerCut.selectedGeneration selected
+    rcases choice with old | new
+    · rw [old] at read
+      exact .inl ⟨Except.ok.inj (read.symm.trans priorGeneration), old⟩
+    · have exactNew : pair.manifest = some manifest := by
+        rw [exactManifest]
+        exact new
+      rw [exactNew, Option.mapM, decodedNew] at read
+      exact .inr ⟨(Except.ok.inj read).symm, exactNew⟩
+  exact ⟨marker, accepted, range, decoded, through, checkpoint, table, replayModel, selected, decided,
+    replayed, committed, refines, represents⟩
+
+namespace CheckpointPowerCut
+
+variable {directory : DiskDirectory} {before : SegmentedWriterState}
+
+/-- A power loss during the actual checkpoint schedule ends the writer's
+lock lifetime. Each surviving manifest selects its exact ordered durable
+runs, and the same acknowledged WAL replays from that checkpoint. The
+result also gives the first step of the ordinary bounded reopen trace. -/
+theorem selectsAcknowledgedHistory (cut : CheckpointPowerCut directory before)
+    (ready : before.RetainedReady directory descriptor) :
+    ∃ published, before.published.executeVersioned cut.checkpoint.plan cut.checkpoint.cut = some published ∧
+      let wal := published.segmentedCheckpointView before.wal
+      wal.ReadLayout before.history ∧ wal.Valid before.history ∧
+      (∀ pair, wal.Selects pair →
+        published.AcceptsVersioned before.history.length.toUInt64 (CheckpointRepresentsPrefix before.history)
+          pair.manifest ∧ ∃ range, pair.walRange = some range ∧ range.through = before.history.length) ∧
+      ∀ {pair}, pair ∈ wal.directory.crashImages →
+        let files := physical before published
+        let crashed := files.crash pair (some before.wal.active.bytes) []
+        BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+          ⟨files, before.owners⟩ ⟨crashed, before.owners.set (directory.file .lock) none⟩ ∧
+        crashed.directory.active.walBoundary = before.wal.directory.active.walBoundary ∧
+        crashed.kept = before.files.kept ∧
+        published.AcceptsVersioned before.history.length.toUInt64 (CheckpointRepresentsPrefix before.history)
+          pair.manifest ∧
+        ∃ range, pair.walRange = some range ∧ range.through = before.history.length ∧
+          ∃ checkpoint table model, SelectedIntegrityCheckpoint published.durable pair.manifest checkpoint ∧
+            (((checkpoint.getD (.empty, 0)).2 = before.installed.generation ∧
+                pair.manifest = before.wal.directory.active.manifest) ∨
+              ((checkpoint.getD (.empty, 0)).2 = SegmentedCheckpointReport.generation before ∧
+                pair.manifest = some cut.checkpoint.manifest)) ∧
+            recoverSelected (checkpoint.getD (.empty, 0)).1 (WAL.encode before.history) = .ok table ∧
+            table.committed.toNat = before.history.length ∧ table.Refines model ∧
+            RepresentsWalHistory before.history model := by
+  obtain ⟨published, executed⟩ := before.published.executeVersioned_exists cut.checkpoint.plan cut.checkpoint.cut
+  obtain ⟨layout, valid, inputs⟩ := cut.preflight.publicationReplays ready executed
+  refine ⟨published, executed, layout, valid, ?_, ?_⟩
+  · intro pair chosen
+    obtain ⟨_, accepted, range, decoded, through, _⟩ := inputs pair chosen
+    exact ⟨accepted, range, decoded, through⟩
+  intro pair survives files crashed
+  obtain ⟨marker, accepted, range, decoded, through, replay⟩ := inputs pair (List.mem_cons_of_mem _ survives)
+  have keeperBytes : before.target.trimmed = before.wal.active.bytes := by
+    rw [ready.resumed.contents, ready.active, ready.layout.activeBytes]
+  have payload : some before.wal.active.bytes ∈ files.keeper.crashImages := by
+    change some before.wal.active.bytes ∈ before.files.keeper.crashImages
+    rw [ready.resumed.ready.keeperDurable, keeperBytes]
+    exact List.mem_singleton_self _
+  have names : [] ∈ files.later.crashImages := by
+    change [] ∈ before.files.later.crashImages
+    rw [ready.resumed.ready.pruned.2]
+    exact List.mem_singleton_self _
+  have trace : BoundedReopenTrace directory (CheckpointRetryTarget before.history before.wal.active.first)
+      ⟨files, before.owners⟩ ⟨crashed, before.owners.set (directory.file .lock) none⟩ :=
+    .powerLoss .empty survives payload names
+  exact ⟨trace, marker, rfl, accepted, range, decoded, through, replay⟩
+
+end CheckpointPowerCut
+end Alvoki.Storage.DiskSession

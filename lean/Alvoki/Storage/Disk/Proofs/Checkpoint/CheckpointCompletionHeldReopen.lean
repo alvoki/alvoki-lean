@@ -1,8 +1,8 @@
-import Alvoki.Storage.Disk.CheckpointCompletionClientTrace
-import Alvoki.Storage.Disk.CheckpointRunDirectoryClose
-import Alvoki.Storage.Disk.CleanCachedClose
-import Alvoki.Storage.Disk.ClosedReadyReopen
-import Alvoki.Storage.Disk.MaintainedRecoveryWork
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointCompletionClientTrace
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunDirectoryClose
+import Alvoki.Storage.Disk.Proofs.Session.CleanCachedClose
+import Alvoki.Storage.Disk.Proofs.Session.ClosedReadyReopen
+import Alvoki.Storage.Disk.Proofs.Session.MaintainedRecoveryWork
 
 namespace Alvoki.Storage.DiskSession
 

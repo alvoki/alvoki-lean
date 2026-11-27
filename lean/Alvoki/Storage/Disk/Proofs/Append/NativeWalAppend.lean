@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Append.AppendHandleCustody
-import Alvoki.Storage.Disk.NativeOpenClose
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenClose
 
 namespace Alvoki.Storage.DiskSession
 

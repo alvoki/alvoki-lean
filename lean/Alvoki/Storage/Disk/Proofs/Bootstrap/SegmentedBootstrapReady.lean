@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapAdmissionEffects
 import Alvoki.Storage.Disk.Proofs.Append.ReopenedSegmentAppend
-import Alvoki.Storage.Disk.WalSegmentCheckpointReopen
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointReopen
 
 namespace Alvoki.Storage.WalSegmentRepair
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeMarkedCheckpointHeap
 
 namespace Alvoki.Storage.DiskSession
 

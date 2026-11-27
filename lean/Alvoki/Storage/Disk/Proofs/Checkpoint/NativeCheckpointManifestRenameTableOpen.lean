@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeClassifiedCheckpointRenameError
-import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeClassifiedCheckpointRenameError
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeAlignedCheckpointReopenEffects
 
 namespace Alvoki.Storage.DiskSession
 

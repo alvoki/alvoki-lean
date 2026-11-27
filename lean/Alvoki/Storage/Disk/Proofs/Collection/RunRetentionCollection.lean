@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.RunRetentionCheckpoint
-import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
+import Alvoki.Storage.Disk.Proofs.Collection.RunRetentionCheckpoint
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedBatchDatabaseTrace
 import Alvoki.Storage.Disk.Proofs.Collection.IntegrityRunCollectionSpace
 
 namespace Alvoki.Storage.DiskSession

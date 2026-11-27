@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestSyncError
-import Alvoki.Storage.Disk.CheckpointManifestRenameCut
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRenameCut
 
 namespace Alvoki.Storage.DiskSession
 

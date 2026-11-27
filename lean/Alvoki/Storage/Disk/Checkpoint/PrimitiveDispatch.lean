@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.CheckpointCacheContinuity
-import Alvoki.Storage.Disk.CheckpointRunWriteCustody
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointCacheContinuity
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunWriteCustody
 
 namespace Alvoki.Storage.DiskSession
 

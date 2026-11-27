@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapExecution
 import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapZeroCreateError
-import Alvoki.Storage.Disk.LockCensusOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Filesystem.LockCensusOpenAdmission
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedTableOpen
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedTableOpen
 import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperMarkedWorker
 
 namespace Alvoki.Storage.DiskSession

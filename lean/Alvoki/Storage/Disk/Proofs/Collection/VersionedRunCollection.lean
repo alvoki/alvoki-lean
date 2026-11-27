@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Collection.LockedRunCollection
-import Alvoki.Storage.Disk.VersionedCheckpointPublication
+import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointPublication
 
 namespace Alvoki.Storage.CheckpointPublication
 open Manifest

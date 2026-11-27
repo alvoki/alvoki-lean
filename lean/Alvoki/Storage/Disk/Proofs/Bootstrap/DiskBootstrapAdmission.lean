@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.DiskOpenAdmission
-import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
+import Alvoki.Storage.Disk.Proofs.Session.DiskOpenAdmission
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedBatchDatabaseTrace
 
 namespace Alvoki.Storage.DiskSession
 

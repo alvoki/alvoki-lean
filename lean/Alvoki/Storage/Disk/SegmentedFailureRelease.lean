@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.LockDescriptionLifetime
-import Alvoki.Storage.Disk.CheckpointLockHandoff
+import Alvoki.Storage.Disk.Proofs.Filesystem.LockDescriptionLifetime
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointLockHandoff
 
 namespace Alvoki.Storage.DiskSession
 

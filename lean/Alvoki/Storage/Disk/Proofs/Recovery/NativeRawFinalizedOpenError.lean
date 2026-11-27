@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeOpenErrorLockFinalization
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenErrorLockFinalization
 import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 
 namespace Alvoki.Storage.DiskSession

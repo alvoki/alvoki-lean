@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.DirectoryCacheCapture
-import Alvoki.Storage.Disk.SegmentedRetryTrace
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRetryTrace
 
 namespace Alvoki.Storage.DiskSession
 

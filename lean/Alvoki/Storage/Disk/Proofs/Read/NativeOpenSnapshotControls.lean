@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeOpenAcquire
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenAcquire
 
 namespace Alvoki.Storage.DiskSession
 

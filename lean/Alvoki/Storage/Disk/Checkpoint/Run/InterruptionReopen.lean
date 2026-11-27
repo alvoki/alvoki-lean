@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Checkpoint.Run.Interruption
-import Alvoki.Storage.Disk.CheckpointClientTrace
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointClientTrace
 
 namespace Alvoki.Storage.DiskSession
 

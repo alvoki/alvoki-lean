@@ -1,7 +1,7 @@
-import Alvoki.Storage.Disk.NativeOpenedPosition
-import Alvoki.Storage.Disk.NativeInactiveSessionCalls
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedPosition
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeInactiveSessionCalls
 import Alvoki.Storage.Disk.Proofs.Read.NativeOpenSnapshotControls
-import Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedFinalizedRetryReport
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunFileSyncFailure
-import Alvoki.Storage.Disk.PriorCheckpointLiveReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.PriorCheckpointLiveReopen
 
 namespace Alvoki.Storage.DiskSession
 

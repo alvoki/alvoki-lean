@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeHealthyMarkedTableOpen
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeHealthyMarkedTableOpen
 
 namespace Alvoki.Storage.DiskSession
 

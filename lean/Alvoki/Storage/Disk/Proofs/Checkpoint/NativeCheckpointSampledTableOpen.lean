@@ -2,8 +2,8 @@ import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointFinalManifest
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointSourceReopen
 import Alvoki.Storage.Disk.Proofs.Write.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.Proofs.Read.NativeOpenSnapshotTrace
-import Alvoki.Storage.Disk.NativeAlignedMarkedReady
-import Alvoki.Storage.Disk.NativeAlignedReadyCalls
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeAlignedMarkedReady
+import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeAlignedReadyCalls
 
 namespace Alvoki.Storage.DiskSession
 

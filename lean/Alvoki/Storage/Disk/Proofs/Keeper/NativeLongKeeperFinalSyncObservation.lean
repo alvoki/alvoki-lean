@@ -4,10 +4,10 @@ import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperRenameError
 import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperStorage
 import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperPending
 import Alvoki.Storage.Disk.Proofs.Write.NativeDurableWriteReboot
-import Alvoki.Storage.Disk.NativeMarkedScanFrame
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstUnlinkError
-import Alvoki.Storage.Disk.NativeRetainedOpenStorage
-import Alvoki.Storage.Disk.NativeWalPublicationTail
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeRetainedOpenStorage
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeWalPublicationTail
 import Alvoki.Storage.Disk.Proofs.Write.NativeLateWriteRecovery
 
 namespace Alvoki.Storage.DiskSession

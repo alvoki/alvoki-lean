@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.NativeOpenedPosition
-import Alvoki.Storage.Disk.NativeOpenClose
-import Alvoki.Storage.Disk.NativeFileEffectProjection
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedPosition
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenClose
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeFileEffectProjection
 
 namespace Alvoki.Storage.DiskSession
 

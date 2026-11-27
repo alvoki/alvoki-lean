@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeAlignedCheckpointReopenEffects
 import Alvoki.Storage.Disk.Proofs.Write.NativeOpenWrite
 import Alvoki.Storage.Disk.Proofs.Write.NativeUncertainWritePowerLoss
 

@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.ReplacedWalDescriptor
-import Alvoki.Storage.Disk.SegmentedRetryTrace
+import Alvoki.Storage.Disk.Proofs.WAL.ReplacedWalDescriptor
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRetryTrace
 
 namespace Alvoki.Storage.WalSegmentRepair
 

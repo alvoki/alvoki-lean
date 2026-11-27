@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeOpenedPosition
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedPosition
 import Alvoki.Storage.Disk.Proofs.Collection.NativeReadyWalCollection
 
 namespace Alvoki.Storage.DiskSession

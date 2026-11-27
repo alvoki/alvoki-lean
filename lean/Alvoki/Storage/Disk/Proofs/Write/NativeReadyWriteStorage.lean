@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.Proofs.Write.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteCustody
-import Alvoki.Storage.Disk.NativeOpenedPosition
-import Alvoki.Storage.Disk.NativeWalFileFsyncEffects
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeOpenedPosition
+import Alvoki.Storage.Disk.Proofs.Native.WAL.NativeWalFileFsyncEffects
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawUncertainWrite
 
 namespace Alvoki.Storage.DiskSession

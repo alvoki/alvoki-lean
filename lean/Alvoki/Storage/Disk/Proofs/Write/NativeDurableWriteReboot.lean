@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedAdmissionRejections
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedAdmissionRejections
 import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteReboot
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationErrorPowerLoss
 

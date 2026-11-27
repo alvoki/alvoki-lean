@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.PendingClientReplay
-import Alvoki.Storage.Disk.NativeMarkedReadPrefix
+import Alvoki.Storage.Disk.Proofs.Recovery.PendingClientReplay
+import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedReadPrefix
 
 namespace Alvoki.Storage.DiskSession
 

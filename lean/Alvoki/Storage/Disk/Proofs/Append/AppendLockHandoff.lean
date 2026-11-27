@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.CheckpointLockHandoff
-import Alvoki.Storage.Disk.WalSegmentCommitEffects
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointLockHandoff
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCommitEffects
 
 namespace Alvoki.Storage.DiskSession
 
