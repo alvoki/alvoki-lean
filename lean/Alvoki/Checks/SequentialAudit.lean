@@ -2264,7 +2264,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.framesPruneDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.namesOfReturnedWalUnlinks
 #check_axioms Alvoki.Storage.DiskSession.foldReturnedPrune
-#check_axioms Alvoki.Storage.DiskSession.framesReturnedPrune
 #check_axioms Alvoki.Storage.DiskSession.fileImageOfReturnedPrune
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.preserves
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEffects.readOnly
@@ -3765,7 +3764,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.syncError
 #check_axioms Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair.continuesAfterError
 #check_axioms Alvoki.Storage.DiskSession.HeldMarkedMetadata.continuesAfterRepairError
-#check_axioms Alvoki.Storage.DiskSession.LongKeeperPruning.stageInputImage
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperPruning.stageInputEffects
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.finishError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperStageAt.continuesAfterSyncError

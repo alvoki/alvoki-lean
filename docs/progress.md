@@ -73,13 +73,14 @@ For a final directory-fsync error, the observed rename proves the measured
 keeper was long. The checked plan bounds the unlinks. Their returned images,
 the scratch write and sync, rename and final cache load determine the repair
 trace for either fsync effect. Cleanup preserves the acquired inode and its
-payload. The sampled recovery observations at the cutoff feed the same public
-opener and ready-call continuation described above.
+payload. The sampled recovery observations at the cutoff supply the entry for
+the shared opener. Both rename-error and final-directory-error paths derive
+their retry frame from the returned authorization, unlinks and staging operations.
 
-**Next source boundary.** Derive the selected retry frame across staging on
-this final-directory-error path from the individual callback effects. The
-current theorem still takes that frame for the whole stage prefix. File and
-directory syscall effects and the sampled crash namespace remain explicit.
+**Next source boundary.** Derive the bounded WAL-name frame used by the
+final-directory-error reboot from the reached stage callbacks. This frame
+tracks which names may survive together after power loss. The retry frame
+already protects live bytes, durable bytes and the parent binding.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

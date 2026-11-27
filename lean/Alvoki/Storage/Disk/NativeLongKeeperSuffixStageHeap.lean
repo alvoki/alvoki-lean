@@ -48,28 +48,6 @@ theorem foldReturnedPrune {model : Type}
   exact ⟨unlinked, accepted, synced,
     foldReturnedWalUnlinks directory plan remove write sync rename invariant applyUnlink entered unlink accepted⟩
 
-/-- Compose a frame through the same accepted unlink pass and its
-directory barrier, including when an unlink reports an already absent name. -/
-theorem framesReturnedPrune
-    (directory : DiskDirectory) (plan : Plan) (remove : @Remove heap)
-    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (sync : Array FilePath → EStateM IO.Error heap Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (frame : heap → heap → Prop) (refl : ∀ atHeap, frame atHeap atHeap)
-    (trans : ∀ {first middle last}, frame first middle → frame middle last → frame first last)
-    (unlink : ∀ {ordinal first last result}, ordinal ∈ plan.newer →
-      remove (directory.file (.walSegment ordinal)) first = .ok result last →
-      RunCollection.ownedUnlinkResult result = .ok () → frame first last)
-    (barrier : ∀ {first last}, sync #[directory.path] first = .ok () last → frame first last)
-    {first last : heap}
-    (returned : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
-      (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
-    frame first last := by
-  obtain ⟨_, _, synced, framed⟩ := foldReturnedPrune directory plan remove write sync rename
-    (fun (_ : Unit) atHeap => frame first atHeap) (fun _ _ => ()) (initial := ()) (refl first)
-    (fun member called accepted earlier => trans earlier (unlink member called accepted)) returned
-  exact trans framed (barrier synced)
-
 /-- The actual unlink calls determine the file image at the issued
 directory barrier. Its successful return settles that same image. -/
 theorem fileImageOfReturnedPrune

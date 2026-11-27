@@ -119,17 +119,6 @@ def afterUnlinks : LongKeeperPruning authorization → FileImage
 def stageInput (pruning : LongKeeperPruning authorization) : Files :=
   { acquired before directory operations.slot with image := pruning.afterUnlinks.syncDirectory }
 
-/-- Both report forms describe the same image at the returned prune barrier. -/
-theorem stageInputImage (pruning : LongKeeperPruning authorization) :
-    pruning.stageInput.image = { before.image.syncDirectory.syncDirectory with later := LaterNames.settled [] } := by
-  cases pruning with
-  | empty report =>
-    simp [stageInput, afterUnlinks, acquired, FileImage.syncDirectory, LaterNames.syncDirectory,
-      LaterNames.settled, report.noLater]
-  | listed _ _ _ =>
-    exact FileImage.syncAfterCoveringUnlinks before.image.syncDirectory before.image.later.visible
-      (fun _ member => member)
-
 theorem completed (pruning : LongKeeperPruning authorization) : authorization.outcome = .completed :=
   match pruning with
   | .empty reported => reported.completed

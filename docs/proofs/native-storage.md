@@ -709,7 +709,8 @@ reported fsync supply the bounded repair error. The observed rename proves the
 keeper exceeded its selected prefix. The returned prune and replacement steps
 determine the logical repair trace for either final-barrier effect. Cleanup
 preserves the acquired inode and its durable bytes. At the cutoff the sampled
-retry observations support the shared marked opener and its ready-call ledger.
+retry observations supply the entry for the shared marked opener. Both error
+paths use the same local staging effects to preserve the selected retry files.
 [Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached

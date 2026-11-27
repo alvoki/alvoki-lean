@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
 import Alvoki.Storage.Disk.NativeLongKeeperPending
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
@@ -493,7 +494,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       visible synced replacement = visible issued replacement ∧
       (stage.ReplacementPrefixLiveEffects calls state view observe visible cached pending root remove →
         view.pending entry pending = [] →
-        (replacementLiveFiles observe visible entry).Frames state.crashPath (replacementLiveFiles observe visible synced)) := by
+        (replacementLiveFiles observe visible entry).Frames state.crashPath (replacementLiveFiles observe visible synced) ∧
+        state.SelectedRetryFrame (observe entry) (observe synced) (visible entry) (visible synced)) := by
   let dir := state.session.directory
   let path := dir.file .stagedWal
   let keeperPath := dir.file (.walSegment plan.keeper)
@@ -559,7 +561,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     (writeFrame.walNames.trans (flushFrame.walNames.trans (recordFrame.walNames.trans
       (loadFrame.walNames.trans (clearFrame.walNames.trans (fun start =>
         congrFun fileSync.names (dir.file (.walSegment start)))))))))
-  refine ⟨prunedFootprint.trans toSynced.visible, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
+  have durable := prunedFootprint.trans toSynced.visible
+  refine ⟨durable, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
     keeperAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
     ⟨prunedNames, settled⟩, consumed, file, slot, replacement, ⟨opened, acquired, openedStage.1, openedStage.2.1⟩,
     stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
@@ -601,10 +604,15 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     (fun path selected => (clearFrame.storage.visible path selected).1) loadedStage.2.2
   have fileLive := replacementLive_offStage (fileSync.frames noAlias).visible
     (liveEffects.syncFile stageSync syncedStage.1) syncedStage.2.2
-  exact prunedLive.trans (openedLive.trans
+  have live := prunedLive.trans (openedLive.trans
     ((replacementLive_offStage writeFrame.storage.visible writeLive openedStage.2.2).trans
       ((replacementLive_offStage flushFrame.storage.visible flushLive writtenStage.2.2).trans
         (recordedLive.trans (loadLive.trans (clearLive.trans fileLive))))))
+
+  have included (path : FilePath) (selected : state.selectedRetryPath path) : state.crashPath path :=
+    NativeReadyState.crashPath_iff_write.mpr (selected.imp id Or.inr)
+  exact ⟨live, fun path selected => live path (included path selected),
+    fun path selected => durable path (included path selected), parentFrame⟩
 
 /-- The actual successful long repair builds physical readiness. Its
 accepted unlink pass is framed locally; a fresh stage descriptor supplies
