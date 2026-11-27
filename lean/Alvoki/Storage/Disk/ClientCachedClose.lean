@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointRunDirectoryClose
 import Alvoki.Storage.Disk.CleanCachedClose
-import Alvoki.Storage.Disk.ClientReadTrace
+import Alvoki.Storage.Disk.Proofs.Read.ClientReadTrace
 import Alvoki.Storage.Disk.Proofs.Recovery.ListedMarkedFinish
 import Alvoki.Storage.Disk.LockCensusTrace
 import Alvoki.Storage.Disk.MaintainedRecoveryWork

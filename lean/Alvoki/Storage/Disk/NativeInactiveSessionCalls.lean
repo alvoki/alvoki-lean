@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeExecutionPendingClose
-import Alvoki.Storage.Disk.NativeSnapshotExecution
+import Alvoki.Storage.Disk.Proofs.Read.NativeSnapshotExecution
 import Alvoki.Storage.Disk.CheckpointPreflight
 
 namespace Alvoki.Storage.DiskSession

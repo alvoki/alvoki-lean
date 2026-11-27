@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeOpenReadTrace
+import Alvoki.Storage.Disk.Proofs.Read.NativeOpenReadTrace
 
 namespace Alvoki.Storage.DiskSession
 

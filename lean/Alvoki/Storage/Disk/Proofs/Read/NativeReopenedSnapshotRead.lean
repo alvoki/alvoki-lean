@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedCloseTableOpen
-import Alvoki.Storage.Disk.NativeOpenExternalPinRead
+import Alvoki.Storage.Disk.Proofs.Read.NativeOpenExternalPinRead
 
 namespace Alvoki.Storage.DiskSession
 

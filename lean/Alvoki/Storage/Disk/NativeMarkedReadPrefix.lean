@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CapturedMarkedInstallation
-import Alvoki.Storage.Disk.NativeReadyReadPrefix
+import Alvoki.Storage.Disk.Proofs.Read.NativeReadyReadPrefix
 
 namespace Alvoki.Storage.DiskSession
 

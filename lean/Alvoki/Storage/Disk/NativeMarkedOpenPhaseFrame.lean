@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeSelectedReadPhaseFrame
+import Alvoki.Storage.Disk.Proofs.Read.NativeSelectedReadPhaseFrame
 
 namespace Alvoki.Storage.DiskSession.KeepsPhase
 

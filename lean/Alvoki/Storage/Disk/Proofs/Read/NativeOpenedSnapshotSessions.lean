@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
+import Alvoki.Storage.Disk.Proofs.Read.NativeOpenSnapshotTrace
 import Alvoki.Storage.Disk.NativeOpenedRestartSessions
 
 namespace Alvoki.Storage.DiskSession

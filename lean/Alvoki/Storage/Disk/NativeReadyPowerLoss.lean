@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeReadyReadPrefix
+import Alvoki.Storage.Disk.Proofs.Read.NativeReadyReadPrefix
 import Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 

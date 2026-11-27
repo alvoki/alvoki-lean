@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestStatError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointChunkError
 import Alvoki.Storage.Disk.NativeOpenAdmissionStorage
 import Alvoki.Storage.Disk.NativeMutatingOpenRetries
-import Alvoki.Storage.Disk.NativeSelectedReadPhaseFrame
+import Alvoki.Storage.Disk.Proofs.Read.NativeSelectedReadPhaseFrame
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeReadRecoveryTrace
+import Alvoki.Storage.Disk.Proofs.Read.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionCompletePlan
 
 namespace Alvoki.Storage.DiskSession

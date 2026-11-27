@@ -6,7 +6,7 @@ import Alvoki.Storage.Disk.SegmentedDatabaseTrace
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
-import Alvoki.Storage.Disk.SessionReadGuards
+import Alvoki.Storage.Disk.Proofs.Read.SessionReadGuards
 import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterMaintenance
 import Alvoki.Storage.Disk.Proofs.Append.SegmentedBatchAppend
 import Alvoki.Storage.Disk.Proofs.Append.SegmentedBatchAppendProcessExit

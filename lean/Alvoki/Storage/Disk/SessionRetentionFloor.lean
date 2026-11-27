@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SessionReadGuards
+import Alvoki.Storage.Disk.Proofs.Read.SessionReadGuards
 import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterMaintenance
 
 namespace Alvoki.Storage.DiskSession

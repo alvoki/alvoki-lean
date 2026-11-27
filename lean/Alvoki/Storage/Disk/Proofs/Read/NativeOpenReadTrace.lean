@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenAcquire
-import Alvoki.Storage.Disk.NativeOpenPinRead
+import Alvoki.Storage.Disk.Proofs.Read.NativeOpenPinRead
 import Alvoki.Storage.Disk.NativeExecutionTrace
 
 namespace Alvoki.Storage.DiskSession

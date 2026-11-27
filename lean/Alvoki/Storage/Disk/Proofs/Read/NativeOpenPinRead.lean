@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
+import Alvoki.Storage.Disk.Proofs.Read.NativeExplicitSnapshotRead
 
 namespace Alvoki.Storage.DiskSession
 

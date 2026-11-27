@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Write.NativeReadyWriteStorage
-import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
+import Alvoki.Storage.Disk.Proofs.Read.NativeOpenSnapshotTrace
 
 namespace Alvoki.Storage.DiskSession
 

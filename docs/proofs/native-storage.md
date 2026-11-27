@@ -25,7 +25,7 @@ and empty client ledgers. `FreshBootstrapOpenHeap.Returned` ties that initial po
 and heap returned by the observed open schedule. An already observed trace from that position uses
 `Returned.refinesTrace` to derive the client history, submissions and reads directly from its events.
 `InstalledClientReplay` includes a replay from empty, ordered batch retention, acknowledged and
-submitted subsequences, and agreement with recorded reads and the ready table. [Raw fresh start](../../lean/Alvoki/Storage/Disk/NativeFreshTableOpen.lean) · [Composition from the empty ledger](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Key-value refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
+submitted subsequences, and agreement with recorded reads and the ready table. [Raw fresh start](../../lean/Alvoki/Storage/Disk/NativeFreshTableOpen.lean) · [Composition from the empty ledger](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) · [Key-value refinement](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/Proofs/Read/ClientReadTrace.lean)
 
 The first-open theorem consumes raw admission, bootstrap and cache chronology, matching lock and
 metadata, and allocation reports that preserve inode and cache state. It joins the raw returned table,
@@ -133,7 +133,7 @@ Supported cases include a denied foreign or inactive handle under the reported o
 An accepted read of a missing or deleted key has an outer `some` and an inner `none`. The pilot closes
 one direct post-crash acquire/read path across both early checkpoint fsync stops. Other executable
 mutation and retry paths must supply their exact returned state to the same read refinement.
-[Packed table refinement](../../lean/Alvoki/Storage/Table/PackedTable.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean) · [Foreign and inactive pin guards](../../lean/Alvoki/Storage/Disk/NativeOpenExternalPinRead.lean) · [Opened snapshot trace](../../lean/Alvoki/Storage/Disk/NativeOpenedSnapshotSessions.lean)
+[Packed table refinement](../../lean/Alvoki/Storage/Table/PackedTable.lean) · [Client replay](../../lean/Alvoki/Storage/Disk/Proofs/Read/ClientReadTrace.lean) · [Foreign and inactive pin guards](../../lean/Alvoki/Storage/Disk/Proofs/Read/NativeOpenExternalPinRead.lean) · [Opened snapshot trace](../../lean/Alvoki/Storage/Disk/Proofs/Read/NativeOpenedSnapshotSessions.lean)
 
 ### Checkpoint publication
 
@@ -210,7 +210,7 @@ the phase-cell and same-token laws, a latest snapshot on the reopened handle
 reads the replayed batch for any key. Its pin and the original acknowledgement
 both have sequence number equal to the batch length.
 [Fresh writer through reopen](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
-· [Snapshot lookup](../../lean/Alvoki/Storage/Disk/NativeOpenSnapshotControls.lean)
+· [Snapshot lookup](../../lean/Alvoki/Storage/Disk/Proofs/Read/NativeOpenSnapshotControls.lean)
 · [Reopen after acknowledgement](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean#L1866)
 · [Reopen after an uncertain write](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean#L1889)
 
@@ -345,7 +345,7 @@ induction must cover these outcomes from the actual source execution.
 [window]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawUncertainWrite.lean#L123
 [entry]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Write/NativeReadyWriteStorage.lean#L74
 [ledger]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean#L881
-[replay]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/ClientReadTrace.lean#L344
+[replay]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Read/ClientReadTrace.lean#L344
 [checkpoint]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointSampledTableOpen.lean#L228
 [fold]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean#L470
 
@@ -406,7 +406,7 @@ preserves each cut's distinct primitive evidence and reuses the same ready witne
 3. `NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest` follows the public acquire and read
    on that returned table with its issued pin. Under the actual same-token comparison it derives
    the exact point or range result from replay and extends the existing read ledger.
-   [Source and replay of the next read](../../lean/Alvoki/Storage/Disk/NativeOpenedSnapshotSessions.lean)
+   [Source and replay of the next read](../../lean/Alvoki/Storage/Disk/Proofs/Read/NativeOpenedSnapshotSessions.lean)
 
 The challenging third case is a returned rename error after the rename effect. The reported
 survivor can keep the old manifest and watermark or select the synchronized new manifest at the
@@ -442,9 +442,9 @@ After building the import with the pinned Lean toolchain, query the actual elabo
 
 ```sh
 cd lean
-lake build Alvoki.Storage.Disk.NativeOpenedSnapshotSessions
+lake build Alvoki.Storage.Disk.Proofs.Read.NativeOpenedSnapshotSessions
 lake env lean --run Alvoki/Checks/ProofDependencies.lean \
-  Alvoki.Storage.Disk.NativeOpenedSnapshotSessions \
+  Alvoki.Storage.Disk.Proofs.Read.NativeOpenedSnapshotSessions \
   Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest \
   Alvoki.Storage.DiskSession.NativeExecutionTrace.keyValueRefinement
 ```
@@ -614,7 +614,7 @@ Build the argument with the following boundaries.
    induction from durable empty state over that concrete chronology. Reuse the existing client
    replay and read results at ready points, and prove the between-session invariant carries prior
    observations and all allowed durable histories. A compound success scenario becomes a corollary
-   of the same induction. [Ledger and replay](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean#L888) · [Snapshot refinement](../../lean/Alvoki/Storage/Disk/ClientReadTrace.lean)
+   of the same induction. [Ledger and replay](../../lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean#L888) · [Snapshot refinement](../../lean/Alvoki/Storage/Disk/Proofs/Read/ClientReadTrace.lean)
 
 The first observed acknowledgement can start from the fresh open's returned cache
 and established storage. For the early checkpoint, terminal refinement can use a

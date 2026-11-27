@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.ClientReadTrace
+import Alvoki.Storage.Disk.Proofs.Read.ClientReadTrace
 import Alvoki.Storage.Disk.Proofs.Bootstrap.MarkedBootstrapRetryInstallation
 import Alvoki.Storage.Disk.Proofs.Bootstrap.MarkerlessBootstrapRetryInstallation
 

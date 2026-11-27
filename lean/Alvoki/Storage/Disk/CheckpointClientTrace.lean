@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRenameReopen
-import Alvoki.Storage.Disk.ClientReadTrace
+import Alvoki.Storage.Disk.Proofs.Read.ClientReadTrace
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.MixedTraceSnapshotReads
+import Alvoki.Storage.Disk.Proofs.Read.MixedTraceSnapshotReads
 
 namespace Alvoki.Storage.DiskSession
 

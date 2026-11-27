@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CachedRetryInstallation
-import Alvoki.Storage.Disk.SessionReadGuards
+import Alvoki.Storage.Disk.Proofs.Read.SessionReadGuards
 
 namespace Alvoki.Storage.DiskSession
 

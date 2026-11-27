@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.ClientReadTrace
+import Alvoki.Storage.Disk.Proofs.Read.ClientReadTrace
 import Alvoki.Storage.Disk.SessionRetentionFloor
 
 namespace Alvoki.Storage.DiskSession

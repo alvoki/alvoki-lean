@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Collection.NativeReadyWalCollectionError
-import Alvoki.Storage.Disk.NativeReadRecoveryTrace
+import Alvoki.Storage.Disk.Proofs.Read.NativeReadRecoveryTrace
 
 namespace Alvoki.Storage.DiskSession
 
