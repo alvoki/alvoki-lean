@@ -1,9 +1,13 @@
 import Alvoki.Experiments.SSTable.FixedNative
 import Alvoki.Experiments.SSTable.FixedPolicies
+import Alvoki.Experiments.SSTable.FixedAligned
 
 open ImmutableSSTable
 
 namespace ImmutableSSTable.FixedBench
+
+@[extern "alvoki_sstable_bench_drop_cache"]
+private opaque dropCache (handle : @& IO.FS.Handle) : IO Unit
 
 private def ok (action : EIO String α) : IO α := action.adapt IO.userError
 
@@ -75,10 +79,11 @@ private def sample (rows trial : Nat) (format operation : String) (items bytes t
   IO.println s!"{rows},{trial},{format},{operation},{items},{bytes},{time},{readColumns},{validationColumn},{checksum}"
 
 private def measureRead (rows trial : Nat) (format operation : String) (items bytes : Nat)
-    (reads : IO.Ref (Nat × Nat)) (timed measured : EIO String UInt64) (expected : UInt64) (validations : Nat → Nat) :
+    (reads : IO.Ref (Nat × Nat)) (timed measured : EIO String UInt64) (expected : UInt64) (validations : Nat → Nat) (beforeTimed : IO Unit := pure ()) :
     IO Unit := do
   let warm ← ok timed
   unless warm == expected do throw (IO.userError s!"{format} {operation} warm-up checksum")
+  beforeTimed
   let (value, uptime) ← elapsed (ok timed)
   unless value == expected do throw (IO.userError s!"{format} {operation} timed checksum")
   reads.set (0, 0)
@@ -156,6 +161,52 @@ private def runSample (dir : System.FilePath) (rows trial : Nat) (queries : Arra
           (scanBlocks source layout count policy) (scanBlocks instrumented layout count policy) scanSum validations
   IO.FS.removeFile path
 
+private def runAlignment (rows queries trials : Nat) : IO Unit := IO.FS.withTempDir fun dir => do
+  let workload := makeQueries rows queries
+  let expected := workload.foldl (fun hash query => mix hash query.expected) 0
+  let mut scanSum := 0
+  for index in [:rows] do
+    scanSum := mix scanSum (index + 1).toUInt64
+  IO.println "rows,trial,format,operation,items,file_bytes,elapsed_ns,read_calls,requested_bytes,data_checksum_validations,checksum"
+  for trial in [:trials] do
+    for i in [:2] do
+      let aligned := (trial + i) % 2 == 1
+      let format := if aligned then "aligned-4096" else "packed-4088"
+      let path := dir / format
+      let cursor ← IO.mkRef 0
+      let nextRow := do
+        let index ← cursor.get
+        if index == rows then return none
+        cursor.set (index + 1)
+        return some (row index)
+      let written ← if aligned then Fixed.Aligned.buildFile path 8 8 4096 27 nextRow
+        else Fixed.buildFile path ⟨8, 8, 255, 27⟩ nextRow
+      unless written == rows do throw (IO.userError "alignment benchmark build count")
+      let handle ← IO.FS.Handle.mk path .read
+      syncFileHandle handle
+      let source := handleSource handle
+      let fileBytes ← ok source.size
+      let reads ← IO.mkRef (0, 0)
+      let instrumented := countReads source reads
+      let openData (input : Source (EIO String)) := do
+        if aligned then Fixed.Aligned.openSource input
+        else
+          let (layout, count) ← Fixed.openLayout input
+          return (layout, count, input)
+      let (layout, count, data) ← ok (openData source)
+      let (_, _, tracedData) ← ok (openData instrumented)
+      unless layout.rowsPerBlock == 255 && count == rows do
+        throw (IO.userError "alignment benchmark layout")
+      for (cache, beforeTimed) in [("warm", pure ()), ("cold-advised", dropCache handle)] do
+        let timed := Fixed.lookupWithReuse data .lazy layout count
+        let measured := Fixed.lookupWithReuse tracedData .lazy layout count
+        measureRead rows trial format s!"lookup-{cache}" workload.size fileBytes reads
+          (lookup timed workload) (lookup measured workload) expected id beforeTimed
+        measureRead rows trial format s!"scan-{cache}" rows fileBytes reads
+          (scanBlocks data layout count .lazy) (scanBlocks tracedData layout count .lazy)
+          scanSum id beforeTimed
+      IO.FS.removeFile path
+
 def run (rows queryCount trials : Nat) : IO Unit := IO.FS.withTempDir fun dir => do
   let queries := makeQueries rows queryCount
   let mut scanSum := 0
@@ -170,8 +221,12 @@ def run (rows queryCount trials : Nat) : IO Unit := IO.FS.withTempDir fun dir =>
 end ImmutableSSTable.FixedBench
 
 def main (args : List String) : IO Unit := do
-  let [some rows, some queries, some trials] := args.map String.toNat?
-    | throw (IO.userError "usage: fixed-sstable-bench ROWS QUERIES TRIALS")
+  let (alignment, numbers) := match args with
+    | "aligned" :: rest => (true, rest)
+    | _ => (false, args)
+  let [some rows, some queries, some trials] := numbers.map String.toNat?
+    | throw (IO.userError "usage: fixed-sstable-bench [aligned] ROWS QUERIES TRIALS")
   unless 0 < rows && rows < 2 ^ 32 && 0 < queries && 0 < trials do
     throw (IO.userError "require 0 < ROWS < 2^32, QUERIES and TRIALS positive")
-  ImmutableSSTable.FixedBench.run rows queries trials
+  if alignment then ImmutableSSTable.FixedBench.runAlignment rows queries trials
+  else ImmutableSSTable.FixedBench.run rows queries trials

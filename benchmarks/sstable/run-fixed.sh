@@ -20,9 +20,14 @@ compile() {
 }
 compile Alvoki/Codec/Block
 table=Alvoki/Experiments/SSTable
-for module in Contract Search Core Builder Native FixedFormat FixedReader FixedBuilder FixedNative FixedPolicies FixedBench; do
+for module in Contract Search Core Builder Native FixedFormat FixedReader FixedBuilder FixedNative FixedPolicies FixedAligned FixedBench; do
   compile "$table/$module"
 done
-cc -O2 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
+cc -O2 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c ../benchmarks/sstable/cache.c \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/fixed-sstable-bench"
-"$out/fixed-sstable-bench" "${1:-8193}" "${2:-512}" "${3:-3}"
+if [[ ${1:-} == aligned ]]; then
+  shift
+  "$out/fixed-sstable-bench" aligned "${1:-65537}" "${2:-4096}" "${3:-5}"
+else
+  "$out/fixed-sstable-bench" "${1:-8193}" "${2:-512}" "${3:-3}"
+fi

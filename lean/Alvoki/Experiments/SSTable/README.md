@@ -129,6 +129,14 @@ Footer and read-length checks apply in every policy. The experimental lookup
 can hold one already-loaded block until the lookup finishes. The fixed
 reader's existing proof applies to its default path.
 
+The [aligned experiment](FixedAligned.lean) accepts an exact physical block
+size in bytes and derives the full-block row count from it. It pads every
+block, including the final one. Data blocks start at integer multiples of
+that size. A checksummed footer extension records the size. The reader
+verifies the packed block payload using the existing checksum, and padding
+is ignored. The aligned adapter is exercised by native fixtures and the
+benchmark.
+
 ## Roadmap
 
 A minimal LSM can build sorted, unique byte rows, publish the completed file

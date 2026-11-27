@@ -1,5 +1,6 @@
 import Alvoki.Experiments.SSTable.FixedNative
 import Alvoki.Experiments.SSTable.FixedPolicies
+import Alvoki.Experiments.SSTable.FixedAligned
 
 open ImmutableSSTable
 
@@ -172,6 +173,38 @@ private def checkValidationPolicies (dir : System.FilePath) : IO Unit := do
   expectError (Fixed.readBlockWithValidation truncated .skip opened count 1)
     "skip accepted a short block"
 
+private def checkAlignment (dir : System.FilePath) : IO Unit := do
+  let path := dir / "aligned"
+  let alignedRow (index : Nat) : Entry :=
+    ⟨byte index, ByteArray.mk (Array.replicate 15 index.toUInt8)⟩
+  let cursor ← IO.mkRef 0
+  let count ← Fixed.Aligned.buildFile path 1 15 4096 12 do
+    let index ← cursor.get
+    if index == 256 then return none
+    cursor.set (index + 1)
+    return some (alignedRow index)
+  check (count == 256) "aligned build count"
+  let image ← IO.FS.readBinFile path
+  check (image.size == 2 * 4096 + 80) "aligned final padded block extent"
+  let reads ← IO.mkRef ([] : List (Nat × Nat))
+  let memory := Source.memory (m := EIO String) image
+  let traced : Source (EIO String) := {
+    size := memory.size
+    readAt := fun offset length => do
+      reads.modify ((offset, length) :: ·)
+      memory.readAt offset length }
+  let (layout, count, source) ← ok (Fixed.Aligned.openSource traced)
+  let table := Table.ofReader count (Fixed.readEntry source layout count)
+  check ((← ok (table.next 0)) == some (alignedRow 0, 1)) "aligned first row"
+  check ((← ok (table.next 255)) == some (alignedRow 255, 256)) "aligned final row"
+  check ((← reads.get).reverse == [(8192, 80), (0, 4096), (4096, 4096)])
+    "aligned data read boundaries"
+  let badFooter := image.set! (image.size - 1) (image[image.size - 1]! ^^^ 1)
+  expectError (Fixed.Aligned.openSource (Source.memory badFooter)) "aligned faulty footer admitted"
+  let badBlock := image.set! 4096 (image[4096]! ^^^ 1)
+  let (layout, count, source) ← ok (Fixed.Aligned.openSource (Source.memory badBlock))
+  expectError (Fixed.readEntry source layout count 255) "aligned bad block admitted"
+
 def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkGolden dir
   checkExtent dir
@@ -179,6 +212,7 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkBuildFailures dir
   checkRequiredRead
   checkValidationPolicies dir
+  checkAlignment dir
   IO.println "immutable fixed SSTable native fixtures passed"
 
 end ImmutableSSTable.FixedNativeTests

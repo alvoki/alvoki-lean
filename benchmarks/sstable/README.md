@@ -67,3 +67,32 @@ With 255 rows per block, lookup reuse reduced data checksum checks from
 same read schedule. These results describe
 the pinned warm-cache workload. The one-block scan verified batches of
 63–1,023 rows at 55–60 ns per row.
+
+## Exact 4 KiB alignment
+
+```sh
+taskset -c 0 bash benchmarks/sstable/run-fixed.sh aligned 65537 4096 5 > aligned-trials.csv
+```
+
+Both layouts use 255 rows per full block, the same row bytes and checksums,
+and the same lookup with block reuse. The aligned writer pads every block
+to 4,096 bytes, including the short final block. The packed layout uses
+4,088 bytes for a full block and omits padding from the final block.
+Each timed workload checks its result against the same oracle.
+
+On the same Linux overlayfs host, a cold-advised batch starts after
+`POSIX_FADV_DONTNEED` on the synced file. The advice runs outside the
+timer. It requests kernel page-cache eviction. It supplies no measurement of
+physical storage reads, and the batch can warm the file again as it runs.
+[Raw CSV](aligned-trials.csv)
+
+| Layout | File bytes | Warm mixed lookup | Cold-advised mixed lookup | Warm block scan | Cold-advised block scan |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Packed, 4,088 B | 1,050,712 | 39.58 µs | 40.98 µs | 55.4 ns/row | 74.0 ns/row |
+| Aligned, 4,096 B | 1,056,848 | 39.17 µs | 41.59 µs | 55.0 ns/row | 78.8 ns/row |
+
+The scan issued 258 data reads in either layout. This workload did not show
+a consistent latency gain from alignment. Both readers used buffered
+positional IO, and the aligned adapter also slices each physical read
+back to the packed payload and checksum. A physical IO comparison would
+require device-level accounting and a workload on the target filesystem.
