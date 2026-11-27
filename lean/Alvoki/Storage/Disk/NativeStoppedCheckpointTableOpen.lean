@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedCheckpointReopenEffects
-import Alvoki.Storage.Disk.NativeCheckpointWatermark
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointWatermark
 import Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 

@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeCheckpointRunFileReboot
-import Alvoki.Storage.Disk.NativeCheckpointRunFileOpenPhase
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileReboot
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileOpenPhase
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 
 namespace Alvoki.Storage.DiskSession

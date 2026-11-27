@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeRawOpenPhaseFrame
-import Alvoki.Storage.Disk.NativeCheckpointReadReturn
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointReadReturn
 import Alvoki.Storage.Disk.NativeWalPayloadReturn
 
 namespace Alvoki.Storage.DiskSession

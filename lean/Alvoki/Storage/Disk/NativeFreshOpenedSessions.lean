@@ -6,7 +6,7 @@ import Alvoki.Storage.Disk.NativeReadyCallRefinement
 import Alvoki.Storage.Disk.NativeRawWriteReboot
 import Alvoki.Storage.Disk.NativeRawWriteRootStop
 import Alvoki.Storage.Disk.NativeAlignedReadyCalls
-import Alvoki.Storage.Disk.NativeCheckpointRunDurability
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.NativeRotationWalReplay
 import Alvoki.Storage.Disk.NativeRawRotationLiveReopen
 import Alvoki.Storage.Disk.NativeRawRotationReboot

@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.NativeCheckpointRawSyncStop
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRawSyncStop
 import Alvoki.Storage.Disk.NativeFreshOpenedSessions
-import Alvoki.Storage.Disk.NativeCheckpointSampledTableOpen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointSampledTableOpen
 
 namespace Alvoki.Storage.DiskSession
 

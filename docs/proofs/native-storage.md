@@ -113,7 +113,7 @@ effects still supply the local observations for installation. For a selected run
 returns an ordinary error after a short chunk, the shared retry proof carries the selected names
 and bytes through temporary, cache and lock disposal. It starts the aligned open from the reached
 failure heap with the original callbacks.
-[Staged manifest stop](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean) · [Selected run read retry](../../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean)
+[Staged manifest stop](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointStopContinuation.lean) · [Selected run read retry](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointOpenChronology.lean)
 
 `NativeReachedExecutionPrefix.keyValueRefinement` adds whole-or-none uncertain events, ready replay when
 the ending returns ready, and the existence of an allowed terminal history that agrees with prior reads.
@@ -149,7 +149,7 @@ The Linux effect on the surviving directory bindings is a separate premise at th
 Selection then uses the published run custody and bytes from one allowed crash image.
 [Source stop and recovery](../../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
 Proofs cover the reported cut families. Derivation from all reached raw schedules and interrupted
-manifest preparation branches remains open. [Checkpoint protocol](../../lean/Alvoki/Storage/Publication/CheckpointPublicationModel.lean) · [Final directory cut](../../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryCut.lean) · [Manifest rename and selected read](../../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameReboot.lean)
+manifest preparation branches remains open. [Checkpoint protocol](../../lean/Alvoki/Storage/Publication/CheckpointPublicationModel.lean) · [Final directory cut](../../lean/Alvoki/Storage/Disk/CheckpointManifestDirectoryCut.lean) · [Manifest rename and selected read](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointManifestRenameReboot.lean)
 
 ### Recovery and retry
 
@@ -339,14 +339,14 @@ induction must cover these outcomes from the actual source execution.
 [Premise provenance](#premise-provenance) · [Open obligations](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
 
 [write-reboot]: https://github.com/alvoki/alvoki-lean/blob/fd688e7a60e3c9eec108e987b43779216db7bcc4/lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean#L28
-[frame]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeCheckpointFsyncEffects.lean#L18
+[frame]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointFsyncEffects.lean#L18
 [authority]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L775
-[sample]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeCheckpointFinalManifest.lean#L524
+[sample]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointFinalManifest.lean#L524
 [window]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean#L123
 [entry]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean#L74
 [ledger]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean#L881
 [replay]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/ClientReadTrace.lean#L344
-[checkpoint]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean#L228
+[checkpoint]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointSampledTableOpen.lean#L228
 [fold]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean#L470
 
 ## Premise provenance
@@ -359,7 +359,7 @@ induction must cover these outcomes from the actual source execution.
 | Internal and discharged | An executable guard establishes the phase or preparation result, a particular step preserves a world invariant, and an admitted reader plus actual effects establish its installation. Cite the producing theorem when passing such a fact to a consumer. |
 | Internal and open | Justify each `Reports` producer from the ordered production input and effects. Establish admission coverage and scope for exact first and later returns, errors and stops. A local healthy dispatch report establishes a selected route only. |
 
-Checkpoint publication also relies on a runtime lifetime observation. When the temporary run handle leaves scope after a successful file sync, the model records the drop of that exact descriptor. The sync and the scope exit supply separate guarantees. [Temporary-file custody](../../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean#L405)
+Checkpoint publication also relies on a runtime lifetime observation. When the temporary run handle leaves scope after a successful file sync, the model records the drop of that exact descriptor. The sync and the scope exit supply separate guarantees. [Temporary-file custody](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointRunDurability.lean#L405)
 
 For the same-directory rename of `WAL.next` onto the keeper, the crash
 contract allows one prior managed-name map or that map with the whole rename
@@ -414,7 +414,7 @@ committed history length. Both selections keep the acknowledged replay.
 Its selected reads prove their own identities and still feed the same aligned installation theorem
 and session induction. This constrains the shared contract to one particular selected reader and
 chronology without forcing the previous manifest or watermark on callers. The explicit acquire/read
-theorem above specializes the two early stops. [Exact manifest-rename reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameTableOpen.lean) · [Watermark proof](../../lean/Alvoki/Storage/Disk/NativeCheckpointWatermark.lean)
+theorem above specializes the two early stops. [Exact manifest-rename reopen](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointManifestRenameTableOpen.lean) · [Watermark proof](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointWatermark.lean)
 
 The first integration build surfaced two maintenance proofs that could no longer eliminate disjoint
 events. The shared event tag depended on a match over opaque recovery evidence. A direct event
@@ -626,7 +626,7 @@ the local reboot projection and aligned callback receipts. The early checkpoint
 pilot joins both stops through the recovered snapshot. The later publication
 cuts still need the selected-file argument.
 [Fresh acknowledgement](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
-· [Source checkpoint reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+· [Source checkpoint reopen](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointSourceReopen.lean)
 · [Early checkpoint pilot](../../lean/Alvoki/Storage/Disk/NativeFreshCheckpointReplay.lean)
 
 Ordinary `IO.Error` and interruption must remain distinct even when they involve the same fsync.
@@ -755,7 +755,7 @@ the source-derived prefix preserves the previous selection. The directory
 stop uses the cached root descriptor. Its scoped crash-map contract
 distinguishes durable child names from the root name in the parent.
 The physical result can feed a stopped ledger or an admitted reboot.
-[Runs-directory stop](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+[Runs-directory stop](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointStopContinuation.lean)
 
 The integrated early checkpoint pilot starts with the justified fresh returned
 table and its settled storage. One confirmed nonempty write provides the exact
@@ -777,7 +777,7 @@ held entry because the same measured keeper is aligned and needs no
 staging. The allocated cache and reference constructor identify the
 returned table and heap. The chosen reboot and each call's primitive
 effects are explicit.
-[Fixed source reopen](../../lean/Alvoki/Storage/Disk/NativeCheckpointSourceReopen.lean)
+[Fixed source reopen](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointSourceReopen.lean)
 
 The final checkpoint proof carries the same sampled durable files and
 parent-directory settlement through the actual framed failed opens to the
@@ -788,7 +788,7 @@ the returned table and cache. A subsequent observed nonempty write on
 that handle appends exactly its acknowledged batch. The following snapshot
 agrees with replay of the preceding history and that batch. The proof uses
 scoped reset, failed-open, repair and write effects.
-[Checkpoint reboot, next write and snapshot](../../lean/Alvoki/Storage/Disk/NativeCheckpointSampledTableOpen.lean)
+[Checkpoint reboot, next write and snapshot](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointSampledTableOpen.lean)
 
 The fresh bootstrap return supplies the empty origin for this continuation.
 The existing opened-session trace supplies the prefix on its exact table.
@@ -813,7 +813,7 @@ directory barrier, the scoped child-name effect settles the new run
 bindings. The actual staged MANIFEST fsync also uses the descriptor
 remembered by its own write. These settled files can be sampled by the
 final manifest selection on the same source prefix.
-[New run durability](../../lean/Alvoki/Storage/Disk/NativeCheckpointRunDurability.lean)
+[New run durability](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointRunDurability.lean)
 
 At the final manifest-directory stop, the source order determines the
 preceding successful replacement of MANIFEST. The returned prefix exposes
@@ -830,7 +830,7 @@ consume the same storage observation and compose with the phase-update
 frame. Longer prefixes can use the returned-step fold with the same sync
 frame. A storage fact at the stop can feed terminal refinement and the
 selected reboot independently.
-[Checkpoint stop frames](../../lean/Alvoki/Storage/Disk/NativeCheckpointStopContinuation.lean)
+[Checkpoint stop frames](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointStopContinuation.lean)
 
 A held MANIFEST lookup error and its actual cleanup supply a singleton failed-call
 trace and the precise frames required by the grouped retry pilot. A later admission
@@ -839,7 +839,7 @@ references and builds the first write entry from the reached descriptor census a
 settled empty files. A successful write supplies the prepared batch and byte bound
 directly from its source result. These transitions provide the inputs for a proof
 that composes the initial open, writes and subsequent recovery.
-[Exact MANIFEST retry](../../lean/Alvoki/Storage/Disk/NativeCheckpointOpenChronology.lean)
+[Exact MANIFEST retry](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointOpenChronology.lean)
 · [Fresh writer](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
 The grouped retry pilot composes these steps at their exact reached heaps. It requires

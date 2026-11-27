@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
-import Alvoki.Storage.Disk.CheckpointCompletionHeldReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointCompletionHeldReopen
 
 namespace Alvoki.Storage.DiskSession
 

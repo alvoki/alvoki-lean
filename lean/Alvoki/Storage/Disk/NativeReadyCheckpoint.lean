@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
-import Alvoki.Storage.Disk.CheckpointCompletionHeldReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointCompletionHeldReopen
 import Alvoki.Storage.Disk.Checkpoint.PrimitiveDispatch
 
 namespace Alvoki.Storage.DiskSession

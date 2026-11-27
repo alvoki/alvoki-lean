@@ -6,8 +6,8 @@ import Alvoki.Storage.Disk.NativeInactiveSessionCalls
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
 import Alvoki.Storage.Disk.NativePendingRotation
 import Alvoki.Storage.Disk.NativePendingCheckpoint
-import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryCut
-import Alvoki.Storage.Disk.NativeCheckpointRunFileStop
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryCut
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileStop
 import Alvoki.Storage.Disk.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerRename
@@ -18,15 +18,15 @@ import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
 import Alvoki.Storage.Disk.NativeCoveredWalDirectoryStop
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenLineage
-import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
-import Alvoki.Storage.Disk.NativeCheckpointRunFileError
-import Alvoki.Storage.Disk.NativeCheckpointRunDataError
-import Alvoki.Storage.Disk.NativeCheckpointManifestSyncError
-import Alvoki.Storage.Disk.NativeCheckpointManifestOpenError
-import Alvoki.Storage.Disk.NativeCheckpointManifestDataError
-import Alvoki.Storage.Disk.NativeCheckpointManifestRenameError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDataError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestSyncError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestOpenError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestDataError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestRenameError
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
-import Alvoki.Storage.Disk.NativeCheckpointDirectoryError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointDirectoryError
 import Alvoki.Storage.Disk.NativeOpenCheckpointScheduleStop
 
 namespace Alvoki.Storage.DiskSession

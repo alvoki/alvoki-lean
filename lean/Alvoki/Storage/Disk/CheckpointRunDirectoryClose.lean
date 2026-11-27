@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointRunDirectoryFailure
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunDirectoryFailure
 import Alvoki.Storage.Disk.Proofs.Recovery.DirectoryCacheCapture
 import Alvoki.Storage.Disk.PoisonedBatchClose
 

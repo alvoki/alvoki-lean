@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeWalPublicationTail
-import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointSourceCrash
 
 namespace Alvoki.Storage.DiskSession
 

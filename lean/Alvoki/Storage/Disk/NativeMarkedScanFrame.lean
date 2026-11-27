@@ -1,8 +1,8 @@
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
-import Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointFsyncEffects
 import Alvoki.Storage.Disk.RetainedWriterReopen
 import Alvoki.Storage.Disk.NativeDurableWriteReboot
-import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointOpenChronology
 import Alvoki.Storage.Disk.NativeSelectedReadPhaseFrame
 
 namespace Alvoki.Storage.DiskSession

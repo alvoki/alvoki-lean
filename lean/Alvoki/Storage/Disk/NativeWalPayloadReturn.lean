@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointReadReturn
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointReadReturn
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
 
 namespace Alvoki.Storage.WalSegmentRepair

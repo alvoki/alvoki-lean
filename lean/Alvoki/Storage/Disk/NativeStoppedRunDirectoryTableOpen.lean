@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryStop
-import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryReboot
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryStop
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryReboot
 import Alvoki.Storage.Disk.NativeQuietPowerLossTableOpen
 
 namespace Alvoki.Storage.DiskSession

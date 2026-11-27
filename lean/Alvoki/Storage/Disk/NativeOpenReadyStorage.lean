@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointSourceCrash
 import Alvoki.Storage.Disk.NativeOpenReferences
 import Alvoki.Storage.Disk.NativeWalPublicationTail
 

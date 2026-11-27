@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointRunBarrierReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunBarrierReopen
 
 namespace Alvoki.Storage.DiskSession
 

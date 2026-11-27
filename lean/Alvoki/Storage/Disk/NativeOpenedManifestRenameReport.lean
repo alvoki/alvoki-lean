@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointManifestRenameTableOpen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointManifestRenameTableOpen
 
 namespace Alvoki.Storage.DiskSession
 

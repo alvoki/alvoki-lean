@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedKeeperCache
-import Alvoki.Storage.Disk.NativeCheckpointReadReturn
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointReadReturn
 import Alvoki.Storage.Disk.StagedHandleCustody
 
 namespace Alvoki.Storage.DiskSession

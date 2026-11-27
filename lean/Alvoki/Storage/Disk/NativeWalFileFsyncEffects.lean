@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointFsyncEffects
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointFsyncEffects
 import Alvoki.Storage.Disk.NativeWalStage
 
 namespace Alvoki.Storage.DiskSession

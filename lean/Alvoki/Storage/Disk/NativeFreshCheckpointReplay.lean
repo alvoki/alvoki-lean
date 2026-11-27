@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeFreshOpenedSessions
-import Alvoki.Storage.Disk.NativeCheckpointSourceReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointSourceReopen
 import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
 
 namespace Alvoki.Storage.DiskSession

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryError
 import Alvoki.Storage.Disk.NativeCloseAlignedReopen
 
 namespace Alvoki.Storage.DiskSession

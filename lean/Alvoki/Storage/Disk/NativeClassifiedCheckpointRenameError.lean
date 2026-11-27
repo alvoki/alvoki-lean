@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointWatermark
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointWatermark
 import Alvoki.Storage.Disk.NativeOpenCheckpoint
 import Alvoki.Storage.Disk.NativeOpenedPosition
 

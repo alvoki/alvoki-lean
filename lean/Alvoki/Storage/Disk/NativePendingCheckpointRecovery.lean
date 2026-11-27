@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativePendingCheckpoint
-import Alvoki.Storage.Disk.NativeCheckpointErrorPowerLoss
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointErrorPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

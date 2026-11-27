@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointCompletionHeldReopen
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointCompletionHeldReopen
 import Alvoki.Storage.Disk.LockCensusTrace
 
 namespace Alvoki.Storage.DiskSession

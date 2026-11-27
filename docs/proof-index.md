@@ -48,7 +48,7 @@ have closed. Both preserve the prior checkpoint selection. A rename error requir
 selection proof because the chosen crash image can retain the old manifest even if the replacement
 was visible. The consolidation target is one proof from selected reads to the exact returned table,
 shared by all three paths. That proof must accept each allowed selection with its
-own watermark and bytes. [Run fsync stop](../lean/Alvoki/Storage/Disk/NativeCheckpointRunFileStop.lean) · [First directory fsync stop](../lean/Alvoki/Storage/Disk/NativeStoppedRunDirectoryTableOpen.lean) · [Manifest rename error](../lean/Alvoki/Storage/Disk/NativeCheckpointManifestRenameTableOpen.lean)
+own watermark and bytes. [Run fsync stop](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointRunFileStop.lean) · [First directory fsync stop](../lean/Alvoki/Storage/Disk/NativeStoppedRunDirectoryTableOpen.lean) · [Manifest rename error](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointManifestRenameTableOpen.lean)
 
 Prove outcomes over the same production schedule and prefer induction over its actual sequence of
 operations or retries. Put the distinction between completed return, pending call and interruption

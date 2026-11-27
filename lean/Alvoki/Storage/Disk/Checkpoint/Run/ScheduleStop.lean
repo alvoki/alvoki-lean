@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointRunFileSyncFailure
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunFileSyncFailure
 
 namespace Alvoki.Storage.CheckpointPublication
 

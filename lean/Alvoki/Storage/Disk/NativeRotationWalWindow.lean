@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeRawUncertainWrite
-import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointSourceCrash
 
 namespace Alvoki.Storage.DiskSession
 

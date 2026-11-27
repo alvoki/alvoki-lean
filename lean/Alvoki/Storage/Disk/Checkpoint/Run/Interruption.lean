@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointRunOpenFailure
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunOpenFailure
 import Alvoki.Storage.Disk.StagedHandleCustody
 
 namespace Alvoki.Storage.DiskSession

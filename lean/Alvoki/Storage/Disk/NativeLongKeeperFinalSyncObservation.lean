@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
+import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointOpenChronology
 import Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperRenameError
 import Alvoki.Storage.Disk.NativeLongKeeperStorage
