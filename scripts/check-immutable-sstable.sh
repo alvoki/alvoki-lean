@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fresh build of the immutable SSTable, including its native positional reader.
 set -euo pipefail
-ulimit -s 65536
+ulimit -s unlimited
 cd "$(dirname "$0")/../lean"
 if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
   export ELAN_HOME="$(cd "${ALVOKI_TOOLCHAINS:-../../work/toolchains}/elan" && pwd)"
@@ -42,6 +42,9 @@ open ImmutableSSTable
 #check_axioms builder_constructs_image
 #check_axioms push_rejects_key
 #check_axioms openTable_encoded
+#check_axioms open_lookup_encoded
+#check_axioms decodeHeader_encodeHeader
+#check_axioms decodeEntry_encodeEntry
 #check_axioms Table.readEntry_encoded
 #check_axioms Table.next_encoded
 #check_axioms Table.lookup_encoded
