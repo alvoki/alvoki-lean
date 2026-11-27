@@ -135,6 +135,22 @@ Keep segment creation, prefix release and collection under the
 existing WAL invariants. Coordinate the adapter change with the L0
 branch when taking up that work.
 
+The [native reopen proof modules](Proofs/NativeReopen.lean) check lock-path
+selection, decoding bytes from the protected CONTROL binding, child dispatch
+to the selected path and returned handle, and installation and scan of the
+session returned by the modeled root schedule. The native child interpreter
+inserts the exact reached child image into the selected disk slot, including
+on error. Composition through every reached native root barrier and
+reclamation primitive, plus root resource cleanup on partial recovery,
+remains open.
+
+The DurableBlob publication schedule can carry the staged CONTROL writer
+through its fsync, rename, and root barrier. Its directory effect must be
+framed with the WAL root's child bindings. Before CONTROL can select a new
+segment, that segment and its name need their own durability argument.
+Reclamation must respect both admissible CONTROL choices until the barrier.
+The CONTROL write-side adapter is owned separately from this read-side work.
+
 ## Roadmap
 
 **Minimal LSM integration.** Record the absolute WAL position covered by a durable

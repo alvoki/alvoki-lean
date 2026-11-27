@@ -30,9 +30,9 @@ private def removeRegular (path : FilePath) : IO Unit := do
     regular path md
     IO.FS.removeFile path
 
-private def segmentPath (root : FilePath) (id : Nat) := root / s!"segment-{id}"
+def segmentPath (root : FilePath) (id : Nat) := root / s!"segment-{id}"
 
-private def policyStamp (p : Policy) := if p == .boundary then "v3 boundary" else "v3 log"
+def policyStamp (p : Policy) := if p == .boundary then "v3 boundary" else "v3 log"
 
 private def childName (name : String) : Bool :=
   ["lock", "policy", "segment", "commit.0", "commit.1"].contains name
@@ -54,12 +54,29 @@ private def removeSegment (root : FilePath) (id : Nat) : IO Unit := do
     for item in members do IO.FS.removeFile item.path
     IO.FS.removeDir dir
 
-private def acquireRoot (root : FilePath) : IO IO.FS.Handle := do
+private abbrev FileM := ExceptT String IO
+
+@[inline] def acquireRootWith [Monad m] [MonadExceptOf String m]
+    (metadata : FilePath → m (Option Bool)) (openFile : FilePath → IO.FS.Mode → m handle)
+    (tryLock : handle → m Bool) (root : FilePath) : m handle := do
   let path := root / "lock"
-  if let some md ← metadata? path then regular path md
-  let lock ← IO.FS.Handle.mk path .append
-  unless ← lock.tryLock do throw <| IO.userError "segmented WAL already open"
-  return lock
+  if (← metadata path) == some false then
+    throw s!"expected singly linked regular file at {path}"
+  let lock ← openFile path .append
+  let granted ← tryLock lock
+  if granted then pure lock else throw "segmented WAL already open"
+
+private def checked (a : FileM α) : IO α := do
+  match ← a.run with
+  | .ok x => return x
+  | .error e => throw <| IO.userError e
+
+private def acquireRoot (root : FilePath) : IO IO.FS.Handle :=
+  checked <| acquireRootWith
+    (fun path => do
+      let md ← metadata? path
+      return md.map fun item => item.type == .file && item.numLinks == 1)
+    (fun path mode => IO.FS.Handle.mk path mode) (fun handle => handle.tryLock) root
 
 private structure Store where
   root : FilePath
@@ -82,19 +99,36 @@ private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   let child ← SingleFile.create dir p
   s.active.set (some (id, child))
 
-private def Store.openChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) := do
-  s.closeChild
-  let dir := segmentPath s.root id
-  let names := (← inspectChild dir).map (·.fileName)
+/-- A selected child is opened at its computed path, installed in the
+active cell, and scanned through the same returned handle. -/
+@[inline] def openChildWith [Monad m] [MonadExceptOf String m]
+    (closePrevious : m Unit) (inspect : FilePath → m (Array String))
+    (policySize : FilePath → m Nat) (readPolicy : FilePath → m String)
+    (openChild : FilePath → m child) (install : Nat → child → m Unit)
+    (scanChild : child → m (List Bytes)) (root : FilePath) (p : Policy) (id : Nat) :
+    m (List Bytes) := do
+  closePrevious
+  let dir := segmentPath root id
+  let names ← inspect dir
   let required := if p == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
-  unless required.all names.contains do throw <| IO.userError s!"incomplete segment {id}"
+  unless required.all names.contains do throw s!"incomplete segment {id}"
   let expected := policyStamp p
-  unless (← (dir / "policy").metadata).byteSize.toNat == expected.utf8ByteSize &&
-      (← IO.FS.readFile (dir / "policy")) == expected do
-    throw <| IO.userError s!"segment policy mismatch at {id}"
-  let child ← SingleFile.openExisting dir
-  s.active.set (some (id, child))
-  SingleFile.scan child
+  unless (← policySize (dir / "policy")) == expected.utf8ByteSize &&
+      (← readPolicy (dir / "policy")) == expected do
+    throw s!"segment policy mismatch at {id}"
+  let child ← openChild dir
+  install id child
+  scanChild child
+
+private def Store.openChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
+  checked <| openChildWith
+    (liftM s.closeChild)
+    (fun path => do return (← inspectChild path).map (·.fileName))
+    (fun path => do return (← path.metadata).byteSize.toNat)
+    (fun path => IO.FS.readFile path)
+    (fun path => SingleFile.openExisting path)
+    (fun index child => s.active.set (some (index, child)))
+    (fun child => SingleFile.scan child) s.root p id
 
 private def Store.listIds (s : Store) : IO (List Nat) := do
   let mut ids := []
@@ -106,7 +140,23 @@ private def Store.listIds (s : Store) : IO (List Nat) := do
       ids := id :: ids
   return ids
 
-private abbrev FileM := ExceptT String IO
+/-- The CONTROL read uses the reached no-follow metadata and whole-file
+read of the same protected path. Its decode and checks are shared. -/
+@[inline] def readControlWith [Monad m] [MonadExceptOf String m]
+    (metadata : FilePath → m (Bool × Nat)) (readBytes : FilePath → m ByteArray)
+    (root : FilePath) : m Control := do
+  let file := root / "CONTROL"
+  let (regularFile, size) ← metadata file
+  unless regularFile do throw s!"expected singly linked regular file at {file}"
+  -- The version, policy, capacity, two UInt64 decimal fields and digest fit in 80 bytes.
+  if size > 80 then throw "oversized segmented WAL control"
+  let some control := ControlCodec.decode (← readBytes file)
+    | throw "invalid segmented WAL control"
+  return control
+
+private def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
+  let md ← path.symlinkMetadata
+  return (md.type == .file && md.numLinks == 1, md.byteSize.toNat)
 
 private def Store.callbacks (s : Store) : Ops FileM where
   prepareSegment p id := s.prepare p id
@@ -121,15 +171,7 @@ private def Store.callbacks (s : Store) : Ops FileM where
       h.flush
   syncControl := liftM <| IO.FS.withFile (s.root / "CONTROL.next") .read syncHandle
   renameControl := IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")
-  readControl := do
-    let file := s.root / "CONTROL"
-    let md ← file.symlinkMetadata
-    regular file md
-    -- The version, policy, capacity, two UInt64 decimal fields and digest fit in 80 bytes.
-    if md.byteSize > 80 then throw "oversized segmented WAL control"
-    let some c := ControlCodec.decode (← IO.FS.readBinFile file)
-      | throw "invalid segmented WAL control"
-    return c
+  readControl := readControlWith controlMetadata (fun file => IO.FS.readBinFile file) s.root
   openSegment p id := s.openChild p id
   appendSegment _ id batch := do
     let some (installed, child) ← s.active.get | throw "no active segment"
@@ -138,19 +180,18 @@ private def Store.callbacks (s : Store) : Ops FileM where
   listSegments := s.listIds
   removeSegment id := removeSegment s.root id
 
-private def checked (a : FileM α) : IO α := do
-  match ← a.run with
-  | .ok x => return x
-  | .error e => throw <| IO.userError e
-
-private inductive Phase where
-  | ready (store : Store) (session : Session)
-  | poisoned (store : Store)
+inductive Phase (store : Type) where
+  | ready (owned : store) (session : Session)
+  | poisoned (owned : store)
   | closed
 
 structure Handle where private mk ::
-  private state : IO.Ref Phase
+  private state : IO.Ref (Phase Store)
   private mutex : Std.BaseMutex
+
+@[inline] def reopenPhaseWith [Monad m] [MonadExceptOf String m]
+    (callbacks : Ops m) (owned : store) : m (Phase store) :=
+  return .ready owned (← Segmented.reopen callbacks)
 
 private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
   let root ← IO.FS.realPath dir
@@ -159,13 +200,13 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handl
   let store := {root, directory, lock, active := ← IO.mkRef none : Store}
   try
     let callbacks := store.callbacks
-    let session ← match fresh with
+    let phase ← match fresh with
       | some (policy, cap) => do
         unless (← entries root).all (fun e => e.fileName == "lock") do
           throw <| IO.userError "segmented WAL directory is not empty"
-        checked (Segmented.create callbacks policy cap)
-      | none => checked (Segmented.reopen callbacks)
-    return ⟨← IO.mkRef (.ready store session), ← Std.BaseMutex.new⟩
+        pure (.ready store (← checked (Segmented.create callbacks policy cap)))
+      | none => checked (reopenPhaseWith callbacks store)
+    return ⟨← IO.mkRef phase, ← Std.BaseMutex.new⟩
   catch e =>
     store.release
     throw e
@@ -198,15 +239,22 @@ def discardThrough (h : Handle) (k : Nat) : IO Unit := do
   let _ ← update h (fun ops s => Segmented.discardThrough ops s k)
   pure ()
 
+def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase store) : m Contract.View :=
+  match phase with
+  | .ready _ session => pure session.view
+  | .poisoned _ => throw "segmented WAL requires reopen"
+  | .closed => throw "segmented WAL closed"
+
+@[inline] def closeWith [Monad m] (swap : Phase store → m (Phase store))
+    (release : store → m Unit) : m Unit := do
+  match ← swap .closed with
+  | .ready owned _ | .poisoned owned => release owned
+  | .closed => pure ()
+
 def scan (h : Handle) : IO Contract.View := h.locked do
-  match ← h.state.get with
-  | .ready _ s => return s.view
-  | .poisoned _ => throw <| IO.userError "segmented WAL requires reopen"
-  | .closed => throw <| IO.userError "segmented WAL closed"
+  checked (scanWith (← h.state.get))
 
 def close (h : Handle) : IO Unit := h.locked do
-  match ← h.state.swap .closed with
-  | .ready store _ | .poisoned store => store.release
-  | .closed => pure ()
+  closeWith h.state.swap Store.release
 
 end WalRecoverySlice.Segmented.Native
