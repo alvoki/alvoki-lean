@@ -34,7 +34,8 @@ lean_lib PackedRun
 lean_lib PackedView where
   roots := #[`Alvoki.Codec.PackedView]
 
-lean_lib PackedViewProofs
+lean_lib PackedViewProofs where
+  roots := #[`Alvoki.Proofs.Packed.PackedViewProofs]
 
 lean_lib MergeModel
 

@@ -1,4 +1,4 @@
-import PackedViewProofs
+import Alvoki.Proofs.Packed.PackedViewProofs
 
 namespace Alvoki.Opt
 

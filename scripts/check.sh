@@ -14,7 +14,7 @@ case "${1:-}" in
     (
       cd lean
       lake build Alvoki.Checks.Audit.AxiomPolicy MergeProofs RunMergeProofs CodecVariants CompactionProofs
-      for module in PackedViewProofs Alvoki.Proofs.Merge.MergeProofs BlockCodec Alvoki.Proofs.Packed.RunProofs Alvoki.Proofs.Packed.RunMergeProofs CodecVariants \
+      for module in Alvoki.Proofs.Packed.PackedViewProofs Alvoki.Proofs.Merge.MergeProofs BlockCodec Alvoki.Proofs.Packed.RunProofs Alvoki.Proofs.Packed.RunMergeProofs CodecVariants \
         Alvoki.Compaction.Model Alvoki.Compaction.Core Alvoki.Compaction.Codec Alvoki.Storage.Proofs.Table.Compaction Alvoki.Storage.Table.SequentialModel; do
         lake env leanchecker "$module"
       done
