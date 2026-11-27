@@ -63,7 +63,8 @@ lean_lib ByteWords
 
 lean_lib CompactionCodec
 
-lean_lib CompactionProofs
+lean_lib CompactionProofs where
+  roots := #[`Alvoki.Storage.Proofs.Table.Compaction]
 
 lean_lib RunMergeProofs
 

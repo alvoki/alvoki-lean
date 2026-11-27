@@ -1,5 +1,5 @@
 import Alvoki.Storage.Table.CompactionRead
-import CompactionProofs
+import Alvoki.Storage.Proofs.Table.Compaction
 
 namespace Alvoki.Compaction
 open Alvoki.Opt

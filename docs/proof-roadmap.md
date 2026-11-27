@@ -49,7 +49,7 @@ The stock v1 canonical codec, checked packed lookup and range, merge and writer 
 
 ### Logical histories and retention
 
-Snapshot reads use the latest eligible version and give the right input precedence on a tie. Retention preserves supported snapshots by keeping newer rows and a floor anchor where needed, including a tombstone. [Logical history](../lean/CompactionModel.lean) · [Compaction proofs](../lean/CompactionProofs.lean)
+Snapshot reads use the latest eligible version and give the right input precedence on a tie. Retention preserves supported snapshots by keeping newer rows and a floor anchor where needed, including a tombstone. [Logical history](../lean/CompactionModel.lean) · [Compaction proofs](../lean/Alvoki/Storage/Proofs/Table/Compaction.lean)
 
 ### Executable v3 format and kernels
 

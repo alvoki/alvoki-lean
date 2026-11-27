@@ -1,7 +1,7 @@
 import Alvoki.Checks.Audit.AxiomPolicy
 import RunMergeProofs
 import CodecVariants
-import CompactionProofs
+import Alvoki.Storage.Proofs.Table.Compaction
 
 #check_axioms Alvoki.Packed.parseRun_iff
 #check_axioms Alvoki.Packed.encodeV1_injective
