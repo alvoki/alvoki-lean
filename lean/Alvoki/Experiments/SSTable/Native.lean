@@ -1,4 +1,4 @@
-import Alvoki.Experiments.SSTable.Core
+import Alvoki.Experiments.SSTable.Builder
 
 namespace ImmutableSSTable
 
@@ -21,19 +21,6 @@ def openNative (path : System.FilePath) : EIO String (Table (EIO String)) := do
   let handle ← (IO.FS.Handle.mk path .read).toEIO toString
   openTable (handleSource handle)
 
-structure BuilderState where
-  count : Nat := 0
-  lastKey : Option UInt64 := none
-  deriving Inhabited
-
-/-- One successful push emits exactly one format row and advances its count. -/
-def BuilderState.push (state : BuilderState) (row : Entry) :
-    Except String (BuilderState × ByteArray) := do
-  if state.count ≥ maxRows then throw "SSTable row count exceeds format limit"
-  if let some prev := state.lastKey then
-    if row.key ≤ prev then throw "SSTable keys must strictly increase"
-  return (⟨state.count + 1, some row.key⟩, encodeEntry row)
-
 /-- Build at a fresh path owned exclusively by the caller until return.
     Retains one entry at a time. A caught construction error removes the
     incomplete file. Crash publication and durability belong to the caller. -/
@@ -48,7 +35,7 @@ def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
       state := updated
     handle.flush
     handle.rewind
-    handle.write (encodeHeader state.count)
+    handle.write state.header
     handle.flush
     return state.count
   catch err =>
