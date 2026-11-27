@@ -206,22 +206,31 @@ theorem installPhase_reached (load : EStateM abort state (Except String phase))
 
 /-- Once the protected namespace is checked, the actual dispatch opens the
 selected path and scans exactly the handle it stores under the selected ID. -/
-theorem openChild_dispatch (root : FilePath) (p : Policy) (id : Nat) (returned : child)
-    (scan : child → Except String (List Bytes)) :
-    openChildWith (.ok ()) (fun path =>
-      if path = segmentPath root id then .ok #["policy", "segment", "commit.0", "commit.1"]
-      else .error "wrong child listing")
+theorem openChild_dispatch [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+    (root : FilePath) (p : Policy) (id : Nat)
+    (closePrevious : m Unit) (openChild : FilePath → m child)
+    (install : Nat → child → m Unit) (scan : child → m (List Bytes)) :
+    openChildWith closePrevious (fun path =>
+      if path = segmentPath root id then pure #["policy", "segment", "commit.0", "commit.1"]
+      else throw "wrong child listing")
       (fun path => if path = (segmentPath root id) / "policy" then
-        .ok (policyStamp p).utf8ByteSize else .error "wrong policy size path")
+        pure (policyStamp p).utf8ByteSize else throw "wrong policy size path")
       (fun path => if path = (segmentPath root id) / "policy" then
-        .ok (policyStamp p) else .error "wrong policy read path")
-      (fun path => if path = segmentPath root id then .ok returned else .error "wrong child open")
-      (fun index _ => if index = id then .ok () else .error "wrong child ID")
-      scan root p id = scan returned := by
+        pure (policyStamp p) else throw "wrong policy read path")
+      openChild install scan root p id = (do
+        closePrevious
+        let child ← openChild (segmentPath root id)
+        install id child
+        scan child) := by
   have log : (Policy.logOnly == .boundary) = false := rfl
   have marked : (Policy.boundary == .boundary) = true := rfl
-  cases p <;> simp [openChildWith, policyStamp, Bind.bind,
-    Except.bind, Array.contains, log, marked] <;> rfl
+  have logNames : ["policy", "segment"].all
+      (#["policy", "segment", "commit.0", "commit.1"] : Array String).contains = true := by simp
+  have boundaryNames : ["policy", "segment", "commit.0", "commit.1"].all
+      (#["policy", "segment", "commit.0", "commit.1"] : Array String).contains = true := by simp
+  cases p <;>
+    simp only [openChildWith, policyStamp, log, marked, logNames, boundaryNames, beq_self_eq_true,
+      ↓reduceIte, Bool.false_eq_true, Bool.and_self, pure_bind]
 
 end WalRecoverySlice.Segmented.Native
 
@@ -404,6 +413,29 @@ theorem nativeOpenChild_effects (root : FilePath) (reports : Nat → Nat → Sin
         exact eq.symm.trans (nativeChild_selected dir r entry chosen opened)
   healthy _ _ impossible := impossible.elim
 
+/-- Interpret the native child wrapper on the protected, validated namespace.
+The single-file producer supplies the scanned value. Child references are
+erased here, so installation and the previous child's close frame the disk. -/
+def nativeChildDispatch (root : FilePath) (reports : Nat → Nat → SingleFile.OpenReports)
+    (policy : Policy) (id : Nat) : M (List Bytes) :=
+  Native.openChildWith (pure ()) (fun path =>
+    if path = Native.segmentPath root id then pure #["policy", "segment", "commit.0", "commit.1"]
+    else throw "wrong child listing")
+    (fun path => if path = (Native.segmentPath root id) / "policy" then
+      pure (Native.policyStamp policy).utf8ByteSize else throw "wrong policy size path")
+    (fun path => if path = (Native.segmentPath root id) / "policy" then
+      pure (Native.policyStamp policy) else throw "wrong policy read path")
+    (fun path => if path = Native.segmentPath root id then nativeOpenChild root reports policy id
+      else throw "wrong child open")
+    (fun _ _ => pure ()) pure root policy id
+
+theorem nativeChildDispatch_eq (root : FilePath) (reports : Nat → Nat → SingleFile.OpenReports)
+    (policy : Policy) (id : Nat) :
+    nativeChildDispatch root reports policy id = nativeOpenChild root reports policy id := by
+  unfold nativeChildDispatch
+  rw [Native.openChild_dispatch]
+  simp
+
 /-- Both barriers use the already opened root directory. One filesystem
 effect settles CONTROL and child directory names together. -/
 theorem nativeRootBarrier (directory : System.FilePath) (effect : Primitive) (s : State) :
@@ -563,7 +595,7 @@ def nativeReopenOps (root : FilePath) (r : RootReports)
     syncRoot := rootSync root r
     listSegments := fun s => read (r.listFault s.step) (rootListing s.disk.liveNames) s
     removeSegment := rootRemove root r
-    openSegment := nativeOpenChild root childReports }
+    openSegment := nativeChildDispatch root childReports }
 
 theorem nativeRootEffects (root : FilePath) (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports) :
     OpenRootEffects (nativeReopenOps root r reports) False where
@@ -604,8 +636,12 @@ theorem nativeRootEffects (root : FilePath) (r : RootReports) (reports : Nat →
 theorem reopen_nativeRoot {known request} (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (s : State) (prior : Recoverable known request s.disk) :
     DiskPost (fun session after => Installed session after ∧ PermittedView known request session.view)
-      (Recoverable known request) ((Segmented.reopen (nativeReopenOps root r reports)).run s) :=
-  reopenWithEffects_refines (nativeRootEffects root r reports) (nativeOpenChild_effects root reports) s prior
+      (Recoverable known request) ((Segmented.reopen (nativeReopenOps root r reports)).run s) := by
+  have dispatch : (nativeReopenOps root r reports).openSegment = nativeOpenChild root reports := by
+    funext policy id
+    exact nativeChildDispatch_eq root reports policy id
+  exact reopenWithEffects_refines (nativeRootEffects root r reports)
+    (dispatch.symm ▸ nativeOpenChild_effects root reports) s prior
 
 theorem reopenPhase_nativeRoot (owned : store) (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (s : State)

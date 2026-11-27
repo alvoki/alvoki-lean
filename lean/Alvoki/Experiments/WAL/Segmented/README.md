@@ -149,15 +149,21 @@ retired segment. The existing collection proof keeps every selected name.
 
 The root interpreter takes local effects for CONTROL reads, enumeration,
 directory sync, inspection, unlink and rmdir. It assumes stable bindings
-under the cooperating root lock and a checked listing of those bindings.
+under the cooperating root lock. Successful enumeration covers the visible
+canonical bindings, and an absent metadata result means the canonical name
+is absent. Child inspection uses complete relative basenames and singly
+linked regular files. Unlink on a retired child can affect those inodes
+and its directory; rmdir controls the root binding independently.
 The root phase theorem gives the installed view or retryability from the
 exact reached disk. The install theorem interprets reference and mutex
 creation by retaining the phase value and erasing resource identity.
 The close schedules show that the phase and child reference are cleared
 before release, then root unlock follows child close even on a reported
-error. The remaining lifecycle proof must compose the outer child checks,
-the actual opened child's reference and public scan, and the resulting
-child and root resource ownership through acquisition and cleanup.
+error. The child dispatch proof runs the validated path and policy checks and
+uses the same returned child value for installation and scan. Its disk
+interpreter erases reference and close effects. The remaining lifecycle proof
+must track actual child reference ownership, root acquisition and cleanup
+through every outcome, and discharge progress under healthy effects.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be
