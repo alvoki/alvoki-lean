@@ -83,4 +83,52 @@ theorem Run.reopenWithWritebacks {policy events image} (prior : Run policy event
       have clean := settleFiles_clean last after opened.onlineImageClean
       simpa only [Result.writeback, clean] using opened
 
+theorem appendPrimitive_refines (effects : Effects) (schedule : WritebackSchedule) (policy : Policy)
+    (image : Image) (history : List Bytes) (p : Bytes)
+    (cut : Option {c : TornAppend // c.SameExtent p ∧ (policy = .logOnly → c.Detected (historyCursor history).nextSeq)})
+    (entry : Ready policy image history) (clean : image.powerLoss = image)
+    (bounded : ∀ b ∈ history, b.length ≤ 32) (fits : history.length < 255) (size : p.length ≤ 32) :
+    let r := (appendBatch (scheduledOps (appendPrimitives effects (cut.map Subtype.val)) schedule) policy (historyCursor history) p).run image
+    Dirty policy history (some p) (reached r) ∧
+    (policy = .logOnly → (reached r).MarkersSettled) ∧
+    ∀ c, acknowledged r = some c →
+      c = historyCursor (history ++ [p]) ∧
+      Ready policy (reached r) (history ++ [p]) ∧
+      (reached r).powerLoss = reached r := by
+  cases cut with
+  | none =>
+    dsimp only [Option.map, appendPrimitives]
+    rw [appendBatch_withWritebacks _ _ _ _ _ _ clean]
+    let e := appendEffects effects schedule
+    refine ⟨appendBatch_dirty policy e _ _ _ entry clean bounded fits size, ?_, ?_⟩
+    · rintro rfl
+      exact appendBatch_logOnly_markers _ _ _ _ entry clean bounded fits size
+    · intro c got
+      let run := appendBatch (ops e) policy (historyCursor history) p
+      have settled := appendBatch_ack_clean policy e _ _ _ entry clean bounded fits size got
+      change (reached (run.run image)).powerLoss = reached (run.run image) at settled
+      change acknowledged (run.run image) = some c at got
+      change _ ∧ Ready policy (reached (run.run image)) _ ∧ _
+      cases h : run.run image with
+      | error => simp [h, acknowledged] at got
+      | ok value after =>
+        cases value with
+        | error => simp [h, acknowledged] at got
+        | ok cursor =>
+          simp [h, acknowledged] at got
+          subst c
+          obtain ⟨canonical, ready⟩ := ready_after_ack entry p e h bounded fits size
+          exact ⟨canonical, ready, by simpa only [h] using settled⟩
+  | some admitted =>
+    dsimp only [Option.map, appendPrimitives]
+    rw [tornAppend_withWritebacks _ _ _ _ _ _ clean]
+    obtain ⟨dirty, markers⟩ := tornAppend_dirty policy admitted.val image history p
+      entry clean bounded fits size admitted.property.1 admitted.property.2
+    refine ⟨dirty, fun _ => markers, ?_⟩
+    have total := encoded_history_size history 1 bounded
+    rw [tornAppend_stops _ _ _ _ _ size (by simp [historyCursor])
+      (by simp [historyCursor]; omega) (by simp only [historyCursor, frame_length]; omega)]
+    cases admitted.val.abort <;> simp [Abort.result, acknowledged]
+
+
 end WalRecoverySlice.Persistence
