@@ -537,7 +537,7 @@ Both repair errors derive the post-prune settlement and synced-stage bytes from 
 unlinks, root fsync, staged write and pending-file fsync. On a final directory error, the
 [worker's rename observation](../../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 selects its measured repair and the reached staging and rename heaps.
-The cached handle and raw fsync effect connect this prefix to cleanup. An effective final barrier settles the replacement. An
+The allocated handle and its slot reach the final fsync. Storage frames carry the root name from cache allocation to that call. The issued census identifies the slot’s live inode, and the observed fsync effect feeds cleanup. An effective final barrier settles the replacement. An
 ineffective one preserves a predecessor map, which may name the old keeper. Both establish a retry entry for the same committed target.
 The earlier successful directory sync after pruning settles present and absent WAL names over
 the replay window. Scoped name-presence frames across staging, rename and cleanup carry

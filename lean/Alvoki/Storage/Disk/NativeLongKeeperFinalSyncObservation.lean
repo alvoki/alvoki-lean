@@ -301,7 +301,7 @@ theorem ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
       (stageCalls.stage pending callbacks.modifyPending) (callbacks.syncPaths directory.path cached active pending)
       rename start = .error (IO.userError s!"sync failed for '{directory.path}': {cause}") (reached, some renamedHeap))
     (loaded : callbacks.getDirectory cached renamedHeap = .ok (some handle) issued)
-    (atIssue : view.handle issued handle = (issue.inventory, held.lifetime.directorySlot, 0))
+    (atIssue : (view.handle issued handle).2.1 = held.lifetime.directorySlot)
     (census : view.descriptors issued = issue.inventory)
     (issuedFiles : view.files issued = issue.files)
     (root : (storage issued).files.names directory.path = issue.bindings directory.path)
@@ -1292,7 +1292,9 @@ section FinalDirectorySync
 
 variable {renamedHeap : heap}
 
-local notation "directoryCell" => fun before after => view.directory after seed.directoryRef = view.directory before seed.directoryRef
+-- Only the cached reference and its allocated handle's slot participate in routing.
+local notation "rootTarget" => fun atHeap => (view.directory atHeap seed.directoryRef, Prod.fst (Prod.snd (view.handle atHeap seed.handle)))
+local notation "rootFrame" => fun before after => rootTarget after = rootTarget before
 local notation "finalIssue" => reachedState (AlignedKeeperCacheCallbacks.getDirectory callbacks seed.directoryRef renamedHeap)
 
 set_option maxHeartbeats 1200000 in
@@ -1337,22 +1339,25 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     (workerStopped : source.workerObservingRepairRename seed.directoryRef seed.activeRef seed.pendingRef dir raw.lock
       (RawMarkedOpenInterpreter.makeCache dir seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending =
       .error publicError (reached, some renamedHeap))
-    (readerCell : source.fileCalls.ScopeFrames directoryCell)
-    (unlinkCell : ∀ {ordinal before after result}, ordinal ∈ layout.boundedPlan.newer →
+    (readerRoot : source.fileCalls.ScopeFrames rootFrame)
+    (unlinkRoot : ∀ {ordinal before after result}, ordinal ∈ layout.boundedPlan.newer →
       source.remove ((dir).file (.walSegment ordinal)) before = .ok result after →
-      RunCollection.ownedUnlinkResult result = .ok () → directoryCell before after)
-    (syncCell : ∀ {path before after}, (path = (dir).path ∨ path = (dir).file .stagedWal) →
-      groupSync #[path] before = .ok () after → directoryCell before after)
-    (writeCell : ∀ {before after}, stageWrite ((dir).file .stagedWal) layout.boundedPlan.keeperBytes
-      before = .ok () after → directoryCell before after)
-    (renameCell : ∀ {before}, source.rename ((dir).file .stagedWal) ((dir).file (.walSegment layout.keeper.first))
-      before = .ok () renamedHeap → directoryCell before renamedHeap)
+      RunCollection.ownedUnlinkResult result = .ok () → rootFrame before after)
+    (syncRoot : ∀ {path before after}, (path = (dir).path ∨ path = (dir).file .stagedWal) →
+      groupSync #[path] before = .ok () after → rootFrame before after)
+    (writeRoot : ∀ {before after}, stageWrite ((dir).file .stagedWal) layout.boundedPlan.keeperBytes
+      before = .ok () after → rootFrame before after)
+    (renameRoot : ∀ {before}, source.rename ((dir).file .stagedWal) ((dir).file (.walSegment layout.keeper.first))
+      before = .ok () renamedHeap → rootFrame before renamedHeap)
     (readRef : ∃ after, (callbacks).getDirectory seed.directoryRef renamedHeap =
       .ok (view.directory renamedHeap seed.directoryRef) after)
-    (atIssue : view.handle finalIssue seed.handle = (issue.inventory, held.lifetime.directorySlot, 0))
+    (readSlot : ∀ {issued}, (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) issued →
+      (view.handle issued seed.handle).2.1 = (view.handle renamedHeap seed.handle).2.1)
+    (sameSlot : admission.cached = held.lifetime.directorySlot)
     (census : view.descriptors finalIssue = issue.inventory)
     (issuedFiles : view.files finalIssue = issue.files)
-    (root : retryNames finalIssue (dir).path = issue.bindings (dir).path)
+    (openedRoot : retryNames seed.afterPending (dir).path =
+      some (operations.descriptors.inode admission.cached.description))
     (keeper : retryNames finalIssue ((dir).file (.walSegment layout.keeper.first)) =
       issue.bindings ((dir).file (.walSegment layout.keeper.first)))
     (scratch : retryNames finalIssue ((dir).file .stagedWal) = issue.bindings ((dir).file .stagedWal))
@@ -1505,22 +1510,27 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     (fun first last => first.trans last) _ _ observedLong keeperRead
   have keeperNames := source.fileCalls.longKeeperReadFrames readerNames (fun _ _ => rfl)
     (fun first last start => (last start).trans (first start)) _ _ observedLong keeperRead
-  have preparedCell := listing.keepsCellAfterLongKeeper selected seals (fun h => view.directory h seed.directoryRef)
-    (fun frame => frame.directoryCell) readerCell _ observedLong keeperRead
+  have preparedRoot := listing.keepsCellAfterLongKeeper selected seals rootTarget
+    (fun frame => Prod.ext frame.directoryCell (congrArg (fun handle => handle.2.1) frame.directoryHandle)) readerRoot _ observedLong keeperRead
   have ⟨authorize, prune, written, persisted⟩ := staging
-  have prunedCell := framesReturnedPrune dir layout.boundedPlan source.remove stageWrite groupSync source.rename
-    directoryCell (fun _ => rfl) (fun first last => last.trans first) unlinkCell (syncCell (.inl rfl)) prune
-  have attached : view.directory renamedHeap seed.directoryRef = view.directory seed.afterPending seed.directoryRef := calc
-    _ = view.directory synced seed.directoryRef := renameCell moved
-    _ = view.directory recorded seed.directoryRef := syncCell (.inr rfl) persisted
-    _ = view.directory pruned seed.directoryRef := writeCell written
-    _ = view.directory authorized seed.directoryRef := prunedCell
-    _ = view.directory afterKeeper seed.directoryRef := syncCell (.inl rfl) authorize
-    _ = _ := preparedCell
+  have prunedRoot := framesReturnedPrune dir layout.boundedPlan source.remove stageWrite groupSync source.rename
+    rootFrame (fun _ => rfl) (fun first last => last.trans first) unlinkRoot (syncRoot (.inl rfl)) prune
+  have targetKept : rootTarget renamedHeap = rootTarget seed.afterPending := calc
+    _ = rootTarget synced := renameRoot moved
+    _ = rootTarget recorded := syncRoot (.inr rfl) persisted
+    _ = rootTarget pruned := writeRoot written
+    _ = rootTarget authorized := prunedRoot
+    _ = rootTarget afterKeeper := syncRoot (.inl rfl) authorize
+    _ = _ := preparedRoot
   obtain ⟨afterRead, read⟩ := readRef
+  have attached : view.directory renamedHeap seed.directoryRef = some seed.handle :=
+    (congrArg Prod.fst targetKept).trans (seed.directoryKept.trans seed.directorySet)
   have loaded : (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue := by
-    rw [read, attached.trans (seed.directoryKept.trans seed.directorySet)]
+    rw [read, attached]
     rfl
+  have allocatedSlot : (view.handle seed.afterPending seed.handle).2.1 = admission.cached :=
+    congrArg (fun handle => handle.2.1) (seed.sameHandle.trans seed.openedHandle)
+  have atIssue := (readSlot loaded).trans ((congrArg Prod.snd targetKept).trans (allocatedSlot.trans sameSlot))
   obtain ⟨diagnostic, failed, reported⟩ := (callbacks).rawDirectoryErrorAfterRead
     seed.directoryRef seed.activeRef seed.pendingRef loaded groupFailed
   subst publicError
@@ -1542,6 +1552,12 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
         fun path inside => durable path (separate path inside), parent⟩)
     suffixSyncFrame prune
   have reachedIssue := (suffixSyncFrame authorize).trans (prunedFrame.trans (stageFrame.trans (renameFrame.trans loadFrame)))
+  obtain ⟨throughListing, throughSeals⟩ := listing.framesThroughSeals selected seals retryFrame
+    (fun h => NativeReadyState.SelectedRetryFrame.refl state (storage h) (visible h))
+    (fun first last => first.trans last) readerFrames listingFrames
+  have throughIssue := throughListing.trans (throughSeals.trans (keeperFrame.trans reachedIssue))
+  have root : retryNames finalIssue (dir).path = issue.bindings (dir).path := by
+    exact (throughIssue.parent.visible (dir).path rfl).1.trans (openedRoot.trans (sameSlot.symm ▸ issue.directoryBound.symm))
   obtain ⟨repair, workerImage, trace, carried, kept, named, durable, _⟩ :=
     issue.returnsSelectedRepairError view state rfl storage visible callbacks seed.directoryRef seed.activeRef seed.pendingRef
       source.remove source.stage source.rename startFiles measured observed loaded atIssue

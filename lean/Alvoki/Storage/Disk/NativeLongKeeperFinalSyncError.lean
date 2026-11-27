@@ -46,7 +46,7 @@ database directory whose child bindings can be settled by this fsync. -/
 theorem ListedLongKeeperDirectoryIssue.rawDirectoryTarget
     (issue : ListedLongKeeperDirectoryIssue moved) (view : OpenCloseHeapView heap FileImage)
     (names : heap → FilePath → Option Nat) {issued : heap} {handle : IO.FS.Handle}
-    (atIssue : view.handle issued handle = (issue.inventory, held.lifetime.directorySlot, 0))
+    (atIssue : (view.handle issued handle).2.1 = held.lifetime.directorySlot)
     (census : view.descriptors issued = issue.inventory)
     (root : names issued directory.path = issue.bindings directory.path) :
     (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots ∧
@@ -84,7 +84,7 @@ theorem ListedLongKeeperDirectoryIssue.rawFinalSyncError
     (renamedFile : rename (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first))
       afterStage = .ok () renamed)
     (loaded : callbacks.getDirectory cached renamed = .ok (some handle) issued)
-    (atIssue : view.handle issued handle = (issue.inventory, held.lifetime.directorySlot, 0))
+    (atIssue : (view.handle issued handle).2.1 = held.lifetime.directorySlot)
     (census : view.descriptors issued = issue.inventory)
     (issuedFiles : view.files issued = issue.files)
     (root : names issued directory.path = issue.bindings directory.path)
