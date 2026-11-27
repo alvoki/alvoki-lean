@@ -90,10 +90,10 @@ lean_exe «alvoki-native» where
   root := `NativeMain
 
 lean_exe «alvoki-merge-phases» where
-  root := `MergePhasesMain
+  root := `Alvoki.Bench.Merge.MergePhasesMain
 
 lean_exe «alvoki-fused-merge» where
-  root := `FusedMergeMain
+  root := `Alvoki.Bench.Merge.FusedMergeMain
 
 lean_exe «alvoki-compaction» where
   root := `CompactionMain
