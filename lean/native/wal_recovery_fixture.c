@@ -1,5 +1,8 @@
+#include <dirent.h>
+#include <errno.h>
 #include <lean/lean.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 
 static int fail_directory_sync;
@@ -49,4 +52,27 @@ lean_object *__wrap_alvoki_fsync(b_lean_obj_arg handle) {
             lean_mk_string("injected marker fsync reply loss")));
     }
     return result;
+}
+
+static unsigned listing_failure_countdown;
+
+lean_object *alvoki_test_fail_directory_listing(uint8_t after_entry) {
+    listing_failure_countdown = after_entry ? 2 : 1;
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+struct dirent *__real_readdir(DIR *directory);
+
+struct dirent *__wrap_readdir(DIR *directory) {
+    if (listing_failure_countdown == 1) {
+        listing_failure_countdown = 0;
+        errno = EIO;
+        return NULL;
+    }
+    struct dirent *entry = __real_readdir(directory);
+    // Count only entries the checked enumerator adds to its partial result.
+    if (listing_failure_countdown == 2 && entry != NULL &&
+        strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0)
+        listing_failure_countdown = 1;
+    return entry;
 }
