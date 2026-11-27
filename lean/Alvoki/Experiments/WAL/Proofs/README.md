@@ -43,8 +43,10 @@ returns the selected history and canonical cursor with both namespace
 barriers settled. An ordinary failure releases the lock and preserves the
 retry invariant at the reached image, including if recovery already
 changed that image. A process stop drops the lock without changing the
-reached child bytes. The shared ready-phase constructor stores that exact
-cursor and history. `scanWith` returns its history and `closeWith` clears
+reached child bytes. The shared open schedule constructs the ready phase with that exact
+cursor and history after both barriers. The shared storage schedule passes
+that phase unchanged to the native reference allocator. The proof observes
+that stored phase, and the runtime supplies reference semantics under the mutex. `scanWith` returns its history and `closeWith` clears
 the phase before releasing the lock, including on unlock error.
 [`Child.Recoverable.nativeOpen`](../Segmented/Proofs/SegmentRecovery.lean)
 derives the current child contracts and scan result from the complete open
@@ -60,7 +62,10 @@ model, with acquisition and cleanup included.
 The focused check kernel-checks the worker and public proofs, audits their
 dependencies and runs the native fixtures. The added fixture exercises
 truncation to zero, append on the pre-opened append description, and two
-subsequent successful reopens, for both policies. The fixtures sample
+subsequent successful reopens, for both policies. A test-only linker
+wrapper also fails directory fsync after the repair, checks that the public
+open failed and left the truncate in place, and verifies lock reacquisition
+and the recovered history on retry. The fixtures sample
 behavior of Linux and its runtime. The proof establishes the contract
 relative to the primitive assumptions in the table.
 

@@ -8,6 +8,9 @@ open WalRecoverySlice System
 @[extern "alvoki_fsync"]
 private opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
 
+@[extern "alvoki_test_fail_directory_sync"]
+private opaque failDirectorySync (_ : Unit) : IO Unit
+
 private def encodeBytes (xs : Bytes) : ByteArray :=
   ⟨xs.toArray⟩
 
@@ -105,6 +108,29 @@ private def truncateToZero (dir : FilePath) (policy : Policy) : IO Unit := do
       throw <| IO.userError "repeated reopen changed the repaired history"
     SingleFile.close reopened
 
+private def lateOpenFailure (dir : FilePath) (policy : Policy) : IO Unit := do
+  let h ← SingleFile.create dir policy
+  SingleFile.append h [7]
+  SingleFile.close h
+  let path := dir / "segment"
+  let confirmed ← IO.FS.readBinFile path
+  IO.FS.writeBinFile path (confirmed ++ encodeBytes ((frame 2 [9]).take 3))
+  failDirectorySync ()
+  match ← (SingleFile.openExisting dir).toBaseIO with
+  | .error (.userError "injected directory fsync failure") => pure ()
+  | .error err => throw err
+  | .ok unexpected =>
+    SingleFile.close unexpected
+    throw <| IO.userError "open returned a handle after the directory sync failed"
+  unless (← IO.FS.readBinFile path) == confirmed do
+    throw <| IO.userError "failed open did not retain the completed repair"
+  let retry ← SingleFile.openExisting dir
+  try
+    unless (← SingleFile.scan retry) == [[7]] do
+      throw <| IO.userError "retry did not recover the confirmed history"
+  finally
+    SingleFile.close retry
+
 private def refuseNonempty (dir : FilePath) : IO Unit := do
   IO.FS.writeBinFile (dir / "segment") ⟨#[17, 18]⟩
   let result ← (SingleFile.create dir .boundary).toBaseIO
@@ -165,6 +191,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.fixture dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.handleRegressions dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.lateOpenFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
   IO.FS.withTempDir WalRecoveryFiles.refuseNonempty
   IO.println "WAL recovery file fixtures passed"

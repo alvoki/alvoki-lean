@@ -103,7 +103,7 @@ private theorem attempt_run (action : OpenM α) (s : OpenImage) :
     Each effect below is selected by the native schedule's reached arguments. -/
 private def openAttempt (dir : FilePath) (policy : Policy) (r : OpenReports)
     (s : OpenImage) : OpenResult (Opened OpenTarget) :=
-  match (openExistingWith (openEffects policy r) attempt throw (workerEffect r) pure dir).run s with
+  match (openExistingWith (openEffects policy r) attempt throw (workerEffect r) (fun _ _ _ => ()) pure dir).run s with
   | .ok result after => .ok result after
   | .error token after => .error token {after with held := false}
 
@@ -200,13 +200,14 @@ def OpenGuarantee (policy : Policy) (known : List Bytes) (pending : Option Bytes
       after.held = true ∧ after.policyDurable = true ∧ after.namesDurable = true ∧
       Contract.Permitted known pending ready.recovered.batches ∧
       ready.recovered.cursor = historyCursor ready.recovered.batches ∧
-      Ready policy after.image ready.recovered.batches ∧ after.image.powerLoss = after.image
+      Ready policy after.image ready.recovered.batches ∧ after.image.powerLoss = after.image ∧
+      ready.phase = .active ready.lock () ready.recovered.cursor ready.recovered.batches
     | .ok (.error _) after | .error _ after => after.held = false
 
 private theorem install_result (dir : FilePath) (r : OpenReports) (s : OpenImage)
     (held : s.held = true) (prior : Dirty policy known pending s.image)
     (markers : policy = .logOnly → s.image.MarkersSettled) :
-    let result := (installWith (openEffects policy r) (workerEffect r) dir .lock).run s
+    let result := (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock).run s
     OpenGuarantee policy known pending
       (match result with
        | .ok (.ok ready) after => .ok (.ok ready) after
@@ -265,7 +266,7 @@ private theorem install_result (dir : FilePath) (r : OpenReports) (s : OpenImage
             obtain ⟨stamp, names⟩ := barriers after rfl
             exact ⟨same ▸ facts.1, fun p => same ▸ facts.2.1 (markers p),
               rfl, rfl, rfl, rfl, rfl, lockEq.trans held, stamp, names, choice,
-              cursor, same ▸ ready, same ▸ closed⟩
+              cursor, same ▸ ready, same ▸ closed, rfl⟩
 
 private theorem acquired_result (dir : FilePath) (r : OpenReports) (s : OpenImage)
     (free : s.held = false) :
@@ -321,21 +322,21 @@ private theorem openAttempt_refines (dir : FilePath) (policy : Policy) (r : Open
       have installed := install_result dir r {s with held := true} rfl prior markers
       dsimp only at installed
       have same : ∀ (state : OpenImage), (attempt
-          (installWith (openEffects policy r) (workerEffect r) dir .lock >>= pure)).run state =
-          match (installWith (openEffects policy r) (workerEffect r) dir .lock).run state with
+          (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock >>= pure)).run state =
+          match (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock).run state with
           | .ok result after => .ok (.ok result) after
           | .error token after => .error token after := by
         intro state
-        have ran : (installWith (openEffects policy r) (workerEffect r) dir .lock >>= pure).run state =
-            (installWith (openEffects policy r) (workerEffect r) dir .lock).run state := by
+        have ran : (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock >>= pure).run state =
+            (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock).run state := by
           rw [runBind]
-          cases (installWith (openEffects policy r) (workerEffect r) dir .lock).run state with
+          cases (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock).run state with
           | error => rfl
           | ok value _ => cases value <;> rfl
         rw [attempt_run, ran]
-        cases (installWith (openEffects policy r) (workerEffect r) dir .lock).run state <;> rfl
+        cases (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock).run state <;> rfl
       simp only [runBind, same]
-      cases h : (installWith (openEffects policy r) (workerEffect r) dir .lock).run {s with held := true} with
+      cases h : (installWith (openEffects policy r) (workerEffect r) (fun _ _ _ => ()) dir .lock).run {s with held := true} with
       | error token after =>
         rw [h] at installed
         exact installed
@@ -385,14 +386,23 @@ theorem openExisting_refines (dir : FilePath) (policy : Policy) (r : OpenReports
     | error err =>
       exact ⟨keepDirty _ outcome.1, fun log => keepMarkers _ (outcome.2.1 log), outcome.2.2⟩
     | ok ready =>
-      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, settled⟩ := outcome.2.2
+      obtain ⟨_, _, _, _, _, _, _, _, _, _, _, settled, _⟩ := outcome.2.2
       have unchanged : settleImage r.afterWorker after = after := by
         unfold settleImage
         rw [settleFiles_clean _ _ settled]
       simpa only [settleResult, unchanged] using outcome
 
-theorem scan_opened (ready : Opened OpenTarget) (s : OpenImage) :
-    (scanWith (ready.phase ()) : OpenM _).run s = .ok (.ok ready.recovered.batches) s := rfl
+/-- The reference-allocation primitive is interpreted by its initial content. -/
+def storedPhase (ready : Opened OpenTarget) : Phase OpenTarget Unit :=
+  (storeReadyWith (m := Id) pure (pure ()) ready).1
+
+theorem storedPhase_eq (ready : Opened OpenTarget) : storedPhase ready = ready.phase := rfl
+
+theorem scan_opened (ready : Opened OpenTarget) (s : OpenImage)
+    (installed : ready.phase = .active ready.lock () ready.recovered.cursor ready.recovered.batches) :
+    (scanWith (storedPhase ready) : OpenM _).run s = .ok (.ok ready.recovered.batches) s := by
+  rw [storedPhase_eq, installed]
+  rfl
 
 private def storePhase (phase : Phase OpenTarget Unit) : OpenM Unit :=
   fun state => finish none () {state with closed := match phase with | .closed => true | _ => false}
@@ -403,13 +413,14 @@ private theorem clear_run (s : OpenImage) :
 /-- Closing a ready handle clears its shared phase before unlocking its
 description. An alias subsequently observes the cleared phase. -/
 theorem close_opened (policy : Policy) (r : OpenReports) (ready : Opened OpenTarget)
-    (lock : ready.lock = .lock) (s : OpenImage) :
-    let result := (closeWith (ready.phase ()) storePhase (openEffects policy r).unlock).run s
+    (lock : ready.lock = .lock) (s : OpenImage)
+    (installed : ready.phase = .active ready.lock () ready.recovered.cursor ready.recovered.batches) :
+    let result := (closeWith (storedPhase ready) storePhase (openEffects policy r).unlock).run s
     let after := postState result
     after.closed = true ∧ after.held = false ∧ after.image = s.image ∧
-    (scanWith (if after.closed then .closed else ready.phase ()) : OpenM _).run after =
+    (scanWith (if after.closed then .closed else ready.phase) : OpenM _).run after =
       .ok (.error "WAL closed") after := by
-  simp only [Opened.phase, closeWith, lock, runBind, clear_run, unlock_run]
+  simp only [storedPhase_eq, installed, closeWith, lock, runBind, clear_run, unlock_run]
   cases h : r.unlockError <;> simp_all [finish, postState] <;> rfl
 
 end WalRecoverySlice.SingleFile

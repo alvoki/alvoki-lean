@@ -77,7 +77,7 @@ theorem Recoverable.nativeOpen (dir : System.FilePath) (reports : SingleFile.Ope
       after.held = true ∧ after.policyDurable = true ∧ after.namesDurable = true ∧
       WalRecoverySlice.Contract.Permitted known pending ready.recovered.batches ∧
       Installed policy after.image ready.recovered.cursor ready.recovered.batches ∧
-      (SingleFile.scanWith (ready.phase ()) : SingleFile.OpenM _).run after =
+      (SingleFile.scanWith (SingleFile.storedPhase ready) : SingleFile.OpenM _).run after =
         .ok (.ok ready.recovered.batches) after
     | .ok (.error _) after | .error _ after => after.held = false := by
   have facts := SingleFile.openExisting_refines dir policy reports start free prior.dirty prior.markers
@@ -90,8 +90,8 @@ theorem Recoverable.nativeOpen (dir : System.FilePath) (reports : SingleFile.Ope
     cases value with
     | error => exact result
     | ok ready =>
-      obtain ⟨_, _, _, _, _, held, stamp, names, chosen, cursor, valid, settled⟩ := result
-      exact ⟨held, stamp, names, chosen, ⟨⟨valid, settled⟩, cursor⟩, SingleFile.scan_opened ready after⟩
+      obtain ⟨_, _, _, _, _, held, stamp, names, chosen, cursor, valid, settled, installed⟩ := result
+      exact ⟨held, stamp, names, chosen, ⟨⟨valid, settled⟩, cursor⟩, SingleFile.scan_opened ready after installed⟩
 
 end Child
 

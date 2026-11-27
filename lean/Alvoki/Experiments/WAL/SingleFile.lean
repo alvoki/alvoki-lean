@@ -129,13 +129,14 @@ structure OpenIO (m : Type → Type) (handle : Type) where
   let (path, mode) := target.location dir
   io.openFile target path mode
 
-structure Opened (handle : Type) where
+structure Opened (handle : Type) (payload : Type := Unit) where
   lock : handle
   policy : Policy
   reader : handle
   writer : handle
   markers : Option (handle × handle)
   recovered : Decoded
+  phase : Phase handle payload
 
 @[inline] def acquireWith [Monad m] [MonadExceptOf String m]
     (io : OpenIO m handle) (dir : FilePath) : m handle := do
@@ -177,20 +178,24 @@ structure OpenFiles (handle : Type) where
 
 @[inline] def installWith [Monad m] [MonadExceptOf String m] (io : OpenIO m handle)
     (recover : Policy → handle → handle → Option (handle × handle) → m Decoded)
-    (dir : FilePath) (lock : handle) : m (Opened handle) := do
+    (stored : handle → handle → Option (handle × handle) → payload)
+    (dir : FilePath) (lock : handle) : m (Opened handle payload) := do
   let files ← openFilesWith io dir
   let recovered ← recover files.policy files.reader files.writer files.markers
   -- Settle policy bytes and the visible file names before installing a handle.
   settleWith io dir files.stamp
-  return ⟨lock, files.policy, files.reader, files.writer, files.markers, recovered⟩
+  let phase := Phase.active lock (stored files.writer files.reader files.markers)
+    recovered.cursor recovered.batches
+  return ⟨lock, files.policy, files.reader, files.writer, files.markers, recovered, phase⟩
 
 @[inline] def openExistingWith [Monad m] [MonadExceptOf String m]
     (io : OpenIO m handle) (attempt : m ready → m (Except error ready))
     (rethrow : error → m ready)
     (recover : Policy → handle → handle → Option (handle × handle) → m Decoded)
-    (makeReady : Opened handle → m ready) (dir : FilePath) : m ready := do
+    (stored : handle → handle → Option (handle × handle) → payload)
+    (makeReady : Opened handle payload → m ready) (dir : FilePath) : m ready := do
   let lock ← acquireWith io dir
-  match ← attempt (installWith io recover dir lock >>= makeReady) with
+  match ← attempt (installWith io recover stored dir lock >>= makeReady) with
   | .ok ready => return ready
   | .error err =>
     io.unlock lock
@@ -212,23 +217,26 @@ private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
     (markers : Option (IO.FS.Handle × IO.FS.Handle)) : FileM Decoded :=
   recoverWith nativeRecovery reader markers policy
 
-def Opened.phase (ready : Opened handle) (stored : payload) : Phase handle payload :=
-  .active ready.lock stored ready.recovered.cursor ready.recovered.batches
+@[inline] def storeReadyWith [Monad m] {ref mutex : Type} (newRef : Phase handle payload → m ref)
+    (newMutex : m mutex) (ready : Opened handle payload) : m (ref × mutex) := do
+  let state ← newRef ready.phase
+  return (state, ← newMutex)
 
-private def installReady (ready : Opened IO.FS.Handle) : IO Handle :=
-  return ⟨ready.policy, ← IO.mkRef (ready.phase (fileOps ready.writer ready.reader ready.markers)), ← Std.BaseMutex.new⟩
+private def installReady (ready : Opened IO.FS.Handle (Ops FileM)) : IO Handle := do
+  let (state, mutex) ← storeReadyWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
+  return ⟨ready.policy, state, mutex⟩
 
 private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
 
 private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
-  checked (installWith nativeOpen recoverNative dir lock) >>= installReady
+  checked (installWith nativeOpen recoverNative fileOps dir lock) >>= installReady
 
 /-- Open a previously initialized directory, holding a nonblocking exclusive file
 lock through recovery and until close. Failure releases the lock. -/
 def openExisting (dir : FilePath) : IO Handle :=
   checked <| openExistingWith nativeOpen
     (fun action => (checked action).toBaseIO)
-    (fun err => liftM (throw err : IO _)) recoverNative (fun ready => installReady ready) dir
+    (fun err => liftM (throw err : IO _)) recoverNative fileOps (fun ready => installReady ready) dir
 
 /-- Initialize an empty caller-owned directory. Existing files are never replaced;
 an interrupted initialization is not automatically retried. -/

@@ -62,6 +62,7 @@ open WalRecoverySlice
 #check_axioms SingleFile.recoverScheduled_eq
 #check_axioms SingleFile.openLocations
 #check_axioms SingleFile.openExisting_refines
+#check_axioms SingleFile.storedPhase_eq
 #check_axioms SingleFile.scan_opened
 #check_axioms SingleFile.close_opened
 #check_axioms Persistence.appendBatch_effects
@@ -77,7 +78,8 @@ lean --run Alvoki/Checks/Tests/WalRecoverySlice.lean
 lean -c "$scratch/files.c" Alvoki/Checks/Tests/WalRecoveryFiles.lean
 # PIC keeps Lean's initialized runtime globals shared with libleanshared.
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" "$scratch/files.c" \
-  native/fsync.c -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
+  native/fsync.c native/wal_recovery_fixture.c -Wl,--wrap=alvoki_fsync \
+  -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/files"
 "$scratch/files"
 # Bash counts 1024-byte blocks outside POSIX mode. Convert SIGXFSZ into EFBIG.
