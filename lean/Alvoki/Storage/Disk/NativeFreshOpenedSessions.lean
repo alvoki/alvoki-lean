@@ -3,8 +3,8 @@ import Alvoki.Storage.Disk.NativeOpenReadyTrace
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
-import Alvoki.Storage.Disk.NativeRawWriteReboot
-import Alvoki.Storage.Disk.NativeRawWriteRootStop
+import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteReboot
+import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteRootStop
 import Alvoki.Storage.Disk.NativeAlignedReadyCalls
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationWalReplay

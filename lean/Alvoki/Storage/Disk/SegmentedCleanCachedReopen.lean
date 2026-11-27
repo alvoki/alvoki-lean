@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CachedMarkedRetryInstallation
 import Alvoki.Storage.Disk.LockDescriptionLifetime
-import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.SegmentedCheckpointStep
 import Alvoki.Storage.Disk.SegmentedRetryTrace
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout
-import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 

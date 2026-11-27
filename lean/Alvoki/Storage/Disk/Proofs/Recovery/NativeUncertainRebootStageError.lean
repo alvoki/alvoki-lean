@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedLongStageCreateError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedBarrierRetryReopen
-import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
+import Alvoki.Storage.Disk.Proofs.Write.NativeUncertainWritePowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

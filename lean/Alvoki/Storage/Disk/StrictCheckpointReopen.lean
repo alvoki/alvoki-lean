@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.VersionedReadyWriter
+import Alvoki.Storage.Disk.Proofs.Write.VersionedReadyWriter
 
 namespace Alvoki.WAL.Boundary
 open Storage CheckpointPublication Manifest

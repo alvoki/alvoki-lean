@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenClose
-import Alvoki.Storage.Disk.WriteGroupFsync
+import Alvoki.Storage.Disk.Proofs.Write.WriteGroupFsync
 
 namespace Alvoki.Storage.DiskSession
 

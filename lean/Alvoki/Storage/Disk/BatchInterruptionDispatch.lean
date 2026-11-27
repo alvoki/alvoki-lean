@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Append.SegmentedBatchAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedBatchPowerLoss
-import Alvoki.Storage.Disk.ClientWriteTrace
+import Alvoki.Storage.Disk.Proofs.Write.ClientWriteTrace
 
 namespace Alvoki.Storage.DiskSession
 

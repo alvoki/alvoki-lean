@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationAuthorityRetry
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationReopenTrace
-import Alvoki.Storage.Disk.SegmentedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterState
 
 namespace Alvoki.Storage.DiskSession
 

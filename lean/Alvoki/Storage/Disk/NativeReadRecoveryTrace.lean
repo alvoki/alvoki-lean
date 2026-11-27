@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadyPowerLoss
-import Alvoki.Storage.Disk.NativeReadyWrite
+import Alvoki.Storage.Disk.Proofs.Write.NativeReadyWrite
 
 namespace Alvoki.Storage.DiskSession
 

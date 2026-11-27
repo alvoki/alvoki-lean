@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.Proofs.Write.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
 import Alvoki.Storage.Disk.NativeLongKeeperPending
 import Alvoki.Storage.Disk.NativeOpenReadyStorage

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeFailedOpenTerminalLedger
-import Alvoki.Storage.Disk.NativeGroupedWriteRecovery
+import Alvoki.Storage.Disk.Proofs.Write.NativeGroupedWriteRecovery
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
 
 namespace Alvoki.Storage.DiskSession

@@ -11,11 +11,11 @@ import Alvoki.Storage.Disk.NativeReadyCloseRetries
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeCloseMarkedBarrierReopen
 import Alvoki.Storage.Disk.NativePendingCloseRecovery
 import Alvoki.Storage.Disk.NativePendingClientRecovery
-import Alvoki.Storage.Disk.NativePendingWriteProcessExit
+import Alvoki.Storage.Disk.Proofs.Write.NativePendingWriteProcessExit
 import Alvoki.Storage.Disk.NativeReadyProcessExit
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.Proofs.Collection.NativeCollectionErrorReopen
-import Alvoki.Storage.Disk.NativeWritePreflight
+import Alvoki.Storage.Disk.Proofs.Write.NativeWritePreflight
 import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointErrorReopen
@@ -36,9 +36,9 @@ import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeContendedOpen
-import Alvoki.Storage.Disk.NativeClassifiedWriteAck
+import Alvoki.Storage.Disk.Proofs.Write.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeUncertainStageRetry
-import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
+import Alvoki.Storage.Disk.Proofs.Write.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryReboot
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileReboot

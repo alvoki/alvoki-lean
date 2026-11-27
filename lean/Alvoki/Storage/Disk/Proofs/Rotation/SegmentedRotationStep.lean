@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationLockHandoff
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationAuthorityRetry
-import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 

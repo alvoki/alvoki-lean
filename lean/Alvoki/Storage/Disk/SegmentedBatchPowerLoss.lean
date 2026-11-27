@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WalBatchMarkerPowerLoss
-import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession
 

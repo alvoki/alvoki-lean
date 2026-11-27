@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterState
 
 namespace Alvoki.Storage.DiskSession
 

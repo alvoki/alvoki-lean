@@ -12,7 +12,7 @@ import Alvoki.Storage.Disk.Proofs.Append.NativePendingFirstAppend
 import Alvoki.Storage.Disk.NativePendingMarkerSync
 import Alvoki.Storage.Disk.NativePendingMarkerRename
 import Alvoki.Storage.Disk.NativePendingMarkerDirectory
-import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
+import Alvoki.Storage.Disk.Proofs.Write.NativePendingMarkerStageWrite
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop

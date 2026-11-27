@@ -62,7 +62,7 @@ storage. The directory barrier settles its child names. The frame still covers t
 own binding. The remaining refinement must derive the normalized publication evidence and cache
 custody from those same raw effects.
 Both ordinary group errors already feed the same uncertain-write endpoint.
-[Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Durable WAL publication](../../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Ready storage after an acknowledged write](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) · [Pending write](../../lean/Alvoki/Storage/Disk/NativeGroupedPendingWrite.lean)
+[Shared cache routing](../../lean/Alvoki/Storage/Disk/NativeRawSync.lean) · [Durable WAL publication](../../lean/Alvoki/Storage/Disk/NativeWalFileFsyncEffects.lean) · [Ready storage after an acknowledged write](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeReadyWriteStorage.lean) · [Pending write](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeGroupedPendingWrite.lean)
 
 The shared single and batch dispatch can now run on one raw heap with the original phase cell,
 metadata lookup and WAL callbacks. A prepared write that acknowledges must have passed the no-follow
@@ -98,7 +98,7 @@ with independent failures and recovery. A returned `commitUnknown` now identifie
 commit at that exact heap, with the original phase poisoned. The shared frame traversal carries
 the exact descriptor authority and protected files through the failure. The uncertain WAL
 outcome and later recovery still need to join that returned state.
-[Raw uncertain return](../../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean) · [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/NativeRawWriteProjection.lean)
+[Raw uncertain return](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawUncertainWrite.lean) · [Raw write phase chronology](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeOpenWrite.lean) · [Raw return projection](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawWriteProjection.lean)
 
 At a stopped staged-manifest fsync the returned prefix and pending-cache update identify the same
 live descriptor. Its private inode effect leaves the previously selected checkpoint and WAL intact
@@ -193,7 +193,7 @@ obligations; a Lean theorem can discharge one obligation for several claims.
 
 | Boundary | What must remain true, and why | Who establishes it → who uses it |
 |---|---|---|
-| Filesystem effects | For the paths an operation must preserve, names still bind the same inodes and their allowed contents agree. Each later crash map has one earlier witness for the **whole footprint**. Otherwise a proof could combine a manifest from one outcome with a run from another. [Scoped frame][frame] | Local effects of reads, removals and barriers → retry proofs, which compose or restrict the frame. A read-only retry preserves the durable selected files, the live keeper binding and bytes, and the presence of other canonical WAL names in the live directory. [Retry frame](https://github.com/alvoki/alvoki-lean/blob/a3629c688ea43a08d6f87aa35e695baabee0a462/lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean#L394) |
+| Filesystem effects | For the paths an operation must preserve, names still bind the same inodes and their allowed contents agree. Each later crash map has one earlier witness for the **whole footprint**. Otherwise a proof could combine a manifest from one outcome with a run from another. [Scoped frame][frame] | Local effects of reads, removals and barriers → retry proofs, which compose or restrict the frame. A read-only retry preserves the durable selected files, the live keeper binding and bytes, and the presence of other canonical WAL names in the live directory. [Retry frame](https://github.com/alvoki/alvoki-lean/blob/a3629c688ea43a08d6f87aa35e695baabee0a462/lean/Alvoki/Storage/Disk/Proofs/Write/NativeDurableWriteReboot.lean#L394) |
 | Storage authority | The held lock and directory handle refer to the captured objects. A single surviving namespace and its bytes determine the selected manifest, run files, WAL marker and replay range. A missing segment inside that range matters just as much as a present one. [Held authority][authority] · [Sampled replay][sample] · [WAL window][window] | Admission establishes custody. For covered publication stops, the crash-selection proof establishes the recoverable file set → the held reader checks and replays those files. |
 | Installed session | The table returned by this `open` has the phase, token and cache allocated by this repair. Its active WAL bytes and directory descriptor agree with the storage at the return heap. This is what makes the next write safe on **that handle**. [Write entry][entry] | Successful repair and reference allocation → the next writer. A newly issued pin carries the returned token. The new handle starts with empty pins. |
 | Client history | Each call extends the incoming history, submissions and observations with its own events. One replay accounts for acknowledged writes, whole uncertain batches and recorded reads. [Ledger suffix][ledger] · [Installed replay][replay] | Local operation refinements → the finite-call induction → write and snapshot guarantees. Collection also needs an eligibility proof for the removed files. Progress needs availability and scheduling assumptions. [Reclamation](#reclamation) · [Progress](#progress-and-bounds) |
@@ -211,8 +211,8 @@ reads the replayed batch for any key. Its pin and the original acknowledgement
 both have sequence number equal to the batch length.
 [Fresh writer through reopen](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 · [Snapshot lookup](../../lean/Alvoki/Storage/Disk/NativeOpenSnapshotControls.lean)
-· [Reopen after acknowledgement](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1866)
-· [Reopen after an uncertain write](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1889)
+· [Reopen after acknowledgement](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean#L1866)
+· [Reopen after an uncertain write](https://github.com/alvoki/alvoki-lean/blob/08546ce9e78606f5dfbfc509d710ee5fc90698a7/lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean#L1889)
 
 For a later write returning `commitUnknown` after the file-sync group
 succeeds, the sampled marker selects the earlier history or the earlier history
@@ -223,7 +223,7 @@ and the active keeper bytes. An interruption during the outstanding final direct
 fsync reaches the same recovery boundary through the cached root descriptor,
 without a write response. The file callbacks each preserve the protected paths and
 the bounded WAL names. The proof composes those local facts up to the marker
-rename, then through the actual cache read and outstanding sync. [Interrupted root sync](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) [Late publication](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+rename, then through the actual cache read and outstanding sync. [Interrupted root sync](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawWriteRootStop.lean) [Late publication](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeLateWriteRecovery.lean)
 
 For the fresh two-write path, `readsAfterInterruptedSecondBatch` carries the
 first write’s established storage and name window into the second write on the
@@ -233,7 +233,7 @@ the returned handle’s phase and token. For any key, acquiring its latest pin
 and reading it extends that history’s recorded reads. This covers a stop at
 the final directory fsync before the first checkpoint.
 [Fresh two-write composition](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
-[Literal reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+[Literal reader](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean)
 
 **What a successful rotation hands to the next call.** Both successor branches
 sync the empty file and then the directory. On the returned heap the former
@@ -311,9 +311,9 @@ table uses the prefix's recorded submissions and reads. The writable
 continuation also requires the durable reset and retry frames above.
 [Mixed calls through rotation](../../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRotationWalReplay.lean) ·
 [Fresh rotation and retry](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
-[Writable reopen](../../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean) · [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
+[Writable reopen](../../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean) · [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRawRotationLiveReopen.lean) ·
-[Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+[Shared reader](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the
@@ -338,12 +338,12 @@ selected checkpoint and bounded WAL range remain intact. The global
 induction must cover these outcomes from the actual source execution.
 [Premise provenance](#premise-provenance) · [Open obligations](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
 
-[write-reboot]: https://github.com/alvoki/alvoki-lean/blob/fd688e7a60e3c9eec108e987b43779216db7bcc4/lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean#L28
+[write-reboot]: https://github.com/alvoki/alvoki-lean/blob/fd688e7a60e3c9eec108e987b43779216db7bcc4/lean/Alvoki/Storage/Disk/Proofs/Write/NativeLateWriteRecovery.lean#L28
 [frame]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointFsyncEffects.lean#L18
-[authority]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L775
+[authority]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean#L775
 [sample]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointFinalManifest.lean#L524
-[window]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean#L123
-[entry]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean#L74
+[window]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawUncertainWrite.lean#L123
+[entry]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Write/NativeReadyWriteStorage.lean#L74
 [ledger]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/NativeExecutionTrace.lean#L881
 [replay]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/ClientReadTrace.lean#L344
 [checkpoint]: https://github.com/alvoki/alvoki-lean/blob/283de70b489be6efc8197ae25a5b525ddeb57b19/lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointSampledTableOpen.lean#L228
@@ -523,7 +523,7 @@ supplies its root and canonical WAL bindings. The common open proof derives the
 returned handle, storage entry and recovery ledger. The shared write and snapshot
 proof extends that ledger given the next write’s observed return and local effects
 and the snapshot token at that return heap.
-[Literal open](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) · [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
+[Literal open](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean) · [Write and snapshot](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativePublishedWriteSnapshot.lean)
 
 An independent failure before flock also exposes its local file frame, including the keeper
 binding in place when the call began. For a second power loss after a replacement, one surviving
@@ -552,7 +552,7 @@ The cache entry and the attached directory handle establish the root inode used 
 the returned writer. At phase and token allocation, only the named keeper needs a
 visible-byte frame. The durable managed-file frame is still required.
 The installation still uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
-[Recovery observations](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+[Recovery observations](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeSelectedWriteReopen.lean)
 · [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 ## Why adding cases is expensive
@@ -671,7 +671,7 @@ read, sync and allocation effects then applies to that branch on
 the same interpreter. The ready table carries the selected replay
 and the physical entry used by later writes. Admission still depends
 on the observed lock state.
-[Ready writer from aligned retry](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+[Ready writer from aligned retry](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean)
 
 A write returning `commitUnknown` can have stopped before or after the two files
 were synced. If marker rename reports an error, its filesystem effect determines
@@ -681,13 +681,13 @@ If the lookup returned a handle, the proof uses the effect of the fsync on that
 handle. An effective sync settles the new marker even if it reports an error.
 Both late paths supply the keeper and marker choices at the failed write's
 heap. The reboot proof samples one joint choice and hands it to recovery.
-[Late write and ready recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+[Late write and ready recovery](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeLateWriteRecovery.lean)
 
 Read-only failures frame the keeper they enter with. A repair failure
 can supply a replacement to the same prefix. Both carry the protected
 files and parent settlement at each returned heap, so grouped recovery
 can consume one prefix through the fixed interpreter.
-[Retry frames](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+[Retry frames](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeDurableWriteReboot.lean)
 
 The raw longer-keeper proof uses the descriptor returned by the staging
 acquisition. A direct create proceeds to write and flush, and a retry
@@ -745,9 +745,9 @@ exact selected successful open to establish its physical writer entry. At that w
 old-target ledger joins the next observed nonempty acknowledged write and snapshot. The
 new write requires its own primitive effect laws, and the snapshot requires the live-token
 comparison. These lemmas supply the individual transitions for a combined execution.
-[Source classification](../../lean/Alvoki/Storage/Disk/NativeRawUncertainWrite.lean)
-· [Aligned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
-· [Write and snapshot](../../lean/Alvoki/Storage/Disk/NativePublishedWriteSnapshot.lean)
+[Source classification](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawUncertainWrite.lean)
+· [Aligned writer](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean)
+· [Write and snapshot](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativePublishedWriteSnapshot.lean)
 
 At the first runs-directory fsync, each successful run write and file
 sync has its own reached heap and inode effect. Folding these frames over
@@ -850,7 +850,7 @@ effects, including frames for the failed calls. The MANIFEST lookup failure proo
 can derive those frames from the actual admission, lookup, cache disposal, unlock
 and release. Fresh initialization, checkpoint stops and full dispatch coverage remain
 open in the broader execution proof.
-[Grouped retry and snapshot](../../lean/Alvoki/Storage/Disk/NativeGroupedWriteSnapshot.lean)
+[Grouped retry and snapshot](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeGroupedWriteSnapshot.lean)
 
 The selected batch target supplies the same repair plan after a reported reboot or live retry.
 The reboot bridge uses one joint map and the bytes sampled at its actual heap. In the grouped
@@ -862,8 +862,8 @@ the root and lock handles and the selected marker, seals, keeper, manifest and r
 observed namespace. The shared return appends one uncertain submission and keeps earlier
 snapshot observations for either selected history. The bridge still takes local primitive effects
 for the failed and healthy opens, with a vacant lock at the healthy entry.
-[Observed reboot](../../lean/Alvoki/Storage/Disk/NativeRawWriteReboot.lean)
-· [Selected retry return](../../lean/Alvoki/Storage/Disk/NativeSelectedWriteReopen.lean)
+[Observed reboot](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawWriteReboot.lean)
+· [Selected retry return](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeSelectedWriteReopen.lean)
 
 For the grouped file-sync failure, the original ready phase supplies the prepared write. The
 actual guard, poison assignment, append, marker stage and failed group determine the literal
@@ -873,7 +873,7 @@ selection across the failed opens and successful installation. The replay ledger
 returned table retains the previous history and snapshot reads and records the uncertain
 submission with zero retained writes. The proof assumes the reported native callback effects,
 the joint Linux crash choice and the observations of the individual open attempts.
-[Grouped write and recovery](../../lean/Alvoki/Storage/Disk/NativeGroupedWriteRecovery.lean)
+[Grouped write and recovery](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeGroupedWriteRecovery.lean)
 · [Replay ledger](../../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
 
 The late-publication composition requires retry observations only for the target admitted
@@ -901,7 +901,7 @@ remain explicit, including the guarded staging-collision route.
 [Pruned returned writer](../../lean/Alvoki/Storage/Disk/NativePrunedMarkedReady.lean)
 · [Replacement returned writer](../../lean/Alvoki/Storage/Disk/NativeLongMarkedReady.lean)
 · [Recovery ledger](../../lean/Alvoki/Storage/Disk/NativeSourceLedger.lean)
-[Late publication recovery](../../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+[Late publication recovery](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeLateWriteRecovery.lean)
 · [Ready allocations](../../lean/Alvoki/Storage/Disk/NativeOpenReadyStorage.lean)
 · [Aligned returned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
 · [Long keeper repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
@@ -912,7 +912,7 @@ settled. The failed-call induction can carry the immutable physical footprint al
 the live keeper, which may change during a repair. For the reopened writer, equal
 manifest and run payloads and the retained seal map transport the durable files to
 the new ledger. The root and lock are tied to the actual reopened descriptors.
-[Durable reboot and retries](../../lean/Alvoki/Storage/Disk/NativeDurableWriteReboot.lean)
+[Durable reboot and retries](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeDurableWriteReboot.lean)
 · [Reopened footprint](../../lean/Alvoki/Storage/Disk/NativeRetainedOpenStorage.lean)
 
 The actual lock, flock, directory open and cache reference allocation receipts carry a
@@ -959,7 +959,7 @@ syncing the existing inode and publishing a trimmed replacement. Each supplies
 the same write entry on the returned handle. Subsequent writes and snapshots
 extend its incoming ledger through the common ready-call induction.
 [Ready-call induction](../../lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean)
-· [Public write stop](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
+· [Public write stop](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawWriteRootStop.lean)
 
 In the native
 process-exit test the keeper can still be aligned, or contain a partial
@@ -967,7 +967,7 @@ batch beyond the marker. The same reopen preserves the aligned inode or
 replaces the longer keeper with its committed prefix. Power loss additionally
 requires a sampled durable directory map and byte contents.
 [Native process-exit fixture](../../scripts/check-disk-process-death.py)
-[Early write recovery](../../lean/Alvoki/Storage/Disk/NativeEarlyWriteRecovery.lean)
+[Early write recovery](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeEarlyWriteRecovery.lean)
 
 A marked repair that fails after changing files supplies its reached image through the same
 worker and finalizers as the read-only error path. After a staged-file fsync error, the prune barrier and subsequent namespace frames keep the

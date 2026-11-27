@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointPreflight
 import Alvoki.Storage.Disk.StagedHandleCustody
-import Alvoki.Storage.Disk.WriteGroupFsync
+import Alvoki.Storage.Disk.Proofs.Write.WriteGroupFsync
 
 namespace Alvoki.Storage.DiskSession
 

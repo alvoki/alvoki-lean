@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Bootstrap.IntegrityBootstrap
 import Alvoki.Storage.Disk.StrictCheckpointReopen
-import Alvoki.Storage.Disk.VersionedUncertainWrite
+import Alvoki.Storage.Disk.Proofs.Write.VersionedUncertainWrite
 import Alvoki.Storage.Disk.Proofs.Collection.VersionedReadyRunCollection
 
 namespace Alvoki.WAL.Boundary

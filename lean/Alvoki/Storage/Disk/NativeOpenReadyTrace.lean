@@ -1,8 +1,8 @@
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointPreflight
 import Alvoki.Storage.Disk.NativeClassifiedCheckpointSuccess
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeOpenRotation
-import Alvoki.Storage.Disk.NativeClassifiedWritePreflight
-import Alvoki.Storage.Disk.NativeClassifiedWriteAck
+import Alvoki.Storage.Disk.Proofs.Write.NativeClassifiedWritePreflight
+import Alvoki.Storage.Disk.Proofs.Write.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 import Alvoki.Storage.Disk.NativeOpenExternalPinRead

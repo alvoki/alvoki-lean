@@ -16,7 +16,7 @@ import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 import Alvoki.Storage.Disk.Proofs.Rotation.SegmentedRotationRecovery
 import Alvoki.Storage.Disk.Proofs.Rotation.SegmentedRotationPowerLoss
 import Alvoki.Storage.Disk.Proofs.Rotation.SegmentedRotationStep
-import Alvoki.Storage.Disk.SegmentedWriterTrace
+import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterTrace
 import Alvoki.Storage.Disk.SessionReadGuards
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 

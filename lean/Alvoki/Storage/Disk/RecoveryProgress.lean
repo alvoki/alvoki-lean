@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Bootstrap.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
-import Alvoki.Storage.Disk.MarkedWriteReopenProgress
+import Alvoki.Storage.Disk.Proofs.Write.MarkedWriteReopenProgress
 
 namespace Alvoki.WAL.Boundary
 

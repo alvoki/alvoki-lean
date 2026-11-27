@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.NativeAlignedKeeperStorage
-import Alvoki.Storage.Disk.NativeSelectedWriteReopen
+import Alvoki.Storage.Disk.Proofs.Write.NativeSelectedWriteReopen
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
-import Alvoki.Storage.Disk.NativeReadyWriteStorage
+import Alvoki.Storage.Disk.Proofs.Write.NativeReadyWriteStorage
 import Alvoki.Storage.Disk.NativeMarkedKeeperLinks
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.NativeOpenAdmissionStorage

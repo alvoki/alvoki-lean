@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeOpenedPosition
 import Alvoki.Storage.Disk.NativeInactiveSessionCalls
-import Alvoki.Storage.Disk.NativeOpenWrite
+import Alvoki.Storage.Disk.Proofs.Write.NativeOpenWrite
 import Alvoki.Storage.Disk.NativeOpenCheckpoint
 
 namespace Alvoki.Storage.DiskSession.NativeOpenedHandle

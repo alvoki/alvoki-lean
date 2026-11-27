@@ -29,8 +29,8 @@ the exact public return. A latest snapshot lookup on that table uses its
 allocated phase and token, and returns the selected replay's value and
 sequence. The reached callbacks still supply the marked probes, phase
 initialization and preservation, and token comparison for that lookup.
-[Public append and continuation](../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) ·
-[Literal reader and repair](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
+[Public append and continuation](../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawWriteRootStop.lean) ·
+[Literal reader and repair](../lean/Alvoki/Storage/Disk/Proofs/Write/NativeAlignedWriteRecovery.lean) ·
 [Aligned public open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 
 **What another open sees.** A live retry starts at the public failure's cleanup
@@ -77,7 +77,7 @@ with supported writes and snapshot responses on the returned handle, using
 the reached callback reports. The native write path uses one inode-byte
 projection for the initial write, recovery and subsequent calls.
 [Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) ·
-[Returned handle and ready calls](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
+[Returned handle and ready calls](../lean/Alvoki/Storage/Disk/Proofs/Write/NativeLateWriteRecovery.lean)
 
 For a final directory-fsync error, the observed rename proves the measured
 keeper was long. The checked plan bounds the unlinks. Their returned images,

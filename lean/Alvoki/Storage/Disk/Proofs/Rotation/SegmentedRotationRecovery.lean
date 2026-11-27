@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationLockHandoff
 import Alvoki.Storage.Disk.SegmentedFailureRelease
-import Alvoki.Storage.Disk.SegmentedWriterEntry
+import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterEntry
 import Alvoki.Storage.Disk.Proofs.Rotation.SegmentedRotationStep
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 

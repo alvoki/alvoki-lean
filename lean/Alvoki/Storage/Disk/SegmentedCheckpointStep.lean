@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointSuccessSession
-import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
 import Alvoki.Storage.Disk.CheckpointPreflight
 
 namespace Alvoki.Storage.DiskSession

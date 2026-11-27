@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.SegmentedRetryTrace
-import Alvoki.Storage.Disk.RetainedWriterState
+import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterState
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointStopContinuation
-import Alvoki.Storage.Disk.NativeRawUncertainWrite
+import Alvoki.Storage.Disk.Proofs.Write.NativeRawUncertainWrite
 
 namespace Alvoki.Storage.DiskSession
 

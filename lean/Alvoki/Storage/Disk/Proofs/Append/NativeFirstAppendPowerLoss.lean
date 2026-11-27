@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Append.NativePendingFirstAppend
-import Alvoki.Storage.Disk.NativeWriteCrashReads
+import Alvoki.Storage.Disk.Proofs.Write.NativeWriteCrashReads
 
 namespace Alvoki.Storage.DiskSession
 

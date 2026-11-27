@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
+import Alvoki.Storage.Disk.Proofs.Write.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
 
 namespace Alvoki.Storage.DiskSession

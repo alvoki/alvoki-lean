@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointFinalManifest
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointSourceReopen
-import Alvoki.Storage.Disk.NativeDurableWriteReboot
+import Alvoki.Storage.Disk.Proofs.Write.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeOpenSnapshotTrace
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
 import Alvoki.Storage.Disk.NativeAlignedReadyCalls

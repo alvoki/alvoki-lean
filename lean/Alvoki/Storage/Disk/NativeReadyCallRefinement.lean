@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
+import Alvoki.Storage.Disk.Proofs.Write.NativePublishedWriteSnapshot
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeExecutionPendingWrite
+import Alvoki.Storage.Disk.Proofs.Write.NativeExecutionPendingWrite
 import Alvoki.Storage.Disk.ClientCachedClose
 
 namespace Alvoki.Storage.DiskSession

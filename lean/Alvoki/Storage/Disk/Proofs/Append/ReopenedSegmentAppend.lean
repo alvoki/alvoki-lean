@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Append.AppendLockHandoff
-import Alvoki.Storage.Disk.VersionedReadyWriter
+import Alvoki.Storage.Disk.Proofs.Write.VersionedReadyWriter
 import Alvoki.Storage.Disk.WalSegmentRetryReads
 
 namespace Alvoki.Storage.DiskSession

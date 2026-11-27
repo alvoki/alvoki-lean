@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeRawRotationDirectoryError
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationReadyStorage
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationWalWindow
-import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
+import Alvoki.Storage.Disk.Proofs.Write.NativeAlignedWriteRecovery
 
 namespace Alvoki.Storage.DiskSession
 

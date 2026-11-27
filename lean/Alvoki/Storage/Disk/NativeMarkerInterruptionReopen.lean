@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.NativePendingMarkerDirectory
 import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
-import Alvoki.Storage.Disk.NativePendingMarkerStageWrite
-import Alvoki.Storage.Disk.NativeWriteCrashReads
+import Alvoki.Storage.Disk.Proofs.Write.NativePendingMarkerStageWrite
+import Alvoki.Storage.Disk.Proofs.Write.NativeWriteCrashReads
 
 namespace Alvoki.Storage.DiskSession
 
