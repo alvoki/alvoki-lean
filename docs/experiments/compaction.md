@@ -1,6 +1,6 @@
 # Versioned compaction experiment
 
-This experiment merges two immutable runs in memory. A caller supplies the oldest snapshot that must remain readable and a snapshot at or above it. It measures producing persistent-format bytes, reading a snapshot directly over the input runs, and scanning a materialized output. [Lean kernel](../../lean/Compaction.lean) · [Rust control](../../rust/src/bin/alvoki-compaction.rs)
+This experiment merges two immutable runs in memory. A caller supplies the oldest snapshot that must remain readable and a snapshot at or above it. It measures producing persistent-format bytes, reading a snapshot directly over the input runs, and scanning a materialized output. [Lean kernel](../../lean/Alvoki/Compaction/Core.lean) · [Rust control](../../rust/src/bin/alvoki-compaction.rs)
 
 ## Format and visibility
 

@@ -1,4 +1,4 @@
-import Compaction
+import Alvoki.Compaction.Core
 import Alvoki.Codec.ByteWords
 
 namespace Alvoki.Compaction

@@ -1,4 +1,4 @@
-import Compaction
+import Alvoki.Compaction.Core
 
 open Alvoki Alvoki.Compaction
 

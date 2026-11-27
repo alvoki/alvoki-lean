@@ -12,7 +12,12 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 ref=${ALVOKI_LINEAR_REF:-HEAD}
 git archive "$ref" lean | tar -x -C "$scratch"
-git -C "$scratch" apply "$here/mark-output.patch"
+if [[ -f "$scratch/lean/Alvoki/Compaction/Core.lean" ]]; then
+  sed 's|lean/Compaction.lean|lean/Alvoki/Compaction/Core.lean|g' "$here/mark-output.patch" > "$scratch/mark-output.patch"
+  git -C "$scratch" apply "$scratch/mark-output.patch"
+else
+  git -C "$scratch" apply "$here/mark-output.patch"
+fi
 
 printf 'Source %s\n' "$(git rev-parse "$ref")"
 uname -srmo
@@ -25,7 +30,11 @@ printf 'CPU affinity %s\n' "$(taskset -pc $$ | cut -d : -f 2-)"
   lean --c=LinearControl.c LinearControl.lean
   leanc -O3 -o linear-control LinearControl.c
   for module in MergePhases Compaction NativeTune; do
-    markers=$(rg -c '= lean_sarray_mark_linear\(' ".lake/build/ir/$module.c")
+    module_path=$module
+    if [[ "$module" == Compaction && -f Alvoki/Compaction/Core.lean ]]; then
+      module_path=Alvoki/Compaction/Core
+    fi
+    markers=$(rg -c '= lean_sarray_mark_linear\(' ".lake/build/ir/$module_path.c")
     printf 'Native destination markers in %s: %s\n' "$module" "$markers"
   done
 )

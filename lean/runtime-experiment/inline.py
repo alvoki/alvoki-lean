@@ -24,6 +24,7 @@ for module in modules:
     for index in range(declaration + 1, len(lines)):
         lines[index] = lines[index].replace(symbol, "fixed_copy_slice(")
     lines[declaration] += f'\n#define FIXED_COPY_FALLBACK lean_byte_array_copy_slice\n#include "{header}"'
+    (TEMP / f"{module}.c").parent.mkdir(parents=True, exist_ok=True)
     (TEMP / f"{module}.c").write_text("\n".join(lines) + "\n")
     original = f'"{ir.with_suffix(".c.o.export").resolve()}"'
     if link_args.count(original) != 1:

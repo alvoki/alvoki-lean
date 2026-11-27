@@ -5,7 +5,7 @@ import re
 
 
 IR = Path(".lake/build/ir")
-compaction = (IR / "Compaction.c").read_text()
+compaction = (IR / "Alvoki/Compaction/Core.c").read_text()
 main = (IR / "Alvoki/Bench/Compaction/CompactionMain.c").read_text()
 
 
@@ -18,7 +18,7 @@ parsed = (
     r"(?P<run>\w+) = lean_alloc_ctor\(0, 1, sizeof\(size_t\)\*1\);\s*"
     r"lean_ctor_set\((?P=run), 0, v_bytes_\d+_\);\s*"
     r"lean_ctor_set_usize\((?P=run), 1, \w+\);[^;]*;[^;]*;\s*"
-    r"\w+ = lp_alvoki___private_Compaction_0__Alvoki_Compaction_validateFrom\((?P=run),"
+    r"\w+ = lp_alvoki___private_Alvoki_Compaction_Core_0__Alvoki_Compaction_validateFrom\((?P=run),"
 )
 require(compaction, parsed, "parser stores validated run bytes in object field zero")
 for target in ("compact", "compactSpans"):

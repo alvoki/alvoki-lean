@@ -12,10 +12,10 @@ for arg in "$@"; do
   (
     cd lean
     output=.lake/compaction-inline
-    python3 runtime-experiment/inline.py alvoki-compaction "$output" Compaction
+    python3 runtime-experiment/inline.py alvoki-compaction "$output" Alvoki/Compaction/Core
     lake env leanc -O3 -DNDEBUG -DLEAN_EXPORTING -ffunction-sections -fdata-sections \
       -fPIC -fvisibility=hidden -fstack-clash-protection -ffp-contract=off \
-      -c "$output/Compaction.c" -o "$output/Compaction.o"
+      -c "$output/Alvoki/Compaction/Core.c" -o "$output/Alvoki/Compaction/Core.o"
     lake env leanc "@$output/link.rsp" -o .lake/build/bin/alvoki-compaction-fixed
   )
   break

@@ -53,7 +53,8 @@ lean_lib ReplayProofs where
 lean_lib FusedMerge where
   roots := #[`Alvoki.Experiments.Merge.FusedMerge]
 
-lean_lib Compaction
+lean_lib Compaction where
+  roots := #[`Alvoki.Compaction.Core]
 
 lean_lib SpanMerge where
   roots := #[`Alvoki.Experiments.Merge.SpanMerge]
