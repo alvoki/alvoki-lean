@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.ObservedBootstrapRetry
-import Alvoki.Storage.Disk.HeldWalInstallation
-import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldWalInstallation
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedDirectoryAuthorizationFailure
 
 namespace Alvoki.Storage.WalSegmentRepair
 

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CapturedKeeperCustody
 import Alvoki.Storage.Disk.CapturedCheckpointReadCensus
-import Alvoki.Storage.Disk.HeldWalInstallation
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldWalInstallation
 
 namespace Alvoki.Storage.DiskSession
 

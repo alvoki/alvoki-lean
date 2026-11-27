@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.ListedStagedKeeperRepair
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedStagedKeeperRepair
 import Alvoki.Storage.Disk.StagedHandleCustody
 
 namespace Alvoki.Storage.DiskSession

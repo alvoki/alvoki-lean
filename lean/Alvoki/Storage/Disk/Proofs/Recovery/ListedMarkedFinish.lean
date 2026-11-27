@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CheckpointHeldOpen
-import Alvoki.Storage.Disk.ListedPrunedAlignedKeeper
-import Alvoki.Storage.Disk.ListedStagedKeeperRepair
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedPrunedAlignedKeeper
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedStagedKeeperRepair
 
 namespace Alvoki.Storage.DiskSession
 

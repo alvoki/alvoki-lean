@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
-import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedAlignedKeeperRepair
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedDirectoryAuthorizationFailure
 
 namespace Alvoki.Storage.DiskSession.ListedAlignedKeeperRepair
 

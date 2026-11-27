@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalOpenFailure
 import Alvoki.Storage.Disk.Proofs.Recovery.DirectoryCacheOpenAdmissionError
-import Alvoki.Storage.Disk.HeldWalPayloadObservations
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldWalPayloadObservations
 import Alvoki.Storage.Disk.Proofs.WAL.WalReplayWork
 
 namespace Alvoki.Storage.DiskSession

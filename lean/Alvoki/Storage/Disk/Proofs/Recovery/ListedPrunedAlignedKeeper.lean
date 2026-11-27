@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.HeldLaterWalPrune
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldLaterWalPrune
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.ListedPrunedAlignedKeeper
-import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedPrunedAlignedKeeper
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedDirectoryAuthorizationFailure
 
 namespace Alvoki.Storage.DiskSession.ListedPrunedAlignedKeeper
 

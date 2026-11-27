@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
 import Alvoki.Storage.Disk.CapturedCheckpointReadCensus
-import Alvoki.Storage.Disk.KeeperDirectoryInterruption
+import Alvoki.Storage.Disk.Proofs.Recovery.KeeperDirectoryInterruption
 
 namespace Alvoki.Storage.DiskSession
 

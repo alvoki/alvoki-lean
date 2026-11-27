@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.HeldWalPayloadObservations
-import Alvoki.Storage.Disk.ListedAlignedKeeperRepair
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldWalPayloadObservations
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedAlignedKeeperRepair
 
 namespace Alvoki.Storage.DiskSession
 

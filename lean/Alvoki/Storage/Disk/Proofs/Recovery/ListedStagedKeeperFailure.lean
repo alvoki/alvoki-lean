@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.ListedStagedKeeperRepair
-import Alvoki.Storage.Disk.ListedDirectoryAuthorizationFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedStagedKeeperRepair
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedDirectoryAuthorizationFailure
 
 namespace Alvoki.Storage.DiskSession
 

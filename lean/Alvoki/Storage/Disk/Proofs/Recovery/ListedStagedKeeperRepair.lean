@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.ListedDirectoryAuthorization
-import Alvoki.Storage.Disk.HeldLaterWalPrune
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedDirectoryAuthorization
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldLaterWalPrune
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskBootstrapAdmission
-import Alvoki.Storage.Disk.DirectoryCacheCapture
+import Alvoki.Storage.Disk.Proofs.Recovery.DirectoryCacheCapture
 
 namespace Alvoki.Storage.DiskSession
 

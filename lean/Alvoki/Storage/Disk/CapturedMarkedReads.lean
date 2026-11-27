@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.LockCensusOpenAdmission
-import Alvoki.Storage.Disk.HeldMetadataReadObservations
-import Alvoki.Storage.Disk.HeldWalPayloadObservations
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldMetadataReadObservations
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldWalPayloadObservations
 import Alvoki.Storage.Disk.WalSegmentCachedRetryCompletion
 
 namespace Alvoki.Storage.DiskSession

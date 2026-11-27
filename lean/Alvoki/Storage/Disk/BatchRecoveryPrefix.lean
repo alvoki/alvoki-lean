@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.BootstrapClientTrace
-import Alvoki.Storage.Disk.ListedMarkedFinish
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedMarkedFinish
 
 namespace Alvoki.Storage.DiskSession
 

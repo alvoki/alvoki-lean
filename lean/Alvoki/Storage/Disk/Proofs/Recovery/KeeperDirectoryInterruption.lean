@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.BatchRecoveryPrefix
-import Alvoki.Storage.Disk.ListedStagedKeeperFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedStagedKeeperFailure
 
 namespace Alvoki.Storage.DiskSession
 

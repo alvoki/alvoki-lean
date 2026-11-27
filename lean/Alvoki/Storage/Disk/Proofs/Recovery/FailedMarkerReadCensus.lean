@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.LockCensusOpenAdmission
-import Alvoki.Storage.Disk.HeldMetadataReadObservations
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldMetadataReadObservations
 
 namespace Alvoki.Storage.DiskSession
 

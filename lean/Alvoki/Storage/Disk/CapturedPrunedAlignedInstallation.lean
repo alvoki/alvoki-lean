@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
-import Alvoki.Storage.Disk.ListedPrunedAlignedKeeper
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedPrunedAlignedKeeper
 
 namespace Alvoki.Storage.DiskSession
 

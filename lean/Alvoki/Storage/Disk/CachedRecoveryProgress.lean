@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.ListedMarkedFinish
+import Alvoki.Storage.Disk.Proofs.Recovery.ListedMarkedFinish
 import Alvoki.Storage.Disk.RotationAuthorityRetry
 
 namespace Alvoki.Storage.DiskSession

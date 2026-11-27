@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.HeldDirectoryReadObservations
+import Alvoki.Storage.Disk.Proofs.Recovery.HeldDirectoryReadObservations
 
 namespace Alvoki.Storage.DiskSession
 
