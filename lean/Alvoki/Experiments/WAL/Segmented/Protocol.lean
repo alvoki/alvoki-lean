@@ -100,7 +100,11 @@ def readSealed (ops : Ops m) (policy : Policy) (capacity first count : Nat)
     if batches.length != capacity then throw "incomplete sealed segment"
     readSealed ops policy capacity (first + 1) n (acc ++ batches.toArray)
 
-def reopen (ops : Ops m) : m Session := do
+/-- The active child is in scope through validation and collection. The
+caller supplies its lifetime and receives it explicitly on success. -/
+def reopenWith (ops : Ops m)
+    (withActive : Policy → Nat → (child → List Bytes → m result) → m result)
+    (finish : Session → child → m result) : m result := do
   let c ← ops.readControl
   if c.capacity = 0 || c.capacity > 255 then throw "invalid segment capacity"
   if c.discarded > (c.active + 1) * c.capacity then throw "invalid release position"
@@ -108,12 +112,16 @@ def reopen (ops : Ops m) : m Session := do
   ops.syncRoot
   let first := c.firstNeeded
   let sealed ← readSealed ops c.policy c.capacity first (c.active - first) #[]
-  let active ← ops.openSegment c.policy c.active
-  if active.length > c.capacity then throw "oversized active segment"
-  if c.discarded > c.active * c.capacity + active.length then throw "release beyond recovered data"
-  let retained := (sealed.toList ++ active).drop (c.discarded - first * c.capacity)
-  collect ops c
-  return ⟨c, active.length, ⟨c.discarded, retained⟩⟩
+  withActive c.policy c.active fun child active => do
+    if active.length > c.capacity then throw "oversized active segment"
+    if c.discarded > c.active * c.capacity + active.length then throw "release beyond recovered data"
+    let retained := (sealed.toList ++ active).drop (c.discarded - first * c.capacity)
+    collect ops c
+    finish ⟨c, active.length, ⟨c.discarded, retained⟩⟩ child
+
+def reopen (ops : Ops m) : m Session :=
+  reopenWith ops (fun policy id resume => do resume () (← ops.openSegment policy id))
+    (fun session () => pure session)
 
 end
 end WalRecoverySlice.Segmented

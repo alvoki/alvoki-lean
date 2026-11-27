@@ -162,13 +162,13 @@ binding and lock acquisition on that description. The binding interpreter
 retains the acquired descriptor identities in the ready phase. A reported
 acquisition error leaves the disk recoverable.
 
-The child cell proof follows the actual dispatch. Validation and child-open
-errors leave the cell empty after the previous child is taken. If the scan
-fails after installation, cleanup can take the newly opened child from the
-cell. A returned single-file child has its existing append authority, and
-closing that exact child clears its phase and drops ownership without
-changing its reached file image. Root unlock follows child close even when
-the latter reports an error.
+The native sealed reader releases each child after scanning it. The active
+child is carried through scan, validation and collection by the shared
+`reopenWith` schedule. A reported error in that scope closes the acquired
+child before the outer store cleanup unlocks the root. On success, the
+schedule returns the session and that same child. The native installer
+writes the child into the ready store, where append takes its writer
+authority. Root unlock follows child close even when close reports an error.
 
 ### Public open contract for the append consumer
 
@@ -193,28 +193,22 @@ same reached disk and resources:
   binding, reach the successful case. Bootstrap and publication must
   eventually supply representability.
 
-The current interface loses information needed for that postcondition.
-`Ops.openSegment` returns only history. The native callback writes the
-child into a private `IO.Ref`, and append later reads that reference.
-`nativeChildDispatch` interprets the returned child as history while
-erasing the reference update. The disk state in `reopenWithEffects_refines`
-therefore cannot distinguish two executions that have the same bytes and
-session but different active child references. `openChild_cell` proves
-the reference update separately, and `nativeOpenBinding` currently
-erases cleanup. Neither theorem supplies the missing connection by itself.
+The value-only model uses the same `reopenWith` executable schedule and
+erases the active payload. Its existing layout proof still supplies disk
+safety and healthy progress. The obsolete reopen dispatcher, active-cell
+simulation and value-only public install interpretation have been removed.
+`withActiveChild_reached` verifies that reported errors close the exact
+acquired child at the reached state. `nativeAppendAfterTransfer` consumes
+the returned child phase and its reached image using the existing
+single-file append proof. The native fixtures cover successful reopen
+and append, failure after active open, and root unlock after a reported
+child close error.
 
-A narrower executable interface is to give the shared reopen schedule a
-separate active-open continuation. Sealed reads can scope and release
-their children locally. After the active open, pass the selected ID,
-child and scan result as values through the remaining validation,
-collection and ready-phase construction. Scope that continuation so a
-reported failure closes its child before outer root cleanup. On success,
-transfer the same child to the store for append. The disk-only
-instantiation can erase this payload. Reuse `reopen_spec` for layout,
-the single-file producer for append authority and child close, and the
-existing release schedule for root cleanup. This preserves a single
-recovery schedule and avoids proving correspondence for a hidden write
-across the entire recovery loop.
+The remaining proof must carry the scoped child value through the disk
+layout proof and bind its returned identity to the ready store under the
+runtime reference and unlock assumptions. Rotation still prepares a
+successor in the store; when refining it, transfer the new child as an
+explicit value through publication and installation.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be

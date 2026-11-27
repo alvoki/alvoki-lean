@@ -131,30 +131,26 @@ private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
       (← readPolicy (dir / "policy")) == expected do
     throw s!"segment policy mismatch at {id}"
 
-/-- A selected child is opened at its computed path, installed in the
-active cell, and scanned through the same returned handle. -/
-@[inline] def openChildWith [Monad m] [MonadExceptOf String m]
-    (closePrevious : m Unit) (inspect : FilePath → m (Array String))
-    (policySize : FilePath → m Nat) (readPolicy : FilePath → m String)
-    (openChild : FilePath → m child) (install : Nat → child → m Unit)
-    (scanChild : child → m (List Bytes)) (root : FilePath) (p : Policy) (id : Nat) :
-    m (List Bytes) := do
-  closePrevious
-  let dir := segmentPath root id
-  validateChildWith inspect policySize readPolicy dir p id
-  let child ← openChild dir
-  install id child
-  scanChild child
-
-private def Store.openChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
-  checked <| openChildWith
-    (liftM s.closeChild)
+private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
+  let dir := segmentPath s.root id
+  checked <| validateChildWith
     (fun path => do return (← inspectChild path).map (·.fileName))
     (fun path => do return (← path.metadata).byteSize.toNat)
-    (fun path => IO.FS.readFile path)
-    (fun path => SingleFile.openExisting path)
-    (fun index child => s.active.set (some (index, child)))
-    (fun child => SingleFile.scan child) s.root p id
+    (fun path => IO.FS.readFile path) dir p id
+  SingleFile.openExisting dir
+
+private def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) := do
+  let child ← s.acquireChild p id
+  try SingleFile.scan child finally SingleFile.close child
+
+/-- Transfer the child to the caller on success. Release it on a reported
+failure anywhere in the continuation, including scan or collection. -/
+@[inline] def withActiveChild [Monad m] [MonadExceptOf error m]
+    (acquire : m child) (close : child → m Unit) (resume : child → m result) : m result := do
+  let child ← acquire
+  tryCatchThe error (resume child) fun err => do
+    close child
+    throw err
 
 def segmentId (name : String) : Except String (Option Nat) :=
   if ["lock", "CONTROL", "CONTROL.next"].contains name then .ok none
@@ -214,7 +210,7 @@ private def Store.callbacks (s : Store) : Ops FileM where
     syncHandle h
   renameControl := IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")
   readControl := readControlWith controlMetadata (fun file => IO.FS.readBinFile file) s.root
-  openSegment p id := s.openChild p id
+  openSegment p id := s.readSealedChild p id
   appendSegment _ id batch := do
     let some (installed, child) ← s.active.get | throw "no active segment"
     unless installed == id do throw "incorrect active segment"
@@ -230,10 +226,6 @@ inductive Phase (store : Type) where
 structure Handle where private mk ::
   private state : IO.Ref (Phase Store)
   private mutex : Std.BaseMutex
-
-@[inline] def reopenPhaseWith [Monad m] [MonadExceptOf String m]
-    (callbacks : Ops m) (owned : store) : m (Phase store) :=
-  return .ready owned (← Segmented.reopen callbacks)
 
 @[inline] def openRootDirectoryWith [Monad m] (resolve : FilePath → m FilePath)
     (openFile : FilePath → IO.FS.Mode → m descriptor) (dir : FilePath) :
@@ -279,7 +271,16 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handl
       unless (← entries store.root).all (fun e => e.fileName == "lock") do
         throw <| IO.userError "segmented WAL directory is not empty"
       pure (.ready store (← checked (Segmented.create store.callbacks policy cap)))
-    | none => checked (reopenPhaseWith store.callbacks store)
+    | none => do
+      let (session, child) ← checked <| Segmented.reopenWith store.callbacks
+        (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
+          (store.acquireChild policy id) SingleFile.close (fun child => do
+            let batches ← SingleFile.scan child
+            checked (resume child batches)))
+        (fun session child => pure (session, child))
+      store.active.set (some (session.control.active, child))
+      return .ready store session
+
   let (state, mutex) ← openWithStore (error := IO.Error) (acquireStore dir) load
     (fun phase => IO.mkRef phase) (liftM Std.BaseMutex.new) Store.release
   return ⟨state, mutex⟩

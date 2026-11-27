@@ -154,7 +154,7 @@ theorem reopen_spec {σ : Type} (ops : Ops (ExceptT String (EStateM Unit σ)))
     readOutcome installed failure
       ⟨c, history.length - c.active * c.capacity, ⟨c.discarded, history.drop c.discarded⟩⟩
       ((reopen ops).run start) := by
-  unfold reopen
+  unfold reopen reopenWith
   apply readOutcome_bind readControl
   intro s valid
   have nonzero : c.capacity ≠ 0 := by omega
