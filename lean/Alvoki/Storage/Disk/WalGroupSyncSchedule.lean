@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentCommit
+import Alvoki.Storage.Disk.WAL.WalSegmentCommit
 
 namespace Alvoki.Storage.SyncPathGroup
 

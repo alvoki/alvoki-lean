@@ -623,7 +623,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRetryReads
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRetryReadEffects
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFast
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentOpenFastEffects
-lake env leanchecker Alvoki.Storage.Disk.WalBatch
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalBatch
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalBatchCommitEffects
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalBatchMarkerPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.SegmentedBatchPowerLoss
@@ -641,7 +641,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.SegmentedBatchMarkerPro
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalBatchCommitReports
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalBatchSession
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalBatchRecovery
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentCommit
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentCommit
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCommitEffects
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendRepair
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendLayout

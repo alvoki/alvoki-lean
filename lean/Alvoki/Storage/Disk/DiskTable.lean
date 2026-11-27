@@ -8,8 +8,8 @@ import Alvoki.Storage.Disk.ReadRecoveryPrefix
 import Alvoki.Storage.Disk.ManifestAcquisition
 import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.SyncHandleRouting
-import Alvoki.Storage.Disk.WalBatch
-import Alvoki.Storage.Disk.WalSegmentCommit
+import Alvoki.Storage.Disk.WAL.WalBatch
+import Alvoki.Storage.Disk.WAL.WalSegmentCommit
 import Alvoki.Storage.Disk.WAL.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WAL.CollectionPlan
 import Alvoki.Storage.Disk.WalSegmentRotationIO

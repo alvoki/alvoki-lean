@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalBatch
+import Alvoki.Storage.Disk.WAL.WalBatch
 import Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendRepair
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRetryTrace
 import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
