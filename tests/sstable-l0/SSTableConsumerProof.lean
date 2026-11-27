@@ -47,7 +47,7 @@ theorem l0_lookup_selected_data_read_error
     {before start afterLeaf reached : σ} {message : String}
     {parent ref : Ref} {children : Array Ref}
     (miss : tables.lookup newer key before = .ok none start)
-    (scoped : tables.lookup needed key start =
+    (adapter : tables.lookup needed key start =
       (TypedTable.mk handle.table keyCodec mutationCodec).lookup key start)
     (rootChoice : findRef handle.root (fun r => decide (r.lastKey < keyCodec.encode key)) =
       some parent)
@@ -64,4 +64,4 @@ theorem l0_lookup_selected_data_read_error
   have typedFailure := TypedTable.lookup_read_error
     (table := TypedTable.mk handle.table keyCodec mutationCodec)
     (handle.table_lookup_seek_error routed).1
-  exact l0_lookup_after_miss_error miss (scoped.trans typedFailure)
+  exact l0_lookup_after_miss_error miss (adapter.trans typedFailure)
