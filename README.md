@@ -9,15 +9,17 @@ The Linux `DiskTable` API stores unsigned 64-bit keys and values. It supports pu
 ```mermaid
 flowchart LR
     W[Writes] --> WAL[Segmented WAL]
-    W --> M[In-memory memtable]
-    M -->|checkpoint| R[Immutable runs on disk]
-    R -->|publish generation| P[Manifest]
-    P -->|selects checkpoint| R
-    R -->|loaded on open| RAM[Runs in memory]
-    RAM -->|checkpoint| R
-    WAL -->|replay after open| M
-    RAM --> Q[Snapshot reads]
-    M --> Q
+    W --> M[Memtable in RAM]
+    M --> Q[Snapshot reads]
+    R[Active runs in RAM] --> Q
+    M --> C[Checkpoint]
+    R --> C
+    C --> F[New run files]
+    C --> P[Publish manifest]
+    P -->|selects| F
+    F --> O[Open and recover]
+    WAL --> O
+    O --> T[Recovered table in RAM]
 ```
 
 Alvoki is pre-release. The current API is sequential, expects a dedicated directory controlled by the engine, and is tested on Linux x86-64. On-disk formats may change during development.
@@ -27,17 +29,6 @@ Alvoki is pre-release. The current API is sequential, expects a dedicated direct
 Lean checks the executable encoding, replay, and snapshot operations against logical models. Across the crash and recovery sequences covered by the proofs, every acknowledged write remains in order. A write whose outcome was uncertain can survive if the durable marker selects it, and supported snapshots agree with abstract replay.
 
 The recovery proofs use explicit assumptions about the filesystem, file identities, and the effects of native calls. Native fault tests exercise selected outcomes at the adapter boundary. The remaining end-to-end work connects the native execution continuously across all supported recovery paths. [Verification status](docs/verification-status.md#storage-engine-guarantees) · [Proof roadmap](docs/proof-roadmap.md)
-
-## Reproduce on Linux x86-64
-
-From the repository root, install the pinned toolchains and run the storage checks. You'll need Bash, curl, tar, unzip, sha256sum, Python 3, and a C compiler available as `cc`.
-
-```sh
-bash scripts/bootstrap.sh
-bash scripts/check-sequential.sh
-```
-
-The getting-started guide shows how to write a value, close the database, reopen it, and read the value in a Lean program. It also covers the packed storage checks, native fault fixtures, and reproducible benchmarks. [Getting started](docs/getting-started.md)
 
 ## Use the API
 
@@ -64,6 +55,17 @@ def main (args : List String) : IO Unit := do
 
 For a runnable Lake project and an example that closes and reopens the database,
 see [getting started](docs/getting-started.md#write-close-and-reopen-a-database).
+
+## Reproduce on Linux x86-64
+
+From the repository root, install the pinned toolchains and run the storage checks. You'll need Bash, curl, tar, unzip, sha256sum, Python 3, and a C compiler available as `cc`.
+
+```sh
+bash scripts/bootstrap.sh
+bash scripts/check-sequential.sh
+```
+
+The getting-started guide shows how to write a value, close the database, reopen it, and read the value in a Lean program. It also covers the packed storage checks, native fault fixtures, and reproducible benchmarks. [Getting started](docs/getting-started.md)
 
 ## Explore the project
 
