@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WAL.CollectionRange
-import Alvoki.Storage.Disk.WalWritePublicationModel
+import Alvoki.Storage.Disk.Proofs.WAL.WalWritePublicationModel
 
 namespace Alvoki.Storage
 

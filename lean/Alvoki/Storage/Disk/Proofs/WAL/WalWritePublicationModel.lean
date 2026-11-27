@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.MarkedWalReopenModel
+import Alvoki.Storage.Disk.Proofs.WAL.MarkedWalReopenModel
 
 namespace Alvoki.WAL.Boundary
 open Storage

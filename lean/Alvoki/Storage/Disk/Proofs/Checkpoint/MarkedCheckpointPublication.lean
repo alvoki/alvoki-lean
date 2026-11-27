@@ -1,6 +1,6 @@
 import Alvoki.Storage.Proofs.Table.PackedTableLookup
 import Alvoki.Storage.Disk.Proofs.Recovery.DiskRecoveryModel
-import Alvoki.Storage.Disk.WalWritePublicationModel
+import Alvoki.Storage.Disk.Proofs.WAL.WalWritePublicationModel
 import Alvoki.Storage.Disk.Proofs.WAL.WalReplayProvenance
 
 namespace Alvoki.Storage.CheckpointPublication

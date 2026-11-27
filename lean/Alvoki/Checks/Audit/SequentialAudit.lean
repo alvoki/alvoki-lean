@@ -79,7 +79,7 @@ import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.ReadRecoveryPrefix
 import Alvoki.Storage.Disk.Proofs.Recovery.UncheckpointedCachedReopen
 import Alvoki.Storage.Disk.Proofs.Recovery.FullWatermarkReopen
-import Alvoki.Storage.Disk.WalWritePublicationModel
+import Alvoki.Storage.Disk.Proofs.WAL.WalWritePublicationModel
 import Alvoki.Storage.Disk.Proofs.Recovery.DiskRecoveryModel
 import Alvoki.Storage.Disk.Proofs.Recovery.MarkedAdapterRefinement
 import Alvoki.Storage.Disk.Proofs.Recovery.MarkedReopenStability
@@ -665,8 +665,8 @@ import Alvoki.Storage.Disk.Proofs.Recovery.MarkedCheckpointReopenProgress
 import Alvoki.Storage.Disk.Proofs.Read.RecoveredPinRefinement
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointHistory
 import Alvoki.Storage.Publication.DiskPublicationModel
-import Alvoki.Storage.Disk.WalBoundaryModel
-import Alvoki.Storage.Disk.MarkedWalReopenModel
+import Alvoki.Storage.Disk.Proofs.WAL.WalBoundaryModel
+import Alvoki.Storage.Disk.Proofs.WAL.MarkedWalReopenModel
 import Alvoki.Storage.Disk.Proofs.WAL.ReplacedWalDescriptor
 import Alvoki.Storage.Proofs.Publication.CheckpointPublicationModel
 import Alvoki.Storage.Publication.DirectoryPublicationModel

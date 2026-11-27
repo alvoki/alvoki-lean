@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.WAL.RetainedWalBoundary
 import Alvoki.Storage.Disk.WAL.WalSegmentCommit
-import Alvoki.Storage.Disk.WalWritePublicationModel
+import Alvoki.Storage.Disk.Proofs.WAL.WalWritePublicationModel
 
 namespace Alvoki.Storage.WalSegmentCommit
 

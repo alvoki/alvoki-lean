@@ -815,9 +815,9 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointHistory
 lake env leanchecker Alvoki.Storage.Publication.DiskPublication
 lake env leanchecker Alvoki.Storage.Publication.DiskPublicationModel
 lake env leanchecker Alvoki.Storage.Disk.WAL.WalBoundary
-lake env leanchecker Alvoki.Storage.Disk.WalBoundaryModel
-lake env leanchecker Alvoki.Storage.Disk.WalWritePublicationModel
-lake env leanchecker Alvoki.Storage.Disk.MarkedWalReopenModel
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalBoundaryModel
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalWritePublicationModel
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.MarkedWalReopenModel
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.ReplacedWalDescriptor
 lake env leanchecker Alvoki.Storage.Publication.CheckpointPublication
 lake env leanchecker Alvoki.Storage.Proofs.Publication.CheckpointPublicationModel
