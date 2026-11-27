@@ -630,6 +630,7 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
     (storage : RenamedCheckpointStorageEffects stop inodes runs observe) (effective : Bool)
     (directoryEffect : CheckpointManifestDirectoryEffect dbDir effective storage.scope
       (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
@@ -646,7 +647,8 @@ theorem NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
     NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
       (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
       (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe stop.manifest names contents origin earlier errors := by
-  have selection := stop.replaysSampledFinalCheckpoint inodes runs observe storage effective directoryEffect names chosen contents sampled
+  have selection := stop.replaysSampledFinalCheckpoint inodes runs observe initial storage effective directoryEffect
+    names chosen contents sampled
   exact stop.toNativeCheckpointSourcePrefix.reopensSampledCheckpoint inodes runs observe names contents selection
     resetCensus resetLock attempts effects prefixLedger
 
@@ -657,6 +659,7 @@ theorem NativeCheckpointSourceError.reopensSampledRenameError
     (stop : NativeCheckpointSourceError current primitives fsync (.manifest .renameStaged) cause reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
     (storage : CheckpointPublicationStorageEffects stop.toNativeCheckpointSourcePrefix inodes runs observe)
     (effective : Bool)
     (renameEffect : stop.ManifestRenameEffect inodes observe storage.scope effective)
@@ -674,7 +677,8 @@ theorem NativeCheckpointSourceError.reopensSampledRenameError
     NativeOpenedPosition.SampledCheckpointRecovery (view := view) (source := source) (input := input)
       (rebooted := rebooted) (entry := entry) (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
       (write := write) (get := get) (set := set) (ptrEq := ptrEq) current inodes observe stop.manifest names contents origin earlier errors := by
-  obtain ⟨choice, selection⟩ := stop.replaysSampledRenameError inodes runs observe storage effective renameEffect names chosen contents sampled
+  obtain ⟨choice, selection⟩ := stop.replaysSampledRenameError inodes runs observe initial storage effective renameEffect
+    names chosen contents sampled
   exact ⟨choice, stop.toNativeCheckpointSourcePrefix.reopensSampledCheckpoint inodes runs observe names contents selection
     resetCensus resetLock attempts effects prefixLedger⟩
 

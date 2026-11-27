@@ -865,7 +865,9 @@ structure NativeReadyWriteCalls.ReachedUncertainWrite (writes : NativeReadyWrite
     (fun atHeap => (current.directory.symm ▸ observe atHeap : RunDirectoryInodeView _ _ _).storageObservation) first
     (current.current.history.length + request.rows.length)
 
-private theorem storageObservation_cast {first last : DiskDirectory} {inodes : WalInodeImage} {runs : RunUnlinkImage}
+/-- Reindexing a run view along directory equality preserves the observed files. -/
+theorem _root_.Alvoki.Storage.CheckpointPublication.RunDirectoryInodeView.storageObservation_cast
+    {first last : DiskDirectory} {inodes : WalInodeImage} {runs : RunUnlinkImage}
     (same : first = last) (files : RunDirectoryInodeView first inodes runs) :
     (same ▸ files : RunDirectoryInodeView last inodes runs).storageObservation = files.storageObservation := by
   subst last
@@ -906,7 +908,7 @@ theorem NativeReturnedCalls.refinesReadyBeforeCommitUnknown
       (fun atHeap => (last.directory.symm ▸ observe atHeap : RunDirectoryInodeView _ _ _).storageObservation) =
         fun atHeap => (observe atHeap).storageObservation := by
     funext atHeap
-    exact storageObservation_cast last.directory.symm (observe atHeap)
+    exact RunDirectoryInodeView.storageObservation_cast last.directory.symm (observe atHeap)
   refine ⟨last, events, ran, length, records, prior.append suffix,
     ⟨observed, writes.commitUnknownHasRows last observed, writes.returnedWriteAt last observed, ?_, ?_⟩⟩
   · exact (congrFun sameStorage last.reached).symm ▸ physical.physical

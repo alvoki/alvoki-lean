@@ -58,8 +58,8 @@ theorem NativeReturnedCalls.refinesReadyBeforeCheckpointStop
 
 /-- Extend the fresh ledger with the returned calls on the current
 handle, which may itself have come from a reopen. The actual checkpoint
-call derives its source stop at the last returned heap. Its local
-publication and recovery effects can be supplied at that stop. -/
+call derives its source stop at the last returned heap. The reached
+read and write prefix supplies the storage needed by the local effects. -/
 theorem FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
     {heap stream : Type} {call : EStateM IO.Error heap DiskTable} {initial : heap}
     (fresh : FreshBootstrapOpenHeap.Returned call initial)
@@ -143,7 +143,9 @@ theorem FreshBootstrapOpenHeap.Returned.recoversFinalCheckpoint
   have initialDirectory := congrArg Cache.directory physical.cacheAt
   have projected := stop.toNativeCheckpointSourcePrefix.projectsDirectoryAtIssue view cache.directory initialDirectory frames
   obtain ⟨literal, found, retained, target, issued, _⟩ := stop.manifestDirectoryIssuesRawSync sync cache projected routing
-  exact stop.reopensSampledFinalCheckpoint inodes runs files publication effective
+  have initialStorage : NativeReadyStorage current.current.ready.state (files current.reached).storageObservation := by
+    simpa only [files, RunDirectoryInodeView.storageObservation_cast] using physical.physical
+  exact stop.reopensSampledFinalCheckpoint inodes runs files initialStorage publication effective
     (durability literal found retained target issued) names chosen contents sampled
     resetCensus (current.directory.symm ▸ resetLock) attempts effects together
 

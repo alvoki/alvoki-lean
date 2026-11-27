@@ -470,12 +470,12 @@ private theorem walPath_ne_manifest {state : NativeReadyState} {path : FilePath}
   · exact segment saved.first
 
 /-- Local run, directory and stage effects shared before publication
-chooses either the old or new manifest. -/
+chooses either the old or new manifest. The reached writer supplies the
+protected storage these effects carry forward. -/
 structure CheckpointPublicationStorageEffects
     (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap)) where
-  initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation
   phaseStorage : (observe current.reached).storageObservation.Frames current.current.ready.state.crashPath
       (observe stop.poisoned).storageObservation
   runEffects : CheckpointRunPrefixEffects stop stop.next.table.runs.length inodes runs observe
@@ -548,6 +548,7 @@ private theorem NativeCheckpointSourcePrefix.replaysSampledManifest
     (stop : NativeCheckpointSourcePrefix current primitives fsync stage)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
     (storage : CheckpointPublicationStorageEffects stop inodes runs observe)
     (names : FilePath → Option Nat) (chosen : names ∈ (observe reached.2).crashBindings)
     (contents : Nat → ByteArray)
@@ -562,7 +563,7 @@ private theorem NativeCheckpointSourcePrefix.replaysSampledManifest
   have valid := current.current.ready.readPrefix.refines.1
   have prepared : CheckpointPreflight (.ready writer.installed) (.ok (stop.next, stop.manifest)) :=
     valid.phase ▸ stop.prepared
-  have oldStorage := stop.priorStorageBeforeStaging inodes runs observe storage.initial storage.phaseStorage storage.runEffects
+  have oldStorage := stop.priorStorageBeforeStaging inodes runs observe initial storage.phaseStorage storage.runEffects
     (fun handle entry after cached synced => (storage.runBarrier handle entry after cached synced).weaken (fun _ => .inl))
   obtain ⟨beforeWrite, published, through, frame, executed, manifest, choice, sample, newModel, oldModel⟩ :=
     manifestSelection
@@ -633,6 +634,7 @@ theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
     (stop : NativeCheckpointSourceStop current primitives fsync (.manifest .syncDirectory) reason reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
     (storage : RenamedCheckpointStorageEffects stop inodes runs observe) (effective : Bool)
     (directoryEffect : CheckpointManifestDirectoryEffect dbDir effective storage.scope
       (observe stop.atIssue.2).storageObservation (observe reached.2).storageObservation)
@@ -643,11 +645,11 @@ theorem NativeCheckpointSourceStop.replaysSampledFinalCheckpoint
     stop.toNativeCheckpointSourcePrefix.SampledReplay names contents := by
   let prior := stop.toNativeCheckpointSourcePrefix
   let common := storage.toCheckpointPublicationStorageEffects
-  have oldStorage := prior.priorStorageBeforeStaging inodes runs observe common.initial common.phaseStorage common.runEffects
+  have oldStorage := prior.priorStorageBeforeStaging inodes runs observe initial common.phaseStorage common.runEffects
     (fun handle entry after cached synced => (common.runBarrier handle entry after cached synced).weaken (fun _ => .inl))
   have manifest := stop.selectsFinalManifest inodes runs observe common.stageEffects oldStorage common.scope
     common.outsideStage storage.renameEffect effective directoryEffect names chosen contents sampled
-  exact prior.replaysSampledManifest inodes runs observe common names chosen contents sampled manifest
+  exact prior.replaysSampledManifest inodes runs observe initial common names chosen contents sampled manifest
 
 /-- The physical rename effect determines which canonical manifest
 bytes this crash sample can select. A before-effect error can only
@@ -664,6 +666,7 @@ theorem NativeCheckpointSourceError.replaysSampledRenameError
     (stop : NativeCheckpointSourceError current primitives fsync (.manifest .renameStaged) cause reached)
     (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
     (observe : ∀ atHeap, RunDirectoryInodeView dbDir (inodes atHeap) (runs atHeap))
+    (initial : NativeReadyStorage current.current.ready.state (observe current.reached).storageObservation)
     (storage : CheckpointPublicationStorageEffects stop.toNativeCheckpointSourcePrefix inodes runs observe)
     (effective : Bool)
     (renameEffect : stop.ManifestRenameEffect inodes observe storage.scope effective)
@@ -673,14 +676,14 @@ theorem NativeCheckpointSourceError.replaysSampledRenameError
       ∀ inode, names path = some inode → contents inode ∈ (inodes reached.2).crashBytes inode) :
     stop.SelectsManifest effective names contents ∧ stop.toNativeCheckpointSourcePrefix.SampledReplay names contents := by
   let prior := stop.toNativeCheckpointSourcePrefix
-  have oldStorage := prior.priorStorageBeforeStaging inodes runs observe storage.initial storage.phaseStorage storage.runEffects
+  have oldStorage := prior.priorStorageBeforeStaging inodes runs observe initial storage.phaseStorage storage.runEffects
     (fun handle entry after cached synced => (storage.runBarrier handle entry after cached synced).weaken (fun _ => .inl))
   have manifest := stop.selectsManifestAtRenameError inodes runs observe storage.stageEffects oldStorage storage.scope
     storage.outsideStage effective renameEffect names chosen contents sampled
   have choice : stop.SelectsManifest effective names contents := by
     obtain ⟨_, _, _, _, _, _, selected, _⟩ := manifest
     exact selected.imp_right And.right
-  exact ⟨choice, prior.replaysSampledManifest inodes runs observe storage names chosen contents sampled manifest⟩
+  exact ⟨choice, prior.replaysSampledManifest inodes runs observe initial storage names chosen contents sampled manifest⟩
 
 /-- The successful manifest staging keeps the earlier WAL catalog,
 including unbound offset names, before either rename outcome. -/
