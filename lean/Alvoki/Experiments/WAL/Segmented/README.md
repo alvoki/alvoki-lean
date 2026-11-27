@@ -170,12 +170,51 @@ closing that exact child clears its phase and drops ownership without
 changing its reached file image. Root unlock follows child close even when
 the latter reports an error.
 
-`nativeOpenBinding_healthy` proves progress and the matching scan for the
-interpreted acquisition, root and child reports and a representable CONTROL
-binding. The native bootstrap and publication producers still need to derive
-representability. The remaining lifecycle proof must carry the real child
-reference and custody through the entire disk interpretation, including
-release of the acquired root and healthy progress with those resources.
+### Public open contract for the append consumer
+
+For a recoverable disk and a root acquired under the primitive assumptions
+above, the interpreted public open must establish one postcondition on the
+same reached disk and resources:
+
+- On return, the public phase contains the acquired store and the installed
+  `Session`. Both CONTROL and the held directory descriptor bind to the
+  same root as the lock. The store owns the child returned at
+  `segmentPath root session.control.active`. That exact child's phase and
+  the reached segment image provide the writer and marker authority used
+  by the next append. The installed history and cursor agree with the
+  session, and public scan returns its view.
+- On a reported error, the exact reached disk remains recoverable for
+  the same request. The attempt retains no published phase or owned child
+  or root lock. Cleanup consumes the child actually reached, including
+  one opened before a scan or collection error. Release still attempts
+  root unlock after a child close error. A process interruption uses the
+  process-stop premises for acquired resources.
+- Healthy primitive and runtime effects, with a representable CONTROL
+  binding, reach the successful case. Bootstrap and publication must
+  eventually supply representability.
+
+The current interface loses information needed for that postcondition.
+`Ops.openSegment` returns only history. The native callback writes the
+child into a private `IO.Ref`, and append later reads that reference.
+`nativeChildDispatch` interprets the returned child as history while
+erasing the reference update. The disk state in `reopenWithEffects_refines`
+therefore cannot distinguish two executions that have the same bytes and
+session but different active child references. `openChild_cell` proves
+the reference update separately, and `nativeOpenBinding` currently
+erases cleanup. Neither theorem supplies the missing connection by itself.
+
+A narrower executable interface is to give the shared reopen schedule a
+separate active-open continuation. Sealed reads can scope and release
+their children locally. After the active open, pass the selected ID,
+child and scan result as values through the remaining validation,
+collection and ready-phase construction. Scope that continuation so a
+reported failure closes its child before outer root cleanup. On success,
+transfer the same child to the store for append. The disk-only
+instantiation can erase this payload. Reuse `reopen_spec` for layout,
+the single-file producer for append authority and child close, and the
+existing release schedule for root cleanup. This preserves a single
+recovery schedule and avoids proving correspondence for a hidden write
+across the entire recovery loop.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be
