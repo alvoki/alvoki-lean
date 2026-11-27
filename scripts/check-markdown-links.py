@@ -19,16 +19,39 @@ def visible(text):
     """Mask fences, comments, and inline code while retaining line breaks."""
     text = re.sub(r'<!--.*?-->', lambda m: re.sub(r'[^\n]', ' ', m.group()), text, flags=re.S)
     lines, fence = [], None
+    list_indent = None
+    paragraph = False
+    indented_code = False
     for line in text.splitlines(keepends=True):
         match = FENCE.match(line)
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(' '))
+        item = re.match(r'^( *)(?:[-+*]|\d{1,9}[.)]) +', expanded)
+        if item:
+            list_indent = item.end()
+            indented_code = False
+            paragraph = True
+        elif line.strip() and indent == 0:
+            list_indent = None
+        code_indent = (list_indent or 0) + 4
         if fence:
             if match and match[1][0] == fence[0] and len(match[1]) >= len(fence):
                 fence = None
             lines.append(re.sub(r'[^\n]', ' ', line))
         elif match:
             fence = match[1]
+            indented_code = False
+            paragraph = False
             lines.append(re.sub(r'[^\n]', ' ', line))
+        elif line.strip() and not item and indent >= code_indent and (indented_code or not paragraph):
+            indented_code = True
+            lines.append(re.sub(r'[^\n]', ' ', line))
+        elif not line.strip():
+            paragraph = False
+            lines.append(line)
         else:
+            indented_code = False
+            paragraph = True
             lines.append(line)
     return ''.join(lines)
 
@@ -68,7 +91,7 @@ def links(text):
     text = INLINE_CODE.sub(lambda m: re.sub(r'[^\n]', ' ', m.group()), text)
     # Explicit links, images, and full/collapsed reference links. Balanced
     # parentheses in destinations are accepted; angle brackets allow spaces.
-    pattern = re.compile(r'!?\[((?:\\.|[^\[\]\\]|\[[^\[\]]*\])+)\][ \t]*(?:\((<[^>]*>|(?:\\.|[^()\s]|\([^()]*\))*)(?:\s+["\'][^"\']*["\'])?\)|\[([^]]*)\])')
+    pattern = re.compile(r'!?\[((?:\\.|[^\[\]\\]|\[[^\[\]]*\])*)\][ \t]*(?:\((<[^>]*>|(?:\\.|[^()\s]|\([^()]*\))*)(?:\s+["\'][^"\']*["\'])?\)|\[([^]]*)\])')
     occupied = []
     for m in pattern.finditer(text):
         occupied.append(m.span())

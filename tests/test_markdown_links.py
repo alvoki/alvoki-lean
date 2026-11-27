@@ -42,8 +42,17 @@ class LinkChecks(unittest.TestCase):
         self.assertEqual(1, len(self.check('[a [nested] label](missing.md)')))
 
     def test_shortcut_and_indented_list_link_are_checked(self):
-        errors = self.check('    [x](missing.md)\n[bad]\n[bad]: missing.md\n')
+        errors = self.check('- item\n    [x](missing.md)\n\n[bad]\n[bad]: missing.md\n')
         self.assertEqual(2, len(errors))
+
+    def test_empty_label_and_image_are_checked(self):
+        self.assertEqual(2, len(self.check('[](missing.md) ![](missing.png)')))
+
+    def test_indented_code_and_list_continuation(self):
+        self.assertEqual([], self.check('    [code](missing.md)\n    [](missing.md)\n'))
+        self.assertEqual([], self.check('- item\n\n      [code](missing.md)\n'))
+        self.assertEqual(1, len(self.check('- item\n  [link](missing.md)\n')))
+        self.assertEqual(1, len(self.check('paragraph\n    [link](missing.md)\n')))
 
     def test_comments_and_code_are_not_links(self):
         self.assertEqual([], self.check('''<!-- [no](missing.md) -->
