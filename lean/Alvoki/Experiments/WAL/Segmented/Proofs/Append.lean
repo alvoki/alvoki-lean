@@ -100,7 +100,8 @@ absolute batch position, including after rotation or prefix release. -/
 theorem append_returned_position (effects : Model.Effects) (session : Session) (p : Bytes)
     (state after : State) (next : Session) (installed : Installed session state.disk)
     (returned : (Segmented.append (Model.ops effects) session p).run state = .ok (.ok next) after) :
-    next.control.active * next.control.capacity + next.activeCount = session.view.tail + 1 := by
+    next.tailPosition = session.view.tail + 1 := by
+  unfold Session.tailPosition
   have result := append_refines effects session p state installed
   rw [returned] at result
   obtain ⟨⟨history, shape, ready, _, _⟩, same⟩ := result

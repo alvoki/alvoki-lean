@@ -18,6 +18,10 @@ structure Session where
   view : Contract.View
   deriving BEq, Repr
 
+/-- One-based last batch position (zero for an empty WAL). Every prior segment is full. -/
+def Session.tailPosition (s : Session) : Nat :=
+  s.control.active * s.control.capacity + s.activeCount
+
 /-- Segment calls invoke the existing single-file WAL. Preparation supplies an
 empty segment at an unpublished ID, including its durable child contents.
 Root synchronization settles names. The staged control record and its rename

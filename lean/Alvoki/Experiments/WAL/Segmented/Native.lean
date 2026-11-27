@@ -192,7 +192,7 @@ private def update (h : Handle) (action : Ops FileM → Session → FileM Sessio
 /-- Return the absolute, one-based position only after the append schedule succeeds. -/
 def append (h : Handle) (batch : Bytes) : IO Nat := do
   let next ← update h (fun ops s => Segmented.append ops s batch)
-  return next.control.active * next.control.capacity + next.activeCount
+  return next.tailPosition
 
 def discardThrough (h : Handle) (k : Nat) : IO Unit := do
   let _ ← update h (fun ops s => Segmented.discardThrough ops s k)

@@ -8,7 +8,7 @@ filesystem and owns it exclusively for the lifetime of the handle.
 `Native.create dir policy capacity` creates a WAL with 1–255 batches per segment.
 `Native.openExisting dir` opens one. `append`, `discardThrough`, `scan`, and `close`
 operate on the returned handle. A successful append returns its one-based absolute position,
-which can be passed directly to discardThrough even after rotation or earlier release. Recovery materializes the retained history in memory, and each
+which can be passed to `discardThrough` within its native UInt64 range, including after rotation or earlier release. Recovery materializes the retained history in memory, and each
 append updates the cached session view. This experimental API is not a bounded-memory
 WAL reader. Positions are absolute: batches start at one and
 `scan` returns the last discarded position `base` plus the retained batches. Release
