@@ -356,9 +356,9 @@ import Alvoki.Storage.Disk.NativeOpenedFinalizedRetryReport
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedListingRetry
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawPresentManifestListing
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointDigestError
-import Alvoki.Storage.Disk.NativeRawCheckpointExtentError
-import Alvoki.Storage.Disk.NativeRawCheckpointChunkError
-import Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointExtentError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointChunkError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeTemporaryChunkReadFailure
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestChunkError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestOpenError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestStatError
