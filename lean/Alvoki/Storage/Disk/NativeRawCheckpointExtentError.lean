@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawCheckpointDigestError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointDigestError
 
 namespace Alvoki.Storage.DiskSession
 

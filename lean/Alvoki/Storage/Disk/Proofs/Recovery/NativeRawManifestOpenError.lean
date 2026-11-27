@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawManifestChunkError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestChunkError
 
 namespace Alvoki.Storage.DiskSession
 

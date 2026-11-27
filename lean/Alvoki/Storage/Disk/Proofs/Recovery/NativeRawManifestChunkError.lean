@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawCheckpointDigestError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawCheckpointDigestError
 import Alvoki.Storage.Disk.NativeTemporaryChunkReadFailure
 
 namespace Alvoki.Storage.DiskSession
