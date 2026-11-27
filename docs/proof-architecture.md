@@ -11,7 +11,7 @@ Alvoki now develops storage components independently. Keep a component's public 
 
 1. State the observable behavior at the caller boundary, including errors and uncertain outcomes.
 2. Write down the admitted filesystem effects and the ownership, descriptor, and durability assumptions supplied by the environment.
-3. Prove one path through the executable schedule and [audit its premises](#premise-audit).
+3. State the final theorem that the caller needs on the executable path and [audit its premises](#premise-audit). Work backward from the conclusion. Add each local lemma to close an identified gap, and compose it into that theorem so the remaining premises are visible.
 4. Challenge the contract with a disallowed behavior and a required counterexample. For a WAL, lose an append reply at the durability boundary, reopen twice, and check that a healthy open can succeed.
 5. Keep the producer of a guarantee explicit. A model theorem, a native fixture, and native refinement are different kinds of evidence.
 
@@ -21,12 +21,42 @@ Prefer shared schedules down to meaningful filesystem primitives. Keep recovery 
 
 For each consuming theorem, name the executable producer of each premise and
 justify any external assumptions. Follow the exact state or handle across
-each outcome. Where applicable, check retry after a rejected operation and
-after an uncertain outcome. When cleanup starts after handle construction, check whether
-acquisition can fail after obtaining a descriptor or creating a name, and
-who owns cleanup in that case. A premise stays open until its producer
-establishes it. Audit premises alongside transitive axioms and apply the
+each outcome. When a later operation depends on a resource's identity or
+authority, make the handoff explicit in the executable dataflow. For example,
+DurableBlob passes the writer returned by staging directly to file sync.
+Hidden mutable state can require an extra proof that the later consumer
+retrieves the same resource. [DurableBlob protocol](../lean/Alvoki/Experiments/DurableBlob/Protocol.lean)
+
+Where applicable, check retry after a rejected operation and after an
+uncertain outcome. On a reported error, run cleanup from the state reached
+and handle only resources actually acquired and still owned. Preserve the
+primary error where the contract calls for it, even if cleanup fails. When
+cleanup starts after handle construction, check whether acquisition can fail
+after obtaining a descriptor or creating a name, and who owns cleanup in
+that case. A process interruption can prevent cleanup from running. Check
+recovery from the state reached at interruption.
+
+A premise stays open until its producer establishes it. Audit premises
+alongside transitive axioms and apply the
 [joint candidate acceptance check](../AGENTS.md#agent-work-and-review).
+
+## Reusing proofs
+
+Pass established facts directly to the next proof. The SSTable reader uses
+the writer's proved `Image`. In the open L0 PR #5, `flushPublicationChoices`
+establishes invariants for both manifest choices over the same catalog and
+WAL. The publication branches consume those facts in the flush proof under
+the component contracts. Native end-to-end composition remains open.
+[SSTable composition](../lean/Alvoki/Experiments/SSTable/Proofs/UnifiedNativeEndToEnd.lean)
+· [L0 flush proof](https://github.com/alvoki/alvoki-lean/blob/5bb259a0838c0b02025615ebce452c2582e7648c/lean/Alvoki/Experiments/L0/Refinement.lean#L242-L306)
+
+Reuse local effect contracts and monadic composition rules that preserve
+the reached state on success and failure. Prefer existing Lean
+infrastructure. Try `Std.WP` and `vcgen` where they can replace existing
+proof work. Before extracting a shared abstraction, use a second concrete
+consumer to replace an existing proof, then compare what must change for a
+schedule edit, a new interpreter, and a changed primitive contract.
+[DurableBlob evaluation](https://github.com/alvoki/alvoki-lean/blob/a8b663695b064efc30cf43d4d3467d658255979e/lean/Alvoki/Experiments/DurableBlob/WPEvaluation.md)
 
 ## Lean techniques that still apply
 
