@@ -1,5 +1,5 @@
 import Alvoki.Proofs.Packed.RunProofs
-import Optimizations
+import Alvoki.Experiments.Packed.Optimizations
 import Init.Internal.Order.While
 
 namespace Alvoki

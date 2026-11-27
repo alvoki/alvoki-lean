@@ -1,4 +1,4 @@
-import Optimizations
+import Alvoki.Experiments.Packed.Optimizations
 import Alvoki.Codec.PackedRun
 
 namespace Alvoki.Packed

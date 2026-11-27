@@ -21,12 +21,14 @@ lean_lib Block where
 lean_lib Proofs where
   roots := #[`Alvoki.Kernel.BlockContracts]
 
-lean_lib Optimizations
+lean_lib Optimizations where
+  roots := #[`Alvoki.Experiments.Packed.Optimizations]
 
 lean_lib OptProofs where
   roots := #[`Alvoki.Kernel.PackedSearchContracts]
 
-lean_lib Packed
+lean_lib Packed where
+  roots := #[`Alvoki.Experiments.Packed.Packed]
 
 @[default_target]
 lean_lib PackedRun where

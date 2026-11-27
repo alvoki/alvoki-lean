@@ -1,4 +1,4 @@
-import Optimizations
+import Alvoki.Experiments.Packed.Optimizations
 import Alvoki.Experiments.Merge.SpanMerge
 
 namespace Alvoki.NativeTune

@@ -40,7 +40,7 @@ The large-range Rust control folds over the layout view directly. Its 2.15 µs r
 ```sh
 bash scripts/optimize.sh --out /tmp/alvoki-opt-trials.csv --trials 9
 python3 benchmarks/optimize.py --summarize /tmp/alvoki-opt-trials.csv
-rg -n 'lean_ctor_set_uint64|lean_byte_array_uget' lean/.lake/build/ir/Optimizations.c
+rg -n 'lean_ctor_set_uint64|lean_byte_array_uget' lean/.lake/build/ir/Alvoki/Experiments/Packed/Optimizations.c
 objdump -d --disassemble=lp_alvoki_Alvoki_Opt_View_readUnaligned lean/.lake/build/bin/alvoki-opt
 ```
 

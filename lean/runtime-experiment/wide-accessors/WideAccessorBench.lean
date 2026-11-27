@@ -1,5 +1,5 @@
 import Alvoki.Compaction.Core
-import Optimizations
+import Alvoki.Experiments.Packed.Optimizations
 
 open Alvoki Alvoki.Opt
 

@@ -1,4 +1,4 @@
-import Optimizations
+import Alvoki.Experiments.Packed.Optimizations
 
 open Alvoki Alvoki.Opt
 
