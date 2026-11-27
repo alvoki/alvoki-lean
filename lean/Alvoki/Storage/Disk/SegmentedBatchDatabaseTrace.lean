@@ -13,7 +13,7 @@ import Alvoki.Storage.Disk.SegmentedBatchAppendProcessExit
 import Alvoki.Storage.Disk.BatchAppendReopenAdmission
 import Alvoki.Storage.Disk.SegmentedBatchCachedPowerLoss
 import Alvoki.Storage.Disk.WalBatchSession
-import Alvoki.Storage.Disk.RotationReopenAdmission
+import Alvoki.Storage.Disk.Proofs.Rotation.RotationReopenAdmission
 
 namespace Alvoki.Storage.DiskSession
 

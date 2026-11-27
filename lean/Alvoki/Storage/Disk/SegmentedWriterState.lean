@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.AppendCutSession
 import Alvoki.Storage.Disk.ReopenedSegmentAppend
-import Alvoki.Storage.Disk.WalSegmentRotation
+import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation
 
 namespace Alvoki.Storage.DiskSession
 

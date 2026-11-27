@@ -10,7 +10,7 @@ phase read, cache and ledger connect writes and snapshots to rotation or checkpo
 After a failed rotation, a surviving directory map and a complete bounded scan
 determine the selected seals, keeper and any names to prune.
 [Fresh execution](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
-[Rotation](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean) ·
+[Rotation](../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRotationWalReplay.lean) ·
 [Checkpoint](../lean/Alvoki/Storage/Disk/NativeFreshFinalCheckpoint.lean)
 
 **Which writes survive.** An append interrupted before marker publication retains

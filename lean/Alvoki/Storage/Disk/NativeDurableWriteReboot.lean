@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeMarkedAdmissionRejections
 import Alvoki.Storage.Disk.NativeRawWriteReboot
-import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
+import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationErrorPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

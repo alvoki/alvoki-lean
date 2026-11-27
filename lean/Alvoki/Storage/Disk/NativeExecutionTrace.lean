@@ -27,7 +27,7 @@ import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorReopen
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkErrorPowerLoss
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointPreflight
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
-import Alvoki.Storage.Disk.NativeReadyRotation
+import Alvoki.Storage.Disk.Proofs.Rotation.NativeReadyRotation
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointErrorPowerLoss
 import Alvoki.Storage.Disk.NativeObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeRunMaintenance
@@ -49,8 +49,8 @@ import Alvoki.Storage.Disk.NativePoisonedCloseReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkPowerLoss
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkRetries
-import Alvoki.Storage.Disk.NativeRotationErrorReopen
-import Alvoki.Storage.Disk.NativeRotationErrorPowerLoss
+import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationErrorReopen
+import Alvoki.Storage.Disk.Proofs.Rotation.NativeRotationErrorPowerLoss
 
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries
 import Alvoki.Storage.Disk.NativeContendedAliasAdmission

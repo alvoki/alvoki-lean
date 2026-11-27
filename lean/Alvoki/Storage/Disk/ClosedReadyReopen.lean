@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.BatchRecoveryPrefix
 import Alvoki.Storage.Disk.ClientCachedClose
-import Alvoki.Storage.Disk.RotationAuthorityRetry
+import Alvoki.Storage.Disk.Proofs.Rotation.RotationAuthorityRetry
 
 namespace Alvoki.Storage.DiskSession
 

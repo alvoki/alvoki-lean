@@ -249,9 +249,9 @@ filesystem premise links the observed child and its bytes to live storage
 and constrains its binding in each admitted joint crash sample. For a freshly
 created successor, the initial acknowledged write supplies both the storage
 entry and the WAL name interval on the same heap and cache.
-[Fresh write, rotation and lookup](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean#L771) · [Physical storage](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationReadyStorage.lean#L110) ·
-[Name interval](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean#L69) ·
-[Returned handle and replay](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean#L17)
+[Fresh write, rotation and lookup](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean#L771) · [Physical storage](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRotationReadyStorage.lean#L110) ·
+[Name interval](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRotationWalWindow.lean#L69) ·
+[Returned handle and replay](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRotationWalReplay.lean#L17)
 
 A failed directory sync leaves the original handle poisoned. On the
 exclusive-create path, the cache passes the newly opened file handle to
@@ -271,7 +271,7 @@ the older selected children and the lock through the reported error. Unlock
 and cache clears supply the release heap for the ordinary WAL reader.
 Only the lock slot must stay live until unlock. The close records the
 drops that actually occur. [Fresh write through lookup](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
-[Local error and close effects](../../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
+[Local error and close effects](../../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRawRotationErrorClose.lean)
 
 For reboot, the original writer identifies the directory inode. The
 rotation preserves the root path and cached inode up to the failed fsync.
@@ -281,8 +281,8 @@ settled WAL catalog excludes an older binding at the successor offset in
 every prior crash map. The phase change and probe preserve that fact. The
 exclusive-create law allows a prior binding or the newly created inode,
 which leaves exactly absence or the new inode here. An earlier unsynced
-unlink would make the settled-catalog premise important. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean) ·
-[Sampled reboot](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
+unlink would make the settled-catalog premise important. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRawRotationDirectoryError.lean) ·
+[Sampled reboot](../../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRawRotationReboot.lean)
 
 The live-close and reboot paths share one reader. At acknowledgement, file
 sync settles the staged marker inode, rename publishes it, and directory
@@ -309,10 +309,10 @@ names through the supplied horizon. If that horizon covers the successful
 retry's held listing, its prune list is empty. A read on the returned
 table uses the prefix's recorded submissions and reads. The writable
 continuation also requires the durable reset and retry frames above.
-[Mixed calls through rotation](../../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean) ·
+[Mixed calls through rotation](../../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRotationWalReplay.lean) ·
 [Fresh rotation and retry](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
 [Writable reopen](../../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean) · [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
-[Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
+[Live reopen](../../lean/Alvoki/Storage/Disk/Proofs/Rotation/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener

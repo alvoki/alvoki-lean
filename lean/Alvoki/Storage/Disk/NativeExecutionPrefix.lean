@@ -4,7 +4,7 @@ import Alvoki.Storage.Disk.NativeExecutionPendingClose
 import Alvoki.Storage.Disk.NativeExecutionOrdinaryClose
 import Alvoki.Storage.Disk.NativeInactiveSessionCalls
 import Alvoki.Storage.Disk.NativeCloseUnlockInterruption
-import Alvoki.Storage.Disk.NativePendingRotation
+import Alvoki.Storage.Disk.Proofs.Rotation.NativePendingRotation
 import Alvoki.Storage.Disk.NativePendingCheckpoint
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileStop

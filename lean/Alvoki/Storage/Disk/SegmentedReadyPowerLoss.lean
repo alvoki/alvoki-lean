@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.RotationAuthorityRetry
+import Alvoki.Storage.Disk.Proofs.Rotation.RotationAuthorityRetry
 import Alvoki.Storage.Disk.SegmentedCleanReopen
 import Alvoki.Storage.Disk.RetainedWriterReopen
 

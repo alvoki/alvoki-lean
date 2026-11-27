@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.SegmentedWriterState
 import Alvoki.Storage.Disk.SegmentedBootstrapReady
-import Alvoki.Storage.Disk.RotationRetrySession
+import Alvoki.Storage.Disk.Proofs.Rotation.RotationRetrySession
 import Alvoki.Storage.Disk.RetainedWriterState
 
 namespace Alvoki.Storage.DiskSession

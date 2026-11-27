@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WalSegmentBootstrapIO
-import Alvoki.Storage.Disk.WalSegmentRotation
+import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation
 
 namespace Alvoki.Storage.WalSegmentRepair
 

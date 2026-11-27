@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.NativeInactiveOpenedSnapshots
 import Alvoki.Storage.Disk.NativeOpenedWalCollection
 import Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
-import Alvoki.Storage.Disk.NativeOpenRotation
+import Alvoki.Storage.Disk.Proofs.Rotation.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 
 namespace Alvoki.Storage.DiskSession.NativeOpenedHandle
