@@ -81,15 +81,16 @@ payload. The sampled recovery observations at the cutoff supply the entry for
 the shared opener. Both rename-error and final-directory-error paths derive
 their retry frame from the returned authorization, unlinks and staging operations.
 
-After the prune barrier, both rename-error and directory-fsync-error reboots
-carry the bounded WAL inventory through the individual staging callbacks.
-For each surviving namespace, the same earlier map accounts for every name
-in the interval. The regular-file sync preserves that map.
+The scratch-file issue proof follows acquisition, write, flush, registration
+and consumption of the selected handle. For a returned fsync it carries
+bounded WAL-name presence to the rename. For a failed fsync it carries the
+old keeper’s durable payloads and one namespace covering immutable children,
+the bounded WAL interval and every actually removed name. The next reboot
+uses that same map even for removals beyond the interval.
 
-**Next source boundary.** On a failed scratch-file fsync, derive the crash-file
-frame across the preceding scratch write from the individual callbacks. That
-path must also preserve the old keeper payload, the immutable children and
-each actually pruned name, including removals beyond the bounded interval.
+**Next source boundary.** The failed scratch-fsync route still takes the
+logical scratch image and live storage frame of the complete stage write.
+Derive them from the reached write, flush and registration callbacks.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

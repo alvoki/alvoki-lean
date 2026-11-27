@@ -211,6 +211,28 @@ structure LongKeeperStageCallbacks.StagingPrefixEffects
     ScopedStagingFile scratch scope view observe file slot inode loaded →
     frame file slot inode loaded after ∧ visible after inode = visible loaded inode
 
+/-- Local frame laws up to issue of the scratch fsync. Write and flush are
+restricted to the private inode actually attached to this scratch handle.
+Cache removal consumes the selected entry in the literal returned list. -/
+structure LongKeeperStageCallbacks.StagingFileFrames
+    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
+    (scratch : FilePath) (scope : FilePath → Prop) (view : OpenCloseHeapView heap image)
+    (observe : heap → CheckpointStorageObservation) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (frame : heap → heap → Prop) where
+  acquire : ∀ before, stage.AcquisitionFrames scratch before frame
+  write : ∀ {file slot inode bytes before after}, ScopedStagingFile scratch scope view observe file slot inode before →
+    stage.write file bytes before = .ok () after → frame before after
+  flush : ∀ {file slot inode before after}, ScopedStagingFile scratch scope view observe file slot inode before →
+    stage.flush file before = .ok () after → frame before after
+  record : ∀ {file before after}, calls.modifyPending pending (pushPending scratch file) before = .ok () after →
+    frame before after
+  load : ∀ {before after entries file}, calls.getPending pending before = .ok entries after →
+    entries.find? (fun entry => entry.1 == scratch) = some (scratch, file) → frame before after
+  clear : ∀ {read before after entries file}, calls.getPending pending read = .ok entries before →
+    entries.find? (fun entry => entry.1 == scratch) = some (scratch, file) →
+    calls.setPending pending (entries.filter (fun entry => entry.1 != scratch)) before = .ok () after →
+    frame before after
+
 /-- A successful stage prefix has one private inode with the requested bytes at
 issue, before the filesystem chooses the result of fsync. Each reached frame
 remains available to callers carrying additional storage or root invariants. -/
@@ -239,6 +261,9 @@ theorem LongKeeperStageCallbacks.issuesStagedFile
       ScopedStagingFile scratch scope view observe file slot inode loaded ∧
       ScopedStagingFile scratch scope view observe file slot inode consumed ∧
       visible consumed inode = bytes ∧
+      (∀ {relation : heap → heap → Prop},
+        stage.StagingFileFrames calls scratch scope view observe pending relation →
+        (∀ h, relation h h) → (∀ {a b c}, relation a b → relation b c → relation a c) → relation entry consumed) ∧
       frame file slot inode opened written ∧ frame file slot inode written flushed ∧
       frame file slot inode flushed staged ∧ frame file slot inode staged loaded ∧ frame file slot inode loaded consumed := by
   obtain ⟨slot, inode, openedStage, empty, unbuffered⟩ :=
@@ -255,35 +280,20 @@ theorem LongKeeperStageCallbacks.issuesStagedFile
   obtain ⟨clearFrame, payloadClear⟩ := effects.clearPending got chosen cleared loadedStage
   have payload := payloadClear.trans (payloadLoad.trans (payloadRecord.trans (payloadFlush.trans payloadWrite)))
   rw [empty, unbuffered, ByteArray.empty_append, ByteArray.empty_append] at payload
-  exact ⟨slot, inode, openedStage, writtenStage, loadedStage, carries clearFrame loadedStage, payload,
+  refine ⟨slot, inode, openedStage, writtenStage, loadedStage, carries clearFrame loadedStage, payload, ?_,
     writeFrame, flushFrame, recordFrame, loadFrame, clearFrame⟩
+  intro relation laws identity compose
+  have acquisition := (laws.acquire entry).keeps identity compose
+  rw [acquired, NativeFileEffectProjection.reached] at acquisition
+  exact compose acquisition (compose (laws.write openedStage wrote) (compose (laws.flush writtenStage didFlush)
+    (compose (laws.record recorded) (compose (laws.load got chosen) (laws.clear got chosen cleared)))))
 
-/-- Filesystem and cache calls preceding the scratch fsync. The protected
-WAL interval is chosen by the reboot consumer. Writing or flushing concerns
-the descriptor currently attached to scratch; clearing pending uses the
-actual returned list, which may contain unrelated entries. -/
-structure LongKeeperStageCallbacks.StagingWalNameFrames
-    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
-    (dir : DiskDirectory) (first through : Nat) (view : OpenCloseHeapView heap image)
-    (observe : heap → CheckpointStorageObservation) (pending : IO.Ref (List (FilePath × IO.FS.Handle))) where
-  acquire : ∀ before, stage.AcquisitionFrames (dir.file .stagedWal) before
-    (fun a b => WalNamePresenceFrame dir first through (observe a) (observe b))
-  write : ∀ {file slot inode bytes before after}, attachedReadSlot view file slot inode before →
-    (observe before).files.names (dir.file .stagedWal) = some inode → stage.write file bytes before = .ok () after →
-    WalNamePresenceFrame dir first through (observe before) (observe after)
-  flush : ∀ {file slot inode before after}, attachedReadSlot view file slot inode before →
-    (observe before).files.names (dir.file .stagedWal) = some inode → stage.flush file before = .ok () after →
-    WalNamePresenceFrame dir first through (observe before) (observe after)
-  record : ∀ {file before after}, calls.modifyPending pending (pushPending (dir.file .stagedWal) file) before =
-    .ok () after → WalNamePresenceFrame dir first through (observe before) (observe after)
-  load : ∀ {before after entries file}, calls.getPending pending before = .ok entries after →
-    entries.find? (fun entry => entry.1 == dir.file .stagedWal) = some (dir.file .stagedWal, file) →
-    WalNamePresenceFrame dir first through (observe before) (observe after)
-  clear : ∀ {read before after entries file}, calls.getPending pending read = .ok entries before →
-    entries.find? (fun entry => entry.1 == dir.file .stagedWal) =
-    some (dir.file .stagedWal, file) →
-    calls.setPending pending (entries.filter (fun entry => entry.1 != dir.file .stagedWal)) before = .ok () after →
-    WalNamePresenceFrame dir first through (observe before) (observe after)
+abbrev LongKeeperStageCallbacks.StagingWalNameFrames (stage : LongKeeperStageCallbacks heap)
+    (calls : AlignedKeeperCacheCallbacks heap) (state : NativeReadyState) (first through : Nat)
+    (view : OpenCloseHeapView heap image) (observe : heap → CheckpointStorageObservation)
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) :=
+  stage.StagingFileFrames calls (state.session.directory.file .stagedWal) state.crashPath view observe pending
+    (fun a b => WalNamePresenceFrame state.session.directory first through (observe a) (observe b))
 
 /-- Local namespace, descriptor and byte laws through the synced
 replacement stage. Each premise is keyed to its own raw callback. -/
@@ -519,7 +529,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       visible issued replacement = plan.keeperBytes.extract 0 plan.keeperSize ∧
       RegularFileSyncEffect replacement [visible issued replacement] (observe issued) (observe synced) ∧
       visible synced replacement = visible issued replacement ∧
-      (∀ {first through}, stage.StagingWalNameFrames calls state.session.directory first through view observe pending →
+      (∀ {first through}, stage.StagingWalNameFrames calls state first through view observe pending →
         WalNamePresenceFrame state.session.directory first through (observe pruned) (observe synced)) ∧
       (stage.ReplacementPrefixLiveEffects calls state view observe visible cached pending root remove →
         view.pending entry pending = [] →
@@ -559,7 +569,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
   rw [show stage.acquire (dir.file .stagedWal) pruned = .ok file opened from acquired,
     NativeFileEffectProjection.reached] at acquiredFrame
   obtain ⟨acquireFrame, acquiredRoot, acquiredNames⟩ := acquiredFrame
-  obtain ⟨slot, replacement, openedStage, writtenStage, loadedStage, syncedStage, stageBytes,
+  obtain ⟨slot, replacement, openedStage, writtenStage, loadedStage, syncedStage, stageBytes, prefixFrames,
       writeFrame, flushFrame, recordFrame, loadFrame, clearFrame⟩ :=
     stage.issuesStagedFile calls effects.toStagingPrefixEffects (fun f => f.carries)
       acquired wrote didFlush recorded got chosenStage cleared
@@ -597,13 +607,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
     syncedVisible, ?_, ?_⟩
   · intro first through localFrames
-    have acquiredNames := (localFrames.acquire pruned).keeps (fun h => .refl (observe h))
-      (fun earlier later => earlier.trans later)
-    rw [show stage.acquire (dir.file .stagedWal) pruned = .ok file opened from acquired,
-      NativeFileEffectProjection.reached] at acquiredNames
-    exact acquiredNames.trans ((localFrames.write openedStage.1 openedStage.2.1 wrote).trans
-      ((localFrames.flush writtenStage.1 writtenStage.2.1 didFlush).trans ((localFrames.record recorded).trans
-        ((localFrames.load got chosenStage).trans ((localFrames.clear got chosenStage cleared).trans (.ofFileSync fileSync))))))
+    have reached := prefixFrames localFrames (fun h => .refl (observe h)) (fun earlier later => earlier.trans later)
+    exact reached.trans (.ofFileSync fileSync)
   intro liveEffects pendingAtEntry
   obtain ⟨authReadLive, authReadPending⟩ := liveEffects.loadRoot authLoaded
   obtain ⟨authSyncLive, authSyncPending⟩ := liveEffects.syncRoot authSynced

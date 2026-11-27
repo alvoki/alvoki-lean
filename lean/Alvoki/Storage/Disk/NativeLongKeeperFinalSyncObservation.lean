@@ -1248,10 +1248,7 @@ theorem MarkedWalExtentReports.extendsStageSyncError
         (∀ {unlinked loadedRoot root}, pruneUnlinks layout.boundedPlan.newer authorized = .ok () unlinked →
           (callbacks).getDirectory seed.directoryRef unlinked = .ok (some root) loadedRoot →
           (callbacks).sync root loadedRoot = .ok () pruned → WalRootSyncEffect dir true (storage loadedRoot) (storage pruned)) →
-        (stageWrite scratch layout.keeper.bytes pruned = .ok () recorded → stageSurvivors pruned recorded) →
-        ((callbacks).getPending seed.pendingRef recorded = .ok entries loaded → stageSurvivors recorded loaded) →
-        ((callbacks).setPending seed.pendingRef (entries.filter (fun item => item.1 != scratch)) loaded = .ok () consumed →
-          stageSurvivors loaded consumed) →
+        source.stage.StagingFileFrames callbacks scratch (· = keeperPath) view storage seed.pendingRef stageSurvivors →
         ((callbacks).sync file consumed = .error cause worker → RegularFileSyncEffect inode
           ((storage worker).files.bytes inode) (storage consumed) (storage worker)) →
         dispose.ScopeFrames finalized stageSurvivors →
@@ -1304,7 +1301,7 @@ theorem MarkedWalExtentReports.extendsStageSyncError
   have chosen : entries.find? (fun entry => entry.1 == scratch) = some (scratch, file) := by
     rw [loadEffect.1, stored]
     simp [pushPending]
-  obtain ⟨slot, replacement, opened, _, _, issued, payload, _⟩ :=
+  obtain ⟨slot, replacement, opened, _, _, issued, payload, prefixFrames, _⟩ :=
     source.stage.issuesStagedFile callbacks staging (fun result _ => result)
       acquired wrote flushedBytes remembered read chosen cleared
   have capturedInode : inode = replacement := captured.trans (opened.1.1.symm ▸ opened.1.2.2)
@@ -1342,7 +1339,7 @@ theorem MarkedWalExtentReports.extendsStageSyncError
     throughError.1.trans finalFrame.1, named, bytes, durable, ?_⟩
 
   intro firstFailure firstBoot reset atBoot sameFirst failedKeeper cacheKeeper readKeeper listKeeper
-    authKeeper unlinkKeeper readRoot rootEffect stageCrash loadCrash clearCrash fileEffect cleanupCrash
+    authKeeper unlinkKeeper readRoot rootEffect stageCrash fileEffect cleanupCrash
     rebooted boot manifest
   obtain ⟨old, oldAtStart, accepts⟩ := listing.keepsLiveKeeperBeforeRepair prior firstBoot reset atBoot sameFirst
     failedKeeper cacheKeeper readKeeper listKeeper selected seals longer keeperRead
@@ -1365,18 +1362,19 @@ theorem MarkedWalExtentReports.extendsStageSyncError
       exact others n (fun same => apart (same ▸ rfl))) unlinks
   have ⟨toIssue, issueBytes⟩ := (beforeLoad.trans rootLoad) keeperPath rfl
   have atPrunedOld := (rootSync.visible (.walSegment target.first)).trans (toIssue.trans oldAtStart)
-  have throughStage := stageCrash staged
-  have throughLoad := loadCrash read
-  have throughClear := clearCrash cleared
+  have composeSurvivors {a b c : heap} (left : stageSurvivors a b) (right : stageSurvivors b c) :
+      stageSurvivors a c := ⟨left.1.trans right.1, left.2.trans right.2⟩
+  have throughClear := prefixFrames stageCrash
+    (fun h => ⟨(CheckpointStorageObservation.Frames.refl _ _).nameFrame, fun _ _ => ⟨rfl, fun _ _ => rfl⟩⟩)
+    composeSurvivors
   have fs := fileEffect failed
   have fsNames : (storage consumed).NameFrame stagePaths (storage worker) :=
     ⟨fun path _ => congrFun fs.names path, fun names possible =>
       ⟨names, .inr (fs.crashNames ▸ possible), fun _ _ => rfl⟩⟩
   have fsKeeper : durableKeeperFile consumed worker := (fs.frames (footprint := (· = keeperPath))
     (fun path eq other bound same => separate (eq ▸ same ▸ bound))).visible
-  have afterWorker := cleanupCrash.afterWorker (fun left right => ⟨left.1.trans right.1, left.2.trans right.2⟩)
-  have ns := throughStage.1.trans (throughLoad.1.trans (throughClear.1.trans (fsNames.trans afterWorker.1)))
-  have byteFrame := throughStage.2.trans (throughLoad.2.trans (throughClear.2.trans (fsKeeper.trans afterWorker.2)))
+  have afterWorker := cleanupCrash.afterWorker composeSurvivors
+  have ⟨ns, byteFrame⟩ := composeSurvivors throughClear (composeSurvivors ⟨fsNames, fsKeeper⟩ afterWorker)
   have settled (names) (possible : names ∈ (storage pruned).crashNames) (path) (inside : stagePaths path) :
       names path = retryNames pruned path := by
     rcases inside with rfl | ⟨selected, notRoot⟩ | ⟨n, _, rfl⟩
@@ -1686,7 +1684,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
           target.pair.manifest = state.writer.target.pair.manifest →
           RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
             TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
-            (source.stage.StagingWalNameFrames callbacks dir firstOffset through view storage seed.pendingRef →
+            (source.stage.StagingWalNameFrames callbacks state firstOffset through view storage seed.pendingRef →
               ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue →
                 WalNamePresenceFrame dir firstOffset through (storage renamedHeap) (storage finalIssue)) →
               dispose.ScopeFrames finalized (fun before after =>
@@ -2072,7 +2070,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
           target.pair.manifest = state.writer.target.pair.manifest →
           RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
             TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
-            (source.stage.StagingWalNameFrames callbacks dir firstOffset through view storage seed.pendingRef →
+            (source.stage.StagingWalNameFrames callbacks state firstOffset through view storage seed.pendingRef →
               dispose.ScopeFrames finalized (fun before after =>
                 WalNamePresenceFrame dir firstOffset through (storage before) (storage after)) →
               seen.DurableReset →

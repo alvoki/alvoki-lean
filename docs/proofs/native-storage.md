@@ -711,9 +711,10 @@ determine the logical repair trace for either final-barrier effect. Cleanup
 preserves the acquired inode and its durable bytes. At the cutoff the sampled
 retry observations supply the entry for the shared marked opener. Both error
 paths use the same local staging effects to preserve the selected retry files.
-Their reboot proofs also compose the bounded WAL-name frame across creation,
-write, flush, cache registration and consumption. Each survivor comes from
-one prior namespace across the entire interval.
+The same pre-fsync proof carries bounded names for a successful scratch sync,
+or the old keeper’s durable bytes and joint namespace on a failed sync.
+The latter footprint includes immutable children and every actually pruned
+name, including removals beyond the reader’s interval.
 [Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached
