@@ -84,6 +84,7 @@ open ImmutableSSTable
 #check_axioms Unified.Handle.table_next_data_error
 #check_axioms Unified.Handle.table_next_row_error
 #check_axioms Unified.Handle.lookup_leaf_error
+#check_axioms TypedTable.seek_read_error
 #check_axioms TypedTable.lookup_read_error
 #check_axioms TypedTable.lookup_decode_error
 #check_axioms TypedTable.next_read_error

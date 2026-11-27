@@ -254,6 +254,11 @@ theorem Handle.lookup_leaf_error {handle : Handle (EStateM String σ)}
 
 end Unified
 
+theorem TypedTable.seek_read_error {table : TypedTable (EStateM String σ) κ ν}
+    (failed : table.table.seek (table.keyCodec.encode key) start = .error error reached) :
+    table.seek key start = .error error reached :=
+  failed
+
 theorem TypedTable.lookup_read_error {table : TypedTable (EStateM String σ) κ ν}
     (failed : table.table.lookup (table.keyCodec.encode key) start = .error message reached) :
     table.lookup key start = .error message reached := by

@@ -104,12 +104,45 @@ exercise successful sync, failed sync cleanup, and an open descriptor
 surviving pathname replacement. Durable publication and descriptor effects
 remain assumptions of the native adapter and its caller.
 
+## Native refinement boundary
+
+[The composed theorem](Proofs/UnifiedNativeEndToEnd.lean) uses the schedules
+executed by `buildFileSynced` and `openNativeChecked`. It derives the image
+from the actual row callback and append schedule in the effect interpreter,
+then ties its bytes to the inode synced through the original flushed writer.
+On checked open, the reader uses the acquired descriptor for both extent and
+positional reads. Its healthy read interpretation takes the bytes from the
+writer's durable inode evidence. The caller supplies the binding from the
+selected read descriptor to that inode and keeps it immutable while in use.
+
+The external assumptions apply to individual operations. On the pinned Lean
+runtime, `.writeNew` uses exclusive creation, a successful `Handle.write`
+reports a full `fwrite`, and a successful flush completes `fflush`. The
+writer owns the fresh name and byte stream, and the supplier advances its
+row cursor without touching that file. On Linux the [sync bridge](../../../native/fsync.c)
+uses `fileno` on that very handle. The filesystem must honor successful
+`fsync` for the flushed inode contents. Neither successful file sync nor
+failed-sync cleanup certifies durability of a directory entry. A reported
+sync failure may follow a completed effect. The proof preserves the primary
+error and runs cleanup from the reached state.
+
+The [read bridge](../../../native/sstable.c) checks the descriptor with
+`fstat` and uses bounded `pread` on that descriptor. Successful operations
+on the immutable regular inode must return its extent and requested
+bytes. Short reads and errors are handled separately. The native proof
+interprets these primitive effects and does not verify libc, the Linux
+filesystem or CRC32C's native implementation in Lean.
+[Pinned Lean I/O implementation](https://github.com/leanprover/lean4/blob/v4.36.0/src/runtime/io.cpp)
+
+Run `bash scripts/check-sstable-l0-consumer.sh` with the pinned PR #5 revision
+available locally to compile the component theorem into the real L0 typed
+consumer. The native fixture checks scoped hit, tombstone, ordinary miss,
+and that a packet or typed-decoding error aborts the real lookup loop.
+The check stages PR #5 code in a temporary checkout and adapts checked open
+to accept its table ID.
+
 ## Roadmap
 
-The component refinement milestone connects successful native build and
-checked open to the model theorem. SSTable owns the proof that the row stream
-produces the exact flushed bytes, that file sync acts on the original inode,
-and that healthy positional reads on the acquired descriptor serve that inode.
 The [L0 adapter](https://github.com/alvoki/alvoki-lean/pull/5) supplies the
 expected catalog ID, durable directory binding and file lifetime. L0 publication
 and reopen must establish that the selected name resolves to the inode produced
