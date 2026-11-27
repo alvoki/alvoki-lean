@@ -659,7 +659,7 @@ import Alvoki.Storage.Disk.Proofs.Recovery.SelectedRecoveryPayload
 import Alvoki.Storage.Disk.Proofs.Append.WalSegmentCachedAppendPowerLoss
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotationPowerLoss
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointPowerLoss
-import Alvoki.Storage.Disk.WalSegmentRepair
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRepair
 import Alvoki.Storage.Disk.Proofs.Bootstrap.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.Proofs.Recovery.MarkedCheckpointReopenProgress
 import Alvoki.Storage.Disk.Proofs.Read.RecoveredPinRefinement

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentRepair
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRepair
 
 namespace Alvoki.Storage
 open WAL (frameSize)
