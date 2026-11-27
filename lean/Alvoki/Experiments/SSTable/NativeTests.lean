@@ -130,10 +130,30 @@ private def checkStreamedIndex (dir : System.FilePath) : IO Unit := do
     check ((← ok (table.next i)) == some (row i, i + 1)) "large index offset"
     check ((← ok (table.lookup (row i).key)) == some (row i).value) "large index lookup"
 
+private def checkSync (dir : System.FilePath) : IO Unit := do
+  let path := dir / "sync"
+  let primary := IO.userError "injected table sync error"
+  let called ← IO.mkRef false
+  let result ← (buildFileWithSync path (pure none) fun handle => do
+    let size ← ok (handleSource handle).size
+    check (size == (encodeImage []).size) "sync ran before the image was flushed"
+    called.set true
+    throw primary).toBaseIO
+  match result with
+  | .error err => check (err.toString == primary.toString) "cleanup masked sync error"
+  | .ok _ => throw (IO.userError "sync failure reported success")
+  check (← called.get) "sync was skipped"
+  check (!(← path.pathExists)) "failed sync left output"
+
+  let written ← buildFileSynced path (pure none)
+  let table ← ok (openNative path)
+  check (written == 0 && table.rowCount == 0) "synced empty table"
+
 def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkNativeReads dir
   checkBuildFailures dir
   checkStreamedIndex dir
+  checkSync dir
   IO.println "immutable SSTable native fixtures passed"
 
 end ImmutableSSTable.NativeTests

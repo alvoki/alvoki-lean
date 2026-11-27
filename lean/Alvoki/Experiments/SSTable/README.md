@@ -9,13 +9,15 @@ A caller can use its own key and value types by providing two explicit
 [`Codec`](Contract.lean) values. Use `Entry.encode` on the build side and `TypedTable` on the read side.
 For typed reads the caller needs decoding to
 recover what encoding wrote. The key encoding must also preserve the caller's
-order and map equal logical keys to the same bytes. For example, big-endian
+order. The [typed refinement](Proofs/Typed.lean) derives typed lookup, seek
+and iteration from the byte-level representation and these codec laws. For example, big-endian
 unsigned integers preserve numeric order. A query can use arbitrary bytes as a
 lower bound, including a prefix of an encoded key.
 
 | Operation | Caller-visible behavior |
 | --- | --- |
 | `buildFile path nextRow` | Consumes one row at a time and writes to a fresh, exclusively owned path. Rejects non-increasing keys, oversized rows and output beyond the file-offset limit. Returns the row count after flushing the footer. Cleanup preserves the original build error. |
+| `buildFileSynced path nextRow` | Builds and flushes the same image, then calls Linux `fsync` on the original output handle before returning. The caller owns directory syncing and publication. |
 | `openNative path` | Reads the fixed-size footer, checks the index extent against the file size, and retains the open descriptor. |
 | `table.lookup key` | Returns the value or `none` for a missing key. |
 | `table.seek key` | Returns the first index with key at least the target, or the row count. |
@@ -65,21 +67,34 @@ checksum in this format. Redirecting a probe to another intact row may pass
 validation, as may a checksum collision. Crash-safe publication belongs to
 the caller.
 
-## Why reads agree with construction
+## Storage assumptions and proof boundaries
 
-The native writer and model run the same streaming loop, which writes each
-encoded row and records its position. The format proofs connect the index and
-record bytes to the input sequence. The end-to-end theorem `open_built_table`
-takes a successful modeled construction and a stable source serving those
-bytes. It yields the actual opened handle and
-[`Table.Represents table rows`](Representation.lean). In a consumer proof,
-`rep.lookup key` gives the logical value, `rep.seek key` locates the lower
-bound, and `rep.next i` advances through the same ordered rows. The Linux
-adapter's effects are exercised with real files and remain environmental
-assumptions of the byte-level proof.
-[Builder proof](Proofs/Builder.lean) · [Format](Proofs/Format.lean) ·
-[Reader](Proofs/Reader.lean) · [Search](Proofs/Search.lean) ·
-[Read errors](Proofs/ReadErrors.lean)
+- **Successful modeled writes.** `modelBuild_ok_iff` checks the shared streaming
+  schedule against a successful two-stream sink. It identifies the exact row
+  bytes, offsets, footer and count. The interpretation of native writes, flush
+  and scratch copying as those sink operations is an adapter assumption.
+  [Builder proof](Proofs/Builder.lean)
+- **Healthy immutable reads.** `open_built_table` gives
+  [`Table.Represents table rows`](Representation.lean) for the returned handle,
+  assuming its source serves the exact built image with successful positional
+  reads. The caller keeps the file immutable while any handle is live. The
+  representation gives the logical lookup, lower bound and next row, and the
+  typed refinement transports those observations through the caller's codecs.
+  [Reader proof](Proofs/Reader.lean) · [Typed proof](Proofs/Typed.lean)
+- **Read failures and corruption.** Stateful read theorems propagate required
+  probe errors, including a failed final lookup read, with their reached state.
+  Format proofs establish the row roundtrip and rejection of a checksum
+  mismatch. Validation is lazy and subject to the limitations above.
+  [Read errors](Proofs/ReadErrors.lean) · [Format proofs](Proofs/Format.lean)
+- **Persistence and crashes.** `buildFileWithSync` runs the supplied sync
+  callback on the original write handle after the complete image is flushed.
+  `buildFileSynced` supplies Linux `fsync`. A sync error is returned and cleanup
+  is best effort. The proofs establish neither post-crash file survival nor
+  the durability of the filename, cleanup, publication or recovery. The
+  native adapter's effects and Linux persistence guarantees are external
+  assumptions. An LSM caller owns the fresh name, directory sync, manifest
+  publication and WAL policy. A shared filesystem model is future work.
+  [Native adapter](Native.lean)
 
 ## Roadmap
 
@@ -91,9 +106,7 @@ memory across the tables it retains.
 Measure sequential scans, point reads and seeks before changing the physical
 layout. Independently known key and value widths can permit cheaper field
 access, and two fixed widths can permit direct addressing. Buffered reads and
-data blocks with a sparse index are further options. Checksums for metadata or
-checksums bound to position and table identity can strengthen corruption
-detection while preserving the read contract.
+data blocks with a sparse index are further options. Metadata integrity and physical optimizations are follow-up work.
 
 ## Verification
 

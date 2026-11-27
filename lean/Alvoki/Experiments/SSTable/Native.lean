@@ -46,21 +46,37 @@ private def openScratch : IO IO.FS.Handle := do
     throw err
   return scratch
 
-/-- Build at a fresh path owned exclusively by the caller until return.
-    Retains one entry and a bounded offset-copy buffer. Crash publication and
-    durability belong to the caller. -/
-def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat := do
+@[extern "alvoki_fsync"]
+private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
+
+/-- Build at a fresh path with exclusive name ownership. After flushing the
+complete image, call `syncOutput` on the original write handle, before reporting
+success. The callback must leave the bytes and name unchanged and must not
+retain the handle. -/
+def buildFileWithSync (path : System.FilePath) (nextRow : IO (Option Entry))
+    (syncOutput : IO.FS.Handle → IO Unit) : IO Nat := do
   let handle ← IO.FS.Handle.mk path .writeNew
   try
     let scratch ← openScratch
-    buildStream {
+    let count ← buildStream {
       writeData := handle.write
       writeOffset := scratch.write
       appendOffsets := copyOffsets scratch handle
       flush := handle.flush
     } nextRow IO.userError
+    syncOutput handle
+    return count
   catch err =>
     try IO.FS.removeFile path catch _ => pure ()
     throw err
+
+/-- Build and flush the image. The caller owns publication. -/
+def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
+  buildFileWithSync path nextRow (fun _ => pure ())
+
+/-- Build, flush, then fsync the original write descriptor. The caller owns
+directory syncing and publication. -/
+def buildFileSynced (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
+  buildFileWithSync path nextRow syncHandle
 
 end ImmutableSSTable
