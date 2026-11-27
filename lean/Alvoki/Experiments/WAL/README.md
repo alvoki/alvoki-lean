@@ -12,3 +12,5 @@ Start with the [design and executable walkthrough](../../../../docs/design/wal-r
 [CrashModel](CrashModel.lean) defines the modeled persistence outcomes.
 [Proofs](Proofs/README.md) explains the verified slice and its limits. The
 design links its deterministic simulation and Linux fixtures.
+
+The [segmented experiment](Segmented/README.md) composes these single-file guarantees across rotation, prefix release and repeated recovery.
