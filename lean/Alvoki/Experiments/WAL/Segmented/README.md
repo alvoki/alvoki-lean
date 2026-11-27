@@ -7,7 +7,8 @@ filesystem and owns it exclusively for the lifetime of the handle.
 
 `Native.create dir policy capacity` creates a WAL with 1–255 batches per segment.
 `Native.openExisting dir` opens one. `append`, `discardThrough`, `scan`, and `close`
-operate on the returned handle. Recovery materializes the retained history in memory, and each
+operate on the returned handle. A successful append returns its one-based absolute position,
+which can be passed directly to discardThrough even after rotation or earlier release. Recovery materializes the retained history in memory, and each
 append updates the cached session view. This experimental API is not a bounded-memory
 WAL reader. Positions are absolute: batches start at one and
 `scan` returns the last discarded position `base` plus the retained batches. Release
@@ -26,6 +27,22 @@ single-file policy and its existing framing and recovery schedule. The native ad
 holds a root lock, validates control and child names, and refuses unexpected files
 rather than deleting them. It assumes other processes respect that lock and the root
 binding is not replaced while open.
+
+### Who owns the commit boundary?
+
+| Scope | Durable record | Recovery uses it to |
+| --- | --- | --- |
+| Whole WAL | `CONTROL` | Select the contiguous range of segment IDs and the first retained position. Rotation and release publish a new control record. |
+| One segment, boundary policy | `segment-N/commit.0` and `commit.1` | Select the committed end offset and last sequence number in that file. Each acknowledged append syncs its data and then its marker. |
+| One segment, log-only policy | Framed `segment` file | Recover the prefix admitted by the single-file scanner and its fault model. |
+
+The marker format in the [single-file protocol](../Recovery.lean) uses local positions.
+Both segment 0 and segment 1 can have a valid marker for local batch 1. Moving the two
+files to the root would make those records ambiguous. A WAL-wide pair is a possible
+different design: bind each generation to a segment ID and committed end, establish the
+sealed prefix before publishing a successor, and specify which frontier recovery can
+select after a crash during rotation or release. This saves two files per
+additional segment. It still requires a marker barrier when acknowledging a marked append.
 
 Run `bash scripts/check-segmented-wal.sh` from the repository root on Linux with the
 pinned Lean toolchain and a C compiler. Set `TMPDIR=/dev/shm` when working space is
@@ -51,6 +68,18 @@ actual segmented schedules with modeled namespace and child operations; the
 [layout](Proofs/Layout.lean), [child](Proofs/Child.lean),
 [publication](Proofs/Publication.lean), and [reopen](Proofs/Reopen.lean) modules
 own its intermediate obligations.
+
+### Namespace assumptions
+
+Only IDs from `firstNeeded` through `active` may supply history. An interrupted
+prepare can leave an incomplete unpublished successor; the next prepare clears known
+child files before reusing that ID. An interrupted collection can leave a partially
+removed retired directory; reopen retries its removal. Unexpected names, links or
+file types can make cleanup fail. A selected incomplete segment makes open fail.
+The model treats successful prepare as a fully initialized child and successful
+remove as an unlink. The native adapter must confine intermediate effects to the
+unselected object. Likewise a partial `CONTROL.next` may survive a failed stage;
+only a fully written and synced stage may be renamed over `CONTROL`.
 
 The trace models child calls using the single-file effects interpreter, including
 source-level failures and prefix tears. It also admits full-length tears with an intact
