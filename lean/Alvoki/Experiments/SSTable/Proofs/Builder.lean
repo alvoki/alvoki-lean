@@ -3,15 +3,6 @@ import Alvoki.Experiments.SSTable.Proofs.Format
 
 namespace ImmutableSSTable
 
-/-- Observe the state and concatenated output of successive native builder pushes.
-    The native sink writes each chunk immediately. It does not retain this trace. -/
-def runPushes (state : BuilderState) : List Entry → Except String (BuilderState × ByteArray)
-  | [] => .ok (state, ByteArray.empty)
-  | row :: rest => do
-    let (next, bytes) ← state.push row
-    let (last, suffix) ← runPushes next rest
-    return (last, bytes ++ suffix)
-
 theorem push_rejects_key {state : BuilderState} (room : state.count < maxRows)
     (previous : state.lastKey = some key) (bad : row.key ≤ key) :
     state.push row = .error "SSTable keys must strictly increase" := by
@@ -27,90 +18,6 @@ private theorem push_ok {state : BuilderState} (room : state.count < maxRows)
     have good : key < row.key := ordered key (by simp [h])
     simp [BuilderState.push, Nat.not_le.mpr room, h, UInt64.not_le.mpr good]
     rfl
-
-private theorem runPushes_from (rows : List Entry) (state : BuilderState)
-    (fits : state.count + rows.length ≤ maxRows)
-    (ordered : rows.Pairwise (fun a b => a.key < b.key))
-    (afterLast : ∀ prev ∈ state.lastKey, ∀ r ∈ rows, prev < r.key) :
-    ∃ last, runPushes state rows = .ok (last, encodeRows rows) ∧
-      last.count = state.count + rows.length := by
-  induction rows generalizing state with
-  | nil => exact ⟨state, rfl, by simp⟩
-  | cons row rest ih =>
-    obtain ⟨ahead, tailOrdered⟩ := List.pairwise_cons.mp ordered
-    let next : BuilderState := ⟨state.count + 1, some row.key⟩
-    have length := List.length_cons (a := row) (as := rest)
-    have step : state.push row = .ok (next, encodeEntry row) :=
-      push_ok (by omega) (fun prev hp => afterLast prev hp row (by simp))
-    obtain ⟨last, tail, count⟩ := ih next (by dsimp [next]; omega) tailOrdered (by
-      intro prev hp
-      have hp' : prev = row.key := by simpa [next, Option.mem_def] using hp.symm
-      simpa [hp'] using ahead)
-    refine ⟨last, ?_, ?_⟩
-    · simp [runPushes, step, tail, Bind.bind, Except.bind, Pure.pure, Except.pure]
-    · dsimp [next] at count
-      omega
-
-/-- For a sorted bounded input, the bytes emitted by all successful pushes and
-    the actual final header together form the exact canonical file image. -/
-theorem builder_constructs_image (rows : List Entry) (fits : rows.length ≤ maxRows)
-    (ordered : rows.Pairwise (fun a b => a.key < b.key)) :
-    ∃ last, runPushes {} rows = .ok (last, encodeRows rows) ∧
-      last.count = rows.length ∧ last.header ++ encodeRows rows = encodeImage rows := by
-  obtain ⟨last, output, count⟩ := runPushes_from rows {} (by simpa using fits) ordered (by simp)
-  exact ⟨last, output, by simpa using count, by simp [BuilderState.header, count, encodeImage]⟩
-
-private theorem runPushes_ordered {state : BuilderState} {rows : List Entry} {last bytes}
-    (bound : state.count ≤ maxRows) (ok : runPushes state rows = .ok (last, bytes)) :
-    state.count + rows.length ≤ maxRows ∧
-    rows.Pairwise (fun a b => a.key < b.key) ∧
-    ∀ key ∈ state.lastKey, ∀ r ∈ rows, key < r.key := by
-  induction rows generalizing state last bytes with
-  | nil => simp [bound]
-  | cons row rest ih =>
-    have room : state.count < maxRows := by
-      by_cases h : state.count < maxRows
-      · exact h
-      · simp [runPushes, BuilderState.push, Nat.le_of_not_gt h, Bind.bind, Except.bind,
-          throw] at ok
-    have ordered : ∀ key ∈ state.lastKey, key < row.key := by
-      intro key member
-      have same : state.lastKey = some key := member
-      by_cases good : key < row.key
-      · exact good
-      · rw [runPushes, push_rejects_key room same (UInt64.not_lt.mp good)] at ok
-        contradiction
-    rw [runPushes, push_ok room ordered] at ok
-    let next : BuilderState := ⟨state.count + 1, some row.key⟩
-    cases tail : runPushes next rest with
-    | error _ =>
-      simp only [next] at tail
-      simp [Bind.bind, Except.bind, tail] at ok
-    | ok pair =>
-      obtain ⟨finalState, suffix⟩ := pair
-      obtain ⟨fits, restOrdered, later⟩ := ih (by dsimp [next]; omega) tail
-      have greater := later row.key rfl
-      refine ⟨?_, List.pairwise_cons.mpr ⟨greater, restOrdered⟩, ?_⟩
-      · dsimp [next] at fits
-        simp only [List.length_cons]
-        omega
-      · intro key member r atRow
-        rcases List.mem_cons.mp atRow with rfl | inside
-        · exact ordered key member
-        · exact UInt64.lt_trans (ordered key member) (greater r inside)
-
-/-- Successful construction establishes every input premise required by the
-reader, even when the caller supplied an unchecked sequence. -/
-theorem builder_accepts_only_ordered {rows : List Entry} {last body}
-    (ok : runPushes {} rows = .ok (last, body)) :
-    rows.length ≤ maxRows ∧ rows.Pairwise (fun a b => a.key < b.key) ∧
-    last.header ++ body = encodeImage rows := by
-  obtain ⟨bound, sorted, _⟩ := runPushes_ordered (Nat.zero_le _) ok
-  simp only [Nat.zero_add] at bound
-  obtain ⟨_, encoded, _, image⟩ := builder_constructs_image rows bound sorted
-  rw [ok] at encoded
-  cases encoded
-  exact ⟨bound, sorted, image⟩
 
 /-- The committed bytes are split at the file cursor. Writes accumulate in
     `pending` until flush, which overwrites the corresponding suffix. Rewind
@@ -142,83 +49,95 @@ def modelBuild (rows : List Entry) : Except String (Nat × ByteArray) := do
   let (count, file) ← (buildStream modelSink modelNext id).run {rows}
   return (count, file.left ++ file.right)
 
-private theorem push_count {state : BuilderState} {r : Entry} {next bytes}
-    (ok : state.push r = .ok (next, bytes)) : next.count = state.count + 1 := by
-  by_cases full : maxRows ≤ state.count
-  · simp [BuilderState.push, full, Bind.bind, Except.bind, throw] at ok
-  · cases h : state.lastKey with
-    | none => simp [BuilderState.push, h, full, Pure.pure, Except.pure] at ok
-              exact (congrArg BuilderState.count ok.1).symm
-    | some k =>
-      by_cases bad : r.key ≤ k
-      · rw [push_rejects_key (by omega) h bad] at ok; contradiction
-      · simp [BuilderState.push, h, full, bad, Pure.pure, Except.pure] at ok
-        exact (congrArg BuilderState.count ok.1).symm
+/-- Valid continuation of an existing streaming writer. -/
+private def Valid (state : BuilderState) (room : Nat) (rows : List Entry) : Prop :=
+  rows.length ≤ room ∧ rows.Pairwise (fun a b => a.key < b.key) ∧
+    ∀ key ∈ state.lastKey, ∀ r ∈ rows, key < r.key
 
-private theorem streamRows_eq (rows : List Entry) (state : BuilderState) (room : Nat)
+private theorem valid_cons (state : BuilderState) (room : Nat) (row : Entry) (tail : List Entry) :
+    Valid state (room + 1) (row :: tail) ↔
+      (∀ key ∈ state.lastKey, key < row.key) ∧ Valid ⟨state.count + 1, some row.key⟩ room tail := by
+  constructor
+  · rintro ⟨fits, sorted, later⟩
+    obtain ⟨ahead, sorted⟩ := List.pairwise_cons.mp sorted
+    exact ⟨fun key member => later key member row (by simp), by simpa using fits, sorted,
+      fun key member => (Option.some.inj member) ▸ ahead⟩
+  · rintro ⟨ahead, fits, sorted, later⟩
+    have next := later row.key rfl
+    refine ⟨by simpa using fits, List.pairwise_cons.mpr ⟨next, sorted⟩, ?_⟩
+    intro key member r present
+    rcases List.mem_cons.mp present with rfl | inside
+    · exact ahead key member
+    · exact UInt64.lt_trans (ahead key member) (next r inside)
+
+/-- The actual streaming loop consumes all supplied rows on success. Failure
+    is possible in this fresh-file model precisely when the remaining input
+    violates capacity or ordering. -/
+private theorem streamRows_spec (rows : List Entry) (state : BuilderState) (room : Nat)
     (remaining : state.count + room = maxRows) (written : ByteArray) :
-    (streamRows modelSink modelNext id state room).run ⟨rows, .empty, .empty, written⟩ =
-      (do let (last, body) ← runPushes state rows
-          pure (last, ⟨[], .empty, .empty, written ++ body⟩) : Except String (BuilderState × BuildState)) := by
+    match (streamRows modelSink modelNext id state room).run ⟨rows, .empty, .empty, written⟩ with
+    | .error _ => ¬ Valid state room rows
+    | .ok (last, file) => Valid state room rows ∧ last.count = state.count + rows.length ∧
+        file = ⟨[], .empty, .empty, written ++ encodeRows rows⟩ := by
   induction rows generalizing state room written with
   | nil =>
-    cases room <;> simp [streamRows, modelNext, runPushes, Bind.bind, StateT.bind, Pure.pure,
-      StateT.pure, Except.bind, Except.pure, StateT.run]
+    cases room <;> simp [streamRows, modelNext, Valid, encodeRows, Bind.bind, StateT.bind,
+      Pure.pure, StateT.pure, Except.bind, Except.pure, StateT.run]
   | cons row tail ih =>
     cases room with
     | zero =>
-      have full : maxRows ≤ state.count := by omega
-      simp [streamRows, modelNext, runPushes, BuilderState.push, full, Bind.bind, StateT.bind,
-        Pure.pure, StateT.pure, Except.bind, Except.pure, StateT.run, throw]
-      rfl
+      simp [streamRows, modelNext, Valid, Bind.bind, StateT.bind, StateT.run, Except.bind, throw]
+      trivial
     | succ room =>
-      cases pushed : state.push row with
-      | error e =>
-        simp [streamRows, modelNext, runPushes, pushed, Bind.bind, StateT.bind, Except.bind, StateT.run, throw]
-        rfl
-      | ok pair =>
-        obtain ⟨next, bytes⟩ := pair
-        have count := push_count pushed
-        have rest := ih next room (by omega) (written ++ bytes)
-        simp only [streamRows, modelNext, modelSink, runPushes, pushed, Bind.bind, StateT.bind,
-          StateT.run, Except.bind, Pure.pure, Except.pure] at ⊢
-        change (streamRows modelSink modelNext id next room).run ⟨tail, .empty, .empty, written ++ bytes⟩ = _
-        rw [rest]
-        cases r : runPushes next tail with
-        | error e => rfl
-        | ok out => obtain ⟨last, body⟩ := out; simp [Bind.bind, Except.bind, Pure.pure, Except.pure, ByteArray.append_assoc]
+      by_cases ahead : ∀ key ∈ state.lastKey, key < row.key
+      · let next : BuilderState := ⟨state.count + 1, some row.key⟩
+        have step : state.push row = .ok (next, encodeEntry row) := push_ok (by omega) ahead
+        have rest := ih next room (by dsimp [next]; omega) (written ++ encodeEntry row)
+        have consumed : (streamRows modelSink modelNext id state (room + 1)).run
+            ⟨row :: tail, .empty, .empty, written⟩ = (streamRows modelSink modelNext id next room).run
+            ⟨tail, .empty, .empty, written ++ encodeEntry row⟩ := by
+          simp only [streamRows, modelNext, step, Bind.bind, StateT.bind, StateT.run, Except.bind]
+          rfl
+        rw [consumed]
+        cases received : (streamRows modelSink modelNext id next room).run
+            ⟨tail, .empty, .empty, written ++ encodeEntry row⟩ with
+        | error => rw [received] at rest; exact fun valid => rest ((valid_cons ..).mp valid).2
+        | ok out =>
+          obtain ⟨last, file⟩ := out
+          rw [received] at rest
+          obtain ⟨valid, count, actual⟩ := rest
+          refine ⟨(valid_cons ..).mpr ⟨ahead, valid⟩, ?_, ?_⟩
+          · dsimp [next] at count; simp only [List.length_cons]; omega
+          · simpa only [encodeRows_cons, ByteArray.append_assoc] using actual
+      · cases prev : state.lastKey with
+        | none => simp [prev] at ahead
+        | some key =>
+          have bad : row.key ≤ key := UInt64.not_lt.mp (fun good => ahead (by simpa [prev] using good))
+          have failed := push_rejects_key (by omega : state.count < maxRows) prev bad
+          simp only [streamRows, modelNext, failed, Bind.bind, StateT.bind, StateT.run, Except.bind]
+          exact fun valid => ahead ((valid_cons ..).mp valid).1
 
+/-- Finalize the buffered sink after the source loop returned its actual file
+    or error. Backpatching the header preserves all previously emitted rows. -/
 private theorem finish_modelBuild (rows : List Entry) (action : BuildM BuilderState)
-    (loop : action.run ⟨rows, .empty, .empty, placeholder⟩ =
-      (do let (last, body) ← runPushes {} rows
-          pure (last, ⟨[], .empty, .empty, placeholder ++ body⟩) : Except String (BuilderState × BuildState))) :
+    (last : BuilderState) (bytes : ByteArray)
+    (ok : action.run ⟨rows, .empty, .empty, placeholder⟩ =
+      .ok (last, ⟨[], .empty, .empty, placeholder ++ bytes⟩)) :
     (do let (count, file) ← (modelSink.writeTable action).run {rows}
-        pure (count, file.left ++ file.right)) =
-      (do let (last, body) ← runPushes {} rows
-          pure (last.count, last.header ++ body)) := by
+        pure (count, file.left ++ file.right)) = (.ok (last.count, last.header ++ bytes) : Except String _) := by
+  have tailBytes : (placeholder ++ bytes).extract last.header.size (placeholder ++ bytes).size = bytes := by
+    apply ByteArray.extract_append_eq_right
+    · rw [BuilderState.header, encodeHeader_size]; rfl
+    · simp
+  have noTail (i : Nat) : ByteArray.empty.extract i ByteArray.empty.size = ByteArray.empty :=
+    ByteArray.extract_eq_empty_iff.mpr (by simp)
   simp only [Sink.writeTable, Bind.bind, StateT.bind, StateT.run, modelSink, modify, modifyGet,
-    MonadStateOf.modifyGet, StateT.modifyGet, Pure.pure, StateT.pure, Except.bind, Except.pure, ByteArray.empty_append] at ⊢
-  dsimp only [StateT.run] at loop
-  rw [loop]
-  cases h : runPushes {} rows with
-  | error e => rfl
-  | ok out =>
-    obtain ⟨last, bytes⟩ := out
-    have tailBytes : (placeholder ++ bytes).extract last.header.size (placeholder ++ bytes).size = bytes := by
-      apply ByteArray.extract_append_eq_right
-      · rw [BuilderState.header, encodeHeader_size]; rfl
-      · simp
-    have unbuffered : ByteArray.empty.isEmpty = true := rfl
-    have noTail (i : Nat) : ByteArray.empty.extract i ByteArray.empty.size = ByteArray.empty :=
-      ByteArray.extract_eq_empty_iff.mpr (by simp)
-    simp only [Bind.bind, Except.bind, Pure.pure, Except.pure, unbuffered, ↓reduceIte,
-      ByteArray.empty_append, noTail, ByteArray.append_empty, tailBytes]
-
-private theorem modelBuild_pushes (rows : List Entry) :
-    modelBuild rows = (do
-      let (last, body) ← runPushes {} rows
-      pure (last.count, last.header ++ body)) :=
-  finish_modelBuild rows _ (streamRows_eq rows {} maxRows (by simp) placeholder)
+    MonadStateOf.modifyGet, StateT.modifyGet, Pure.pure, StateT.pure, Except.bind, Except.pure,
+    ByteArray.empty_append]
+  dsimp only [StateT.run] at ok
+  rw [ok]
+  simp only [show ByteArray.empty.isEmpty = true from rfl, ↓reduceIte, ByteArray.empty_append,
+    noTail, ByteArray.append_empty, tailBytes]
 
 /-- On the fresh, buffered model file, the actual build schedule succeeds
     exactly for ordered inputs within the format limit. Its returned count
@@ -227,23 +146,32 @@ theorem modelBuild_ok_iff {rows : List Entry} {count : Nat} {bytes : ByteArray} 
     modelBuild rows = .ok (count, bytes) ↔
     rows.length ≤ maxRows ∧ rows.Pairwise (fun a b => a.key < b.key) ∧
     count = rows.length ∧ bytes = encodeImage rows := by
-  rw [modelBuild_pushes]
-  constructor
-  · intro got
-    cases h : runPushes {} rows with
-    | error => rw [h] at got; contradiction
-    | ok out =>
-      obtain ⟨last, body⟩ := out
-      rw [h] at got
-      cases got
-      obtain ⟨fits, sorted, image⟩ := builder_accepts_only_ordered h
-      obtain ⟨_, out, count, _⟩ := builder_constructs_image rows fits sorted
-      rw [h] at out
-      cases out
-      exact ⟨fits, sorted, count, image⟩
-  · rintro ⟨fits, sorted, rfl, rfl⟩
-    obtain ⟨last, h, count, image⟩ := builder_constructs_image rows fits sorted
-    rw [h]
-    simp [Bind.bind, Except.bind, Pure.pure, Except.pure, count, image]
+  have spec := streamRows_spec rows {} maxRows (by simp) placeholder
+  let action := streamRows modelSink modelNext id {} maxRows
+  cases done_ : action.run ⟨rows, .empty, .empty, placeholder⟩ with
+  | error e =>
+    change (streamRows modelSink modelNext id {} maxRows).run _ = _ at done_
+    rw [done_] at spec
+    have fail : modelBuild rows = .error e := by
+      change (do let (n, file) ← (modelSink.writeTable action).run {rows}; pure (n, file.left ++ file.right)) = _
+      unfold Sink.writeTable
+      simp only [Bind.bind, StateT.bind, StateT.run, modelSink, modify, modifyGet, MonadStateOf.modifyGet,
+        StateT.modifyGet, Pure.pure, StateT.pure, Except.bind, Except.pure, ByteArray.empty_append]
+      change action ⟨rows, .empty, .empty, placeholder⟩ = .error e at done_
+      rw [done_]
+    rw [fail]
+    simp only [reduceCtorEq, false_iff, not_and]
+    intro fits ordered
+    exact False.elim (spec ⟨fits, ordered, by simp⟩)
+  | ok out =>
+    obtain ⟨last, file⟩ := out
+    change (streamRows modelSink modelNext id {} maxRows).run _ = _ at done_
+    rw [done_] at spec
+    obtain ⟨valid, length, rfl⟩ := spec
+    have length' : last.count = rows.length := by simpa using length
+    have result : modelBuild rows = .ok (last.count, last.header ++ encodeRows rows) :=
+      finish_modelBuild rows action last _ done_
+    rw [result, BuilderState.header, length']
+    simp [encodeImage, valid.1, valid.2.1, eq_comm]
 
 end ImmutableSSTable
