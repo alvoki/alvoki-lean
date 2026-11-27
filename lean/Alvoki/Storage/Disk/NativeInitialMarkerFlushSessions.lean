@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeInitialMarkerFlushError
-import Alvoki.Storage.Disk.NativeBootstrapFlushReopen
+import Alvoki.Storage.Disk.Proofs.Bootstrap.NativeBootstrapFlushReopen
 import Alvoki.Storage.Disk.NativeOpenedRestartSessions
 
 namespace Alvoki.Storage.DiskSession

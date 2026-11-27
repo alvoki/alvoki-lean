@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.CachedRetryInstallation
 import Alvoki.Storage.Disk.CheckpointRunChunkReports
-import Alvoki.Storage.Disk.SegmentedBootstrapCompletion
+import Alvoki.Storage.Disk.Proofs.Bootstrap.SegmentedBootstrapCompletion
 
 namespace Alvoki.Storage.DiskSession
 

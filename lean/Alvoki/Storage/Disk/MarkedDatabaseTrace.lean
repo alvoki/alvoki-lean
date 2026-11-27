@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.MarkedDatabaseCheckpoint
 import Alvoki.Storage.Disk.ObservedMarkedState
-import Alvoki.Storage.Disk.FreshMarkedBootstrap
+import Alvoki.Storage.Disk.Proofs.Bootstrap.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedOpenControl
 
 namespace Alvoki.WAL.Boundary

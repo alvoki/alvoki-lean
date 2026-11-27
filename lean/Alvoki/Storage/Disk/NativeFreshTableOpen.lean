@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
+import Alvoki.Storage.Disk.Proofs.Bootstrap.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeRawOpenAdmission
 
 namespace Alvoki.Storage.DiskSession

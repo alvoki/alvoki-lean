@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.BootstrapExecution
-import Alvoki.Storage.Disk.BootstrapZeroCreateRetry
-import Alvoki.Storage.Disk.BootstrapCreateErrorLineage
+import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapExecution
+import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapZeroCreateRetry
+import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapCreateErrorLineage
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.NativeReadyWalCollection

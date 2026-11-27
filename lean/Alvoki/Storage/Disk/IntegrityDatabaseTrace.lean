@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.IntegrityBootstrap
+import Alvoki.Storage.Disk.Proofs.Bootstrap.IntegrityBootstrap
 import Alvoki.Storage.Disk.StrictCheckpointReopen
 import Alvoki.Storage.Disk.VersionedUncertainWrite
 import Alvoki.Storage.Disk.VersionedReadyRunCollection

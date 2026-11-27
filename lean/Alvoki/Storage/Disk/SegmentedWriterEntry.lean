@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.SegmentedWriterState
-import Alvoki.Storage.Disk.SegmentedBootstrapReady
+import Alvoki.Storage.Disk.Proofs.Bootstrap.SegmentedBootstrapReady
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationRetrySession
 import Alvoki.Storage.Disk.RetainedWriterState
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.BootstrapExecution
+import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapExecution
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
 
 namespace Alvoki.Storage.DiskSession

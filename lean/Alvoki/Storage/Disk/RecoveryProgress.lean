@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.FreshMarkedBootstrap
+import Alvoki.Storage.Disk.Proofs.Bootstrap.FreshMarkedBootstrap
 import Alvoki.Storage.Disk.MarkedCheckpointReopenProgress
 import Alvoki.Storage.Disk.MarkedWriteReopenProgress
 

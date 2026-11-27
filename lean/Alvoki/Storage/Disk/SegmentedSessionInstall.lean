@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskLockLifecycle
-import Alvoki.Storage.Disk.WalSegmentBootstrapEffects
+import Alvoki.Storage.Disk.Proofs.Bootstrap.WalSegmentBootstrapEffects
 
 namespace Alvoki.Storage.DiskSession
 
