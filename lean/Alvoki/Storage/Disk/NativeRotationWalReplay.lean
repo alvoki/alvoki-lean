@@ -5,7 +5,7 @@ import Alvoki.Storage.Disk.NativeAlignedReadyCalls
 
 namespace Alvoki.Storage.DiskSession
 
-open System WalSegmentRepair CheckpointPublication
+open System WalSegmentRepair CheckpointPublication SyncHandleRouting
 open WAL.Boundary (WalInodeImage)
 
 variable {heap : Type} {opened : NativeOpenedHandle heap} {current position : NativeOpenedPosition opened}
@@ -101,7 +101,8 @@ theorem NativeOpenedPosition.rotatesExistingWithWal
 nonempty rotation. Its observed ready phase identifies the prefix that
 supplies the physical cache, WAL window and client ledger. Before the
 first checkpoint, the selected sample is also sufficient for the ordinary
-reader and the writer installed by a later aligned open. -/
+reader and the writer installed by a later aligned open. The reached
+create and pending-cache callbacks determine where those effects apply. -/
 theorem NativeReturnedCalls.samplesAfterFailedRotationDirectory
     {heap : Type} {opened : NativeOpenedHandle heap}
     {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
@@ -136,12 +137,28 @@ theorem NativeReturnedCalls.samplesAfterFailedRotationDirectory
         (barrier : rotation.FailedRootBarrier writes.syncer writes.cache afterFileSync),
         rotation.run opened guard.lookup writes.cache.active reached =
           .error (IO.userError s!"sync failed for '{opened.directory.path}': {barrier.cause}") barrier.failed ∧
+        let successor := opened.directory.file (.walSegment state.writer.rotationInstalled.activeFirst)
         ∀ {rebooted : heap} {effective : Bool}
-          (file : filePrefix.ExclusiveSync writes.stager writes.syncer writes.cache)
-          (_fileEffects : file.SuccessorEffects view storage visible last.reached barrier.issued)
-          (_rootEffects : filePrefix.RootErrorEffects barrier view storage effective last.reached)
-          (_fileFrames : file.PreservesFiles view storage (state.rotationProtectedScope 0 horizon)
-            last.reached barrier.issued),
+          (absent : filePrefix.observed = none)
+          (create : rotation.create successor filePrefix.afterRead = (do
+            let handle ← writes.stager.create successor
+            writes.stager.remember writes.cache.pending (pushPending successor handle)) filePrefix.afterRead)
+          (fileSync : rotation.sync successor filePrefix.beforeSync =
+            writes.syncer.group opened.directory.path writes.cache.directory writes.cache.active writes.cache.pending
+              #[successor] filePrefix.beforeSync)
+          (stored : ∀ {handle openedAt}, writes.stager.create successor filePrefix.afterRead = .ok handle openedAt →
+            writes.stager.remember writes.cache.pending (pushPending successor handle) openedAt =
+              .ok () filePrefix.beforeSync →
+            view.pending filePrefix.beforeSync writes.cache.pending =
+              pushPending successor handle (view.pending openedAt writes.cache.pending))
+          (loaded : ∀ {entries loaded}, writes.syncer.readPending writes.cache.pending filePrefix.beforeSync =
+            .ok entries loaded → entries = view.pending filePrefix.beforeSync writes.cache.pending),
+          let file := Classical.choice (filePrefix.reachesExclusiveSync writes.stager writes.syncer writes.cache view
+            absent create fileSync stored loaded)
+          ∀ (_fileEffects :
+            file.SuccessorEffects view storage visible last.reached barrier.issued ∧
+            file.PreservesFiles view storage (state.rotationProtectedScope 0 horizon) last.reached barrier.issued)
+          (_rootEffects : filePrefix.RootErrorEffects barrier view storage effective last.reached),
           let selected := state.rotationWriterAtSample last.current.ready.readPrefix.refines.1 (bindings rebooted)
           ∀ (_chosen : bindings rebooted ∈ (storage barrier.failed).crashNames),
             selected.history = last.current.history ∧
@@ -192,7 +209,9 @@ theorem NativeReturnedCalls.samplesAfterFailedRotationDirectory
   have returned := (last.rotationReturnsDirectoryError rotation writes.syncer writes.cache guard nonempty
     (atRotation.symm ▸ poisonedAt) filePrefix barrier.route barrier.loaded barrier.returned).2.2.1
   refine ⟨atRotation ▸ returned, ?_⟩
-  intro rebooted effective file fileEffects rootEffects fileFrames selected chosen
+  intro successor rebooted effective absent create fileSync storedPending loadedPending
+    file effectsAtFile rootEffects selected chosen
+  obtain ⟨fileEffects, fileFrames⟩ := effectsAtFile
   have cutoff := valid.retained.resumed.through.trans (congrArg List.length currentHistory)
   have within : state.writer.target.range.through ≤ horizon :=
     (valid.retained.rotationAtEnd.trans valid.retained.resumed.through.symm) ▸ coversCutoff
