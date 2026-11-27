@@ -265,20 +265,13 @@ theorem ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
     (stageCalls : LongKeeperStageCallbacks heap) (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     {effective : Bool} {physical : Nat}
-    {start authorizedHeap pruned recorded synced renamedHeap issued reached : heap}
+    {start renamedHeap issued reached : heap}
     {handle : IO.FS.Handle} {cause : IO.Error}
     (startFiles : (view.files start).image = initial.image)
     (measured : physical = authorized.keeper.metadata.byteSize.toNat)
-    (authorize : callbacks.syncPaths directory.path cached active pending #[directory.path] start = .ok () authorizedHeap)
-    (prune : let write := stageCalls.stage pending callbacks.modifyPending
-      let sync := callbacks.syncPaths directory.path cached active pending
-      ((layout.boundedPlan.newer.map Step.unlink ++ [Step.syncPruned]).forM
-        (performPaths directory layout.boundedPlan remove throw write sync rename)) authorizedHeap = .ok () pruned)
-    (written : stageCalls.stage pending callbacks.modifyPending (directory.file .stagedWal) layout.keeper.bytes pruned =
-      .ok () recorded)
-    (persisted : callbacks.syncPaths directory.path cached active pending #[directory.file .stagedWal] recorded = .ok () synced)
-    (moved : rename (directory.file .stagedWal) (directory.file (.walSegment layout.keeper.first))
-      synced = .ok () renamedHeap)
+    (observed : LongKeeperRepair.observeRename directory layout.boundedPlan physical remove
+      (stageCalls.stage pending callbacks.modifyPending) (callbacks.syncPaths directory.path cached active pending)
+      rename start = .error (IO.userError s!"sync failed for '{directory.path}': {cause}") (reached, some renamedHeap))
     (loaded : callbacks.getDirectory cached renamedHeap = .ok (some handle) issued)
     (atIssue : view.handle issued handle = (issue.inventory, held.lifetime.directorySlot, 0))
     (census : view.descriptors issued = issue.inventory)
@@ -318,6 +311,11 @@ theorem ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
   let names atHeap := (storage atHeap).files.names
   obtain ⟨live, bound⟩ := issue.rawDirectoryTarget view names atIssue census root
   obtain ⟨files, children, parent, unchanged⟩ := effect failed live bound issuedFiles
+  have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have long : layout.boundedPlan.keeperSize < physical := bytes ▸ measured.symm ▸ pruning.longer
+  obtain ⟨_, _, _, _, authorize, prune, written, persisted, moved, _⟩ :=
+    (LongKeeperRepair.observeRename_error_iff directory layout.boundedPlan physical remove write sync rename
+      (layout.boundedPlan_valid pruning.later) bytes long).mp observed
   obtain ⟨returned, _, trace, activeKeeper, _, _, _, _, named, _⟩ :=
     issue.rawFinalSyncError callbacks cached active pending remove stageCalls rename view names startFiles measured
       authorize prune written persisted moved loaded atIssue census issuedFiles root keeper scratch failed
@@ -1455,9 +1453,20 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
         fun path inside => durable path (separate path inside), parent⟩)
     suffixSyncFrame prune
   have reachedIssue := authorizedFrame.trans (prunedFrame.trans (stageFrame.trans (renameFrame.trans loadFrame)))
+  have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have long : layout.boundedPlan.keeperSize < reads.wal.keeper.calls.metadata.byteSize.toNat :=
+    bytes ▸ measured.symm ▸ pruning.longer
+  have finalSync : groupSync #[(dir).path] renamedHeap =
+      .error (IO.userError s!"sync failed for '{(dir).path}': {cause}") reached := by
+    rw [AlignedKeeperCacheCallbacks.syncPaths, SyncPathGroup.run_single]
+    simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, failed, Pure.pure, EStateM.pure]
+    rfl
+  have observed := (LongKeeperRepair.observeRename_error_iff dir layout.boundedPlan _ source.remove
+    stageWrite groupSync source.rename (layout.boundedPlan_valid pruning.later) bytes long).mpr
+    ⟨_, _, _, _, authorize, prune, written, persisted, moved, finalSync⟩
   obtain ⟨repair, workerImage, trace, carried, kept, named, durable, _⟩ :=
     issue.returnsSelectedRepairError view state rfl storage visible callbacks seed.directoryRef seed.activeRef seed.pendingRef
-      source.remove source.stage source.rename startFiles measured authorize prune written persisted moved loaded atIssue
+      source.remove source.stage source.rename startFiles measured observed loaded atIssue
       census issuedFiles root keeper scratch keeperBytes keeperDurable reachedIssue failed effect
   obtain ⟨liveRoot, rootBinding⟩ := issue.rawDirectoryTarget view retryNames atIssue census root
   have errorEffect := effect failed liveRoot rootBinding issuedFiles

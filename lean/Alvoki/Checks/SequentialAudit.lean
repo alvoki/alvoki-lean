@@ -2269,6 +2269,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.LaterWalAt.afterAcceptedUnlinks
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.LaterWalAt.scanNames
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempts.keepsLaterWal
+#check_axioms Alvoki.Storage.WalSegmentRepair.LongKeeperRepair.observeRename_error_iff
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_afterStage
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.longRepairStageSyncFails
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.rawFinalSyncError
