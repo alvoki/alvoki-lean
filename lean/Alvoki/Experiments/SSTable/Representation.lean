@@ -7,6 +7,7 @@ logical contents. A consumer can carry this relation alongside the handle. -/
 structure Table.Represents [Monad m] [MonadExceptOf String m]
     (table : Table m) (rows : List Entry) : Prop where
   ordered : Ordered rows
+  rowCount : table.rowCount = rows.length
   lookup : ∀ key, table.lookup key = pure (Contents.lookup rows key)
   seek : ∀ key, ∃ i, table.seek key = pure i ∧ Contents.IsSeek rows key i
   next : ∀ i, table.next i = pure (Contents.next rows i)

@@ -163,7 +163,7 @@ theorem open_built_table [Monad m] [LawfulMonad m] [MonadExceptOf String m]
   obtain ⟨fits, ordered, _, image⟩ := modelBuild_ok_iff.mp built
   rw [image] at observed
   obtain ⟨table, opened, bound⟩ := openTable_encoded fits observed
-  exact ⟨table, opened, ordered, table.lookup_encoded bound observed ordered,
+  exact ⟨table, opened, ordered, bound.1, table.lookup_encoded bound observed ordered,
     table.seek_encoded bound observed ordered, table.next_encoded bound observed⟩
 
 end ImmutableSSTable
