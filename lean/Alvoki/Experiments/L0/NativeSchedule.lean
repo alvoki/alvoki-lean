@@ -9,6 +9,9 @@ the schedule. The premises on component actions are separate from these
 monadic rules. -/
 structure Reports (σ : Type) where
   relates : {α : Type} → ExceptT String IO α → StorageM σ α → Prop
+  observed : {α : Type} → ExceptT String IO α → σ → EStateM.Result String σ α → Prop
+  adequate : ∀ {α} {io : ExceptT String IO α} {model s result},
+    relates io model → observed io s result → model s = result
   pure : ∀ {α} (x : α), relates (pure x) (pure x)
   bind : ∀ {α β} {a : ExceptT String IO α} {b : StorageM σ α}
     {f : α → ExceptT String IO β} {g : α → StorageM σ β},
@@ -108,5 +111,85 @@ theorem native_schedules
     (∀ session key, r.relates (get (Native.callbackComponents root phase) session key)
       (get model session key)) :=
   ⟨reports.recover, reports.write, reports.flush, reports.get⟩
+
+/-- Each attempt may have its own phase cell. Evidence is required only
+for the callback record of the attempt that makes this observation. -/
+def NativeObserved (r : Reports σ) (model : Components (StorageM σ))
+    (call : {m : Type → Type} → [Monad m] → [MonadExceptOf String m] → Components m → m α)
+    (s : σ) (result : EStateM.Result String σ α) : Prop :=
+  ∃ root phase, CallbackReports r (Native.callbackComponents root phase) model ∧
+    r.observed (call (Native.callbackComponents root phase)) s result
+
+private theorem observedWrite (h : NativeObserved r model (fun ops => write ops session change) s result) :
+    write model session change s = result := by
+  obtain ⟨_, _, callbacks, observed⟩ := h
+  exact r.adequate (callbacks.write session change) observed
+
+private theorem observedFlush (h : NativeObserved r model (fun ops => flush ops session) s result) :
+    flush model session s = result := by
+  obtain ⟨_, _, callbacks, observed⟩ := h
+  exact r.adequate (callbacks.flush session) observed
+
+private theorem observedGet (h : NativeObserved r model (fun ops => get ops session key) s result) :
+    get model session key s = result := by
+  obtain ⟨_, _, callbacks, observed⟩ := h
+  exact r.adequate (callbacks.get session key) observed
+
+private theorem observedRecover (h : NativeObserved r model (fun ops => recover ops) s result) :
+    recover model s = result := by
+  obtain ⟨_, _, callbacks, observed⟩ := h
+  exact r.adequate callbacks.recover observed
+
+/-- Observed calls admitted by the wrapper's serialized phase discipline.
+A failed read contributes no logical observation. Cleanup and stops frame
+the durable selections. Uncertain results end the current session. -/
+inductive NativeRun (r : Reports σ) (model : Components (StorageM σ)) (selected : σ → Selected) :
+    List Event → Option Session → σ → Prop where
+  | initial : Nonempty (Durable (selected s) []) → NativeRun r model selected [] none s
+  | written : NativeRun r model selected events (some session) s →
+      NativeObserved r model (fun ops => write ops session change) s (.ok next after) →
+      NativeRun r model selected (events ++ [.written change]) (some next) after
+  | writeUncertain : NativeRun r model selected events (some session) s →
+      NativeObserved r model (fun ops => write ops session change) s result →
+      NativeRun r model selected (events ++ [.writeUncertain change]) none (reached result)
+  | got : NativeRun r model selected events (some session) s →
+      NativeObserved r model (fun ops => get ops session key) s (.ok value after) →
+      NativeRun r model selected (events ++ [.got key value]) (some session) after
+  | readFailed : NativeRun r model selected events (some session) s →
+      NativeObserved r model (fun ops => get ops session key) s (.error error after) →
+      NativeRun r model selected events (some session) after
+  | flushed : NativeRun r model selected events (some session) s →
+      NativeObserved r model (fun ops => flush ops session) s (.ok next after) →
+      NativeRun r model selected (events ++ [.flushed]) (some next) after
+  | flushUncertain : NativeRun r model selected events (some session) s →
+      NativeObserved r model (fun ops => flush ops session) s result →
+      NativeRun r model selected (events ++ [.flushUncertain]) none (reached result)
+  | reopened : NativeRun r model selected events none s →
+      NativeObserved r model (fun ops => recover ops) s (.ok session after) →
+      NativeRun r model selected (events ++ [.reopened]) (some session) after
+  | openFailed : NativeRun r model selected events none s →
+      NativeObserved r model (fun ops => recover ops) s (.error error after) →
+      NativeRun r model selected (events ++ [.openFailed]) none after
+  | stopped : NativeRun r model selected events session s → selected after = selected s →
+      NativeRun r model selected (events ++ [.stop]) none after
+
+theorem NativeRun.projects (run : NativeRun r model selected events session s) :
+    ObservedRun model selected events session s := by
+  induction run with
+  | initial durable => exact .initial durable
+  | written _ observed ih => exact .written ih (observedWrite observed)
+  | writeUncertain _ observed ih => exact .writeUncertain ih (observedWrite observed)
+  | got _ observed ih => exact .got ih (observedGet observed)
+  | readFailed _ observed ih => exact .readFailed ih (observedGet observed)
+  | flushed _ observed ih => exact .flushed ih (observedFlush observed)
+  | flushUncertain _ observed ih => exact .flushUncertain ih (observedFlush observed)
+  | reopened _ observed ih => exact .reopened ih (observedRecover observed)
+  | openFailed _ observed ih => exact .openFailed ih (observedRecover observed)
+  | stopped _ frame ih => exact .stopped ih frame
+
+theorem NativeRun.refines (run : NativeRun r model selected events session s)
+    (evidence : CallbackEvidence model selected fileBytes) :
+    ∃ state, Client.Allows events state ∧ Execution.Represents session (selected s) state :=
+  run.projects.refines evidence
 
 end ExperimentalL0.NativeBridge

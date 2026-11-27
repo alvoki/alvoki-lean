@@ -198,7 +198,7 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
       exact ⟨read.1.effect, read.2⟩
     | error error after => simpa [ran] using read
 
-private def reached : EStateM.Result String σ α → σ
+def reached : EStateM.Result String σ α → σ
   | .ok _ after | .error _ after => after
 
 /-- Reports of the actual shared operation schedule. The callback interpreter

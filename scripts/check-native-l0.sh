@@ -55,6 +55,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms CallbackEvidence.laws
 #check_axioms ObservedRun.refines
 #check_axioms native_schedules
+#check_axioms NativeRun.refines
 #check_axioms Lifecycle.Phase.online_owns_wal
 #check_axioms Lifecycle.Phase.publish_owns_wal
 #check_axioms Lifecycle.Phase.beginUpdate_hides_session

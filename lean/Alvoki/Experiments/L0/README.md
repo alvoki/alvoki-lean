@@ -112,9 +112,11 @@ big-endian key and tagged mutation codecs. The bridge derives
 [NativeSchedule](NativeSchedule.lean) proves that correspondence for each
 complete L0 schedule follows from correspondence for the individual
 callbacks in the record constructed by `Native.withOpen` and the runtime
-rules for bind, success and error. This connects the actual callback record
-to the reported schedule without assuming the LSM operations themselves
-refine. The remaining premises are at the IO boundary:
+rules for bind, success and error. Given a runtime observation relation
+that reports the reached results faithfully, `NativeRun.refines` takes
+observations of those concrete callback records to the generic client
+trace. It uses the wrapper's serialized phase discipline and frame on
+cleanup. The remaining premises are at the IO boundary:
 
 - The WAL and blob primitives realize their modeled file effects, including
   the effects that may precede an error. Successful reads/reopens report
