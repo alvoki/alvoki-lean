@@ -103,6 +103,11 @@ under its own crash protocol and use lookup, seek and iteration. The consumer
 owns crash-safe publication and merging. It must bound live descriptors and
 memory across the tables it retains.
 
+As part of the future work on a common filesystem model, investigate whether
+durable immutable file creation and [DurableBlob](../DurableBlob/README.md)
+can share streaming file construction. Compare a streaming extension of
+DurableBlob with a smaller shared building block.
+
 Measure sequential scans, point reads and seeks before changing the physical
 layout. Independently known key and value widths can permit cheaper field
 access, and two fixed widths can permit direct addressing. Buffered reads and
