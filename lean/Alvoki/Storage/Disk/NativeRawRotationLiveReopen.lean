@@ -25,14 +25,19 @@ local notation "visible" => fun h =>
 
 /-- Close preserves the visible successor even if the failed directory
 barrier left it absent from a crash map. The same rooted close observation
-supplies the WAL reads of a successful literal reopen. -/
+supplies the WAL reads of a successful literal reopen. Only prior seals
+need to agree with the durable write entry on their visible bytes. -/
 theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     (failure : NativeRotationDirectoryFailure old (some cause))
     (cache : OpenSyncCacheRefs opened.files opened.directory.path)
     {drops : CloseCacheField → List LockReferenceDrop}
     (closed : view.ClosedFrom opened.phase cache.active cache.pending cache.directory dir drops failed released)
-    (atFailure : view.Matches opened.phase cache.active cache.pending cache.directory failed failure.closeState)
-    (prior : NativeReadyProtectedStorage old ⟨names current.reached, fun inode => [failure.parent.files.inodes.visible inode]⟩)
+    (liveAtFailure : (view.files failed).image.view = failure.reported.after.view ∧
+      (view.files failed).image.inodes.visible = failure.reported.after.inodes.visible)
+    (prior : NativeReadyProtectedStorage old (storage current.reached).files)
+    (sealedVisible : ∀ segment ∈ (old).writer.wal.sealed,
+      ∀ inode, names current.reached ((dir).file (.walSegment segment.first)) = some inode →
+      failure.parent.files.inodes.visible inode ∈ (storage current.reached).files.bytes inode)
     (catalog : (old).writer.wal.NamespaceWindow dir 0 limit (names current.reached))
     (atEntry : ∀ name, checkpointFreeWalChild limit name →
       names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ =
@@ -63,16 +68,17 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
   let valid := current.current.ready.readPrefix.refines.1
   let writer := (failure.liveState valid).writer
   have ready := failure.liveRetained valid
-  have image : (view.files released).image = failure.reported.after := by
-    rw [closed.2.2.1, atFailure.2.2.1]
-    rfl
-  have observedImage : observed = failure.reported.after := image
+  have observedView : observed.view = failure.reported.after.view :=
+    (congrArg (fun files : LockedFileState RotationCreateFiles => files.image.view) closed.2.2.1).trans liveAtFailure.1
+  have observedBytes : observed.inodes.visible = failure.reported.after.inodes.visible :=
+    (congrArg (fun files : LockedFileState RotationCreateFiles => files.image.inodes.visible) closed.2.2.1).trans liveAtFailure.2
+  have reachedView : (view.files released).image.view = failure.reported.after.view := observedView
   obtain ⟨_, _, root, _, _, _, lockName, _, successor, _, _⟩ := failure.custody valid
   have present (name : String) (inScope : checkpointFreeWalChild limit name)
       (apart : name ≠ renderWalSegmentName newStart) :
       names released ⟨(dir).path.toString ++ "/" ++ name⟩ =
         names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ := by
-    rw [atClose name inScope, atEntry name inScope, image, failure.reported.view,
+    rw [atClose name inScope, atEntry name inScope, reachedView, failure.reported.view,
       failure.created.names name apart, failure.created.objects]
   have successorAtEnd : newStart = limit := valid.retained.rotationAtEnd
   have keeperFirst : writer.wal.active.first = newStart :=
@@ -84,11 +90,11 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     change _ = some (observed.view.modelObject failure.created.child.child)
     change failure.reported.after.view.child failure.parent.root (renderWalSegmentName newStart) =
       some failure.created.child.child at successor
-    simpa only [DiskDirectory.walSegment_path, image, observedImage, successor, Option.map_some] using
+    simpa only [DiskDirectory.walSegment_path, reachedView, observedView, successor, Option.map_some] using
       child newStart (Nat.le_of_eq successorAtEnd)
   have freshBytes : visible released (observed.view.modelObject failure.created.child.child) = ByteArray.empty := by
     change observed.inodes.visible (observed.view.modelObject failure.created.child.child) = _
-    rw [observedImage, failure.reported.bytes, failure.reported.view, failure.created.inode]
+    rw [observedBytes, observedView, failure.reported.bytes, failure.reported.view, failure.created.inode]
     exact failure.created.empty
   have newStarts : writer.wal.segments.map WalSegment.first =
       (old).writer.wal.segments.map WalSegment.first ++ [newStart] := by
@@ -115,7 +121,7 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     exact kept.trans originally
   have lockBound : names released ((dir).file .lock) = some (observed.view.modelObject failure.parent.lock.child) := by
     change names released ⟨(dir).path.toString ++ "/" ++ "LOCK"⟩ = _
-    simpa only [image, observedImage, lockName, Option.map_some] using atClose "LOCK" (.inl (by simp))
+    simpa only [reachedView, observedView, lockName, Option.map_some] using atClose "LOCK" (.inl (by simp))
   obtain ⟨objects, keeperName, markerName, _, _, keeperBytes, _, markerBytes, _⟩ :=
     (RotationRawCreateEffect.afterOpen (failure.created.afterSync true)).keepsKeeperMarker
   change failure.created.files.view.modelObject = failure.parent.files.view.modelObject at objects
@@ -131,7 +137,7 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     rw [atClose "WAL.commit" (.inl (by simp))]
     change ((observed.view.child failure.parent.root "WAL.commit").map observed.view.modelObject).map
       observed.inodes.visible = (old).writer.target.pair.walBoundary
-    rw [observedImage, failure.reported.view, markerName, failure.reported.bytes, objects]
+    rw [observedBytes, observedView, failure.reported.view, markerName, failure.reported.bytes, objects]
     simpa only [Option.map_some, valid.retained.walPair] using markerBytes.symm
   have pair : (images released).directory.active = writer.target.pair := by
     rw [pairAt, manifestAbsent, Option.map_none, marker]
@@ -146,7 +152,7 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     rw [DiskDirectory.walSegment_path, child _ bounded]
     change ((observed.view.child failure.parent.root (renderWalSegmentName (old).writer.wal.active.first)).map
       observed.view.modelObject).map observed.inodes.visible = _
-    rw [observedImage, failure.reported.view, ← first, keeperName, failure.reported.bytes, objects]
+    rw [observedBytes, observedView, failure.reported.view, ← first, keeperName, failure.reported.bytes, objects]
     simpa only [Option.map_some] using congrArg some keeperBytes
   have previousSeals (segment : WalSegment) (member : segment ∈ (old).writer.wal.sealed) :
       (names released ((dir).file (.walSegment segment.first))).map (visible released) = some segment.bytes := by
@@ -159,15 +165,16 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     have apart : renderWalSegmentName segment.first ≠ renderWalSegmentName newStart := by
       intro same
       exact (Nat.ne_of_lt below) (by simpa only [parseWalSegmentName_render, Option.some.injEq] using congrArg parseWalSegmentName same)
-    obtain ⟨inode, named, payload⟩ := prior.sealedFiles segment member
+    obtain ⟨inode, named, payload⟩ := (prior.sealedFiles segment member).samplesAtBinding
+      (names current.reached) failure.parent.files.inodes.visible rfl (sealedVisible segment member)
     have binding := (atEntry _ (.inr ⟨segment.first, within, rfl⟩)).symm.trans named
     obtain ⟨object, atParent, modeled⟩ := Option.map_eq_some_iff.mp binding
     have distinct := modeled ▸ failure.created.freshObject _ _ atParent
     have priorName : names current.reached ⟨(dir).path.toString ++ "/" ++ renderWalSegmentName segment.first⟩ = some inode := named
     rw [DiskDirectory.walSegment_path, present _ (.inr ⟨segment.first, within, rfl⟩) apart, priorName, Option.map_some]
-    have contents := (failure.created.bytes inode distinct).1.trans (List.cons.inj payload).1
+    have contents := (failure.created.bytes inode distinct).1.trans payload
     change some (observed.inodes.visible inode) = _
-    rw [observedImage, failure.reported.bytes]
+    rw [observedBytes, failure.reported.bytes]
     exact congrArg some contents
   obtain ⟨layout, target, active, tail, descriptors, offsets⟩ := ready.visibleReopenLayout pair newKeeper
   have modeled := layout.modeledWindow _ offsets
