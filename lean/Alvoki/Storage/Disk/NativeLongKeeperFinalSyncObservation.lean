@@ -1282,9 +1282,11 @@ theorem MarkedWalExtentReports.extendsStageSyncError
     (clearEffect : view.files consumed = view.files loaded ∧ scratchFrame loaded consumed)
     {cause : IO.Error} {effective : Bool}
     (failed : (callbacks).sync file consumed = .error cause worker)
-    (descriptor : RawFsyncTarget view created consumed file)
-    (atIssue : let inode := (view.handle created file).1.inode (view.handle created file).2.1.description
-      retryNames consumed scratch = some inode ∧ visible consumed inode = layout.keeper.bytes)
+    {buffered : heap → IO.FS.Handle → ByteArray}
+    (staging : source.stage.StagingPrefixEffects callbacks scratch (· = keeperPath) view storage visible buffered
+      seed.pendingRef)
+    (captured : (view.handle created file).1.inode (view.handle created file).2.1.description =
+      (view.descriptors created).inode (view.handle created file).2.1.description)
     (fsync : let inode := (view.descriptors consumed).inode (view.handle consumed file).2.1.description
       FsyncResult (view.files consumed, visible consumed inode, (storage consumed).files.bytes inode)
         ({ view.files consumed with image := (liveImage consumed).withScratch (some (layout.keeper.bytes, true)) },
@@ -1331,7 +1333,6 @@ theorem MarkedWalExtentReports.extendsStageSyncError
         ((callbacks).getPending seed.pendingRef recorded = .ok entries loaded → stageSurvivors recorded loaded) →
         ((callbacks).setPending seed.pendingRef (entries.filter (fun item => item.1 != scratch)) loaded = .ok () consumed →
           stageSurvivors loaded consumed) →
-        (retryNames consumed keeperPath ≠ some inode) →
         ((callbacks).sync file consumed = .error cause worker → RegularFileSyncEffect inode
           ((storage worker).files.bytes inode) (storage consumed) (storage worker)) →
         dispose.ScopeFrames finalized stageSurvivors →
@@ -1368,6 +1369,19 @@ theorem MarkedWalExtentReports.extendsStageSyncError
     pruneFrame.2.2 NativeReadyState.SelectedRetryFrame.trans
   have staged := source.stage.stageReturns acquired wrote flushedBytes remembered
   obtain ⟨writtenImage, stagedFrame⟩ := stageEffect staged
+  have chosen : entries.find? (fun entry => entry.1 == scratch) = some (scratch, file) := by
+    rw [loadEffect.1, stored]
+    simp [pushPending]
+  obtain ⟨slot, replacement, opened, _, _, issued, payload, _⟩ :=
+    source.stage.issuesStagedFile callbacks staging (fun result _ => result)
+      acquired wrote flushedBytes remembered read chosen cleared
+  have capturedInode : inode = replacement := captured.trans (opened.1.1.symm ▸ opened.1.2.2)
+  have descriptor : RawFsyncTarget view created consumed file :=
+    ⟨issued.1.1.trans opened.1.1.symm, issued.1.1.symm ▸ issued.1.2.1,
+      (issued.1.1.symm ▸ issued.1.2.2).trans capturedInode.symm⟩
+  have atIssue : retryNames consumed scratch = some inode ∧ visible consumed inode = layout.keeper.bytes :=
+    capturedInode.symm ▸ ⟨issued.2.1, payload⟩
+  have separate : retryNames consumed keeperPath ≠ some inode := capturedInode.symm ▸ issued.2.2 _ rfl
   obtain ⟨repair, files, trace, named, bytes, durable⟩ := (callbacks).longRepairStageSyncFails
     layout.boundedPlan _ source.stage seed.directoryRef seed.activeRef seed.pendingRef source.remove source.rename
     checked size (size ▸ longer) view retryNames visible (fun h => (storage h).files.bytes) authorize prune acquired
@@ -1396,7 +1410,7 @@ theorem MarkedWalExtentReports.extendsStageSyncError
     throughError.1.trans finalFrame.1, named, bytes, durable, ?_⟩
 
   intro firstFailure firstBoot reset atBoot sameFirst failedKeeper cacheKeeper readKeeper listKeeper
-    authKeeper unlinkKeeper readRoot rootEffect stageCrash loadCrash clearCrash separate fileEffect cleanupCrash
+    authKeeper unlinkKeeper readRoot rootEffect stageCrash loadCrash clearCrash fileEffect cleanupCrash
     rebooted boot manifest
   obtain ⟨old, oldAtStart, accepts⟩ := listing.keepsLiveKeeperBeforeRepair prior firstBoot reset atBoot sameFirst
     failedKeeper cacheKeeper readKeeper listKeeper selected seals longer keeperRead

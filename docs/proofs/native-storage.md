@@ -696,10 +696,10 @@ description. The Linux proof still needs the namespace and inode
 effects of those callbacks to establish the selected physical footprint.
 [Staging proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperSuffixStageHeap.lean)
 
-For a completed staged-file fsync, the observed successful exclusive
-create supplies the disjoint inode and empty contents. The reached
-write and flush establish the bytes on that inode, and the pending
-descriptor identifies the file fsync. Its local effect makes those
+Both staged-file fsync outcomes use the winning exclusive create, including
+a retry after removal of a stale name. It supplies an empty inode disjoint
+from protected names. Write, flush and the pending-cache operations carry the
+same slot, inode and payload to the syscall. On success its local effect makes those
 bytes durable and frames all protected files and the root in its parent.
 The rename keeps the same inode and its durable bytes while moving its
 visible binding. A final directory-fsync error carries that binding and

@@ -105,17 +105,21 @@ def CachedKeeperReplacementRoot (state : NativeReadyState) (view : OpenCloseHeap
   view.directory atHeap cached = some root ∧
     attachedReadSlot view root state.directorySlot (state.census.inode state.directorySlot.description) atHeap
 
-private def keeperStageAt (state : NativeReadyState) (view : OpenCloseHeapView heap image)
+/-- The opened slot still denotes the private staging inode. Only names in the
+chosen footprint have to stay disjoint from it. -/
+def ScopedStagingFile (scratch : FilePath) (scope : FilePath → Prop) (view : OpenCloseHeapView heap image)
     (observe : heap → CheckpointStorageObservation) (file : IO.FS.Handle) (slot : DescriptorSlot) (inode : Nat)
     (atHeap : heap) : Prop :=
-  attachedReadSlot view file slot inode atHeap ∧
-    (observe atHeap).files.names (state.session.directory.file .stagedWal) = some inode ∧
-    ∀ path, state.crashPath path → (observe atHeap).files.names path ≠ some inode
+  attachedReadSlot view file slot inode atHeap ∧ (observe atHeap).files.names scratch = some inode ∧
+    ∀ path, scope path → (observe atHeap).files.names path ≠ some inode
 
-private def freshKeeperStage (state : NativeReadyState) (view : OpenCloseHeapView heap image)
+private abbrev keeperStageAt (state : NativeReadyState) (view : OpenCloseHeapView heap image) :=
+  ScopedStagingFile (state.session.directory.file .stagedWal) state.crashPath view
+
+def FreshScopedStagingFile (scratch : FilePath) (scope : FilePath → Prop) (view : OpenCloseHeapView heap image)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (buffered : heap → IO.FS.Handle → ByteArray) (file : IO.FS.Handle) (atHeap : heap) : Prop :=
-  ∃ (slot : DescriptorSlot) (inode : Nat), keeperStageAt state view observe file slot inode atHeap ∧
+  ∃ (slot : DescriptorSlot) (inode : Nat), ScopedStagingFile scratch scope view observe file slot inode atHeap ∧
     visible atHeap inode = .empty ∧ buffered atHeap file = .empty
 
 private def SameLiveWalNames (directory : DiskDirectory) (before after : CheckpointStorageObservation) : Prop :=
@@ -168,6 +172,91 @@ structure AlignedKeeperCacheCallbacks.CachedRootEffects
       ∀ inode, (observe issued).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) =
         some inode → visible after inode = visible issued inode
 
+/-- Local regular-file and cache laws up to the issued syscall. The caller
+chooses the protected names and the frame it needs from each actual callback. -/
+structure LongKeeperStageCallbacks.StagingPrefixEffects
+    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
+    (scratch : FilePath) (scope : FilePath → Prop) (view : OpenCloseHeapView heap image)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (buffered : heap → IO.FS.Handle → ByteArray) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (frame : IO.FS.Handle → DescriptorSlot → Nat → heap → heap → Prop :=
+      fun file slot inode _ after => ScopedStagingFile scratch scope view observe file slot inode after) where
+  tryCreate : ∀ {before after file}, stage.tryCreate scratch before = .ok (.ok file) after →
+    FreshScopedStagingFile scratch scope view observe visible buffered file after
+  create : ∀ {before after file}, stage.create scratch before = .ok file after →
+    FreshScopedStagingFile scratch scope view observe visible buffered file after
+  write : ∀ {before after file slot inode bytes}, stage.write file bytes before = .ok () after →
+    ScopedStagingFile scratch scope view observe file slot inode before →
+    frame file slot inode before after ∧
+    visible after inode ++ buffered after file = (visible before inode ++ buffered before file) ++ bytes
+  flush : ∀ {before after file slot inode}, stage.flush file before = .ok () after →
+    ScopedStagingFile scratch scope view observe file slot inode before →
+    frame file slot inode before after ∧
+    visible after inode = visible before inode ++ buffered before file
+  record : ∀ {before after file slot inode},
+    calls.modifyPending pending (pushPending scratch file) before = .ok () after →
+    ScopedStagingFile scratch scope view observe file slot inode before →
+    frame file slot inode before after ∧ visible after inode = visible before inode
+  loadPending : ∀ {before after entries file slot inode}, calls.getPending pending before = .ok entries after →
+    entries.find? (fun entry => entry.1 == scratch) =
+      some (scratch, file) →
+    ScopedStagingFile scratch scope view observe file slot inode before →
+    frame file slot inode before after ∧ visible after inode = visible before inode
+  clearPending : ∀ {before loaded after entries file slot inode}, calls.getPending pending before = .ok entries loaded →
+    entries.find? (fun entry => entry.1 == scratch) =
+      some (scratch, file) →
+    calls.setPending pending (entries.filter (fun entry => entry.1 != scratch)) loaded =
+      .ok () after →
+    ScopedStagingFile scratch scope view observe file slot inode loaded →
+    frame file slot inode loaded after ∧ visible after inode = visible loaded inode
+
+/-- A successful stage prefix has one private inode with the requested bytes at
+issue, before the filesystem chooses the result of fsync. Each reached frame
+remains available to callers carrying additional storage or root invariants. -/
+theorem LongKeeperStageCallbacks.issuesStagedFile
+    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
+    {scratch : FilePath} {scope : FilePath → Prop} {view : OpenCloseHeapView heap image}
+    {observe : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {buffered : heap → IO.FS.Handle → ByteArray} {pending : IO.Ref (List (FilePath × IO.FS.Handle))}
+    {frame : IO.FS.Handle → DescriptorSlot → Nat → heap → heap → Prop}
+    (effects : stage.StagingPrefixEffects calls scratch scope view observe visible buffered pending frame)
+    (carries : ∀ {file slot inode before after}, frame file slot inode before after →
+      ScopedStagingFile scratch scope view observe file slot inode before →
+      ScopedStagingFile scratch scope view observe file slot inode after)
+    {entry opened written flushed staged loaded consumed : heap} {file : IO.FS.Handle}
+    {bytes : ByteArray} {entries : List (FilePath × IO.FS.Handle)}
+    (acquired : stage.acquire scratch entry = .ok file opened)
+    (wrote : stage.write file bytes opened = .ok () written)
+    (didFlush : stage.flush file written = .ok () flushed)
+    (recorded : calls.modifyPending pending (pushPending scratch file) flushed = .ok () staged)
+    (got : calls.getPending pending staged = .ok entries loaded)
+    (chosen : entries.find? (fun entry => entry.1 == scratch) = some (scratch, file))
+    (cleared : calls.setPending pending (entries.filter (fun entry => entry.1 != scratch)) loaded = .ok () consumed) :
+    ∃ slot inode,
+      ScopedStagingFile scratch scope view observe file slot inode opened ∧
+      ScopedStagingFile scratch scope view observe file slot inode written ∧
+      ScopedStagingFile scratch scope view observe file slot inode loaded ∧
+      ScopedStagingFile scratch scope view observe file slot inode consumed ∧
+      visible consumed inode = bytes ∧
+      frame file slot inode opened written ∧ frame file slot inode written flushed ∧
+      frame file slot inode flushed staged ∧ frame file slot inode staged loaded ∧ frame file slot inode loaded consumed := by
+  obtain ⟨slot, inode, openedStage, empty, unbuffered⟩ :=
+    withFreshStaging_acquireProvides stage.tryCreate stage.detachStale stage.create scratch
+      (FreshScopedStagingFile scratch scope view observe visible buffered) acquired effects.tryCreate effects.create
+  obtain ⟨writeFrame, payloadWrite⟩ := effects.write wrote openedStage
+  have writtenStage := carries writeFrame openedStage
+  obtain ⟨flushFrame, payloadFlush⟩ := effects.flush didFlush writtenStage
+  have flushedStage := carries flushFrame writtenStage
+  obtain ⟨recordFrame, payloadRecord⟩ := effects.record recorded flushedStage
+  have recordedStage := carries recordFrame flushedStage
+  obtain ⟨loadFrame, payloadLoad⟩ := effects.loadPending got chosen recordedStage
+  have loadedStage := carries loadFrame recordedStage
+  obtain ⟨clearFrame, payloadClear⟩ := effects.clearPending got chosen cleared loadedStage
+  have payload := payloadClear.trans (payloadLoad.trans (payloadRecord.trans (payloadFlush.trans payloadWrite)))
+  rw [empty, unbuffered, ByteArray.empty_append, ByteArray.empty_append] at payload
+  exact ⟨slot, inode, openedStage, writtenStage, loadedStage, carries clearFrame loadedStage, payload,
+    writeFrame, flushFrame, recordFrame, loadFrame, clearFrame⟩
+
 /-- Local namespace, descriptor and byte laws through the synced
 replacement stage. Each premise is keyed to its own raw callback. -/
 structure LongKeeperStageCallbacks.ReplacementPrefixStorageEffects
@@ -177,39 +266,13 @@ structure LongKeeperStageCallbacks.ReplacementPrefixStorageEffects
     (buffered : heap → IO.FS.Handle → ByteArray)
     (cached : IO.Ref (Option IO.FS.Handle)) (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
     (root : IO.FS.Handle)
-    extends calls.CachedRootEffects state view observe visible cached root where
+    extends calls.CachedRootEffects state view observe visible cached root,
+      stage.StagingPrefixEffects calls (state.session.directory.file .stagedWal) state.crashPath view observe
+        visible buffered pending (fun file slot inode => keepsKeeperStage state view observe file slot inode cached root) where
   acquire : ∀ before, stage.AcquisitionFrames (state.session.directory.file .stagedWal) before
     (fun first last => (observe first).Frames state.crashPath (observe last) ∧
       (CachedKeeperReplacementRoot state view cached root first → CachedKeeperReplacementRoot state view cached root last) ∧
       SameLiveWalNames state.session.directory (observe first) (observe last))
-  tryCreate : ∀ {before after file}, stage.tryCreate (state.session.directory.file .stagedWal) before = .ok (.ok file) after →
-    freshKeeperStage state view observe visible buffered file after
-  create : ∀ {before after file}, stage.create (state.session.directory.file .stagedWal) before = .ok file after →
-    freshKeeperStage state view observe visible buffered file after
-  write : ∀ {before after file slot inode bytes}, stage.write file bytes before = .ok () after →
-    keeperStageAt state view observe file slot inode before →
-    keepsKeeperStage state view observe file slot inode cached root before after ∧
-    visible after inode ++ buffered after file = (visible before inode ++ buffered before file) ++ bytes
-  flush : ∀ {before after file slot inode}, stage.flush file before = .ok () after →
-    keeperStageAt state view observe file slot inode before →
-    keepsKeeperStage state view observe file slot inode cached root before after ∧
-    visible after inode = visible before inode ++ buffered before file
-  record : ∀ {before after file slot inode},
-    calls.modifyPending pending (pushPending (state.session.directory.file .stagedWal) file) before = .ok () after →
-    keeperStageAt state view observe file slot inode before →
-    keepsKeeperStage state view observe file slot inode cached root before after ∧ visible after inode = visible before inode
-  loadPending : ∀ {before after entries file slot inode}, calls.getPending pending before = .ok entries after →
-    entries.find? (fun entry => entry.1 == state.session.directory.file .stagedWal) =
-      some (state.session.directory.file .stagedWal, file) →
-    keeperStageAt state view observe file slot inode before →
-    keepsKeeperStage state view observe file slot inode cached root before after ∧ visible after inode = visible before inode
-  clearPending : ∀ {before loaded after entries file slot inode}, calls.getPending pending before = .ok entries loaded →
-    entries.find? (fun entry => entry.1 == state.session.directory.file .stagedWal) =
-      some (state.session.directory.file .stagedWal, file) →
-    calls.setPending pending (entries.filter (fun entry => entry.1 != state.session.directory.file .stagedWal)) loaded =
-      .ok () after →
-    keeperStageAt state view observe file slot inode loaded →
-    keepsKeeperStage state view observe file slot inode cached root loaded after ∧ visible after inode = visible loaded inode
   fileSync : ∀ {before after file slot inode}, calls.sync file before = .ok () after →
     attachedReadSlot view file slot inode before →
     (observe before).files.names (state.session.directory.file .stagedWal) = some inode →
@@ -462,22 +525,11 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
   rw [show stage.acquire (dir.file .stagedWal) pruned = .ok file opened from acquired,
     NativeFileEffectProjection.reached] at acquiredFrame
   obtain ⟨acquireFrame, acquiredRoot, acquiredNames⟩ := acquiredFrame
-  obtain ⟨slot, replacement, openedStage, empty, unbuffered⟩ :=
-    withFreshStaging_acquireProvides stage.tryCreate stage.detachStale stage.create path
-      (freshKeeperStage state view observe visible buffered) acquired effects.tryCreate effects.create
-  obtain ⟨writeFrame, payloadWrite⟩ := effects.write wrote openedStage
-  have writtenStage := writeFrame.carries openedStage
-  obtain ⟨flushFrame, payloadFlush⟩ := effects.flush didFlush writtenStage
-  have flushedStage := flushFrame.carries writtenStage
-  obtain ⟨recordFrame, payloadRecord⟩ := effects.record recorded flushedStage
-  have recordedStage := recordFrame.carries flushedStage
-  obtain ⟨loadFrame, payloadLoad⟩ := effects.loadPending got chosenStage recordedStage
-  have loadedStage := loadFrame.carries recordedStage
-  obtain ⟨clearFrame, payloadClear⟩ := effects.clearPending got chosenStage cleared loadedStage
-  have syncedStage := clearFrame.carries loadedStage
+  obtain ⟨slot, replacement, openedStage, writtenStage, loadedStage, syncedStage, stageBytes,
+      writeFrame, flushFrame, recordFrame, loadFrame, clearFrame⟩ :=
+    stage.issuesStagedFile calls effects.toStagingPrefixEffects (fun f => f.carries)
+      acquired wrote didFlush recorded got chosenStage cleared
   have stagedBinding := syncedStage.2.1
-  have stageBytes := payloadClear.trans (payloadLoad.trans (payloadRecord.trans (payloadFlush.trans payloadWrite)))
-  rw [empty, unbuffered, ByteArray.empty_append, ByteArray.empty_append] at stageBytes
   have atSyncRoot := clearFrame.root (loadFrame.root (recordFrame.root
     (flushFrame.root (writeFrame.root (acquiredRoot prunedRoot)))))
   have pendingFrames := writeFrame.storage.trans

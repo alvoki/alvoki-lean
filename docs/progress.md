@@ -63,10 +63,14 @@ with an accepted payload, the selected immutable children, the bounded WAL
 inventory and the absence of every name actually pruned. The inventory interval
 ends at or before the commit cutoff. Scratch durability may take either outcome.
 
-**Next source boundary.** Derive the scratch inode’s separation from the keeper
-at fsync from the exclusive creation and the reached pending-cache operations.
-The final-directory-error report also still identifies the staged inode by a
-separate observation.
+Both fsync outcomes derive the issued scratch binding, its payload and its
+separation from the keeper from the same exclusive-create and cache prefix.
+The handle snapshot and descriptor census need agree only on the created
+slot’s inode at acquisition.
+
+**Next source boundary.** Connect the second sampled reboot to the exact public
+marked opener. The final-directory-error report also still identifies the
+staged inode by a separate observation.
 [Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
