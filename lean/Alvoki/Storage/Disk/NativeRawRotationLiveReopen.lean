@@ -165,32 +165,25 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     obtain ⟨inode, bound, bytes⟩ := (prior.sealedFiles segment member).samplesAtBinding
       (names current.reached) (visible current.reached) rfl (sealedVisible segment member)
     exact segmentPayload segment below bound bytes
-  obtain ⟨layout, target, active, tail, descriptors, offsets⟩ := ready.visibleReopenLayout pair newKeeper
-  have modeled := layout.modeledWindow _ offsets
-  have onWal : layout.VisibleWal dir (names released) (visible released) := by
-    refine ⟨fun start low high => (newCatalog start (Nat.zero_le _) (layout.through ▸ high)).trans (modeled.1 start low), ?_, ?_⟩
-    · intro segment member
-      have sealed := WalSegmentImage.selectedSeals_subset descriptors member
-      change segment ∈ (old).writer.wal.sealed ++ [(old).writer.wal.active] at sealed
-      rcases List.mem_append.mp sealed with prior | keeper
-      · exact previousSeals segment prior
-      · obtain rfl := List.mem_singleton.mp keeper
-        exact oldKeep
-    · rw [active, keeperFirst, freshName, Option.map_some, freshBytes, tail, ByteArray.append_empty] <;> rfl
-  have noSelected := (congrArg (fun t : Target => t.pair.manifest) target).trans noManifest
-  have selectedMarker := marker.trans (congrArg (fun t : Target => t.pair.walBoundary) target).symm
-  have replay : source.ReplaysWalBeforeCheckpointAtOpen openView dir layout.keeper.first storage visible released
-      observed.view root (old).writer.history :=
-    @RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
-      (source := source) (namespaceView := observed.view) (root := root)
-      (view := openView) (directory := dir) (storage := storage) («visible» := visible) (entry := released)
-      (history := (old).writer.history)
-      (layout := layout) (lockBound := lockBound) (missing := noSelected) (manifestAbsent := manifestAbsent)
-      (markerBytes := selectedMarker) (following := modeled.2)
-      (ordered := ready.resumed.ordered) (wal := onWal)
+  have seals (segment : WalSegment) (member : segment ∈ writer.wal.sealed) :
+      (names released ((dir).file (.walSegment segment.first))).map (visible released) = some segment.bytes := by
+    change segment ∈ (old).writer.wal.sealed ++ [(old).writer.wal.active] at member
+    rcases List.mem_append.mp member with prior | keeper
+    · exact previousSeals segment prior
+    · obtain rfl := List.mem_singleton.mp keeper
+      exact oldKeep
+  have active : (names released ((dir).file (.walSegment writer.wal.active.first))).map (visible released) =
+      some writer.wal.active.bytes := by
+    rw [keeperFirst, freshName, Option.map_some, freshBytes]
+    rfl
+  have replay := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
+    (source := source) (namespaceView := observed.view) (root := root)
+    (view := openView) (storage := storage) («visible» := visible) (entry := released)
+    (ready := ready) (lockBound := lockBound) (missing := noManifest) (absent := manifestAbsent)
+    (marker := marker) (pair := pair) (keeper := newKeeper) (window := newCatalog) (seals := seals) (active := active)
   obtain ⟨_, history, pending⟩ := current.current.ready.readPrefix.refines
   have finalReplay := @Eq.mp _ _ (congrArg
-    (fun writes => source.ReplaysWalBeforeCheckpointAtOpen openView dir layout.keeper.first
+    (fun writes => source.ReplaysWalBeforeCheckpointAtOpen openView dir writer.wal.active.first
       storage visible released observed.view root writes) history) (@replay)
   have retainedChild : ∀ start ≤ current.current.history.length,
       (observed.view.child root (renderWalSegmentName start)).map observed.view.modelObject =

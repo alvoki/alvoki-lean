@@ -1906,6 +1906,39 @@ theorem RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
   rw [← assembled] at uses
   exact uses.lookupLatestAfterWalReplay cells stored full ptrEq compare key
 
+/-- Live close and reboot both expose a retained WAL through the same
+named files. Only the active pair and keeper of the opener's image matter. -/
+theorem RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
+    {directory : DiskDirectory} {entry : heap} {writer : SegmentedWriterState} {descriptor lockInode : Nat}
+    (ready : writer.RetainedReady directory descriptor)
+    (lockBound : names entry (directory.file .lock) = some lockInode)
+    (missing : writer.target.pair.manifest = none)
+    (absent : names entry (directory.file .manifest) = none)
+    (marker : (names entry (directory.file .walBoundary)).map (visible entry) = writer.target.pair.walBoundary)
+    (pair : (view.files entry).image.directory.active = writer.target.pair)
+    (keeper : (view.files entry).image.keeper.active = some writer.target.trimmed)
+    (window : writer.wal.NamespaceWindow directory 0 writer.history.length (names entry))
+    (seals : ∀ segment ∈ writer.wal.sealed,
+      (names entry (directory.file (.walSegment segment.first))).map (visible entry) = some segment.bytes)
+    (active : (names entry (directory.file (.walSegment writer.wal.active.first))).map (visible entry) =
+      some writer.wal.active.bytes) :
+    source.ReplaysWalBeforeCheckpointAtOpen view directory writer.wal.active.first
+      storage visible entry namespaceView root writer.history := by
+  obtain ⟨layout, target, atKeeper, tail, descriptors, offsets⟩ := ready.visibleReopenLayout pair keeper
+  have modeled := layout.modeledWindow _ offsets
+  have wal : layout.VisibleWal directory (names entry) (visible entry) := by
+    refine ⟨fun start low high => (window start (Nat.zero_le _) (layout.through ▸ high)).trans (modeled.1 start low),
+      fun segment member => seals segment (WalSegmentImage.selectedSeals_subset descriptors member), ?_⟩
+    rw [atKeeper, tail, ByteArray.append_empty]
+    exact active
+  rw [← atKeeper]
+  exact @RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
+    (source := source) (namespaceView := namespaceView) (root := root)
+    (layout := layout) (lockBound := lockBound)
+    (missing := (congrArg (fun t : Target => t.pair.manifest) target).trans missing) (manifestAbsent := absent)
+    (markerBytes := marker.trans (congrArg (fun t : Target => t.pair.walBoundary) target).symm)
+    (following := modeled.2) (ordered := ready.resumed.ordered) (wal := wal)
+
 local notation "directory" => state.session.directory
 
 /-- Read the visible files chosen by an exact retry entry. -/

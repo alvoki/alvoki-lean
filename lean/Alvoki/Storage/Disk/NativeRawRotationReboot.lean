@@ -335,8 +335,15 @@ local notation "picked" => state.withRotationSample valid (names rebooted)
 /-- The directory sample chooses the new keeper before opening. The
 literal reopening shares the ordinary WAL reader and retains the earlier
 history whether the sampled namespace lost or kept the empty successor. -/
-theorem RawWriteRebootEntry.replaysRotationSample
-    (seen : RawWriteRebootEntry picked view storage names visible failed rebooted)
+theorem RawMarkedOpenInterpreter.replaysRotationSample
+    (chosen : names rebooted ∈ (storage failed).crashNames)
+    (sampled : ∀ path, checkpointSurvivorPath directory (picked).writer (picked).writer.target.pair.manifest path →
+      ∀ inode, names rebooted path = some inode → visible rebooted inode ∈ (storage failed).files.bytes inode)
+    (pairAt : (view.files rebooted).image.directory.active =
+      ⟨(names rebooted ((directory).file .manifest)).map (visible rebooted),
+        (names rebooted ((directory).file .walBoundary)).map (visible rebooted)⟩)
+    (keeperAt : (view.files rebooted).image.keeper.active =
+      (names rebooted ((directory).file (.walSegment (picked).writer.wal.active.first))).map (visible rebooted))
     (old : NativeReadyStorage state (storage failed))
     (ready : (picked).writer.RetainedReady directory state.session.descriptor)
     {inode : Nat}
@@ -350,7 +357,7 @@ theorem RawWriteRebootEntry.replaysRotationSample
   have pairEq := state.rotationWriterAtSample_pair valid (names rebooted)
   have oldName (path : FilePath) (inside : state.crashPath path) :
       names rebooted path = (storage failed).files.names path :=
-    old.settled _ seen.chosen path inside
+    old.settled _ chosen path inside
   have frame : NativeReadyProtectedStorage picked (storage failed).files ∧
       (∀ path, (picked).writeFramePath path → state.crashPath path) := by
     cases found : names rebooted ((directory).file (.walSegment successor)) with
@@ -366,7 +373,7 @@ theorem RawWriteRebootEntry.replaysRotationSample
       exact ⟨old.protectedAfterRotation valid rotated rfl rfl rfl,
         fun _ keep => NativeReadyState.rotationProtectedPaths valid rotated rfl keep⟩
   obtain ⟨protectedFiles, manifest⟩ := frame.1.samplesRebootFiles (names rebooted) (visible rebooted)
-    (fun path inside => oldName path (frame.2 path inside)) seen.sampled
+    (fun path inside => oldName path (frame.2 path inside)) sampled
   let markerPath := (directory).file .walBoundary
   have marker : state.writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) :=
     (congrArg DirectoryPublication.Bindings.walBoundary valid.retained.resumed.ready.selected).symm.trans
@@ -374,7 +381,7 @@ theorem RawWriteRebootEntry.replaysRotationSample
   obtain ⟨markerInode, markerNamed, markerBytes⟩ :=
     old.marker.samplesAtBinding (names rebooted) (visible rebooted)
       (oldName markerPath (NativeReadyState.crashPath_iff_write.mpr (.inl rfl)))
-      (fun inode => seen.samplesWal markerPath inode (.inr (.inl rfl)))
+      (sampled markerPath (.inr (.inl (.inl rfl))))
   have marked : (names rebooted markerPath).map (visible rebooted) = (picked).writer.target.pair.walBoundary := by
     rw [markerNamed, Option.map_some, markerBytes, pairEq, marker]
   have pair : (picked).writer.target.pair =
@@ -394,7 +401,7 @@ theorem RawWriteRebootEntry.replaysRotationSample
         congrArg (fun writer : SegmentedWriterState => (directory).file (.walSegment writer.wal.active.first)) unrotated
       obtain ⟨oldInode, named, bytes⟩ := old.keeper.samplesAtBinding (names rebooted) (visible rebooted)
         (oldName oldKeeper (NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))))
-        (fun inode bound => seen.samplesWal keeperPath inode (.inr (.inr rfl)) (path.symm ▸ bound))
+        (fun inode bound => sampled keeperPath (.inr (.inl (.inr (.inl rfl)))) inode (path.symm ▸ bound))
       rw [path, named, Option.map_some, bytes, unrotated]
     · have rotated : (picked).writer = state.writer.rotated valid.retained.rotationTarget := by
         simp only [NativeReadyState.rotationWriterAtSample, present, Option.isSome_some, ↓reduceIte]
@@ -405,24 +412,26 @@ theorem RawWriteRebootEntry.replaysRotationSample
         change names rebooted ((directory).file (.walSegment (picked).writer.wal.active.first)) = some inode
         rw [start]
         exact present
-      have bytes := seen.samplesWal keeperPath inode (.inr (.inr rfl)) atKeeper
+      have bytes := sampled keeperPath (.inr (.inl (.inr (.inl rfl)))) inode atKeeper
       rw [durable] at bytes
       rw [atKeeper, Option.map_some, List.mem_singleton.mp bytes, rotated]
       rfl
-  have accepts : (picked).writer.target.Accepts ((names rebooted keeperPath).map (visible rebooted)) :=
-    payload.symm ▸ (picked).writer.target.acceptsTrimmed
-  obtain ⟨selected, _, _⟩ := seen.selectsSampledRetry ready.active rfl protectedFiles pair accepts
-  obtain ⟨layout, target, sameKeeper, _, descriptors, offsets, _⟩ := selected.readyRebootLayout ready payload
-  have through : layout.range.through = (picked).writer.target.range.through :=
-    congrArg (fun target : Target => target.range.through) target
-  have wal := selected.visibleReadyWal layout target descriptors offsets (window.restrict (Nat.zero_le _) (Nat.le_of_eq through))
-  have absent : (picked).writer.target.pair.manifest = none := (congrArg DirectoryPublication.Bindings.manifest pairEq).trans noManifest
-  have sameFirst := congrArg WalSegment.first sameKeeper
-  rw [← sameFirst, ← history]
-  exact @RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
-    (source := source) (namespaceView := namespaceView) (root := root) (selected := selected) (layout := layout)
-    (noManifest := absent) (following := (layout.modeledWindow _ offsets).2)
-    (ordered := ready.resumed.ordered) (wal := wal)
+  have absent : (picked).writer.target.pair.manifest = none :=
+    (congrArg DirectoryPublication.Bindings.manifest pairEq).trans noManifest
+  have lock := protectedFiles.lockBound
+  have manifestAbsent := protectedFiles.manifest
+  rw [absent] at manifestAbsent
+  have seals (segment : WalSegment) (member : segment ∈ (picked).writer.wal.sealed) :
+      (names rebooted ((directory).file (.walSegment segment.first))).map (visible rebooted) = some segment.bytes := by
+    obtain ⟨inode, bound, bytes⟩ := protectedFiles.sealedFiles segment member
+    exact Option.map_eq_some_iff.mpr ⟨inode, bound, List.singleton_inj.mp bytes⟩
+  rw [← history]
+  exact @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
+    (source := source) (view := view) (namespaceView := namespaceView) (root := root)
+    (storage := storage) («visible» := visible) (entry := rebooted)
+    (ready := ready) (lockBound := lock) (missing := absent) (absent := manifestAbsent)
+    (marker := marked) (pair := pairAt.trans pair.symm) (keeper := keeperAt.trans payload)
+    (window := ready.resumed.through ▸ window) (seals := seals) (active := trimmed ▸ payload)
 
 end SampledReader
 
