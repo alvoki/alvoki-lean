@@ -975,60 +975,65 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
       prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (batch, preparedTable) ∧
       sequence = preparedTable.committed ∧ sequence.toNat = batch.length ∧ next.reached = reached ∧
       opened.start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
-      ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 request.rows.length)
-        (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
-          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
-            (storage preReady) (storage reached))
-        {poisoned afterFileSync rebooted : heap} {effective : Bool}
+      ∀ {poisoned afterFileSync : heap}
         (guard : BatchActiveGuard opened.handle.directory state.writer.installed)
         (_poisonedAt : opened.handle.set opened.handle.phase .poisoned next.reached = .ok () poisoned)
         (filePrefix : rotation.SuccessorFilePrefix opened.handle.directory state.writer.rotationInstalled.activeFirst
           poisoned afterFileSync)
-        (file : filePrefix.ExclusiveSync stager syncer usedCache)
-        (barrier : rotation.FailedRootBarrier syncer usedCache afterFileSync)
-        (_fileEffects : file.SuccessorEffects clientView storage visible next.reached barrier.issued)
-        (_rootEffects : filePrefix.RootErrorEffects barrier clientView storage effective next.reached)
-        (_fileFrames : file.PreservesFiles clientView storage (state.rotationProtectedScope 0 state.writer.target.range.through)
-          next.reached barrier.issued),
-        let valid := next.current.ready.readPrefix.refines.1
-        let selected := state.withRotationSample valid (names rebooted)
-        let path := dir.file (.walSegment state.writer.rotationInstalled.activeFirst)
-        let inode := OpenCloseHeapView.capturedInode clientView file.opened file.handle
-        ∀ (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
-          (_chosen : names rebooted ∈ (storage barrier.failed).crashNames)
-          (_sampled : ∀ path, checkpointSurvivorPath dir selected.writer selected.writer.target.pair.manifest path →
-            ∀ object, names rebooted path = some object → visible rebooted object ∈ (storage barrier.failed).files.bytes object)
-          {errors : List (FilePath × IO.Error)} {retryAt : heap}
-          (attempts : source.FailedCalls rebooted errors retryAt)
-          (_effects : attempts.PreserveWalFiles (directory := dir) selected.writer.history.length names visible)
-          (_pairAt : (OpenCloseHeapView.files clientView retryAt).image.directory.active =
-            ⟨(names retryAt (dir.file .manifest)).map (visible retryAt),
-              (names retryAt (dir.file .walBoundary)).map (visible retryAt)⟩)
-          (_keeperAt : (OpenCloseHeapView.files clientView retryAt).image.keeper.active =
-            (names retryAt (dir.file (.walSegment selected.writer.wal.active.first))).map (visible retryAt)),
-          rotation.run opened.handle guard.lookup usedCache.active next.reached =
-            .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {barrier.cause}") barrier.failed ∧
-          (names rebooted path = none ∨ names rebooted path = some inode) ∧
-          (effective = true → names rebooted path = some inode) ∧
-          source.ReadsClientHistoryAtOpen clientView dir storage visible retryAt namespaceView root
-            [.acknowledgedBatch batch] [] batch := by
+        (barrier : rotation.FailedRootBarrier syncer usedCache afterFileSync),
+        rotation.run opened.handle guard.lookup usedCache.active next.reached =
+          .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {barrier.cause}") barrier.failed ∧
+        ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 request.rows.length)
+          (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+            WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
+              (storage preReady) (storage reached))
+          {rebooted : heap} {effective : Bool}
+          (file : filePrefix.ExclusiveSync stager syncer usedCache)
+          (_fileEffects : file.SuccessorEffects clientView storage visible next.reached barrier.issued)
+          (_rootEffects : filePrefix.RootErrorEffects barrier clientView storage effective next.reached)
+          (_fileFrames : file.PreservesFiles clientView storage (state.rotationProtectedScope 0 state.writer.target.range.through)
+            next.reached barrier.issued),
+          let valid := next.current.ready.readPrefix.refines.1
+          let selected := state.withRotationSample valid (names rebooted)
+          let path := dir.file (.walSegment state.writer.rotationInstalled.activeFirst)
+          let inode := OpenCloseHeapView.capturedInode clientView file.opened file.handle
+          ∀ (_chosen : names rebooted ∈ (storage barrier.failed).crashNames),
+            (names rebooted path = none ∨ names rebooted path = some inode) ∧
+            (effective = true → names rebooted path = some inode) ∧
+            ∀ (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+              (_sampled : ∀ path, checkpointSurvivorPath dir selected.writer selected.writer.target.pair.manifest path →
+                ∀ object, names rebooted path = some object → visible rebooted object ∈ (storage barrier.failed).files.bytes object)
+              {errors : List (FilePath × IO.Error)} {retryAt : heap}
+              (attempts : source.FailedCalls rebooted errors retryAt)
+              (_effects : attempts.PreserveWalFiles (directory := dir) selected.writer.history.length names visible)
+              (_pairAt : (OpenCloseHeapView.files clientView retryAt).image.directory.active =
+                ⟨(names retryAt (dir.file .manifest)).map (visible retryAt),
+                  (names retryAt (dir.file .walBoundary)).map (visible retryAt)⟩)
+              (_keeperAt : (OpenCloseHeapView.files clientView retryAt).image.keeper.active =
+                (names retryAt (dir.file (.walSegment selected.writer.wal.active.first))).map (visible retryAt)),
+            source.ReadsClientHistoryAtOpen clientView dir storage visible retryAt namespaceView root
+              [.acknowledgedBatch batch] [] batch := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
     _, batchHistory, ledger, physical, _, ⟨noManifest, noSeals, history, cutoff⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
       liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
       modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
   refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, exactHeap, ledger, ?_⟩
-  intro firstNames restore poisoned afterFileSync rebooted effective guard poisonedAt filePrefix file barrier
-    fileEffects rootEffects fileFrames valid selected path createdInode namespaceView root chosen sampled errors retryAt attempts effects pairAt keeperAt
+  intro poisoned afterFileSync guard poisonedAt filePrefix barrier
   have positive : 0 < next.current.ready.state.writer.history.length := by
     rw [history, (prepareBatch_spec prepared).1]
     exact List.length_pos_iff.mpr nonempty
-  have nonemptyWal := valid.retained.activeBeforeCutoffOfFirstBatch noManifest noSeals positive
+  have nonemptyWal := next.current.ready.readPrefix.refines.1.retained.activeBeforeCutoffOfFirstBatch noManifest noSeals positive
+  refine ⟨(next.rotationReturnsDirectoryError rotation syncer _ guard nonemptyWal poisonedAt filePrefix
+    barrier.route barrier.loaded barrier.returned).2.2.1, ?_⟩
+  intro firstNames restore rebooted effective file fileEffects rootEffects fileFrames valid selected path createdInode chosen
   have window := (carries request.rows.length covered firstNames restore).2
   rw [← cutoff] at window
-  obtain ⟨_, returned, _, ready, sameHistory, pair, _, choice, settled, sampledFiles⟩ := next.samplesFailedRotationDirectory
-    rotation syncer clientView _ guard storage visible poisonedAt filePrefix file barrier fileEffects rootEffects
+  obtain ⟨_, ready, sameHistory, pair, _, choice, settled, sampledFiles⟩ := next.samplesFailedRotationDirectory
+    rotation syncer clientView _ storage visible filePrefix file barrier fileEffects rootEffects
     nonemptyWal physical fileFrames window chosen
+  refine ⟨choice.imp id And.left, settled, ?_⟩
+  intro namespaceView root sampled errors retryAt attempts effects pairAt keeperAt
   have filesAtRetry := (sampledFiles sampled noManifest).afterFailedCalls ready.layout attempts effects
   have missing := (congrArg DirectoryPublication.Bindings.manifest pair).trans noManifest
   have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
@@ -1042,7 +1047,6 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
   have pending : PendingClientReplay [.acknowledgedBatch batch] [] batch := by
     rw [← submitted, ← noReads, ← batchHistory]
     exact next.current.ready.readPrefix.refines.2.2
-  refine ⟨returned, choice.imp id And.left, settled, ?_⟩
   exact @RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
     (opened := replay) (pending := pending)
 

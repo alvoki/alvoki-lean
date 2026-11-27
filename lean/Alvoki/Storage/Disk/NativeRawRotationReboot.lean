@@ -409,17 +409,14 @@ theorem NativeReadyState.visibleWalAtRotationSample
 
 end SampledReader
 
-/-- The literal rotation error and a joint reboot sample select the
-keeper used by the next successful open. The returned table replays
-the preceding acknowledged WAL. -/
+/-- The filesystem effects through a failed root barrier select the keeper
+and retained WAL files in one joint reboot sample. -/
 theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     {opened : NativeOpenedHandle heap} (current : NativeOpenedPosition opened)
     (calls : OpenRotationCallbacks heap) (raw : RawSyncCalls heap) (view : OpenCloseHeapView heap FileImage)
     (cache : OpenSyncCacheRefs opened.files opened.directory.path)
-    (guard : BatchActiveGuard opened.directory current.current.ready.state.writer.installed)
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     {stager : RawWalStageCalls heap} {poisoned afterFileSync rebooted : heap} {effective : Bool}
-    (poisonedAt : opened.set opened.phase .poisoned current.reached = .ok () poisoned)
     (filePrefix : calls.SuccessorFilePrefix opened.directory
       current.current.ready.state.writer.rotationInstalled.activeFirst poisoned afterFileSync)
     (file : filePrefix.ExclusiveSync stager raw cache)
@@ -445,9 +442,6 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     let path := directory.file (.walSegment state.writer.rotationInstalled.activeFirst)
     let selected := state.rotationWriterAtSample current.current.ready.readPrefix.refines.1 names
     let inode := view.capturedInode file.opened file.handle
-    UsesRotationSchedule opened.table opened.directory opened.phase cache.active cache.pending cache.directory ∧
-    calls.run opened guard.lookup cache.active current.reached =
-      .error (IO.userError s!"sync failed for '{opened.directory.path}': {barrier.cause}") barrier.failed ∧
     NativeReadyStorage state (storage barrier.failed) ∧ selected.RetainedReady directory state.session.descriptor ∧
     selected.history = state.writer.history ∧ selected.target.pair = state.writer.target.pair ∧
     selected.wal.NamespaceWindow directory 0 selected.target.range.through names ∧
@@ -472,9 +466,6 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
   have root := rootEffects.named.trans (kept.1.trans
     (initialRoot.trans (congrArg some (sameInode.trans rootEffects.target.inode.symm))))
   have effect := rootEffects.sync rootEffects.target.live root
-  obtain ⟨schedule, _, returned, _⟩ :=
-    current.rotationReturnsDirectoryError calls raw cache guard nonempty poisonedAt filePrefix
-      barrier.route barrier.loaded barrier.returned
   have ready : selected.RetainedReady directory state.session.descriptor :=
     state.rotationWriterAtSample_retained valid nonempty names
   have history : selected.history = state.writer.history := state.rotationWriterAtSample_history valid names
@@ -532,7 +523,7 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     rw [cutoff]
     exact state.rotationWriterAtSample_namespace valid nonempty (fun start low high _ => slice start low high)
       namesFrame chosen
-  refine ⟨schedule, returned, old, ready, history, state.rotationWriterAtSample_pair valid names,
+  refine ⟨old, ready, history, state.rotationWriterAtSample_pair valid names,
     catalog, survives, settled, ?_⟩
   intro sampled noManifest
   exact @NativeReadyState.visibleWalAtRotationSample

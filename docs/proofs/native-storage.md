@@ -289,6 +289,8 @@ catalog to the same retained-WAL reader. The write establishes its live
 marker at acknowledgement. The file barrier synchronizes the staged inode,
 rename publishes that inode, and the directory barrier and phase setter
 preserve its bytes. The live reader observes that inode through the close.
+The rotation error follows from the reached callbacks alone. Selecting a reboot
+map determines the possible successor before any later open is considered.
 After power loss the fresh proof derives the successor inode from the
 exclusive-create handle. With one sampled map and its inode bytes, the
 lookup extends the original batch's client ledger. The exclusive-create and file-sync callback frames preserve the old
