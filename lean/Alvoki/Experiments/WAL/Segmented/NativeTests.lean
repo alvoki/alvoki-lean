@@ -90,6 +90,8 @@ private def invalidControl (dir : FilePath) : IO Unit := do
   Native.close h
   let path := dir / "CONTROL"
   let ok ← IO.FS.readBinFile path
+  let body := "swal1 boundary 1 0 0".toUTF8
+  require (ok == body ++ ⟨(checksumBytes body.data.toList).toArray⟩) "changed CONTROL wire format"
   let damaged := ok.set! (ok.size - 1) (ok[ok.size - 1]! ^^^ 1)
   IO.FS.writeBinFile path damaged
   failed (Native.openExisting dir) "opened a damaged authority record"
