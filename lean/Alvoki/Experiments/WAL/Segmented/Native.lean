@@ -179,18 +179,24 @@ private def Handle.locked (h : Handle) (action : IO α) : IO α := do
   h.mutex.lock
   try action finally h.mutex.unlock
 
-private def update (h : Handle) (action : Ops FileM → Session → FileM Session) : IO Unit := h.locked do
+private def update (h : Handle) (action : Ops FileM → Session → FileM Session) : IO Session := h.locked do
   match ← h.state.get with
   | .ready store session =>
     h.state.set (.poisoned store)
     let next ← checked (action store.callbacks session)
     h.state.set (.ready store next)
+    return next
   | .poisoned _ => throw <| IO.userError "segmented WAL requires reopen"
   | .closed => throw <| IO.userError "segmented WAL closed"
 
-def append (h : Handle) (batch : Bytes) : IO Unit := update h (fun ops s => Segmented.append ops s batch)
+/-- Return the absolute, one-based position only after the append schedule succeeds. -/
+def append (h : Handle) (batch : Bytes) : IO Nat := do
+  let next ← update h (fun ops s => Segmented.append ops s batch)
+  return next.control.active * next.control.capacity + next.activeCount
 
-def discardThrough (h : Handle) (k : Nat) : IO Unit := update h (fun ops s => Segmented.discardThrough ops s k)
+def discardThrough (h : Handle) (k : Nat) : IO Unit := do
+  let _ ← update h (fun ops s => Segmented.discardThrough ops s k)
+  pure ()
 
 def scan (h : Handle) : IO Contract.View := h.locked do
   match ← h.state.get with

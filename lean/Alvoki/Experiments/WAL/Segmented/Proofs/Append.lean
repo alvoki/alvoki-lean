@@ -95,4 +95,26 @@ theorem append_refines (effects : Model.Effects) (session : Session) (p : Bytes)
     refine And.intro ?_ rfl
     exact ⟨history ++ [p], exactSession, newEntry, newLive, newDurable⟩
 
+/-- The position projected from an acknowledged source append is the next
+absolute batch position, including after rotation or prefix release. -/
+theorem append_returned_position (effects : Model.Effects) (session : Session) (p : Bytes)
+    (state after : State) (next : Session) (installed : Installed session state.disk)
+    (returned : (Segmented.append (Model.ops effects) session p).run state = .ok (.ok next) after) :
+    next.control.active * next.control.capacity + next.activeCount = session.view.tail + 1 := by
+  have result := append_refines effects session p state installed
+  rw [returned] at result
+  obtain ⟨⟨history, shape, ready, _, _⟩, same⟩ := result
+  have lower := ready.layout.lower
+  have count := segmentHistory_active_length (active := next.control.active) ready.layout.upper
+  have position : next.control.active * next.control.capacity + next.activeCount = next.view.tail := by
+    rw [shape]
+    simp only [sessionOf] at *
+    rw [count, historyView_tail ready.layout.discardedFits]
+    omega
+  rw [position]
+  simp [Contract.Request.apply] at same
+  rw [← same]
+  simp [Contract.View.tail, Contract.View.append]
+  omega
+
 end WalRecoverySlice.Segmented

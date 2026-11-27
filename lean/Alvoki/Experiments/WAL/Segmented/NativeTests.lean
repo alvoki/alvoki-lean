@@ -16,17 +16,21 @@ private def check (h : Native.Handle) (base : Nat) (batches : List Bytes) : IO U
   let seen ← Native.scan h
   require (seen == ⟨base, batches⟩) s!"unexpected retained history {repr seen}"
 
+private def appendAt (h : Native.Handle) (batch : Bytes) (expected : Nat) : IO Unit := do
+  let position ← Native.append h batch
+  require (position == expected) s!"expected position {expected}, got {position}"
+
 private def lifecycle (dir : FilePath) (p : Policy) : IO Unit := do
   let h ← Native.create dir p 2
   failed (Native.openExisting dir) "admitted two handles for the same directory"
-  Native.append h [1]
-  Native.append h [2]
+  appendAt h [1] 1
+  appendAt h [2] 2
   -- An interrupted successor preparation can leave a directory with incomplete child files.
   IO.FS.createDir (dir / "segment-1")
   IO.FS.writeFile (dir / "segment-1" / "policy") "incomplete"
-  Native.append h [3]
-  Native.append h [4]
-  Native.append h [5]
+  appendAt h [3] 3
+  appendAt h [4] 4
+  appendAt h [5] 5
   Native.discardThrough h 1
   check h 1 [[2], [3], [4], [5]]
   require (← (dir / "segment-0").pathExists) "partially retained segment was reclaimed"
@@ -40,7 +44,7 @@ private def lifecycle (dir : FilePath) (p : Policy) : IO Unit := do
     "obsolete sealed segments still exist"
   Native.discardThrough h 5
   Native.discardThrough h 3
-  Native.append h [6]
+  appendAt h [6] 6
   check h 5 [[6]]
   Native.close h
   let h ← Native.openExisting dir
@@ -49,7 +53,7 @@ private def lifecycle (dir : FilePath) (p : Policy) : IO Unit := do
 
 private def retryRotation (dir : FilePath) (p : Policy) : IO Unit := do
   let h ← Native.create dir p 1
-  Native.append h [1]
+  appendAt h [1] 1
   let previous ← IO.FS.readBinFile (dir / "CONTROL")
   IO.FS.createDir (dir / "CONTROL.next")
   failed (Native.append h [2]) "rotation overwrote an invalid staging binding"
@@ -59,7 +63,7 @@ private def retryRotation (dir : FilePath) (p : Policy) : IO Unit := do
   IO.FS.removeDir (dir / "CONTROL.next")
   let h ← Native.openExisting dir
   check h 0 [[1]]
-  Native.append h [3]
+  appendAt h [3] 2
   Native.close h
   let h ← Native.openExisting dir
   check h 0 [[1], [3]]
@@ -67,8 +71,8 @@ private def retryRotation (dir : FilePath) (p : Policy) : IO Unit := do
 
 private def retryAfterRelease (dir : FilePath) (p : Policy) : IO Unit := do
   let h ← Native.create dir p 1
-  Native.append h [10]
-  Native.append h [11]
+  appendAt h [10] 1
+  appendAt h [11] 2
   let unknown := dir / "segment-0" / "unmanaged"
   IO.FS.writeFile unknown "keep"
   failed (Native.discardThrough h 1) "unmanaged file in old segment silently unlinked"
@@ -86,7 +90,7 @@ private def retryAfterRelease (dir : FilePath) (p : Policy) : IO Unit := do
 
 private def invalidControl (dir : FilePath) : IO Unit := do
   let h ← Native.create dir .boundary 1
-  Native.append h [7]
+  appendAt h [7] 1
   Native.close h
   let path := dir / "CONTROL"
   let ok ← IO.FS.readBinFile path
