@@ -27,3 +27,23 @@ lean_object *alvoki_wal_unbuffered(b_lean_obj_arg handle) {
             lean_mk_string("cannot disable WAL stream buffering")));
     return lean_io_result_mk_ok(lean_box(0));
 }
+
+/* Recovery supplies a nonnegative length bounded by the bytes it scanned.
+   This adapter targets Linux x86-64, where every scalar Nat fits in off_t. */
+lean_object *alvoki_wal_truncate_at(b_lean_obj_arg handle, b_lean_obj_arg count) {
+    if (!lean_is_scalar(count))
+        return lean_io_result_mk_error(lean_decode_io_error(EOVERFLOW, NULL));
+
+    int fd = fileno(lean_get_external_data(handle));
+    if (fd == -1)
+        return lean_io_result_mk_error(lean_decode_io_error(errno, NULL));
+
+    int result;
+    do {
+        result = ftruncate(fd, (off_t)lean_unbox(count));
+    } while (result == -1 && errno == EINTR);
+    if (result == -1)
+        return lean_io_result_mk_error(lean_decode_io_error(errno, NULL));
+
+    return lean_io_result_mk_ok(lean_box(0));
+}

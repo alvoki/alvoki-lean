@@ -7,7 +7,7 @@
 - Keep formal contracts explicit. Do not weaken a specification to make a proof pass, and do not use `sorry`, `admit`, custom axioms, or proof steps that depend on native execution.
 - Keep verification-only history and evidence out of the runtime path. Measure affected native workloads when proof-driven changes add or alter runtime work.
 - Review executable behavior, proof assumptions, fault coverage, and performance at milestone boundaries and during longer milestones. Add confirmed findings and new proof obligations to `docs/progress.md` or the relevant component guide with clear completion criteria.
-- Report model correctness, native test coverage, and native refinement separately at component acceptance. Tie each retained executable implementation, including optimized paths, to its public semantic contract. Record any open connection explicitly. Treat a reviewed intermediate proof as progress. Close a component milestone when the executable producer supplies its agreed public guarantee under the audited primitive assumptions.
+- Report model correctness, native test coverage, and native refinement separately at component acceptance. Tie each retained executable implementation, including optimized paths, to its public semantic contract. Record any open connection explicitly. Treat a reviewed intermediate proof as progress. A temporary mutation of the producer can check that the proof rejects a wrong installed value. Close a component milestone when the executable producer supplies its agreed public guarantee under the audited primitive assumptions.
 
 ## Designing a verified component
 
