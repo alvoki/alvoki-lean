@@ -102,6 +102,47 @@ private theorem observePrune (newer : List Nat) :
     change (seen (.unlink first) >>= fun _ => _) = observe (perform (.unlink first) >>= fun _ => _)
     rw [ih, observeUnlink, observe_bind]
 
+/-- Only replacement can record a rename. An invalid extent, the aligned
+fast path, and a prune followed by an ordinary keeper sync preserve the
+initial empty observation, even when one of their calls fails. -/
+theorem longerOfObservedRenameError
+    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
+    {start renamed reached : heap} {cause : IO.Error}
+    (observed : observeRename dir plan extent remove write sync rename start = .error cause (reached, some renamed)) :
+    plan.keeperSize < extent := by
+  apply Classical.byContradiction
+  intro short
+  by_cases fits : plan.keeperSize ≤ extent
+  · have eq := Nat.le_antisymm fits (Nat.le_of_not_gt short)
+    subst extent
+    unfold observeRename at observed
+    simp only [finishBoundedMarkedOpen, valid, size, beq_self_eq_true, Nat.le_refl, decide_true,
+      Bool.and_self, Bool.and_true, Nat.lt_irrefl, decide_false] at observed
+    by_cases empty : plan.newer.isEmpty = true
+    · simp only [empty, ite_true] at observed
+      cases first : sync #[dir.path] start <;> simp [observe, Bind.bind, EStateM.bind, first] at observed
+      rename_i after
+      cases last : sync #[dir.file (.walSegment plan.keeper)] after <;> simp [last] at observed
+    · have remainder : (steps plan.newer false).forM seen = (do
+          observe ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM perform)
+          seen Step.syncKeeper
+          pure () : EStateM IO.Error (heap × Option heap) Unit) := by
+        unfold steps
+        simp only [Bool.false_eq_true, ite_false]
+        rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM,
+          observePrune dir plan remove write sync rename]
+        rfl
+      simp only [empty, Bool.false_eq_true, ite_false, ite_true, runRepairPlan, remainder] at observed
+      generalize ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM perform) = prune at observed
+      cases first : sync #[dir.path] start <;> simp [observe, Bind.bind, EStateM.bind, first] at observed
+      rename_i after
+      cases cut : prune after <;> simp [cut] at observed
+      rename_i pruned
+      cases last : sync #[dir.file (.walSegment plan.keeper)] pruned <;>
+        simp [performPaths, observe, last, Pure.pure, EStateM.pure] at observed
+  · simp [observeRename, finishBoundedMarkedOpen, valid, size, fits, Bind.bind, EStateM.bind, throw,
+      throwThe, MonadExceptOf.throw, EStateM.throw] at observed
+
 /-- The literal prefix from repair entry through staging-file sync. Physical
 frame laws at staging or rename can be restricted to these reached heaps. -/
 def StagedFrom (start authorized pruned staged synced : heap) : Prop :=

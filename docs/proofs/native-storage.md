@@ -705,10 +705,11 @@ The rename keeps the same inode and its durable bytes while moving its
 visible binding. A final directory-fsync error carries that binding and
 payload under either effect. Only the effective branch settles the new
 keeper name in every crash map. The actual cached directory load and
-reported fsync supply the bounded repair error. Cleanup carries the inode attached to the actual scratch handle at creation,
-with its durable bytes, to the fixed opener's error heap. The resulting selected retry prefix supplies the next healthy
-aligned open. Connecting its ready ledger to the complete mixed
-execution remains open.
+reported fsync supply the bounded repair error. The observed rename proves the
+keeper exceeded its selected prefix. The returned prune and replacement steps
+determine the logical repair trace for either final-barrier effect. Cleanup
+preserves the acquired inode and its durable bytes. At the cutoff the sampled
+retry observations support the shared marked opener and its ready-call ledger.
 [Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached

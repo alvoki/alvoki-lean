@@ -69,14 +69,17 @@ projection for the initial write, recovery and subsequent calls.
 [Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) ·
 [Returned handle and ready calls](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
-A final directory-fsync error now identifies the installed keeper by the
-slot and inode of the actual successful scratch acquisition. The separate
-listing report identifies that inode when its scratch binding agrees at creation.
+For a final directory-fsync error, the observed rename proves the measured
+keeper was long. The checked plan bounds the unlinks. Their returned images,
+the scratch write and sync, rename and final cache load determine the repair
+trace for either fsync effect. Cleanup preserves the acquired inode and its
+payload. The sampled recovery observations at the cutoff feed the same public
+opener and ready-call continuation described above.
 
-**Next source boundary.** Derive the final repair effect trace from the reached
-operations. Its current proof still consumes the listing report’s measured long
-keeper, pruning bound and logical image after rename and the final barrier.
-The Linux syscall effects and sampled namespace remain explicit inputs.
+**Next source boundary.** Derive the selected retry frame across staging on
+this final-directory-error path from the individual callback effects. The
+current theorem still takes that frame for the whole stage prefix. File and
+directory syscall effects and the sampled crash namespace remain explicit.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

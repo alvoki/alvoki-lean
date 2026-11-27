@@ -1,5 +1,4 @@
 import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
-import Alvoki.Storage.Disk.NativeLongKeeperFinalSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
 import Alvoki.Storage.Disk.NativeLongKeeperRenameError
 import Alvoki.Storage.Disk.NativeLongKeeperStorage
@@ -270,95 +269,6 @@ theorem AlignedKeeperCacheCallbacks.framesPruneDirectoryError
   exact ⟨diagnostic, failed, reported, loadFrame.trans atSync, children⟩
 
 end PruneDirectorySync
-
-section DirectorySync
-
-variable {heap : Type} {directory : DiskDirectory} {initial : LockedFileState FileImage}
-  {history : List WAL.Write} {layout : CanonicalKeeperLayout initial.image history}
-  {operations : MarkedRetryChunkOperations
-    (Cache (DescriptorInventory × DescriptorSlot × Nat)) directory layout}
-  {published : CheckpointPublication.Image} {held : HeldDirectoryMarkedRetryReports operations published}
-  {authorized : ListedDirectoryAuthorization held} {pruning : LongKeeperPruning authorized}
-  {stage : ListedLongKeeperStageAt pruning} {renamed : ListedLongKeeperRename stage}
-
-/-- The issued final sync connects the exact bounded repair error to
-its reached storage frame and live keeper. Only the observed path from
-authorization to this issued descriptor needs physical frames. An
-effective sync settles the reached keeper inode in every crash map. -/
-theorem ListedLongKeeperDirectoryIssue.returnsSelectedRepairError
-    (issue : ListedLongKeeperDirectoryIssue renamed) (view : OpenCloseHeapView heap FileImage)
-    (state : NativeReadyState) (sameDirectory : state.session.directory = directory)
-    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (callbacks : AlignedKeeperCacheCallbacks heap)
-    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
-    (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
-    (stageCalls : LongKeeperStageCallbacks heap) (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {effective : Bool} {physical : Nat}
-    {start renamedHeap issued reached : heap}
-    {cause : IO.Error} {replacement : Nat}
-    (startFiles : (view.files start).image = initial.image)
-    (observed : LongKeeperRepair.observeRename directory layout.boundedPlan physical remove
-      (stageCalls.stage pending callbacks.modifyPending) (callbacks.syncPaths directory.path cached active pending)
-      rename start = .error (IO.userError s!"sync failed for '{directory.path}': {cause}") (reached, some renamedHeap))
-    (keeper : (storage issued).files.names (directory.file (.walSegment layout.keeper.first)) =
-      some replacement)
-    (keeperBytes : visible issued replacement = layout.target.trimmed)
-    (keeperDurable : (storage issued).files.bytes replacement = [layout.target.trimmed])
-    (prefixFrame : state.SelectedRetryFrame (storage start) (storage issued) (visible start) (visible issued))
-    (effect :
-      (view.files reached).image = (issue.stopped effective).image ∧
-      WalRootSyncEffect directory effective (storage issued) (storage reached) ∧
-      (storage issued).Frames (· = directory.path) (storage reached) ∧
-      ∀ path, state.selectedRetryPath path ∨ path = directory.file (.walSegment layout.keeper.first) →
-        ∀ inode, (storage issued).files.names path = some inode → visible reached inode = visible issued inode) :
-    let write := stageCalls.stage pending callbacks.modifyPending
-    let sync := callbacks.syncPaths directory.path cached active pending
-    finishBoundedMarkedOpen directory layout.boundedPlan physical remove write sync rename start =
-      .error (IO.userError s!"sync failed for '{directory.path}': {cause}") reached ∧
-    (view.files reached).image = (issue.stopped effective).image ∧
-    EffectTrace layout.target (view.files start).image (view.files reached).image ∧
-    state.SelectedRetryFrame (storage start) (storage reached) (visible start) (visible reached) ∧
-    RawOpenRetryTrace.KeeperAt view directory layout.target (fun atHeap => (storage atHeap).files.names) visible reached ∧
-    (storage reached).files.names (directory.file (.walSegment layout.keeper.first)) =
-      some replacement ∧
-    (storage reached).files.bytes replacement = [layout.target.trimmed] ∧
-    (effective = true → ∀ names ∈ (storage reached).crashNames,
-      names (directory.file (.walSegment layout.keeper.first)) = some replacement) := by
-  intro write sync
-  let names atHeap := (storage atHeap).files.names
-  obtain ⟨files, children, parent, unchanged⟩ := effect
-  have returned : finishBoundedMarkedOpen directory layout.boundedPlan physical remove write sync rename start =
-      .error (IO.userError s!"sync failed for '{directory.path}': {cause}") reached := by
-    rw [← LongKeeperRepair.forget_observeRename, observed]
-    rfl
-  have trace : EffectTrace layout.target (view.files start).image (view.files reached).image := by
-    rw [startFiles, files]
-    exact issue.stoppedEffects effective
-  have activeKeeper : (view.files reached).image.keeper.active = some layout.target.trimmed :=
-    files.symm ▸ (issue.visibleAfterRename effective).1
-  have named : names reached (directory.file (.walSegment layout.keeper.first)) =
-      some replacement :=
-    (children.visible (.walSegment layout.keeper.first)).trans keeper
-  have childScope : WalRootSyncEffect state.session.directory effective (storage issued) (storage reached) :=
-    sameDirectory.symm ▸ children
-  have parentScope : (storage issued).Frames (· = state.session.directory.path) (storage reached) := by
-    rw [sameDirectory]
-    exact parent
-  have durable := (children.bytes (storage reached).files.names (.inl rfl)
-    (.walSegment layout.keeper.first) replacement named).trans keeperDurable
-  have keptKeeper := unchanged _ (.inr rfl) _ ((children.visible (.walSegment layout.keeper.first)).symm.trans named)
-  refine ⟨returned, files, trace,
-    prefixFrame.trans (childScope.framesSelectedRetry parentScope (fun path selected => unchanged path (.inl selected))),
-    ?_, named, durable, ?_⟩
-  · unfold RawOpenRetryTrace.KeeperAt
-    change (view.files reached).image.keeper.active =
-      (names reached (directory.file (.walSegment layout.keeper.first))).map (visible reached)
-    rw [activeKeeper, named, Option.map_some, keptKeeper, keeperBytes]
-  · intro applied names survives
-    exact (children.settled applied names survives (.walSegment layout.keeper.first)).trans named
-
-end DirectorySync
 
 section CatalogAtError
 
@@ -1599,12 +1509,6 @@ target, whether it names the old keeper or the trimmed replacement.
 The scoped catalog frames preserve presence and absence through that
 same sample, starting at the returned post-prune root barrier. -/
 theorem MarkedWalExtentReports.extendsFinalSyncError
-    {operations : MarkedRetryChunkOperations
-      (SyncHandleRouting.Cache (DescriptorInventory × DescriptorSlot × Nat)) dir layout}
-    {held : HeldDirectoryMarkedRetryReports operations published}
-    {authorization : ListedDirectoryAuthorization held} {pruning : LongKeeperPruning authorization}
-    {staged : ListedLongKeeperStageAt pruning} {renamed : ListedLongKeeperRename staged}
-    (issue : ListedLongKeeperDirectoryIssue renamed)
     (before : RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath selectedWal prior)
     (sameTarget : layout.target = target)
     {checkpoint : Option (PackedTable × UInt64)} {beforeKeeper afterKeeper reached : heap}
@@ -1629,7 +1533,6 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     (listingFrames : source.directoryCalls.ScopeFrames dir retryFrame)
     (keeperFiles : source.fileCalls.ScopeFrames (fun before after => liveImage after = liveImage before))
     {publicError : IO.Error} {effective : Bool}
-    (measured : reads.wal.keeper.calls.metadata.byteSize.toNat = authorization.keeper.metadata.byteSize.toNat)
     (workerStopped : source.workerObservingRepairRename seed.directoryRef seed.activeRef seed.pendingRef dir raw.lock
       (RawMarkedOpenInterpreter.makeCache dir seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending =
       .error publicError (reached, some renamedHeap))
@@ -1753,9 +1656,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
           stagedFrom afterKeeper authorized pruned recorded synced ∧
           source.stage.acquire ((dir).file .stagedWal) pruned = .ok file created ∧
           attachedReadSlot view file slot replacement created ∧
-          retryNames created ((dir).file .stagedWal) = some replacement ∧
-          (staged.bindings ((dir).file .stagedWal) = retryNames created ((dir).file .stagedWal) →
-            replacement = staged.inventory.inode staged.slot.description)) ∧
+          retryNames created ((dir).file .stagedWal) = some replacement) ∧
       (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
       (view.files finalized.reached).image.later.DurablyEmpty ∧
       (∀ {failed} (reboot : RawWriteRebootEntry state view storage retryNames visible failed first),
@@ -1801,14 +1702,14 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     .ok (layout.boundedPlan, expected, reads.wal.keeper.calls.metadata.byteSize.toNat) afterKeeper at measuredReads
   cases measuredReads.symm.trans actual
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
-  have long : layout.boundedPlan.keeperSize < reads.wal.keeper.calls.metadata.byteSize.toNat :=
-    bytes ▸ measured.symm ▸ pruning.longer
+  have later := (Plan.valid_iff _).mp valid.valid |>.2.2
+  have checked := layout.boundedPlan_valid later
+  have long := LongKeeperRepair.longerOfObservedRenameError dir layout.boundedPlan _ source.remove stageWrite
+    groupSync source.rename checked bytes observed
   obtain ⟨authorized, pruned, recorded, synced, staging, moved, groupFailed⟩ :=
     (LongKeeperRepair.observeRename_error_iff dir layout.boundedPlan _ source.remove stageWrite groupSync source.rename
-      (layout.boundedPlan_valid pruning.later) bytes long).mp observed
-  have observedLong : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat := by
-    rw [measured]
-    exact pruning.longer
+      checked bytes long).mp observed
+  have observedLong : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat := bytes ▸ long
   have startFiles := listing.imageAfterLongKeeper selected seals keeperFiles _ observedLong keeperRead
   have keeperFrame := source.fileCalls.longKeeperReadFrames readerFrames
     (fun h => NativeReadyState.SelectedRetryFrame.refl state (storage h) (visible h))
@@ -1840,7 +1741,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have away (ordinal : Nat) (member : ordinal ∈ layout.boundedPlan.newer) :
       ¬ state.crashPath ((dir).file (.walSegment ordinal)) :=
     laterWalOutsideRepairScope currentReady
-      (targetAtKeeper ▸ Nat.lt_of_le_of_lt layout.target.firstCovered (pruning.later ordinal member))
+      (targetAtKeeper ▸ Nat.lt_of_le_of_lt layout.target.firstCovered (later ordinal member))
   have writtenPrefix : stageWrite ((dir).file .stagedWal)
       (layout.boundedPlan.keeperBytes.extract 0 layout.boundedPlan.keeperSize) pruned = .ok () recorded := by
     rw [layout.boundedPlan_extractKeeper]
@@ -1881,7 +1782,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     (fun first last => first.trans last) (unlink := by
       intro ordinal before after result member removed accepted
       obtain ⟨live, durable, parent⟩ := unlinkFrame member removed accepted
-      have afterTarget : layout.range.through < ordinal := pruning.later ordinal member
+      have afterTarget : layout.range.through < ordinal := later ordinal member
       have covers : state.writer.wal.active.first ≤ layout.range.through :=
         targetAtKeeper ▸ layout.target.firstCovered
       have separate (path : FilePath) (inside : state.selectedRetryPath path) :
@@ -1896,25 +1797,32 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       some ((view.descriptors finalIssue).inode (view.handle finalIssue seed.handle).2.1.description) := by
     rw [atIssue, sameInode]
     exact (throughIssue.parent.visible (dir).path rfl).1.trans openedRoot
-  obtain ⟨_, prunedImage, syncedImage⟩ := longKeeperSyncPrefix (fun h => (view.files h).image) dir layout.target
+  obtain ⟨prunedTrace, prunedImage, syncedImage⟩ := longKeeperSyncPrefix (fun h => (view.files h).image) dir layout.target
     layout.boundedPlan source.remove stageWrite groupSync source.rename authorize prune written persisted
     (fun ordinal member => (startFiles ▸ member : ordinal ∈ (view.files entry).image.later.visible))
-    pruning.later authorizationImage (pruneImage authorize) unlinkImage writeImage
+    later authorizationImage (pruneImage authorize) unlinkImage writeImage
     (fun wrote fsynced => stageSyncImage fsynced (by rw [writeImage wrote]; rfl))
-  have beforeRename : liveImage synced = pruning.stageInput.image.withScratch (some (layout.target.trimmed, true)) := by
-    dsimp only
-    rw [syncedImage, prunedImage, startFiles, pruning.stageInputImage]
-  have movedImage := renameImage moved (by rw [beforeRename]; rfl)
-  have issuedImage : liveImage finalIssue = issue.files.image := by
-    rw [loadImage loaded]
+  have movedImage := renameImage moved (by dsimp only; rw [syncedImage]; rfl)
+  have renamedImage : liveImage renamedHeap = { liveImage pruned with keeper :=
+      ⟨some layout.target.trimmed, some layout.target.trimmed :: (liveImage pruned).keeper.crashImages, none⟩ } := by
     apply Option.some.inj
-    rw [← movedImage, beforeRename]
+    rw [← movedImage]
+    dsimp only
+    rw [syncedImage]
     rfl
   have ⟨fsyncImage, physicalEffect⟩ := effect failed (atIssue.symm ▸ liveRoot) rootBinding
-  have stoppedImage : liveImage reached = (issue.stopped effective).image := by
-    rw [fsyncImage, issuedImage]
-    cases effective <;> rfl
-  have errorEffect := And.intro stoppedImage physicalEffect
+  have emptyPrune : (liveImage pruned).later.DurablyEmpty := by dsimp only; rw [prunedImage]; exact ⟨rfl, rfl⟩
+  have trace : EffectTrace layout.target (liveImage afterKeeper) (liveImage reached) := by
+    rw [fsyncImage, loadImage loaded, renamedImage]
+    cases effective
+    · exact .replace prunedTrace emptyPrune (cut := 3) rfl
+    · exact .replace prunedTrace emptyPrune (cut := 4) rfl
+  have workerFields : (liveImage reached).keeper.active = some layout.target.trimmed ∧
+      (liveImage reached).later.DurablyEmpty := by
+    rw [fsyncImage, loadImage loaded, renamedImage]
+    dsimp only
+    rw [prunedImage]
+    cases effective <;> exact ⟨rfl, rfl, rfl⟩
   have atRename : (storage renamedHeap).files.names keeperPath = some replacement := by
     simpa [keeperPath, WalKeeperRenameEffect.rebind] using
       inodeMove.visible keeperPath (.inr ⟨.walSegment layout.keeper.first, rfl⟩)
@@ -1923,14 +1831,26 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have keeperBytes := loadedBytes.trans ((inodeMove.liveBytes keeperPath managed replacement atRename).trans
     (liveAtFileSync.trans bytePrefix))
   have keeperDurable := loadedDurable.trans ((inodeMove.durableBytes _ (.inl rfl) keeperPath managed replacement atRename).trans stagedAtSync)
-  obtain ⟨repair, workerImage, trace, carried, kept, named, durable, _⟩ :=
-    issue.returnsSelectedRepairError view state rfl storage visible callbacks seed.directoryRef seed.activeRef seed.pendingRef
-      source.remove source.stage source.rename startFiles observed keeperAtIssue keeperBytes keeperDurable reachedIssue errorEffect
+  have repair : finishBoundedMarkedOpen dir layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
+      source.remove stageWrite groupSync source.rename afterKeeper =
+        .error (IO.userError s!"sync failed for '{(dir).path}': {diagnostic}") reached := by
+    rw [← LongKeeperRepair.forget_observeRename, observed]
+    rfl
+  obtain ⟨children, parentFrame, unchanged⟩ := physicalEffect
+  have carried := reachedIssue.trans (children.framesSelectedRetry parentFrame (fun p hp => unchanged p (.inl hp)))
+  have named := (children.visible (.walSegment layout.keeper.first)).trans keeperAtIssue
+  have durable := (children.bytes _ (.inl rfl) (.walSegment layout.keeper.first) replacement named).trans keeperDurable
+  have liveWorker := (unchanged _ (.inr rfl) replacement keeperAtIssue).trans keeperBytes
+  have kept : RawOpenRetryTrace.KeeperAt view dir layout.target retryNames visible reached := by
+    change (liveImage reached).keeper.active = (retryNames reached _).map (visible reached)
+    rw [workerFields.1]
+    change some layout.target.trimmed = ((storage reached).files.names ((dir).file (.walSegment layout.keeper.first))).map (visible reached)
+    rw [named, Option.map_some, liveWorker]
   have errorNames : walNameFrame synced reached := fun start =>
-    (congrArg Option.isSome (errorEffect.2.1.visible (.walSegment start))).trans
+    (congrArg Option.isSome (children.visible (.walSegment start))).trans
       ((namesOfLoad start).trans (namesOfRename staging moved start))
   have laterBound (ordinal : Nat) (member : ordinal ∈ layout.boundedPlan.newer) : target.range.through < ordinal :=
-    sameTarget ▸ pruning.later ordinal member
+    sameTarget ▸ later ordinal member
   have retainCatalog (atEntry : catalog entry)
       (gone : (view.files finalized.reached).image.later.visible = []) :=
     listing.carriesPrunedCatalog seals selected unlinks dispose finalized readerNames listingNames keeperNames
@@ -1938,30 +1858,26 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       (fun start => (stageNames start).trans ((namesOfDirectorySync suffixSync) start))
       errorNames namesOfCleanup firstCovered cutoffCovered bounded laterBound
       (fun start beyond => (namesOfDirectorySync authorize start) ▸ listed start beyond) unlinkNames atEntry gone
+  dsimp only at trace
   rw [startFiles] at trace
   obtain ⟨returned, selectedEffects, finalImage⟩ := extents.extendsFailedRepair before sameTarget seals selected valid following accepted ordered sameStat flat marked
     keeperRead readerFrames listingFrames keeperFrame repair trace carried (sameTarget ▸ kept) dispose sameDisposal owner
     finalized scope keeperCleanup (fun initial => initial.2.2.1) (by
       intro image finalKeeper finalDurability initial
       have gone : (view.files finalized.reached).image.later.visible = [] := by
-        rw [image, workerImage]
-        exact (issue.visibleAfterRename effective).2.1
+        rw [image]
+        exact workerFields.2.1
       obtain ⟨nextWindow, nextSuffix, _⟩ := retainCatalog initial.1 gone
       exact ⟨nextWindow, finalKeeper, finalDurability, nextSuffix⟩)
   obtain ⟨sameName, sameBytes⟩ := keeperStorage _ rfl
   have afterCleanup := (keeperCleanup _ (congrArg (fun start => (dir).file (.walSegment start))
     (congrArg Target.first sameTarget))).2 _ named
-  have liveAtSync := errorEffect.2.2.2 _ (.inr rfl) _
-    ((errorEffect.2.1.visible (.walSegment layout.keeper.first)).symm.trans named)
-  have live := (List.cons.inj afterCleanup).1.trans
-    (liveAtSync.trans (keeperBytes.trans (congrArg Target.trimmed sameTarget)))
-  have ⟨active, later⟩ : (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
-      (view.files finalized.reached).image.later.DurablyEmpty := by
-    rw [finalImage, workerImage, ← sameTarget]
-    exact issue.visibleAfterRename effective
+  have live := (List.cons.inj afterCleanup).1.trans (liveWorker.trans (congrArg Target.trimmed sameTarget))
+  have ⟨active, laterEmpty⟩ : (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
+      (view.files finalized.reached).image.later.DurablyEmpty := finalImage.symm ▸ sameTarget ▸ workerFields
   refine ⟨returned, selectedEffects, ⟨replacement, sameName.trans named, (sameBytes _ named).trans durable,
-    live, authorized, pruned, recorded, synced, created, file, slot, staging, acquired, attachedStage, boundStage,
-    fun shared => Option.some.inj (boundStage.symm.trans (shared.symm.trans staged.stageBound))⟩, active, later, ?_⟩
+    live, authorized, pruned, recorded, synced, created, file, slot, staging, acquired, attachedStage, boundStage⟩,
+    active, laterEmpty, ?_⟩
   intro beforeReboot reboot reset atBoot failedKeeper cacheKeeper readKeeper listKeeper
     loadSurvivors cleanupSurvivors
   have liveBeforeRepair : RawOpenRetryTrace.LiveKeeperCrashChoices dir layout.target (storage afterKeeper) :=
@@ -1983,7 +1899,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have atIssueSurvivors : RawOpenRetryTrace.KeeperCrashChoices dir layout.target (storage finalIssue) :=
     (inodeMove.acceptsKeeperSurvivors (target := layout.target) settled stagedAtSync oldPayload).frame loadedFrame (.inl rfl)
   have atErrorSurvivors : RawOpenRetryTrace.KeeperCrashChoices dir layout.target (storage reached) :=
-    errorEffect.2.1.acceptsKeeperSurvivors atIssueSurvivors keeperAtIssue keeperDurable
+    children.acceptsKeeperSurvivors atIssueSurvivors keeperAtIssue keeperDurable
   have afterWorker : (storage reached).CrashFileFrame crashScope (storage finalized.reached) :=
     cleanupSurvivors.afterWorker (fun first last => first.trans last)
   have survivesCleanup : RawOpenRetryTrace.KeeperCrashChoices dir target (storage finalized.reached) :=
@@ -2004,7 +1920,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       names path = retryNames finalIssue path :=
     loadChildren.settledFrom (fun prior possible path child => immutableAtRename prior possible path child.1 child.2)
       names possible path ⟨selectedPath, notRoot⟩
-  have immutableAtError := errorEffect.2.1.keepsSelectedChildren immutableAtIssue
+  have immutableAtError := children.keepsSelectedChildren immutableAtIssue
   have cleanupChildren := afterWorker.toFrames.weaken (scope := immutableChild) (fun _ child => .inr child)
   have immutableAtReboot (path : FilePath) (selectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
       retryNames rebooted path = retryNames finalized.reached path :=
@@ -2016,10 +1932,10 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   refine ⟨nextEntry, vacant, empty, ?_⟩
   intro stageCatalog loadCatalog cleanupCatalog reset
   have atEntry := ((before.preserves initial).2.2.2 priorStorage).1
-  have atPrune := settlesPrunedWindow (retainCatalog atEntry later.1).2.2 prunedNames prunedSettled
+  have atPrune := settlesPrunedWindow (retainCatalog atEntry laterEmpty.1).2.2 prunedNames prunedSettled
   have throughStage := stageCatalog staging
   have throughRename := throughStage.trans (inodeMove.walNames oldNamed settled firstOffset through)
-  have throughError := (throughRename.trans (loadCatalog loaded)).trans (WalNamePresenceFrame.ofRootSync errorEffect.2.1)
+  have throughError := (throughRename.trans (loadCatalog loaded)).trans (WalNamePresenceFrame.ofRootSync children)
   have throughCleanup := throughError.trans (cleanupCatalog.afterWorker (fun earlier later => earlier.trans later))
   have window := (throughCleanup.preservesNamespaceWindow atPrune).2 _ seen.chosen
   exact seen.startsRecoveryObservations reset nextEntry window
