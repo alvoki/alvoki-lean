@@ -34,32 +34,33 @@ existing `Run` with the exact returned or submitted bytes.
 image directly. `Run.healthy_open` shows that a reachable offline image
 can reopen when the read and barrier succeed.
 
-The Linux interpretation assumes the following primitive effects at the
-reached paths and descriptions:
+## Primitive correspondence
 
-- A successful directory open holds the managed directory. A successful
-  stage open holds the private staging inode, truncated or created.
-  Open errors, partial writes, failed flushes and late finalization of
-  scratch can affect scratch. They preserve the active bytes and binding.
-  Scratch bookkeeping between attempts may be stale. Each publication
-  overwrites it and must complete write and flush before syncing or renaming.
-- A successful read returns the exact bytes of the visible active binding.
-  The read and directory open do not modify that binding. Write followed
-  by successful flush provides the complete staged bytes on the held writer.
-  File fsync persists the bytes through that descriptor. Releasing it
-  after a successful flush and sync preserves the persisted bytes.
-- Rename atomically replaces the visible active binding with the staged
-  inode. Directory fsync on the held directory settles its visible bindings.
-  A failed rename or fsync can have either the before or after effect.
-  Before the barrier, a crash can select either intact binding. The model
-  can retain both choices until a barrier even if writeback has narrowed
-  the physical choices.
-- The runtime and compiler preserve the meanings of these reached calls,
-  including descriptor lifetime and the native fsync wrapper. The filesystem
-  and device preserve synced data under the specified crash model. Recovery
-  may fail on resource or I/O errors. The owner supplies the stable,
-  exclusive namespace described above.
-  [Filesystem premises](../../../../docs/proofs/filesystem.md)
+For a reached call, the Linux IO result and its physical effect must match
+the following interpretation. Success/failure flags come from that call.
+For rename and fsync, an observed error allows either effect. Reports for
+unreached operations are immaterial.
+
+| Linux primitive at the reached argument | Correspondence to `LinuxEffects.primitives` |
+| --- | --- |
+| `readBinFile BLOB` | Success returns the exact bytes of the visible binding, `Image.active`. A failure returns an error. Neither changes the binding or its crash choices. |
+| Open the directory for read | Success holds the managed directory and yields `.directory`. Failure skips fsync. Opening leaves the blob image unchanged. |
+| Open `BLOB.next` for write, then write and flush | Successful open holds the private, truncated or newly created inode and yields `.writer`. The write records the supplied bytes for staging. Successful flush makes those full bytes visible on that inode. Open, write or flush failure can leave arbitrary scratch contents, including effects of a late close. Scratch effects preserve the active binding and every active crash choice. |
+| File fsync through `.writer` | The effect persists the flushed bytes on that inode, recorded in `Image.synced`. A pre-effect error preserves the prior projected image. Closing after successful flush and sync preserves the synced bytes. |
+| Rename `BLOB.next` over `BLOB` | The effect switches the visible binding atomically to the synced inode. Until a barrier, the model covers both intact crash choices. Physical writeback may narrow that set. |
+| Directory fsync through `.directory` | The effect settles the visible binding and narrows the modeled survivors to that binding. A pre-effect error leaves the previous choices. |
+
+The shared schedule fixes which paths and modes are used and passes the
+actual handle returned by each open to the relevant primitives. The runtime
+must keep that handle tied to its open file description, including through
+the native fsync wrapper. The owner's exclusive stable namespace ties the
+directory handle to the parent of both names and keeps the staging name
+bound to the writer's inode until rename. Non-aliasing also keeps scratch
+effects private. These facts make the two abstract identities sufficient
+within each call. Each successful open resolves its own descriptor again,
+so neither tag asserts descriptor equality across calls or restarts.
+Compiler and runtime fidelity, the primitive effects above, and the device's
+preservation of synced data remain external. [Filesystem premises](../../../../docs/proofs/filesystem.md)
 
 A process stop retains the reached visible binding. A power loss selects a
 surviving binding. An interruption uses the effect at the cut, or the
@@ -70,9 +71,77 @@ second successful open after stop or power loss returns the first reply.
 The focused manifest check exercises rename and barrier errors in the
 interpreter and uses the native adapter for its Linux fixture.
 
-A future segmented WAL change could reuse this protocol for `CONTROL`.
-PR #5 retains the original CONTROL writer for sync.
-Before sharing publication code, establish that WAL preparation makes any newly referenced segment
-durable, that recovery settles the selected control before collecting files,
-and that the WAL's directory ownership and initialization satisfy the blob
-premises. The WAL retains its control codec and segment-lifetime rules.
+## L0 producer check
+
+The PR #5 consumer requires an open receipt and a publication run. Start at
+`Run.initial` for the owner's initialized empty manifest. The primitive
+interpreter and producer theorems construct both runs below. L0 supplies
+codec validity and the selected-manifest projection. A returned reopen
+error records `.openFailed`. An interrupted reopen, including a lost
+reply, records `.stop`. A publication error or lost reply records
+`.uncertain`. If a later L0 action fails after the blob has opened
+successfully, L0 records that open followed by stop. [PR #5 consumer](https://github.com/alvoki/alvoki-lean/blob/56a422f6/lean/Alvoki/Experiments/L0/NativeFacts.lean)
+
+```lean
+import Alvoki.Experiments.L0.NativeFacts
+
+open DurableBlob L0Manifest ExperimentalL0.NativeBridge
+
+example (dir : System.FilePath) (proposal : Version) (valid : proposal.Valid) :
+    ManifestOpenReceipt .empty .empty ∧
+    decode (Image.settled (encode proposal)).active = some proposal := by
+  let reports : LinuxEffects.Reports := {
+    readActive := true
+    openDirectory := true
+    syncDirectory := .ok
+    openWriter := true
+    write := true
+    flush := true
+    syncWriter := .ok
+    rename := .ok
+  }
+  let initial := encode Version.empty
+  have opened : Run initial [.opened initial] true (.settled initial) := by
+    have run := LinuxEffects.reopen dir reports (Run.initial (initial := initial))
+    have returned : (LinuxEffects.backend dir reports).reopen (.settled initial) =
+        .ok initial (.settled initial) := by
+      simp [LinuxEffects.backend, Primitives.backend, Primitives.files, Files.backend,
+        LinuxEffects.primitives, reports, Bind.bind, EStateM.bind] <;> rfl
+    rw [returned] at run
+    exact run
+  have published : Run initial ([.opened initial] ++ [.published (encode proposal)])
+      true (.settled (encode proposal)) := by
+    have run := LinuxEffects.publish dir reports (encode proposal) opened
+    have returned : (LinuxEffects.backend dir reports).publish (encode proposal)
+        (.settled initial) = .ok () (.settled (encode proposal)) := by
+      simp [LinuxEffects.backend, Primitives.backend, Primitives.files, Files.backend,
+        LinuxEffects.primitives, reports, Bind.bind, EStateM.bind] <;> rfl
+    rw [returned] at run
+    exact run
+  have decoded : decode initial = some Version.empty :=
+    decode_encode (by simp [Version.Valid, Version.empty])
+  refine ⟨.issued (events := []) opened ?_ decoded decoded,
+    manifest_publish published ?_ valid⟩
+  · simp [Event.Submitted]
+  · simp [Event.Submitted]
+    exact ⟨proposal, valid, rfl⟩
+```
+
+The focused manifest script checks the producer modules and audits their
+axiom dependencies, and runs the Linux fixture. Compile this example with
+the PR #5 consumer to check the premise handoff. The kernel and axiom
+checks establish the derivation and its logical dependencies. The table
+above records the external IO premises, and the fixture samples their
+native behavior.
+
+## Follow-up for WAL and SSTable
+
+PR #5 already retains the original `CONTROL` writer for WAL sync. Try
+sharing the staged writer and directory barrier with that path once its
+producer establishes durability of newly referenced segments and settles
+the control binding before collection. WAL owns its codec and segment
+lifetime. For SSTable, try sharing held-file identity, exact positional
+reads and file sync with its checked open or builder. SSTable owns content
+immutability, range checks, codec validity and publication by the caller.
+Extract a primitive only after the second consumer shows what proof or
+executable code it can reuse.
