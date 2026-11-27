@@ -18,21 +18,11 @@ Use both cases to decide which facts belong in the shared invariant before expan
 list. The milestone is complete when the composed theorem covers the promised outcomes and
 derives its intermediate premises from the execution.
 
-Prove one refinement at each boundary. Join the results by identifying the state or value that one
-boundary produces and the next one consumes.
-
-| Boundary | Obligation to prove once |
-|---|---|
-| Native primitive to production schedule | Interpret the actual callback at the reached heap. Account for the returned value and effects, or for the issued operation and effects at an interruption. A returned error may follow an effect. An interruption has no ordinary API return. |
-| Reached storage state to recovery selection | Derive which manifest, runs and marker-bounded WAL recovery reads from one allowed filesystem outcome. Record the selected paths, inodes, bytes and replay watermark together. |
-| Selected reads to the returned table | Use the proof of the actual reads, replay, repair and allocation to identify the returned table and next usable session. The same opened references and reached heap carry into the next call. |
-| Session steps to the client contract | Compose the operation refinements in one induction from the supported initial state. Use the common replay and snapshot proofs for the resulting history. |
-
-The end-to-end theorem crosses all four boundaries by composition. Each local proof sees the
-implementation detail needed at its own boundary. For example, proving that the replay algorithm
-returns the right rows for an input byte array still leaves an essential equality to prove. Those must
-be the bytes read from the selected inode by the opener that returned the table. Reuse the existing
-trace induction and bounded-read contracts as consumers of that evidence. [Reached execution and replay](../lean/Alvoki/Storage/Disk/Proofs/Native/Execution/NativeExecutionPrefix.lean) · [Exact prefix reads](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
+To join two proofs, identify the exact value the first produces and the next consumes.
+For example, a proof that replay returns the right rows still needs the equality between
+its input bytes and the bytes the opener read from the selected inode. Follow that value
+through the [invariant map](proofs/native-storage.md#refinement-boundaries).
+[Reached execution](../lean/Alvoki/Storage/Disk/Proofs/Native/Execution/NativeExecutionPrefix.lean) · [Exact prefix reads](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
 
 ### Choose an invariant that can be carried forward
 

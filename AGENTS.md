@@ -14,6 +14,8 @@
 
 When separating implementation from proofs, start at a public operation and follow its imports. Keep the evidence needed to construct a valid return value close to its constructor. Place theorems relating that value to the abstract model with their proof consumers. After migrating callers, compare the public operation’s transitive imports before and after, and check that its end-to-end theorem remains audited.
 
+For a storage operation, describe the caller-visible invariant at its entry point. Use a short module guide when a reader needs to cross from the operation to its contract, tests and proofs. Link to the document that owns a guarantee or open obligation so a change has one place to update.
+
 ## Agent work and review
 
 - Aim to keep five subagents working in parallel on independent roadmap tasks. While a shared boundary is changing, give it one owner. Split work by independent producers or consumers once their interface is stable. Prioritize the end-to-end crash refinement in the proof roadmap.

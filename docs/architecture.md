@@ -31,6 +31,27 @@ Use `writeWithOutcome` when the caller needs to distinguish a rejected submissio
 6. `collectObsoleteRuns` is optional maintenance on a ready session. Under the same database lock, it validates the current v2 manifest generation, then removes only canonical regular run files from strictly older, unheld generations. Pass any generations held by users of the files themselves. Snapshot handles use run bytes already in memory. A reported error may leave some older files unlinked. Retry on the same ready session to finish the pass and sync the directory, even if no more eligible names are visible. The selected generation and WAL stay intact. [Versioned run collection](../lean/Alvoki/Storage/Disk/Proofs/Collection/VersionedRunCollection.lean)
 7. `collectCoveredWal` is optional maintenance on a ready session. It checks the installed generation, absolute marker and retained suffix under the writer lock. It uses each sealed file's own no-follow size to select segments wholly covered by the checkpoint and before the active keeper. It unlinks those canonical files and syncs the directory, including on an empty pass. A preflight error leaves the session ready. An unlink or sync error requires close and reopen before retrying. `planWalCollection` performs the same read-only checks and reports the offsets observed during that call. [Native WAL collector](../lean/Alvoki/Storage/Disk/DiskTable.lean)
 
+A single write and a batch share the same publication boundary. The interruption below occurs after both files were synced and the rename succeeded.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant T as DiskTable
+    participant F as Filesystem
+    C->>T: Submit mutations
+    T->>F: Append and flush frames to active segment
+    T->>F: Stage new byte count and sync segment and staged marker
+    T->>F: Rename staged marker onto WAL.commit
+    alt Machine crashes before directory sync
+        Note over C,F: No acknowledgement. On reopen the old or new marker can survive.
+        Note over T,F: Recovery reads up to that marker, omitting or retaining the whole batch.
+    else Publication completes
+        T->>F: Sync directory
+        F-->>T: Success
+        T-->>C: Acknowledge final sequence
+    end
+```
+
 WAL, marker, and manifest replacements create their staging files exclusively. Retry can detach a stale regular staging name before creating a fresh file. A nonregular staging name causes the operation to fail. [Staging implementation](../lean/Alvoki/Storage/Disk/StagingFile.lean)
 
 Bootstrap, marked reopen and both collectors use a listing that reports a `readdir` error before planning file mutations. A successful listing reached the end of the directory under the stable owned-directory contract. This matters when a failed partial scan would otherwise omit a durable empty successor and cause reopen to select the previous keeper. [Checked listing](../lean/native/read_dir_checked.c) · [Fault tests](../lean/Alvoki/Checks/Tests/DiskTableChecks.lean)

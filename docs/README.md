@@ -1,7 +1,13 @@
 # Alvoki documentation
 
-- **Run the engine.** Install the pinned tools, try a persistent write and reopen, and reproduce the checks. [Getting started](getting-started.md)
-- **Understand storage.** Follow a write through the WAL, see how checkpoints and recovery work, and look up the file formats. [Architecture](architecture.md#sequential-storage) · [Formats and behavior](specifications.md#wal-and-checkpoint-manifest)
-- **Follow the correctness argument.** Trace public claims through the native refinement boundaries, exact theorem evidence, trusted assumptions and open obligations. [Proof architecture](proof-architecture.md) · [Verification status](verification-status.md) · [Active proof roadmap](proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
-- **Follow development.** See engine priorities and the results of recent proof and implementation work. [Roadmap](roadmap.md) · [Progress](progress.md) · [Proof index](proof-index.md)
-- **Reproduce performance experiments.** Find workloads and measurements for the engine and the separate packed Lean, Rust and native experiments. [Benchmarks](benchmarks.md) · [High-performance Lean](high-performance-lean.md)
+Start with the question you have about the sequential Linux engine.
+
+| Question | First read | Follow through |
+|---|---|---|
+| How do I run it? | [Getting started](getting-started.md) | [Source and build targets](../lean/README.md) |
+| When does a write become visible and durable? | [Storage architecture](architecture.md#sequential-storage) | [Format and client contracts](specifications.md) |
+| What does a read on a reopened table mean? | [Six system claims](proof-architecture.md#system-claims) | [From file bindings to installed session and history](proofs/native-storage.md#refinement-boundaries) · [Point lookup in the code](../lean/Alvoki/Storage/Table/README.md) |
+| Which executions have been verified? | [Verification status](verification-status.md) | [Which premises come from Linux?](proofs/native-storage.md#premise-provenance) |
+| Which proof should I work on next? | [Current handoff](progress.md) | [Open proof milestones](proof-roadmap.md#completion-checklist-for-native-key-value-refinement) · [Reusable proof techniques](proof-index.md) |
+
+For engine features and priorities, see the [development roadmap](roadmap.md). For performance methodology and measurements, see [benchmarks](benchmarks.md) and the [Lean performance guide](high-performance-lean.md).

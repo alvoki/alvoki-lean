@@ -31,6 +31,32 @@ separates kernel evidence, executable coverage, premises and remaining obligatio
 
 ## How the argument composes
 
+The arrows show what each layer must supply. The solid paths describe existing conditional composition and selected source proofs. The dotted path is the remaining general production refinement.
+
+```mermaid
+flowchart TD
+    C["External contract: owned directory, sync and crash semantics"]
+    S["Covered source paths: fresh open and first write, selected reopens"]
+    P["All admitted production calls, errors and interruptions"]
+    D["Selected checkpoint and marker-bounded WAL"]
+    L["Logical history obtained by replay"]
+    I["Successful open: literal returned session, with reads tied to replay"]
+    E["Failed or interrupted call: reached storage state for retry"]
+    R["Local transition from the prior state, with its client events"]
+    T["Reported execution: compose adjacent steps from the initial ledger"]
+    H["One legal history explains acknowledged writes and snapshot reads"]
+    C --> S
+    S -->|"selected reopen paths"| D
+    D --> L --> I --> R
+    S -->|"covered stops"| E
+    E --> R
+    S -->|"fresh open and first write"| R
+    P -. "Open: derive each step from its source and primitive outcomes" .-> R
+    R --> T --> H
+```
+
+Checkpoint and recovery proofs supply the selected files and their replay at the local step. Reclamation also needs eligibility of deleted files. Progress and bounds require availability, scheduling and a stated work measure. The six claims above link to those obligations.
+
 Start with the [invariant map](proofs/native-storage.md#refinement-boundaries).
 It follows one crash and reopen from file bindings to client history, identifies
 who establishes and consumes each invariant, and marks the unproven steps.
