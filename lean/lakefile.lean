@@ -32,3 +32,20 @@ lean_lib Components where
   moreLinkObjs := #[fsyncO, readDirCheckedO, sstableO]
 
 lean_lib Alvoki.Checks.Audit.AxiomPolicy
+
+target crc32cArchive pkg : FilePath := do
+  let buildScript ← inputTextFile (pkg.dir / "native" / "build-crc32c.sh")
+  let bridge ← inputTextFile (pkg.dir / "native" / "crc32c.c")
+  let includeDir ← getLeanIncludeDir
+  let archive := pkg.buildDir / "native" / "libalvoki_crc32c.a"
+  buildFileAfterDep archive (Job.collectArray #[buildScript, bridge] "CRC32C sources") fun sources => do
+    IO.FS.createDirAll archive.parent.get!
+    proc { cmd := "bash", args := #[sources[0]!.toString, archive.toString, includeDir.toString,
+      sources[1]!.toString] }
+
+lean_lib CRC32C where
+  roots := #[`Alvoki.Codec.CRC32C]
+  moreLinkObjs := #[crc32cArchive]
+
+lean_exe crc32cCheck where
+  root := `Alvoki.Checks.Tests.CRC32C

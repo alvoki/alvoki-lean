@@ -9,6 +9,16 @@ export LC_ALL=C
 
 cd lean
 lake build
+lake exe crc32cCheck
+lake build Alvoki.Checks.Audit.AxiomPolicy
+lake env leanchecker Alvoki.Codec.CRC32C
+lake env lean --stdin <<'LEAN'
+import Alvoki.Checks.Audit.AxiomPolicy
+import Alvoki.Codec.CRC32C
+
+#check_axioms Alvoki.CRC32C.extend_empty
+#check_axioms Alvoki.CRC32C.extend_append
+LEAN
 cd ..
 
 bash scripts/check-experimental-manifest.sh
