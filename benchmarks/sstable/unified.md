@@ -38,29 +38,28 @@ formats, including exact alignment and alternative validation policies.
 
 Three warm-cache trials on CPU 0 of an AMD EPYC 9V45, Linux 6.18.57,
 overlayfs, Lean 4.36.0 and GCC 14.2.0. Times below are median microseconds
-per mixed lookup. [Raw build, open, hit, miss, lookup and scan data](unified-trials.csv)
+per mixed lookup through the public table whose operations the end-to-end
+theorem covers. [Raw build, open, hit, miss, lookup and scan data](unified-trials.csv)
 
-| Key / value | ALVSST03 | 1 KiB data / 1 KiB leaf | 4 KiB data / 1 KiB leaf | 16 KiB data / 1 KiB leaf | 4 KiB data / 4 KiB leaf |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Fixed / fixed | 10.79 | 4.24 | 4.47 | 5.26 | 11.10 |
-| Fixed / variable | 11.14 | 4.51 | 4.83 | 5.68 | 11.33 |
-| Variable / fixed | 11.58 | 4.50 | 4.60 | 5.32 | 10.27 |
-| Variable / variable | 10.79 | 4.41 | 4.63 | 5.53 | 10.52 |
+| Key / value | 1 KiB data / 1 KiB leaf | 4 KiB data / 1 KiB leaf | 16 KiB data / 1 KiB leaf | 4 KiB data / 4 KiB leaf |
+| --- | ---: | ---: | ---: | ---: |
+| Fixed / fixed | 4.48 | 4.75 | 5.50 | 12.00 |
+| Fixed / variable | 4.60 | 4.94 | 5.73 | 12.03 |
+| Variable / fixed | 4.58 | 4.76 | 7.04 | 10.94 |
+| Variable / variable | 4.78 | 4.87 | 5.72 | 11.38 |
 
-At 4 KiB data / 1 KiB leaf, each mixed lookup requested one leaf
-and one data block. The paired ALVSST03 readers made 34 requests per
-lookup on this workload. The unified reader requests about 5.1 kB per
-lookup at these targets, versus roughly 0.82–0.88 kB from ALVSST03.
-These are file-read requests and bytes, with no device-level I/O counts.
+With 4 KiB data targets and 1 KiB leaf targets, each mixed lookup requested
+one leaf and one data block. The root was loaded at open. The reader
+requested about 5.1 kB per lookup. These are file-read requests and bytes.
+The run has no device-level I/O counters.
 
 | Key / value | Index leaves | Data blocks | File bytes | Hit µs | Miss µs | Scan via `next` µs/row |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Fixed / fixed | 13 | 258 | 1,062,748 | 4.49 | 4.47 | 4.02 |
-| Fixed / variable | 25 | 508 | 2,096,252 | 4.75 | 4.97 | 4.14 |
-| Variable / fixed | 24 | 443 | 1,832,479 | 4.61 | 4.59 | 4.22 |
-| Variable / variable | 37 | 693 | 2,864,682 | 4.65 | 4.64 | 3.89 |
+| Fixed / fixed | 13 | 258 | 1,062,748 | 4.69 | 4.72 | 4.19 |
+| Fixed / variable | 25 | 508 | 2,096,252 | 4.94 | 4.98 | 4.22 |
+| Variable / fixed | 24 | 443 | 1,832,479 | 4.73 | 4.71 | 4.34 |
+| Variable / variable | 37 | 693 | 2,864,682 | 4.86 | 4.81 | 4.08 |
 
-Larger index leaves increase how many references the reader decodes and
-validates on each lookup. In this workload, the 4 KiB leaves erased most of
-the latency advantage. The results favor a 1 KiB leaf target for this
-implementation and workload.
+The [previous paired matrix](history/unified-before-proof-trials.csv)
+records the ALVSST03 baselines and the prototype before it was connected to
+the public proof. The current benchmark runs only ALVSST05.

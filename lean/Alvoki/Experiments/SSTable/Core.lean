@@ -5,7 +5,7 @@ namespace ImmutableSSTable
 
 def maxFileSize : Nat := 2 ^ 63 - 1
 
-/-- The largest physical row, including its length and checksum words. -/
+/-- The maximum physical packet size, including its checksum. -/
 def maxRowSize : Nat := 16 * 1024 * 1024
 
 def encodeOffset (offset : Nat) : ByteArray :=
