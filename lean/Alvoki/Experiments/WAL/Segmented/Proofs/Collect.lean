@@ -52,21 +52,49 @@ private theorem mapPost {result : Result α} {ok next : α → Disk → Prop} {s
     | error _ => exact failure s.disk h
     | ok value => exact success value s.disk h
 
-private theorem removeRetired_cases (effects : Effects) (first : Nat) (ids : List Nat) (s : State) :
+structure CollectionEffects (callbacks : Ops M) : Prop where
+  list : ∀ s, DiskPost
+    (fun ids d => (∀ id ∈ s.disk.liveNames, id ∈ ids) ∧ d = s.disk)
+    (· = s.disk) (callbacks.listSegments.run s)
+  remove : ∀ id s, DiskPost (fun _ d => ∃ p, d = s.disk.remove id p)
+    (fun d => d = s.disk ∨ ∃ p, d = s.disk.remove id p)
+    ((callbacks.removeSegment id).run s)
+  sync : ∀ s, DiskPost (fun _ d => d = s.disk.syncRoot)
+    (fun d => d = s.disk ∨ d = s.disk.syncRoot) (callbacks.syncRoot.run s)
+
+theorem modelCollectionEffects (effects : Effects) : CollectionEffects (ops effects) where
+  list s := by
+    change DiskPost _ _ (read (effects.listing s.step) (.ok s.disk.liveNames) s)
+    cases effects.listing s.step with
+    | none => exact ⟨fun _ h => h, rfl⟩
+    | some fault => cases fault <;> rfl
+  remove id s := by
+    apply namespacePost (effects.remove s.step id) (fun d p => d.remove id p) s
+    · exact .inl rfl
+    · exact fun p => .inr ⟨p, rfl⟩
+    · exact fun p => ⟨p, rfl⟩
+  sync s := by
+    apply barrierPost (effects.root s.step) Disk.syncRoot s
+    · exact .inl rfl
+    · exact .inr rfl
+    · rfl
+
+private theorem removeRetired_cases {callbacks : Ops M} (effects : CollectionEffects callbacks) (first : Nat) (ids : List Nat) (s : State) :
     DiskPost (fun _ after => CollectionFrame first s.disk after ∧
       ∀ id ∈ ids, id < first → id ∉ after.liveNames)
-      (CollectionFrame first s.disk) (((Segmented.removeRetired (ops effects) first ids).run s)) := by
+      (CollectionFrame first s.disk) (((Segmented.removeRetired callbacks first ids).run s)) := by
   induction ids generalizing s with
   | nil => exact ⟨.refl first s.disk, by simp⟩
   | cons id ids ih =>
     by_cases retired : id < first
     · simp only [Segmented.removeRetired, retired, ↓reduceIte]
       apply bindPost (P := fun _ after => ∃ p, after = s.disk.remove id p)
-      · change DiskPost _ _ (namespaceChange (effects.remove s.step id) (fun d p => d.remove id p) s)
-        apply namespacePost
-        · exact .refl first s.disk
-        · exact fun p => .remove s.disk retired p
-        · exact fun p => ⟨p, rfl⟩
+      · apply mapPost (effects.remove id s)
+        · exact fun _ _ h => h
+        · intro d h
+          rcases h with rfl | ⟨p, rfl⟩
+          · exact .refl first s.disk
+          · exact .remove s.disk retired p
       intro _ removed ⟨persist, exactRemoved⟩
       have initialFrame : CollectionFrame first s.disk removed.disk := by
         rw [exactRemoved]
@@ -82,7 +110,7 @@ private theorem removeRetired_cases (effects : Effects) (first : Nat) (ids : Lis
         · exact gone n member old survived
       · intro _ tail
         exact initialFrame.trans tail
-    · apply mapPost (result := ((Segmented.removeRetired (ops effects) first (id :: ids)).run s))
+    · apply mapPost (result := ((Segmented.removeRetired callbacks first (id :: ids)).run s))
         (ok := fun _ after => CollectionFrame first s.disk after ∧
           ∀ n ∈ ids, n < first → n ∉ after.liveNames)
       · simpa [Segmented.removeRetired, retired] using ih s
@@ -97,17 +125,16 @@ private theorem removeRetired_cases (effects : Effects) (first : Nat) (ids : Lis
 /-- The actual listing and removal loop preserve selected names even on an
 error or interruption. On success, exactly the live names remaining after
 those removals are durable, and every remaining name is at least `firstNeeded`. -/
-theorem collect_cases (effects : Effects) (c : Control) (s : State) :
+theorem collectWith_cases {callbacks : Ops M} (effects : CollectionEffects callbacks) (c : Control) (s : State) :
     DiskPost (fun _ after => CollectionFrame c.firstNeeded s.disk after ∧
       after.durableControl = after.liveControl ∧ after.durableNames = after.liveNames ∧
       ∀ id ∈ after.liveNames, c.firstNeeded ≤ id)
-      (CollectionFrame c.firstNeeded s.disk) ((Segmented.collect (ops effects) c).run s) := by
+      (CollectionFrame c.firstNeeded s.disk) ((Segmented.collect callbacks c).run s) := by
   unfold Segmented.collect
-  apply bindPost (P := fun ids after => ids = s.disk.liveNames ∧ after = s.disk)
-  · change DiskPost _ _ (read (effects.listing s.step) (.ok s.disk.liveNames) s)
-    cases effects.listing s.step with
-    | none => exact ⟨rfl, rfl⟩
-    | some fault => cases fault <;> exact .refl _ _
+  apply bindPost (P := fun ids after => (∀ id ∈ s.disk.liveNames, id ∈ ids) ∧ after = s.disk)
+  · apply mapPost (effects.list s)
+    · exact fun _ _ h => h
+    · intro _ rfl; exact .refl _ _
   intro ids listed ⟨idsExact, listedExact⟩
   apply bindPost (P := fun _ after => CollectionFrame c.firstNeeded s.disk after ∧
     ∀ id ∈ after.liveNames, c.firstNeeded ≤ id)
@@ -117,16 +144,26 @@ theorem collect_cases (effects : Effects) (c : Control) (s : State) :
       refine ⟨frame, ?_⟩
       intro id member
       have original := frame.liveSubset id member
-      rw [← idsExact] at original
+      have original := idsExact id original
       exact Nat.le_of_not_gt (fun retired => gone id original retired member)
     · intro _ frame
       rw [listedExact] at frame
       exact frame
   intro _ pruned ⟨frame, gone⟩
-  apply barrierPost
-  · exact frame
-  · exact frame.trans (.syncRoot c.firstNeeded pruned.disk)
-  · exact ⟨frame.trans (.syncRoot c.firstNeeded pruned.disk), rfl, rfl, gone⟩
+  apply mapPost (effects.sync pruned)
+  · intro _ _ rfl
+    exact ⟨frame.trans (.syncRoot c.firstNeeded pruned.disk), rfl, rfl, gone⟩
+  · intro _ h
+    rcases h with eq | eq
+    · rw [eq]; exact frame
+    · rw [eq]; exact frame.trans (.syncRoot c.firstNeeded pruned.disk)
+
+theorem collect_cases (effects : Effects) (c : Control) (s : State) :
+    DiskPost (fun _ after => CollectionFrame c.firstNeeded s.disk after ∧
+      after.durableControl = after.liveControl ∧ after.durableNames = after.liveNames ∧
+      ∀ id ∈ after.liveNames, c.firstNeeded ≤ id)
+      (CollectionFrame c.firstNeeded s.disk) ((Segmented.collect (ops effects) c).run s) :=
+  collectWith_cases (modelCollectionEffects effects) c s
 
 private theorem run_bind_ok {a : M α} {next : α → M β} {before after : State} {value : α}
     (got : a.run before = .ok (.ok value) after) :

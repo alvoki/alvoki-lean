@@ -138,19 +138,26 @@ Keep segment creation, prefix release and collection under the
 existing WAL invariants. Coordinate the adapter change with the L0
 branch when taking up that work.
 
-The [native reopen proof modules](Proofs/NativeReopen.lean) check lock-path
-selection, decoding bytes from the protected CONTROL binding, child dispatch
-to the selected path and returned handle, and installation and scan of the
-session returned by the shared root schedule. The native child interpreter
-inserts the exact reached image into the selected disk slot, including on
-error. A sealed child preserves its file image. An active child that returns
-selects the value determined by its live bytes. `reopenPhase_nativeChild`
-composes that producer with the root model to prove the public open step and
-scan result, or retryability on the exact reached disk. The shared release schedule runs root unlock on the state reached by
-child close, even if child close reports an error. The Linux root barrier,
-enumeration and reclamation effects, the outer child wrapper's checks and
-active-cell updates, and the installation and release of the public root
-handle still need to be connected to this theorem.
+[Native reopen proofs](Proofs/NativeReopen.lean) compose the single-file
+producer with the shared root operations. The root directory descriptor
+selects both directory barriers. A barrier that takes effect settles the
+CONTROL binding and child directory names together, including on a reported
+failure. Root enumeration decodes only canonical segment IDs. Reclamation
+addresses entries beneath the selected directory and changes its projected
+root binding only at rmdir. Prefix unlinks affect private artifacts of a
+retired segment. The existing collection proof keeps every selected name.
+
+The root interpreter takes local effects for CONTROL reads, enumeration,
+directory sync, inspection, unlink and rmdir. It assumes stable bindings
+under the cooperating root lock and a checked listing of those bindings.
+The root phase theorem gives the installed view or retryability from the
+exact reached disk. The install theorem interprets reference and mutex
+creation by retaining the phase value and erasing resource identity.
+The close schedules show that the phase and child reference are cleared
+before release, then root unlock follows child close even on a reported
+error. The remaining lifecycle proof must compose the outer child checks,
+the actual opened child's reference and public scan, and the resulting
+child and root resource ownership through acquisition and cleanup.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be
@@ -161,7 +168,7 @@ The native CONTROL adapter uses the writer custody from PR #5: the stage
 writer is consumed by its own fsync and cleared on cleanup. The recovery
 composition theorem covers a reported discard error, another reported open
 error, and two successful opens with the same view. It uses the shared
-root publication model and interpreted native child effects. Linking the
+root publication model and interpreted native reopen effects. Linking the
 actual CONTROL publication to that model remains open.
 
 ## Roadmap

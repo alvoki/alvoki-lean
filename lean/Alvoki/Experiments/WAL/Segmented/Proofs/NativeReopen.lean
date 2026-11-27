@@ -53,6 +53,30 @@ theorem close_ready (owned : store) (session : Session) (release : store → Exc
 theorem close_alreadyClosed (release : store → Except String Unit) :
     closeWith (fun _ => .ok .closed) release = .ok () := rfl
 
+/-- The child reference is emptied before calling close. If close fails the
+old child cannot be taken a second time by root cleanup. -/
+theorem closeChild_reached (close : child → EStateM error (Option (Nat × child)) Unit)
+    (held : Option (Nat × child)) :
+    (closeChildWith
+      (fun current => EStateM.Result.ok current none)
+      close).run held =
+      match held with
+      | none => .ok () none
+      | some (_, child) => (close child).run none := by
+  cases held with
+  | none => rfl
+  | some pair => cases pair; rfl
+
+/-- The public phase is set to closed before release. Repeat close has no
+release call, including after a reported first release error. -/
+theorem closePhase_reached (release : store → EStateM error (Phase store) Unit)
+    (held : Phase store) :
+    (closeWith (fun phase old => .ok old phase) release).run held =
+      match held with
+      | .ready owned _ | .poisoned owned => (release owned).run .closed
+      | .closed => .ok () .closed := by
+  cases held <;> rfl
+
 /-- Root unlock receives the state reached by child close on either outcome. -/
 theorem release_reached (close unlock : EStateM error state Unit) (before : state) :
     (releaseWith close unlock).run before =
@@ -143,14 +167,14 @@ theorem openRootDirectory_usesCanonicalPath (dir root : FilePath) (held : descri
 
 /-- Interpret cleanup against the same reached state as installation, even
 when phase installation failed after the root protocol changed the disk. -/
-theorem installPhase_reached (load : EStateM String state (Except String phase))
-    (newRef : phase → EStateM String state (Except String cell))
-    (newMutex : EStateM String state (Except String mutex))
-    (release : EStateM String state (Except String Unit)) (before : state) :
-    let action : ExceptT String (EStateM String state) (cell × mutex) := do
-      let phase ← (ExceptT.mk load : ExceptT String (EStateM String state) phase)
-      let cell ← (ExceptT.mk (newRef phase) : ExceptT String (EStateM String state) cell)
-      let mutex ← (ExceptT.mk newMutex : ExceptT String (EStateM String state) mutex)
+theorem installPhase_reached (load : EStateM abort state (Except String phase))
+    (newRef : phase → EStateM abort state (Except String cell))
+    (newMutex : EStateM abort state (Except String mutex))
+    (release : EStateM abort state (Except String Unit)) (before : state) :
+    let action : ExceptT String (EStateM abort state) (cell × mutex) := do
+      let phase ← (ExceptT.mk load : ExceptT String (EStateM abort state) phase)
+      let cell ← (ExceptT.mk (newRef phase) : ExceptT String (EStateM abort state) cell)
+      let mutex ← (ExceptT.mk newMutex : ExceptT String (EStateM abort state) mutex)
       return (cell, mutex)
     (installPhaseWith (error := String) (ExceptT.mk load)
       (fun phase => ExceptT.mk (newRef phase)) (ExceptT.mk newMutex)
@@ -207,10 +231,11 @@ open Persistence
 
 /-- The shared phase wrapper preserves the disk proof of the existing model
 schedule and ties the public scan to the exact installed session. -/
-theorem reopenPhase_withChild (owned : store) (root : Effects)
-    {call} {healthyCall : Prop} (childEffects : OpenChildEffects call healthyCall) (s : State)
-    (prior : Recoverable known request s.disk) :
-    let result := (Native.reopenPhaseWith (reopenOps root call) owned).run s
+theorem reopenPhase_refines (owned : store) (callbacks : Ops M) (s : State)
+    (physical : DiskPost (fun session after => Installed session after ∧ PermittedView known request session.view)
+      (Recoverable known request) ((Segmented.reopen callbacks).run s))
+    :
+    let result := (Native.reopenPhaseWith callbacks owned).run s
     match result with
     | .ok (.ok (.ready owner session)) after =>
       owner = owned ∧ Installed session after.disk ∧
@@ -218,14 +243,13 @@ theorem reopenPhase_withChild (owned : store) (root : Effects)
       Native.scanWith (m := Except String) (.ready owner session) = .ok session.view
     | .ok (.ok _) _ => False
     | .ok (.error _) after | .error _ after => Recoverable known request after.disk := by
-  have physical := reopenWithChild_refines root childEffects s prior
   have phase :
-      (Native.reopenPhaseWith (reopenOps root call) owned).run s =
-        match (Segmented.reopen (reopenOps root call)).run s with
+      (Native.reopenPhaseWith callbacks owned).run s =
+        match (Segmented.reopen callbacks).run s with
         | .ok (.ok session) after => .ok (.ok (.ready owned session)) after
         | .ok (.error err) after => .ok (.error err) after
         | .error token after => .error token after := by
-    cases ran : (Segmented.reopen (reopenOps root call)).run s with
+    cases ran : (Segmented.reopen callbacks).run s with
     | error =>
       simp [Native.reopenPhaseWith, Bind.bind, ExceptT.run, ExceptT.bind,
         ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢
@@ -236,7 +260,7 @@ theorem reopenPhase_withChild (owned : store) (root : Effects)
           ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢ <;> rw [ran] <;> rfl
   dsimp only
   rw [phase]
-  cases issued : (Segmented.reopen (reopenOps root call)).run s with
+  cases issued : (Segmented.reopen callbacks).run s with
   | error => rw [issued] at physical; exact physical
   | ok response _ =>
     rw [issued] at physical
@@ -380,12 +404,213 @@ theorem nativeOpenChild_effects (root : FilePath) (reports : Nat → Nat → Sin
         exact eq.symm.trans (nativeChild_selected dir r entry chosen opened)
   healthy _ _ impossible := impossible.elim
 
-/-- The native child producer supplies the root recovery proof. Root namespace
-operations here still use the root model. -/
-theorem reopenPhase_nativeChild (owned : store) (root : FilePath) (effects : Effects)
+/-- Both barriers use the already opened root directory. One filesystem
+effect settles CONTROL and child directory names together. -/
+theorem nativeRootBarrier (directory : System.FilePath) (effect : Primitive) (s : State) :
+    let result := (Native.syncRootWith (m := M)
+      (fun path state => if path = directory then barrier effect Disk.syncRoot state
+        else .ok (.error "wrong directory description") state) directory).run s
+    result = barrier effect Disk.syncRoot s ∧
+      ((reached result).disk = s.disk ∨
+        ((reached result).disk.durableControl = s.disk.liveControl ∧
+         (reached result).disk.durableNames = s.disk.liveNames)) := by
+  simp only [Native.syncRootWith, ExceptT.run]
+  cases effect with
+  | before fault =>
+    cases fault <;> exact ⟨rfl, .inl rfl⟩
+  | after fault =>
+    cases fault with
+    | none => exact ⟨rfl, .inr ⟨rfl, rfl⟩⟩
+    | some fault => cases fault <;> exact ⟨rfl, .inr ⟨rfl, rfl⟩⟩
+
+/-- Member unlinks stay inside the retired directory. In the root projection
+these files are private artifacts, so only rmdir changes the root binding. -/
+theorem nativeRemoveSegment (root : FilePath) (id : Nat)
+    (present : Except String Bool) (members : Except String (Array String))
+    (unlinkFailure : FilePath → Option Abort)
+    (removeEffect : NamespaceEffect) (s : State)
+    (missing : present = .ok false → id ∉ s.disk.liveNames) :
+    let observe : {α : Type} → Except String α → M α := fun {_} value t => read none value t
+    let dir := Native.segmentPath root id
+    DiskPost (fun _ after => ∃ persist, after = s.disk.remove id persist)
+      (fun after => after = s.disk ∨ ∃ persist, after = s.disk.remove id persist)
+      ((Native.removeSegmentWith (m := M)
+        (fun path => observe (if path = dir then present else .error "wrong metadata path"))
+        (fun path => observe (if path = dir then members else .error "wrong listing path"))
+        (fun path t => read (unlinkFailure path) (.ok ()) t)
+        (fun path t => if path = dir then namespaceChange removeEffect (fun d p => d.remove id p) t
+          else .ok (.error "wrong rmdir path") t) root id).run s) := by
+  dsimp only [Native.removeSegmentWith]
+  apply bindPost (P := fun found d => d = s.disk ∧ present = .ok found)
+  · change DiskPost _ _ (read none (if Native.segmentPath root id = Native.segmentPath root id
+      then present else .error "wrong metadata path") s)
+    rw [ite_eq_left rfl]
+    cases present with
+    | error => exact .inl rfl
+    | ok => exact ⟨rfl, rfl⟩
+  intro found t ⟨same, readPresent⟩
+  cases found with
+  | false =>
+    refine ⟨false, ?_⟩
+    rw [same]
+    have filtered : s.disk.liveNames.filter (· != id) = s.disk.liveNames :=
+      List.filter_eq_self.mpr (fun n hn => by
+        simp only [bne_iff_ne]
+        intro eq
+        exact missing readPresent (eq ▸ hn))
+    simp [Disk.remove, filtered]
+  | true =>
+    apply bindPost (P := fun _ d => d = s.disk)
+    · change DiskPost _ _ (read none (if Native.segmentPath root id = Native.segmentPath root id
+        then members else .error "wrong listing path") t)
+      rw [ite_eq_left rfl]
+      cases members with
+      | error => exact .inl same
+      | ok => exact same
+    intro names t inspected
+    apply bindPost (P := fun _ d => d = s.disk)
+    · have loop (names : List String) (state : State) (same : state.disk = s.disk) :
+          DiskPost (fun _ d => d = s.disk)
+            (fun d => d = s.disk ∨ ∃ p, d = s.disk.remove id p)
+            ((names.foldlM (m := M) (fun (_ : Unit) (name : String) state =>
+              read (unlinkFailure (Native.segmentPath root id / name)) (.ok ()) state) ()).run state) := by
+        induction names generalizing state with
+        | nil => exact same
+        | cons name tail ih =>
+          apply bindPost (P := fun _ d => d = s.disk)
+          · change DiskPost _ _ (read (unlinkFailure (Native.segmentPath root id / name)) (.ok ()) state)
+            cases h : unlinkFailure (Native.segmentPath root id / name) with
+            | none => exact same
+            | some fault => cases fault <;> exact .inl same
+          · intro _ next frame
+            exact ih next frame
+      change DiskPost _ _ ((names.foldlM (m := M) (fun (_ : Unit) (name : String) state =>
+        read (unlinkFailure (Native.segmentPath root id / name)) (.ok ()) state) ()).run t)
+      have eq := Array.foldlM_toList (m := M) (xs := names) (init := ()) (f := fun _ (name : String) state =>
+        read (unlinkFailure (Native.segmentPath root id / name)) (.ok ()) state)
+      have post := loop names.toList t inspected
+      rw [eq] at post
+      exact post
+    intro _ last frame
+    change DiskPost _ _ (if Native.segmentPath root id = Native.segmentPath root id then
+      namespaceChange removeEffect (fun d p => d.remove id p) last else .ok (.error "wrong rmdir path") last)
+    rw [ite_eq_left rfl]
+    apply namespacePost
+    · exact .inl frame
+    · intro persist; exact .inr ⟨persist, by rw [frame]⟩
+    · intro persist; exact ⟨persist, by rw [frame]⟩
+
+/-- Reached Linux effects for the root operations. Child file unlinks are
+projected out after retirement. Directory fsync and rmdir retain their
+effects even when an error is reported. -/
+structure RootReports where
+  controlRead : Nat → Option Abort := fun _ => none
+  listFault : Nat → Option Abort := fun _ => none
+  sync : Nat → Primitive := fun _ => .after none
+  presenceFault : Nat → Nat → Option String := fun _ _ => none
+  members : Nat → Nat → Except String (Array String) := fun _ _ => .ok #[]
+  unlinkFault : Nat → FilePath → Option Abort := fun _ _ => none
+  rmdir : Nat → Nat → NamespaceEffect := fun _ _ => .after false none
+
+private def rootControl (root : FilePath) (disk : Disk) : Except String Control :=
+  match disk.liveControl with
+  | none => .error "missing CONTROL"
+  | some c =>
+    if c.capacity ≤ 255 ∧ c.active ≤ ControlCodec.wordMax ∧ c.discarded ≤ ControlCodec.wordMax then
+      Native.readControlWith
+        (fun path => if path = root / "CONTROL" then .ok (true, (ControlCodec.encode c).size)
+          else .error "unexpected metadata path")
+        (fun path => if path = root / "CONTROL" then .ok (ControlCodec.encode c)
+          else .error "unexpected read path") root
+    else .error "unrepresentable CONTROL"
+
+private def rootListing (ids : List Nat) : Except String (List Nat) :=
+  Native.listedIds id (ids.reverse.map Native.segmentName).toArray
+
+private theorem rootListing_eq (ids : List Nat) : rootListing ids = .ok ids := by
+  unfold rootListing
+  have parsed : ((ids.reverse.map Native.segmentName).toArray).toList.map
+      (Native.segmentId ∘ id) = (ids.reverse.map some).map Except.ok := by
+    simp [List.map_map, Function.comp_def, Native.segmentId_canonical]
+  rw [Native.listedIds_exact id _ _ parsed]
+  simp [List.filterMap_map, Function.comp_def]
+
+private def rootPresent (r : RootReports) (s : State) (id : Nat) : Except String Bool :=
+  match r.presenceFault s.step id with
+  | some cause => .error cause
+  | none => .ok (decide (id ∈ s.disk.liveNames))
+
+private def rootRemove (root : FilePath) (r : RootReports) (id : Nat) : M Unit := fun s =>
+  let dir := Native.segmentPath root id
+  (Native.removeSegmentWith (m := M)
+    (fun path t => read none (if path = dir then rootPresent r s id else .error "wrong metadata path") t)
+    (fun path t => read none (if path = dir then r.members s.step id else .error "wrong listing path") t)
+    (fun path t => read (r.unlinkFault s.step path) (.ok ()) t)
+    (fun path t => if path = dir then namespaceChange (r.rmdir s.step id) (fun d p => d.remove id p) t
+      else .ok (.error "wrong rmdir path") t) root id).run s
+
+private def rootSync (root : FilePath) (r : RootReports) : M Unit := fun s =>
+  (Native.syncRootWith (m := M)
+    (fun path t => if path = root then barrier (r.sync s.step) Disk.syncRoot t
+      else .ok (.error "wrong directory description") t) root).run s
+
+/-- The unused write callbacks retain their model implementations. Reopen
+uses only the filesystem schedules in these five fields. -/
+def nativeReopenOps (root : FilePath) (r : RootReports)
+    (childReports : Nat → Nat → SingleFile.OpenReports) : Ops M :=
+  { ops healthy with
+    readControl := fun s => read (r.controlRead s.step) (rootControl root s.disk) s
+    syncRoot := rootSync root r
+    listSegments := fun s => read (r.listFault s.step) (rootListing s.disk.liveNames) s
+    removeSegment := rootRemove root r
+    openSegment := nativeOpenChild root childReports }
+
+theorem nativeRootEffects (root : FilePath) (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports) :
+    OpenRootEffects (nativeReopenOps root r reports) False where
+  collection := {
+    list s := by
+      change DiskPost _ _ (read (r.listFault s.step) (rootListing s.disk.liveNames) s)
+      rw [rootListing_eq]
+      cases r.listFault s.step with
+      | none => exact ⟨fun _ h => h, rfl⟩
+      | some fault => cases fault <;> rfl
+    remove i s := nativeRemoveSegment root i (rootPresent r s i) (r.members s.step i)
+      (r.unlinkFault s.step) (r.rmdir s.step i) s (by
+        unfold rootPresent
+        split <;> simp)
+    sync s := by
+      change DiskPost _ _ (rootSync root r s)
+      unfold rootSync
+      rw [(nativeRootBarrier root (r.sync s.step) s).1]
+      apply barrierPost
+      · exact .inl rfl
+      · exact .inr rfl
+      · rfl }
+  control s c found := by
+    change DiskPost _ _ (read (r.controlRead s.step) (rootControl root s.disk) s)
+    cases cut : r.controlRead s.step with
+    | none =>
+      unfold rootControl
+      simp only [found]
+      split
+      · rename_i fits
+        rw [Native.readControl_canonical root c fits.1 fits.2.1 fits.2.2]
+        exact ⟨rfl, rfl⟩
+      · exact ⟨rfl, id⟩
+    | some fault => cases fault <;> exact ⟨rfl, id⟩
+  syncHealthy _ impossible := impossible.elim
+  collectHealthy _ _ impossible := impossible.elim
+
+theorem reopen_nativeRoot {known request} (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (s : State) (prior : Recoverable known request s.disk) :
+    DiskPost (fun session after => Installed session after ∧ PermittedView known request session.view)
+      (Recoverable known request) ((Segmented.reopen (nativeReopenOps root r reports)).run s) :=
+  reopenWithEffects_refines (nativeRootEffects root r reports) (nativeOpenChild_effects root reports) s prior
+
+theorem reopenPhase_nativeRoot (owned : store) (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
     (prior : Recoverable known request s.disk) :
-    let result := (Native.reopenPhaseWith (reopenOps effects (nativeOpenChild root reports)) owned).run s
+    let result := (Native.reopenPhaseWith (nativeReopenOps root r reports) owned).run s
     match result with
     | .ok (.ok (.ready owner session)) after =>
       owner = owned ∧ Installed session after.disk ∧
@@ -393,34 +618,77 @@ theorem reopenPhase_nativeChild (owned : store) (root : FilePath) (effects : Eff
       Native.scanWith (m := Except String) (.ready owner session) = .ok session.view
     | .ok (.ok _) _ => False
     | .ok (.error _) after | .error _ after => Recoverable known request after.disk :=
-  reopenPhase_withChild owned effects (nativeOpenChild_effects root reports) s prior
+  reopenPhase_refines owned _ s (reopen_nativeRoot root r reports s prior)
+
+/-- A fresh reference receives the exact phase. Reference and mutex creation
+are BaseIO operations in the public adapter. This model erases their identities. -/
+def nativeInstallModel (owned : store) (callbacks : Ops M) : M (Native.Phase store × Unit) :=
+  Native.installPhaseWith (error := String) (Native.reopenPhaseWith callbacks owned)
+    pure (pure ()) (pure ())
+
+theorem nativeInstallModel_eq (owned : store) (callbacks : Ops M) (s : State) :
+    (nativeInstallModel owned callbacks).run s =
+      match (Native.reopenPhaseWith callbacks owned).run s with
+      | .ok (.ok phase) after => .ok (.ok (phase, ())) after
+      | .ok (.error err) after => .ok (.error err) after
+      | .error token after => .error token after := by
+  unfold nativeInstallModel
+  simp only [Native.installPhaseWith, tryCatchThe, MonadExceptOf.tryCatch,
+    ExceptT.tryCatch, ExceptT.run, ExceptT.mk, Bind.bind, EStateM.bind, ExceptT.bind]
+  cases reopened : (Native.reopenPhaseWith callbacks owned).run s with
+  | error =>
+    simp only [ExceptT.run] at reopened
+    rw [reopened]
+  | ok value after =>
+    simp only [ExceptT.run] at reopened
+    rw [reopened]
+    cases value <;> rfl
+
+theorem nativeInstallModel_refines (owned : store) (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
+    (prior : Recoverable known request s.disk) :
+    match (nativeInstallModel owned (nativeReopenOps root r reports)).run s with
+    | .ok (.ok (.ready owner session, ())) after =>
+      owner = owned ∧ Installed session after.disk ∧
+      Contract.Step (.offline known request) (.opened session.view) (.online session.view) ∧
+      Native.scanWith (m := Except String) (.ready owner session) = .ok session.view
+    | .ok (.ok _) _ => False
+    | .ok (.error _) after | .error _ after => Recoverable known request after.disk := by
+  have opened := reopenPhase_nativeRoot owned root r reports s prior
+  dsimp only at opened
+  rw [nativeInstallModel_eq]
+  cases ran : (Native.reopenPhaseWith (nativeReopenOps root r reports) owned).run s with
+  | error => rw [ran] at opened; exact opened
+  | ok value _ =>
+    cases value with
+    | error => rw [ran] at opened; exact opened
+    | ok phase => rw [ran] at opened; cases phase <;> exact opened
 
 /-- The same continuation applies to every publication cut that reports an
-error. The child producer is used on each reached disk; root operations
-still use the root model. -/
-theorem repeatOpenAfterFailedDiscard (root : FilePath) (publish interruptedOpen first second : Effects)
+error. The interpreted native reopen runs on each reached disk. -/
+theorem repeatOpenAfterFailedDiscard (root : FilePath) (publish : Effects)
+    (interruptedOpen first second : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports)
     (session : Session) (position : Nat) (before failed retried opened done : State)
     (selected repeated : Session) (installed : Installed session before.disk)
     (discardError : (Segmented.discardThrough (ops publish) session position).run before =
       .ok (.error publicationError) failed)
-    (openError : (Segmented.reopen (reopenOps interruptedOpen (nativeOpenChild root reports))).run failed =
+    (openError : (Segmented.reopen (nativeReopenOps root interruptedOpen reports)).run failed =
       .ok (.error recoveryError) retried)
-    (openFirst : (Segmented.reopen (reopenOps first (nativeOpenChild root reports))).run retried =
+    (openFirst : (Segmented.reopen (nativeReopenOps root first reports)).run retried =
       .ok (.ok selected) opened)
-    (openSecond : (Segmented.reopen (reopenOps second (nativeOpenChild root reports))).run opened =
+    (openSecond : (Segmented.reopen (nativeReopenOps root second reports)).run opened =
       .ok (.ok repeated) done) :
     PermittedView session.view (some (.discardThrough position)) selected.view ∧
       repeated.view = selected.view := by
   have discard := discard_refines publish session position before installed
   rw [discardError] at discard
-  have child := nativeOpenChild_effects root reports
-  have retry := reopenWithChild_refines interruptedOpen child failed discard
+  have retry := reopen_nativeRoot root interruptedOpen reports failed discard
   rw [openError] at retry
-  have chosen := reopenWithChild_refines first child retried retry
+  have chosen := reopen_nativeRoot root first reports retried retry
   rw [openFirst] at chosen
   have settled := chosen.1.offline (request := none) (.inl rfl)
-  have again := reopenWithChild_refines second child opened settled
+  have again := reopen_nativeRoot root second reports opened settled
   rw [openSecond] at again
   exact ⟨chosen.2, again.2.elim id (fun impossible => by cases impossible)⟩
 

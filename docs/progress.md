@@ -11,11 +11,11 @@ uncertain result, and composes with the existing segmented child contract.
 **Segmented WAL recovery.** The branch composes the single-file producer
 with segmented reopen on the reached child image, and checks view stability
 across a failed publication, a failed reopen, and two successful reopens
-using the root model. The native CONTROL sync keeps the original PR #5
+using the root publication model and interpreted native reopen operations. The native CONTROL sync keeps the original PR #5
 writer. The public append schedule rejects position exhaustion before any
-write. The next obligation is to connect native root barriers, reclamation,
-active-child ownership, and public handle installation and release to the
-same recovery theorem. CONTROL publication and rotation still need a
+write. The interpreted native root barrier and reclamation preserve the
+selected bindings and feed the existing reopen proof. The next obligation is
+to connect the public root and child resource lifecycle to that proof. CONTROL publication and rotation still need a
 primitive-level proof of their joint namespace effects.
 [Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 · [WAL fault assumptions](design/wal-recovery.md)

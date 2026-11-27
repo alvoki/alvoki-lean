@@ -43,18 +43,26 @@ private def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) := do
   unless (← dir.symlinkMetadata).type == .dir do throw <| IO.userError s!"expected segment directory at {dir}"
   let names ← entries dir
   for item in names do
-    unless childName item.fileName do throw <| IO.userError s!"unexpected child {item.path}"
-    regular item.path (← item.path.symlinkMetadata)
+    let path := dir / item.fileName
+    unless childName item.fileName do throw <| IO.userError s!"unexpected child {path}"
+    regular path (← path.symlinkMetadata)
   return names
 
 /-- Reclaim only recognized names after the shared protocol has established
 the ID is retired or was never published. A partial deletion is retryable. -/
-private def removeSegment (root : FilePath) (id : Nat) : IO Unit := do
+@[inline] def removeSegmentWith [Monad m] (present : FilePath → m Bool)
+    (inspect : FilePath → m (Array String)) (unlink rmdir : FilePath → m Unit)
+    (root : FilePath) (id : Nat) : m Unit := do
   let dir := segmentPath root id
-  if (← metadata? dir).isSome then
-    let members ← inspectChild dir
-    for item in members do IO.FS.removeFile item.path
-    IO.FS.removeDir dir
+  if ← present dir then
+    let members ← inspect dir
+    members.forM fun (name : String) => unlink (dir / name)
+    rmdir dir
+
+private def removeSegment (root : FilePath) (id : Nat) : IO Unit :=
+  removeSegmentWith (fun dir => return (← metadata? dir).isSome)
+    (fun dir => return (← inspectChild dir).map (·.fileName))
+    IO.FS.removeFile IO.FS.removeDir root id
 
 private abbrev FileM := ExceptT String IO
 
@@ -87,8 +95,12 @@ private structure Store where
   active : IO.Ref (Option (Nat × SingleFile.Handle))
   controlWriter : IO.Ref (Option IO.FS.Handle)
 
-private def Store.closeChild (s : Store) : IO Unit := do
-  if let some (_, child) ← s.active.swap none then SingleFile.close child
+@[inline] def closeChildWith [Monad m] (take : m (Option (Nat × child)))
+    (close : child → m Unit) : m Unit := do
+  if let some (_, child) ← take then close child
+
+private def Store.closeChild (s : Store) : IO Unit :=
+  closeChildWith (s.active.swap none) SingleFile.close
 
 /-- Dispose of the child before releasing the root lock. An I/O error
 closing the child still runs the root unlock. -/
@@ -175,9 +187,12 @@ private def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
   let md ← path.symlinkMetadata
   return (md.type == .file && md.numLinks == 1, md.byteSize.toNat)
 
+@[inline] def syncRootWith {m : Type → Type} (sync : descriptor → m Unit) (directory : descriptor) : m Unit :=
+  sync directory
+
 private def Store.callbacks (s : Store) : Ops FileM where
   prepareSegment p id := s.prepare p id
-  syncRoot := syncHandle s.directory
+  syncRoot := syncRootWith (fun directory => liftM (syncHandle directory)) s.directory
   stageControl c := do
     unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do throw "segmented WAL position exhausted"
     let stage := s.root / "CONTROL.next"
