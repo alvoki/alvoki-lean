@@ -61,7 +61,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms wal_open
 #check_axioms ManifestComposition.reopen
 #check_axioms ManifestComposition.publish
-#check_axioms ManifestComposition.initialOpenPublish
+#check_axioms ManifestComposition.healthyInitialOpenPublish
 #check_axioms ManifestComposition.reopenSelected
 #check_axioms ManifestComposition.publishSelected
 #check_axioms ManifestComposition.retryAfterPublication

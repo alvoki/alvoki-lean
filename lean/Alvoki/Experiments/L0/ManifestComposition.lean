@@ -79,6 +79,21 @@ theorem initialOpenPublish (dir : System.FilePath) (reports : LinuxEffects.Repor
   simp [backend, L0Manifest.backend, Bind.bind, EStateM.bind, opened, initial,
     L0Manifest.decode_encode emptyValid, Pure.pure, EStateM.pure]
 
+private def healthy : LinuxEffects.Reports :=
+  ⟨true, true, .ok, true, true, true, .ok, .ok⟩
+
+/-- A healthy report sequence actually reaches the initialized open and
+the first publication in the same interpreter. -/
+theorem healthyInitialOpenPublish (dir : System.FilePath) (valid : proposal.Valid) :
+    let initial := L0Manifest.encode Version.empty
+    (backend dir healthy).reopen (.settled initial) = .ok Version.empty (.settled initial) ∧
+    (backend dir healthy).publish proposal (.settled initial) =
+      .ok () (.settled (L0Manifest.encode proposal)) ∧
+    L0Manifest.decode (Image.settled (L0Manifest.encode proposal)).active = some proposal := by
+  apply initialOpenPublish dir healthy valid <;>
+    simp [LinuxEffects.backend, Primitives.backend, Primitives.files, Files.backend,
+      LinuxEffects.primitives, healthy, Bind.bind, EStateM.bind] <;> rfl
+
 /-- At an L0 recovery boundary, the selected version is projected from
 the active image of that attempt. The WAL and table catalog are framed
 separately by the filesystem namespace boundary. -/
