@@ -1241,7 +1241,7 @@ private def checkProductionWalRotation (root : FilePath) (failDirectory : Bool) 
 
 private inductive SparsePruneCut where
   | directory (afterSync : Bool)
-  | unlinkBefore
+  | unlinkBefore (failDirectoryOnRetry : Bool)
   | unlinkAfter
 
 private def checkPublicSparsePruneRetry (root : FilePath) (cut : SparsePruneCut) : IO Unit := do
@@ -1284,20 +1284,23 @@ private def checkPublicSparsePruneRetry (root : FilePath) (cut : SparsePruneCut)
       check ((← path.pathExists) == present) s!"sparse prune changed the wrong later name {path}"
       if present then
         check ((← IO.FS.readBinFile path) == path.toString.toUTF8) s!"sparse prune changed the payload of {path}"
+  let stopAtDirectory := fun (afterSync : Bool) (remaining : List FilePath) => do
+    -- The already absent first name is an unlink observer and a guard against repeating it.
+    let traceUnlinks := if remaining.isEmpty then #[] else
+      #[("ALVOKI_CHECK_UNLINK_FAIL", some firstLater.toString)]
+    let (reported, calls) ← probeDisk bin dir (some dir) "--check-open-directory-sync-error" (skipFailures := 1)
+      (failureMode := if afterSync then .afterSync else .beforeSync) (extraEnv := traceUnlinks)
+    let barriers := [dir.toString] ++ remaining.map (fun path => s!"unlink {path}") ++ [dir.toString]
+    let expected := if afterSync then barriers ++ [s!"synced before error: {dir}"] else barriers
+    check (reported && calls == expected) "public reopen did not report EIO at the expected post-prune directory sync"
+    expectLater []
   IO.FS.writeBinFile keeper excess
   for path in later.reverse do
     -- Discardable files need valid names and regular bindings, with unchecked payloads.
     IO.FS.writeBinFile path path.toString.toUTF8
   match cut with
-  | .directory afterSync =>
-    let (reported, syncs) ← probeDisk bin dir (some dir) "--check-open-directory-sync-error" (skipFailures := 1)
-      (failureMode := if afterSync then .afterSync else .beforeSync)
-    let barriers := [dir.toString, dir.toString]
-    let expected := if afterSync then barriers ++ [s!"synced before error: {dir}"] else barriers
-    check (reported && syncs == expected)
-      "public reopen did not report EIO at the expected post-prune directory sync"
-    expectLater []
-  | .unlinkBefore | .unlinkAfter =>
+  | .directory afterSync => stopAtDirectory afterSync []
+  | .unlinkBefore _ | .unlinkAfter =>
     let afterEffect := cut matches .unlinkAfter
     let mode := if afterEffect then "after" else "before"
     let (reported, calls) ← probeDisk bin dir none "--check-open-eio"
@@ -1306,7 +1309,11 @@ private def checkPublicSparsePruneRetry (root : FilePath) (cut : SparsePruneCut)
     let expected := [dir.toString, s!"unlink {firstLater}", s!"unlink {secondLater}"] ++
       (if afterEffect then [s!"unlinked before error: {secondLater}"] else [])
     check (reported && calls == expected) s!"public reopen did not stop at the second unlink ({mode} effect)"
-    expectLater (if afterEffect then [thirdLater] else [secondLater, thirdLater])
+    let remaining := if afterEffect then [thirdLater] else [secondLater, thirdLater]
+    expectLater remaining
+    if cut matches .unlinkBefore true then
+      expectFiles excess oldMarker
+      stopAtDirectory true remaining
   expectFiles excess oldMarker
   let recovered ← DiskTable.open dir
   try
@@ -1320,6 +1327,7 @@ private def checkPublicSparsePruneRetry (root : FilePath) (cut : SparsePruneCut)
       "sparse prune retry returned the wrong table"
     check ((← recovered.write replacement.key replacement.value) == replacement.sequence)
       "sparse prune retry did not resume at the next ordinal"
+    expectSnapshot recovered 3 [(4, some 41), (7, some 70)]
   finally recovered.close
   expectFiles (WAL.encode [second, replacement]) (WAL.Boundary.encode (3 * WAL.frameSize).toUInt64)
 
@@ -2517,7 +2525,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir checkWalSegmentRepair
     for failDirectory in [false, true] do
       IO.FS.withTempDir (checkProductionWalRotation · failDirectory)
-    for cut in [SparsePruneCut.directory false, .directory true, .unlinkBefore, .unlinkAfter] do
+    for cut in [SparsePruneCut.directory false, .directory true, .unlinkBefore false, .unlinkAfter, .unlinkBefore true] do
       IO.FS.withTempDir (checkPublicSparsePruneRetry · cut)
     IO.FS.withTempDir checkFirstBoundedCheckpointOpen
     IO.FS.withTempDir checkRetrySync
