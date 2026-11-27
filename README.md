@@ -25,7 +25,7 @@ bash scripts/bootstrap.sh
 bash scripts/reproduce.sh
 ```
 
-The checks cover retained component proofs, native fixtures and Markdown links. The active SSTable integration adds its own checks when present.
+The checks cover retained component proofs, native fixtures and Markdown links. The SSTable suite runs as part of reproduction. Its native CRC32C check requires Linux x86-64, GCC, G++ and Git.
 
 ## Source map
 

@@ -50,9 +50,9 @@ descriptor. Directory sync and publication are the caller's responsibility.
 ## Verification and status
 
 Run `bash scripts/check-immutable-sstable.sh` with the pinned Lean toolchain,
-GCC and G++ on Linux x86-64. The opt-in runner builds Google CRC32C 1.1.2 from
+GCC and G++ on Linux x86-64. The runner also runs in the standard reproduction suite. It builds Google CRC32C 1.1.2 from
 pinned source using upstream's SSE4.2 dispatch and portable fallback. It can
-use an already checked-out copy via `CRC32C_DIR`. The runner only adds the pinned CRC32C dependency for this experiment.
+use an already checked-out copy via `CRC32C_DIR`. The shell runner links the native CRC32C library. Lake builds the Lean modules, and a separate native executable using `UnifiedNative` must link the CRC32C library too.
 [Lean Google CRC32C benchmark](../../../../benchmarks/sstable/checksums.md) ·
 [End-to-end lookup benchmark](../../../../benchmarks/sstable/unified.md)
 
