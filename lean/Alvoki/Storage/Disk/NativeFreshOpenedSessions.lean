@@ -1152,6 +1152,47 @@ theorem readsAfterInterruptedSecondBatch {stream : Type}
   exact ⟨plan.history, retained, retainedHistory, interruption.whole, interruption,
     (@opens stream source namespaceView root noManifest).recordsReads pending⟩
 
+include covered in
+/-- Use the cache and WAL window of the first acknowledged write to
+recover a stopped second append. The same fresh ledger continues at the
+exact table returned after the reported reboot and failed opens. -/
+theorem recoversInterruptedSecondAppend (wrote : observedFirstWrite) :
+    ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
+      (firstBatch : List WAL.Write) (firstTable : PackedTable) (next : NativeOpenedPosition opened.handle)
+      (sameDirectory : next.current.ready.state.session.directory = opened.start.current.ready.state.session.directory),
+      let nextCache : OpenSyncCacheRefs opened.handle.files next.current.ready.state.session.directory.path :=
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
+      call entry = .ok opened.handle.table opened.start.reached ∧
+      request.runOnRawOpenPhase directory lookup (appender.run seed.activeRef) (stager.run seed.pendingRef)
+        (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
+        rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
+      prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (firstBatch, firstTable) ∧
+      cache.directory = seed.directoryRef ∧ cache.active = seed.activeRef ∧ cache.pending = seed.pendingRef ∧
+      next.reached = reached ∧ next.current.history = firstBatch ∧
+      opened.start.current.LedgerSuffix [.acknowledged request firstBatch] next.current ∧
+      ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0
+          next.current.history.length)
+        (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 next.current.history.length
+            (storage preReady) (storage reached)),
+        next.ContinuesAfterInterruptedAppend clientView
+          (FreshBootstrapKeeperPhysical.inodes (FreshBootstrapOpenHeap.keeperPhysical seen)) runs storage nextCache
+          opened.start.current [.acknowledged request firstBatch] 0 := by
+  obtain ⟨cache, firstBatch, firstTable, next, sameDirectory, atOpen, write, prepared, _, _, directoryRef, activeRef,
+    pendingRef, exactHeap, _, history, prior, physical, _, _, carries⟩ :=
+    opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
+      liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+      modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
+  refine ⟨cache, firstBatch, firstTable, next, sameDirectory, atOpen, write, prepared, directoryRef, activeRef,
+    pendingRef, exactHeap, history, prior, ?_⟩
+  intro firstNames restore
+  have budget : next.current.history.length ≤ through := by
+    simpa only [history, (prepareBatch_spec prepared).1] using covered
+  exact @NativeOpenedPosition.opensReadyAfterInterruptedAppend heap opened.handle next clientView
+    seen.keeperPhysical.inodes runs storage _ physical.physical 0 (carries _ budget firstNames restore)
+    opened.start.current [.acknowledged request firstBatch] prior
+
 end FirstAcknowledgement
 
 end BootstrapWriteEntry

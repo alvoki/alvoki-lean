@@ -657,9 +657,8 @@ end AppendStop
 
 section AppendReopen
 
-variable {heap stream stop : Type} {opened : NativeOpenedHandle heap}
-  (last : NativeOpenedPosition opened) {source : RawMarkedOpenInterpreter heap stream}
-  {view : OpenCloseHeapView heap FileImage}
+variable {heap : Type} {opened : NativeOpenedHandle heap}
+  (last : NativeOpenedPosition opened) (view : OpenCloseHeapView heap FileImage)
   (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
   (storage : heap → CheckpointStorageObservation)
 
@@ -670,66 +669,63 @@ local notation "installed" => last.current.ready.state.writer.installed
 local notation "target" => last.current.ready.state.writer.target
 local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage h))
 local notation "visible" => fun h => WalInodeImage.visible (inodes h)
-variable (request : WriteRequest)
-local notation "prepares" => fun batch table => prepareBatch (Installed.table installed) (WriteRequest.rows request) =
+local notation "prepares" => fun request batch table => prepareBatch (Installed.table installed) (WriteRequest.rows request) =
   some (batch, table)
 
-/-- Start with the public write stopped at the keeper append. Derive the
-old-marker handoff from the reported joint reboot and carry it through
-the admitted failed opens to the observed ready return. -/
-theorem NativeOpenedPosition.opensReadyAfterInterruptedAppend
+/-- The next public write may stop at its keeper append. Its local
+effects, joint reboot, and later calls of the marked opener determine the
+exact ready return and its continuation. -/
+abbrev NativeOpenedPosition.ContinuesAfterInterruptedAppend
     (cache : OpenSyncCacheRefs opened.files (dir).path)
+    (origin : NativeExecutionPosition) (events : List NativeExecutionEvent) (firstOffset : Nat) : Prop :=
+    ∀ {stream stop : Type} (request : WriteRequest)
     (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     (write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit))
     {cut rebooted : heap} {tag : stop}
-    (stopped : request.runUntilPublicationStop dir lookup
+    (_stopped : request.runUntilPublicationStop dir lookup
       (appender.commitUntilWrite dir cache write stager syncer rename) opened.phase opened.get opened.set
       last.reached = .error tag cut)
-    (initial : NativeReadyStorage state (storage last.reached))
-    {firstOffset : Nat}
-    (frames : ∀ {batch preparedTable guarded poisoned}, prepares batch preparedTable →
+    (_frames : ∀ {batch preparedTable guarded poisoned}, prepares request batch preparedTable →
       checkActiveSegmentWith dir installed lookup last.reached = .ok () guarded →
       opened.set opened.phase .poisoned guarded = .ok () poisoned →
       appender.runUntilWrite cache.active write ((dir).file (.walSegment (installed).activeFirst))
         (WAL.encodeBatch batch) poisoned = .error tag cut →
       last.AppendStopFrames view cache appender storage write firstOffset batch guarded poisoned tag cut)
-    (sample : RawWriteRebootEntry state view storage names visible cut rebooted) (reset : sample.DurableReset)
-    (walWindow : last.WalWindowAt storage firstOffset last.current.history.length)
-    {origin : NativeExecutionPosition} {events : List NativeExecutionEvent}
-    (prior : origin.LedgerSuffix events last.current)
+    (sample : RawWriteRebootEntry state view storage names visible cut rebooted) (_reset : sample.DurableReset)
+    {source : RawMarkedOpenInterpreter heap stream}
     {returns : List (FilePath × IO.Error)} {reached : heap} {attempts : source.FailedCalls rebooted returns reached}
-    (retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted target
+    (_retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted target
       (fun h => ⟨names h, fun inode => [visible h inode]⟩) (state).selectedRetryPath
       (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset (target).range.through) attempts)
-    {input : FilePath} (admission : source.AlignedAdmissionEffects view state input reached storage visible)
+    {input : FilePath} (_admission : source.AlignedAdmissionEffects view state input reached storage visible)
     (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
-    (rootBinding : names reached (dir).path = some (namespaceView.modelObject root))
-    (openEffects : ∀ {batch preparedTable}, prepares batch preparedTable →
+    (_rootBinding : names reached (dir).path = some (namespaceView.modelObject root))
+    (_openEffects : ∀ {batch preparedTable}, prepares request batch preparedTable →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
       LiteralOpenAuthority view dir cache cache.ready →
       namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
       source.LiteralOpenEffects cache namespaceView root plan storage visible)
-    (alignedEffects : ∀ {batch preparedTable}, prepares batch preparedTable →
+    (_alignedEffects : ∀ {batch preparedTable}, prepares request batch preparedTable →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
       LiteralOpenAuthority view dir cache cache.ready →
       namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
       plan.layout.tail.size = 0 → source.LiteralAlignedRepairEffects cache plan storage visible)
-    (replacementEffects : ∀ {batch preparedTable}, prepares batch preparedTable →
+    (_replacementEffects : ∀ {batch preparedTable}, prepares request batch preparedTable →
       ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
       LiteralOpenAuthority view dir cache cache.ready →
       namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
       0 < plan.layout.tail.size → source.LiteralKeeperReplacementEffects cache plan storage visible)
-    (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
+    (_phaseIdentity : IO.Ref (Phase Installed) → Nat) (_tokenIdentity : IO.Ref Unit → Nat)
     {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
-    (phase : OpenPhaseCellEffects view.phase get set)
-    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    (_phase : OpenPhaseCellEffects view.phase get set)
+    (_ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
     {returnedAt : heap} {table : DiskTable}
-    (returned : source.openTable input reached = .ok table returnedAt) :
+    (_returned : source.openTable input reached = .ok table returnedAt),
     opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
-    ∃ batch preparedTable, prepares batch preparedTable ∧
+    ∃ batch preparedTable, prepares request batch preparedTable ∧
     (∃ poisoned, appender.runUntilWrite cache.active write ((dir).file (.walSegment (installed).activeFirst))
       (WAL.encodeBatch batch) poisoned = .error tag cut) ∧
     ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
@@ -739,7 +735,22 @@ theorem NativeOpenedPosition.opensReadyAfterInterruptedAppend
       origin.LedgerSuffix (events ++ [.interruptedAppendCrashRecovered request input batch]) start.current ∧
       start.WriteStorageEntry view refs (storage start.reached) (visible start.reached) ∧
       start.ContinuesReadyCalls refs view inodes runs storage origin
-        (events ++ [.interruptedAppendCrashRecovered request input batch]) firstOffset := by
+        (events ++ [.interruptedAppendCrashRecovered request input batch]) firstOffset
+
+variable {view inodes storage}
+
+/-- Derive the joint reboot's old-marker handoff at the actual stop and
+carry it through the reported failed opens to the observed ready return. -/
+theorem NativeOpenedPosition.opensReadyAfterInterruptedAppend
+    (cache : OpenSyncCacheRefs opened.files (dir).path)
+    (initial : NativeReadyStorage state (storage last.reached))
+    {firstOffset : Nat} (walWindow : last.WalWindowAt storage firstOffset last.current.history.length)
+    {origin : NativeExecutionPosition} {events : List NativeExecutionEvent}
+    (prior : origin.LedgerSuffix events last.current) :
+    last.ContinuesAfterInterruptedAppend view inodes runs storage cache origin events firstOffset := by
+  intro stream stop request appender stager syncer lookup rename write cut rebooted tag stopped frames sample reset
+    source returns reached attempts retryEffects input admission namespaceView root rootBinding openEffects alignedEffects
+    replacementEffects phaseIdentity tokenIdentity get set phase ptrEq returnedAt table returned
   obtain ⟨schedules, batch, preparedTable, _, poisoned, _, prepared, _, checked, assigned, append, reboot⟩ :=
     last.stopsDuringWalAppend (firstOffset := firstOffset) view cache appender stager syncer storage visible
       request lookup rename write stopped
