@@ -700,19 +700,22 @@ private def walReplacementSyncs (dir : FilePath) : List String :=
 private def alignedWalSyncs (dir active : FilePath) : List String :=
   [dir.toString, active.toString]
 
+private def probePartialDirectoryRead (bin dir : FilePath) (phase firstName : String)
+    (skip : Nat) (expectedSyncs : List String) : IO Unit := do
+  let readLog := bin / "read-directory.log"
+  IO.FS.writeFile readLog ""
+  let (reported, syncs) ← probeDisk bin dir none "--check-directory-read-error" (extraArgs := #[phase])
+    (extraEnv := #[("ALVOKI_CHECK_READDIR_DIR", some dir.toString),
+      ("ALVOKI_CHECK_READDIR_PARTIAL", some firstName), ("ALVOKI_CHECK_READDIR_SKIP", some (toString skip)),
+      ("ALVOKI_CHECK_READDIR_LOG", some readLog.toString)])
+  let observed := (← IO.FS.readFile readLog).splitOn "\n" |>.filter (!·.isEmpty)
+  check (observed == [s!"listed before error: {firstName}", s!"readdir error: {firstName}"])
+    s!"fixture did not deliver a partial {phase} listing"
+  check (reported && syncs == expectedSyncs) s!"partial {phase} listing did not stop at its EIO"
+
 private def checkDirectoryReadError (root : FilePath) : IO Unit := do
   let bin ← syncFixtureBin root
-  let readLog := bin / "read-directory.log"
-  let probe := fun (dir : FilePath) (phase firstName : String) (skip : Nat) (expectedSyncs : List String) => do
-    IO.FS.writeFile readLog ""
-    let (reported, syncs) ← probeDisk bin dir none "--check-directory-read-error" (extraArgs := #[phase])
-      (extraEnv := #[("ALVOKI_CHECK_READDIR_DIR", some dir.toString),
-        ("ALVOKI_CHECK_READDIR_PARTIAL", some firstName), ("ALVOKI_CHECK_READDIR_SKIP", some (toString skip)),
-        ("ALVOKI_CHECK_READDIR_LOG", some readLog.toString)])
-    let observed := (← IO.FS.readFile readLog).splitOn "\n" |>.filter (!·.isEmpty)
-    check (observed == [s!"listed before error: {firstName}", s!"readdir error: {firstName}"])
-      s!"fixture did not deliver a partial {phase} listing"
-    check (reported && syncs == expectedSyncs) s!"partial {phase} listing did not stop at its EIO"
+  let probe := probePartialDirectoryRead bin
   let empty := root / "empty"
   IO.FS.createDir empty
   probe empty "open" "LOCK" 0 []
@@ -1771,12 +1774,16 @@ private def checkWritesAcrossReopens (root : FilePath) : IO Unit := do
     "the later session did not report an unknown commit before publishing its marker"
   let durable := WAL.encode continued
   let appended := durable ++ WAL.encodeFrame ⟨9, 7, some 99⟩
+  -- A partial listing fails before repair sees the excess frame. The next open
+  -- reaches the final directory sync after replacing that same keeper.
+  probePartialDirectoryRead bin dir "open" firstWalSegment 0 []
   check ((← IO.FS.readBinFile keeper) == appended && (← IO.FS.readBinFile staged) == boundary appended &&
-    (← IO.FS.readBinFile marker) == boundary durable)
-    "the later failed append did not leave its full frame outside the active marker"
+    (← IO.FS.readBinFile marker) == boundary durable && !(← (dir / "WAL.next").pathExists))
+    "failed listing changed the long keeper or its markers before repair"
   expectFixedFiles
-  let (opened, syncs) ← probeDisk bin dir (some dir) (skipFailures := 2) (failureMode := .afterSync)
-  check (!opened && syncs == walReplacementSyncs dir ++ [s!"synced before error: {dir}"])
+  let (reported, syncs) ← probeDisk bin dir (some dir) "--check-open-directory-sync-error"
+    (skipFailures := 2) (failureMode := .afterSync)
+  check (reported && syncs == walReplacementSyncs dir ++ [s!"synced before error: {dir}"])
     "reopen did not report failure after settling the replacement keeper"
   expectFiles continued
   check (!(← (dir / "WAL.next").pathExists)) "settled keeper replacement left its staging file"
