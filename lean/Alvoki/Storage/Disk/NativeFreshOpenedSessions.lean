@@ -1100,16 +1100,18 @@ theorem readsAfterInterruptedSecondBatch {stream : Type}
         (stop : next.RootFsyncStop syncer nextCache clientView appender stager seen.keeperPhysical.inodes runs observed
           inode buffered second lookup rename fsync),
         second.runUntilRootFsync dir nextCache lookup appender stager syncer rename fsync
-          opened.handle.phase opened.handle.get opened.handle.set next.reached = .error stop.handle stop.reached ∧
-        ∀ {rebooted : heap} (sample : RawWriteRebootEntry next.current.ready.state clientView observedStorage
-          (fun h => (observedStorage h).files.names) visible stop.reached rebooted),
-          sample.DurableReset →
-          ∃ history retained : List WAL.Write,
-            history = firstBatch ++ retained ∧ (retained = [] ∨ retained = stop.batch) ∧
-            opened.start.current.InterruptedWriteLedger next.current [.acknowledged request firstBatch]
-              second stop.batch retained history ∧
-            source.ReadsClientHistoryAtOpen clientView next.current.ready.state.session.directory observedStorage visible rebooted
-              namespaceView root [.acknowledgedBatch firstBatch, .uncertainBatch stop.batch] [] history := by
+          opened.handle.phase opened.handle.get opened.handle.set next.reached = .error stop.tag stop.reached ∧
+        ∃ (secondBatch : List WAL.Write) (secondTable : PackedTable),
+          prepareBatch next.current.ready.state.writer.installed.table second.rows = some (secondBatch, secondTable) ∧
+          ∀ {rebooted : heap} (sample : RawWriteRebootEntry next.current.ready.state clientView observedStorage
+            (fun h => (observedStorage h).files.names) visible stop.reached rebooted),
+            sample.DurableReset →
+            ∃ history retained : List WAL.Write,
+              history = firstBatch ++ retained ∧ (retained = [] ∨ retained = secondBatch) ∧
+              opened.start.current.InterruptedWriteLedger next.current [.acknowledged request firstBatch]
+                second secondBatch retained history ∧
+              source.ReadsClientHistoryAtOpen clientView next.current.ready.state.session.directory observedStorage visible rebooted
+                namespaceView root [.acknowledgedBatch firstBatch, .uncertainBatch secondBatch] [] history := by
   obtain ⟨cache, firstBatch, firstTable, next, sameDirectory, atOpen, write, prepared, _, count, _, _, _,
     exactHeap, _, batchHistory, firstLedger, physical, _, ⟨noManifest, _, _, _⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
@@ -1137,16 +1139,16 @@ theorem readsAfterInterruptedSecondBatch {stream : Type}
       0 (next.current.history.length + second.rows.length) := by
     rw [sameStorage, expectedHorizon]
     exact firstWindow
-  obtain ⟨_, stopped, _, selects⟩ := next.stopsAtRootFsync syncer _ clientView appender stager seen.keeperPhysical.inodes
+  obtain ⟨_, stopped, secondBatch, secondTable, secondPrepared, _, selects⟩ := next.stopsAtRootFsync syncer _ clientView appender stager seen.keeperPhysical.inodes
     runs (fun h => next.directory.symm ▸ files h) inode buffered second lookup rename fsync stop old
-  refine ⟨stopped, ?_⟩
+  refine ⟨stopped, secondBatch, secondTable, secondPrepared, ?_⟩
   intro rebooted sample reset
   obtain ⟨_, plan, retained, _, _, ledger, opens⟩ := selects sample reset window
   have interruption := ledger firstLedger
   have retainedHistory : plan.history = firstBatch ++ retained := by
     simpa only [opened.emptyHistory, List.nil_append, List.flatMap_cons, List.flatMap_nil,
       List.append_nil, NativeExecutionEvent.writes] using interruption.history_eq
-  have pending : PendingClientReplay [.acknowledgedBatch firstBatch, .uncertainBatch stop.batch] [] plan.history := by
+  have pending : PendingClientReplay [.acknowledgedBatch firstBatch, .uncertainBatch secondBatch] [] plan.history := by
     simpa only [opened.emptySubmissions, opened.emptyReads, List.nil_append, List.flatMap_cons, List.flatMap_nil,
       List.append_nil, List.cons_append, NativeExecutionEvent.submissions, NativeExecutionEvent.reads] using interruption.pending
   exact ⟨plan.history, retained, retainedHistory, interruption.whole, interruption,
