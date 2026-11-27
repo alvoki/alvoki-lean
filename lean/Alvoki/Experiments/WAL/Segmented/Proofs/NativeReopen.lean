@@ -50,6 +50,30 @@ theorem close_ready (owned : store) (session : Session) (release : store → Exc
 theorem close_alreadyClosed (release : store → Except String Unit) :
     closeWith (fun _ => .ok .closed) release = .ok () := rfl
 
+/-- Root unlock receives the state reached by child close on either outcome. -/
+theorem release_reached (close unlock : EStateM error state Unit) (before : state) :
+    (releaseWith close unlock).run before =
+      match close.run before with
+      | .ok () after => unlock.run after
+      | .error childError after =>
+        match unlock.run after with
+        | .ok () released => .error childError released
+        | .error unlockError reached => .error unlockError reached := by
+  simp only [releaseWith, tryFinally, EStateM.run]
+  change (EStateM.map Prod.fst (tryFinally' close (fun _ => unlock))) before = _
+  cases closed : close before with
+  | ok value after =>
+    cases value
+    simp [EStateM.map, tryFinally', closed]
+    cases unlock after with
+    | ok value _ => cases value; rfl
+    | error => rfl
+  | error err after =>
+    simp [EStateM.map, tryFinally', closed]
+    cases unlock after with
+    | ok value _ => cases value; rfl
+    | error => rfl
+
 /-- Once the protected namespace is checked, the actual dispatch opens the
 selected path and scans exactly the handle it stores under the selected ID. -/
 theorem openChild_dispatch (root : FilePath) (p : Policy) (id : Nat) (returned : child)

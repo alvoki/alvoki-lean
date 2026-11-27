@@ -87,8 +87,13 @@ private structure Store where
 private def Store.closeChild (s : Store) : IO Unit := do
   if let some (_, child) ← s.active.swap none then SingleFile.close child
 
-private def Store.release (s : Store) : IO Unit := do
-  try s.closeChild finally s.lock.unlock
+/-- Dispose of the child before releasing the root lock. An I/O error
+closing the child still runs the root unlock. -/
+@[inline] def releaseWith [MonadFinally m] [Functor m] (closeChild unlock : m Unit) : m Unit :=
+  tryFinally closeChild unlock
+
+private def Store.release (s : Store) : IO Unit :=
+  releaseWith s.closeChild s.lock.unlock
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   s.closeChild

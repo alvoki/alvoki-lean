@@ -143,9 +143,11 @@ inserts the exact reached image into the selected disk slot, including on
 error. A sealed child preserves its file image. An active child that returns
 selects the value determined by its live bytes. `reopenPhase_nativeChild`
 composes that producer with the root model to prove the public open step and
-scan result, or retryability on the exact reached disk. The Linux root
-barrier, enumeration and reclamation effects, and root ownership and cleanup
-after partial recovery still need to be connected to this theorem.
+scan result, or retryability on the exact reached disk. The shared release schedule runs root unlock on the state reached by
+child close, even if child close reports an error. The Linux root barrier,
+enumeration and reclamation effects, the outer child wrapper's checks and
+active-cell updates, and the installation and release of the public root
+handle still need to be connected to this theorem.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be
