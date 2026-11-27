@@ -1,4 +1,4 @@
-import CompactionCodec
+import Alvoki.Compaction.Codec
 import CodecVariants
 
 open Alvoki Alvoki.Compaction

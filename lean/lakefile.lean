@@ -70,7 +70,8 @@ lean_lib RunProofs where
 lean_lib ByteWords where
   roots := #[`Alvoki.Codec.ByteWords]
 
-lean_lib CompactionCodec
+lean_lib CompactionCodec where
+  roots := #[`Alvoki.Compaction.Codec]
 
 lean_lib CompactionProofs where
   roots := #[`Alvoki.Storage.Proofs.Table.Compaction]

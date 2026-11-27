@@ -53,7 +53,7 @@ Snapshot reads use the latest eligible version and give the right input preceden
 
 ### Executable v3 format and kernels
 
-The checked compaction writers agree on the bytes of the retained rows. Snapshot scans over the encoded data must continue to agree with logical reads as new kernels are promoted. [Executable codec](../lean/CompactionCodec.lean) · [Compaction contract](experiments/compaction.md)
+The checked compaction writers agree on the bytes of the retained rows. Snapshot scans over the encoded data must continue to agree with logical reads as new kernels are promoted. [Executable codec](../lean/Alvoki/Compaction/Codec.lean) · [Compaction contract](experiments/compaction.md)
 
 ## V1 API and codec contracts
 

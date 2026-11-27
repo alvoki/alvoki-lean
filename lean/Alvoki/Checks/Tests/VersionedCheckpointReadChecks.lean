@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.VersionedCheckpointRead
-import CompactionCodec
+import Alvoki.Compaction.Codec
 
 open Alvoki.Manifest Alvoki.Storage Alvoki.Compaction
 

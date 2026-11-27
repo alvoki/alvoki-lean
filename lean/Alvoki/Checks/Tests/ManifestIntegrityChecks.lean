@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.VersionedManifest
 import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollection
-import CompactionCodec
+import Alvoki.Compaction.Codec
 
 open Alvoki.Storage
 open Alvoki.Manifest

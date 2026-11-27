@@ -1,4 +1,4 @@
-import CompactionCodec
+import Alvoki.Compaction.Codec
 import Alvoki.Storage.Table.SequentialModel
 
 namespace Alvoki.Compaction
