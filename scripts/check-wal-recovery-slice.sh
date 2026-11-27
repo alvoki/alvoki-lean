@@ -20,7 +20,9 @@ lean -o "$scratch/$wal/CrashModel.olean" "$wal/CrashModel.lean"
 leanchecker Alvoki.Experiments.WAL.CrashModel
 lean -o "$scratch/$wal/Contract.olean" "$wal/Contract.lean"
 leanchecker Alvoki.Experiments.WAL.Contract
-for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend Execution Policy; do
+lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
+leanchecker Alvoki.Experiments.WAL.Writeback
+for proof in AppendWriteback Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution ReopenWriteback ScheduledExecution Policy; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Proofs.$proof"
 done
@@ -32,9 +34,23 @@ import Alvoki.Experiments.WAL.Proofs.Scan
 import Alvoki.Experiments.WAL.Proofs.Marker
 import Alvoki.Experiments.WAL.Proofs.Execution
 import Alvoki.Experiments.WAL.Proofs.Policy
+import Alvoki.Experiments.WAL.Proofs.TornAppend
+import Alvoki.Experiments.WAL.Proofs.ScheduledExecution
+import Alvoki.Experiments.WAL.Proofs.ReopenWriteback
 open WalRecoverySlice
+#check_axioms scan_damaged_encodeFrames
+#check_axioms Persistence.reopen_published_scan_error
+#check_axioms Persistence.reopen_substituted_batch
 #check_axioms Persistence.reopen_unpublished_batch
 #check_axioms Persistence.reopen_missing_published_batch
+#check_axioms Persistence.tornAppend_stops
+#check_axioms Persistence.tornAppend_dirty
+#check_axioms Persistence.Dirty.writeback
+#check_axioms Persistence.Run.appendWithWritebacks
+#check_axioms Persistence.Run.tornAppendWithWritebacks
+#check_axioms Persistence.Run.reopenWithWritebacks
+#check_axioms Persistence.reopen_writeback_normalizes
+#check_axioms Persistence.appendBatch_withWritebacks
 #check_axioms Persistence.Run.refines
 #check_axioms Persistence.Run.healthy_open
 #check_axioms Persistence.reopen_live_retry

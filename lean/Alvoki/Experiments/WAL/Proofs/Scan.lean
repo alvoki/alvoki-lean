@@ -180,4 +180,58 @@ theorem scan_torn_encodeFrames {batches : List Bytes} (p : Bytes) (cut : Nat)
   rw [torn_frame _ _ _ _ _ _ short (by omega) nextBounded]
   simp
 
+/-- Actual bytes of a full frame with an intact header and an observed
+eight-byte trailer. A torn overwrite can mix old and new payload or check
+bytes while leaving the encoded payload length unchanged. -/
+def frameWithTrailer (seq : Nat) (payload trailer : Bytes) : Bytes :=
+  let header : Bytes := [42, 1, seq.toUInt8, payload.length.toUInt8]
+  header ++ checksumBytes header ++ payload ++ trailer
+
+private theorem damaged_frame (policy : Policy) (fuel pos seq : Nat) (payload check extra : Bytes)
+    (acc : List Bytes) (fits : seq ≤ 255) (bounded : payload.length ≤ 32) (size : check.length = 8)
+    (bad : check ≠ checksumBytes ([42, 1, seq.toUInt8, payload.length.toUInt8] ++ payload)) :
+    scan.loop policy (fuel + 1) pos seq (frameWithTrailer seq payload check ++ extra) acc =
+      (if policy == .logOnly && extra.isEmpty then .ok ⟨acc.reverse, ⟨pos, seq⟩⟩
+       else .error "damaged batch") := by
+  have seqByte : seq.toUInt8.toNat = seq := Nat.mod_eq_of_lt (by omega : seq < 256)
+  have lenByte : payload.length.toUInt8.toNat = payload.length :=
+    Nat.mod_eq_of_lt (by omega : payload.length < 256)
+  rw [scan.loop.eq_def]
+  simp [frameWithTrailer, List.append_assoc, seqByte, lenByte, List.splitAt_eq, List.take_append,
+    List.drop_append, checksum_take, checksum_drop, size] at bad ⊢
+  split <;> rename_i tooLarge
+  · change 32 < payload.length at tooLarge
+    omega
+  · congr 1
+    apply propext
+    apply and_congr_right
+    intro _
+    change 8 + (payload.length + (8 + extra.length)) + 1 + 1 + 1 + 1 ≤ payload.length + 20 ↔ extra = []
+    cases extra <;> simp <;> omega
+
+/-- A full-length checksum-invalid final frame preserves the exact earlier
+history and cursor in log-only mode. Boundary mode rejects that frame inside
+its selected extent. Any further selected byte makes the damage interior and
+also forces a log-only error. -/
+theorem scan_damaged_encodeFrames {batches : List Bytes} (policy : Policy) (payload check extra : Bytes)
+    (bounded : ∀ p ∈ batches, p.length ≤ 32) (fits : batches.length < 255)
+    (nextBounded : payload.length ≤ 32) (size : check.length = 8)
+    (bad : check ≠ checksumBytes ([42, 1, (1 + batches.length).toUInt8, payload.length.toUInt8] ++ payload)) :
+    let seq := 1 + batches.length
+    let prior := encodeFrames 1 batches
+    let bytes := prior ++ (frameWithTrailer seq payload check ++ extra)
+    scan bytes bytes.length policy =
+      (if policy == .logOnly && extra.isEmpty then .ok ⟨batches, ⟨prior.length, seq⟩⟩
+       else .error "damaged batch") := by
+  dsimp only
+  simp only [scan, List.take_length, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
+  have enough := count_le_encoded 1 batches
+  generalize h : (encodeFrames 1 batches ++
+    (frameWithTrailer (1 + batches.length) payload check ++ extra)).length = n
+  have budget : batches.length ≤ n := by simp only [List.length_append] at h; omega
+  have fuel : n + 1 = ((n - batches.length) + 1) + batches.length := by omega
+  rw [fuel, consume_frames _ _ _ _ _ _ _ (by omega) bounded]
+  rw [damaged_frame _ _ _ _ _ _ _ _ (by omega) nextBounded size bad]
+  simp
+
 end WalRecoverySlice

@@ -135,18 +135,19 @@ private theorem AppendEffects.unchanged {policy : Policy} {cursor : Cursor} {pay
     exact atStart
   exact noMarker atData ⟨0, by simp⟩ ⟨0, by simp⟩ (by simp [failed])
 
-private theorem unfoldAppend {effects : Effects} {policy : Policy} {cursor : Cursor} {payload : Bytes}
+/-- The actual append schedule after its size, sequence and marker extent guards. -/
+theorem appendBatch_of_valid {callbacks : Ops M} {policy : Policy} {cursor : Cursor} {payload : Bytes}
     (wellSized : payload.length ≤ 32) (positive : cursor.nextSeq ≠ 0) (fits : cursor.nextSeq ≤ 255)
     (inBounds : policy = .boundary → cursor.endPos + (frame cursor.nextSeq payload).length ≤ 65535) :
-    appendBatch (ops effects) policy cursor payload = (do
+    appendBatch callbacks policy cursor payload = (do
       let bytes := frame cursor.nextSeq payload
       let next := cursor.endPos + bytes.length
-      (ops effects).append bytes
-      (ops effects).syncData
+      callbacks.append bytes
+      callbacks.syncData
       if policy == .boundary then
         let slot := cursor.nextSeq % 2
-        (ops effects).writeMarker slot (encodeMarker next cursor.nextSeq)
-        (ops effects).syncMarker slot
+        callbacks.writeMarker slot (encodeMarker next cursor.nextSeq)
+        callbacks.syncMarker slot
       return ⟨next, cursor.nextSeq + 1⟩) := by
   have guard : (payload.length > 32 || cursor.nextSeq == 0 || cursor.nextSeq > 255) = false := by
     simp [Nat.not_lt_of_ge wellSized, positive, Nat.not_lt_of_ge fits]
@@ -222,7 +223,7 @@ theorem appendBatch_effects (effects : Effects) (policy : Policy) (cursor : Curs
     (wellSized : payload.length ≤ 32) (positive : cursor.nextSeq ≠ 0) (fits : cursor.nextSeq ≤ 255)
     (inBounds : policy = .boundary → cursor.endPos + (frame cursor.nextSeq payload).length ≤ 65535) :
     AppendEffects policy cursor payload prior before ((appendBatch (ops effects) policy cursor payload).run before) := by
-  rw [unfoldAppend wellSized positive fits inBounds]
+  rw [appendBatch_of_valid wellSized positive fits inBounds]
   have initial := settled.1
   let bytes := frame cursor.nextSeq payload
   have fullTail := dataEnds prior bytes

@@ -69,6 +69,17 @@ theorem reopen_unpublished_batch (before : Image) (history : List Bytes) (batch 
       (fun b member => bounded b (List.mem_append_left _ member)) (Nat.le_of_lt fits)
   · simp [observed, historyCursor]
 
+/-- A decode error inside the published extent returns before the first
+recovery write. Both marker slots and the segment retain their entry images. -/
+theorem reopen_published_scan_error {before : Image} {marker : Marker} {err : String}
+    (published : selectMarker before.slot0.live before.slot1.live = .ok marker)
+    (failed : scan before.data.live marker.endPos .boundary = .error err) :
+    (reopen (ops healthyReopen) .boundary).run before = .ok (.error err) before := by
+  have branch : (Policy.boundary == .boundary) = true := rfl
+  simp [reopen, ops, healthyReopen, branch, published, failed, Bind.bind,
+    ExceptT.run, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind, ExceptT.pure,
+    Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw]
+
 /-- An intact selected marker whose byte limit exceeds the observed
 segment makes boundary recovery report the missing data without repairing
 the image. No condition on the observed prefix's contents is needed. -/
@@ -79,10 +90,7 @@ theorem reopen_missing_published_bytes {before : Image} {marker : Marker}
   have missing : scan before.data.live marker.endPos .boundary = .error "missing bytes" := by
     simp [scan, Nat.min_eq_right (Nat.le_of_lt short), Nat.ne_of_lt short,
       Bind.bind, Except.bind, throw, throwThe, MonadExceptOf.throw]
-  have branch : (Policy.boundary == .boundary) = true := rfl
-  simp [reopen, ops, healthyReopen, branch, published, missing, Bind.bind,
-    ExceptT.run, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind, ExceptT.pure,
-    Pure.pure, EStateM.pure, throw, throwThe, MonadExceptOf.throw]
+  exact reopen_published_scan_error published missing
 
 /-- When the whole final published frame is absent, the same intact
 shorter history can pass log-only recovery while boundary recovery
@@ -101,5 +109,44 @@ theorem reopen_missing_published_batch (before : Image) (history : List Bytes) (
   change before.data.live.length < (encodeFrames 1 (history ++ [batch])).length
   rw [physical, encodeFrames_snoc, List.length_append, frame_length]
   omega
+
+/-- A boundary records length and sequence. Even with the original marker intact,
+replacing the last batch by a different valid frame of equal payload length lets
+both policies return the replacement. This is a storage fault outside Run. -/
+theorem reopen_substituted_batch (before : Image) (history : List Bytes)
+    (submitted replacement : Bytes) (different : submitted ≠ replacement)
+    (sameSize : submitted.length = replacement.length)
+    (physical : before.data.live = encodeFrames 1 (history ++ [replacement]))
+    (published : selectMarker before.slot0.live before.slot1.live =
+      .ok ⟨(encodeFrames 1 (history ++ [submitted])).length, history.length + 1⟩)
+    (bounded : ∀ b ∈ history ++ [replacement], b.length ≤ 32)
+    (fits : history.length < 255) :
+    history ++ [replacement] ≠ history ++ [submitted] ∧
+    ∀ policy, ∃ after, (reopen (ops healthyReopen) policy).run before =
+      .ok (.ok ⟨history ++ [replacement], historyCursor (history ++ [replacement])⟩) after := by
+  have size : (encodeFrames 1 (history ++ [submitted])).length =
+      (encodeFrames 1 (history ++ [replacement])).length := by
+    simp only [encodeFrames_snoc, List.length_append, frame_length, sameSize]
+  rw [size] at published
+  have count : (history ++ [replacement]).length ≤ 255 := by simp; omega
+  refine ⟨by simpa using Ne.symm different, ?_⟩
+  intro policy
+  cases policy with
+  | logOnly =>
+    obtain ⟨after, result, _⟩ := reopen_logOfEncoded physical bounded count
+    exact ⟨after, result⟩
+  | boundary =>
+    let cursor := historyCursor (history ++ [replacement])
+    let marker : Marker := ⟨cursor.endPos, history.length + 1⟩
+    have selected : ReopenSelection .boundary before (some marker)
+        ⟨history ++ [replacement], cursor⟩ := by
+      refine ⟨published, ?_, by simp [marker, cursor, historyCursor, Nat.add_comm]⟩
+      change scan before.data.live (encodeFrames 1 (history ++ [replacement])).length .boundary = _
+      rw [physical]
+      exact scan_encodeFrames .boundary bounded count
+    obtain ⟨after, result, _⟩ := reopen_canonical selected (by
+      rw [physical]
+      exact List.take_length)
+    exact ⟨after, result⟩
 
 end WalRecoverySlice.Persistence

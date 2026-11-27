@@ -63,8 +63,45 @@ Starting at the initialized empty files, every finite sequence of appends, scans
 
 | Boundary | Fact passed to the next layer |
 |---|---|
-| Append and sync | The settled prefix survives. Only the next frame can be partial. Publishing its marker requires the entire frame to have reached stable storage. [Primitive model](../../lean/Alvoki/Experiments/WAL/CrashModel.lean) · [Append proof](../../lean/Alvoki/Experiments/WAL/Proofs/Append.lean) |
+| Append and sync | The settled prefix survives. Only the outstanding frame can be partial or torn. Publishing its marker requires the entire frame to have reached stable storage. [Primitive model](../../lean/Alvoki/Experiments/WAL/CrashModel.lean) · [Append proof](../../lean/Alvoki/Experiments/WAL/Proofs/Append.lean) · [Interrupted torn append](../../lean/Alvoki/Experiments/WAL/Proofs/TornAppend.lean) |
 | Choose a boundary | An intact marker round-trips. The reader ignores a 14-byte record whose checksum fails and selects the highest valid sequence. [Marker proofs](../../lean/Alvoki/Experiments/WAL/Proofs/Marker.lean) |
 | Decode and reopen | A sequence of encoded frames decodes to the submitted batches. A proper byte prefix of the next frame drops out in log-only mode. Boundary mode reads through the selected offset. [Scanner proofs](../../lean/Alvoki/Experiments/WAL/Proofs/Scan.lean) · [Reopen proof](../../lean/Alvoki/Experiments/WAL/Proofs/Persistence.lean) |
 
-The proof models an interrupted append as persisting zero or more leading bytes of its frame. An interrupted marker overwrite can leave the old record, the new record, a short record or 14 mixed bytes with a bad checksum. The theorem covers every such checksum-rejected mixture. A plausible newer record forged by a checksum collision and arbitrary full-length damage to the data file lie outside the model. The trace starts after successful initialization under exclusive ownership. It models volatile and durable bytes at the primitive calls. Kernel background writeback between those calls and native handle and lock acquisition are outside its scope. The correspondence between Linux and these primitives remains an external assumption.
+For a stopped append, the model chooses visible and durable residues independently.
+Each may contain a genuine prefix, or the full expected header followed by an observed
+payload of the submitted length and an eight-byte trailer. Log-only recovery admits the
+latter as a damaged frame when its trailer disagrees with its observed payload and header.
+With an intact earlier marker, boundary recovery ignores that unpublished tail even if
+the observed payload and trailer agree. The ordinary append model still covers the complete
+genuine frame. Marker overwrites admit old, new, short and full-length checksum-rejected
+slot images. The trace assumes an interrupted overwrite cannot forge a newer valid marker.
+
+At each reached primitive, background writeback can first settle any sequence of individual
+files, including their lengths. Suppose the live log is H plus a torn tail and the durable
+log is H. Writeback just before truncate can persist the tail. If recovery then truncates to
+H and stops before sync, power loss reveals the tail again. The proof accounts for both sides
+of that truncate. Each successful sync fences earlier writes to its file. Arbitrary
+sector-level persistence and stale writes crossing a successful fence remain outside the model.
+[Writeback proofs](../../lean/Alvoki/Experiments/WAL/Proofs/README.md)
+
+The trace starts after successful initialization under exclusive ownership. Native creation,
+locking, descriptor lifetimes, buffering and the correspondence between Linux calls and the
+modeled primitives remain separate obligations. [Native adapter](../../lean/Alvoki/Experiments/WAL/SingleFile.lean)
+
+### Where corruption detection ends
+
+- **Physical fault.** A stopped append can leave the full new file length while only part of
+  the batch reached storage. Its already synchronized prefix must survive, even if the old and
+  new batches share a block. Otherwise damage to the last acknowledged batch could look like
+  a disposable tail to log-only recovery.
+- **Wire evidence.** With an intact header, a complete observed payload and a mismatching
+  eight-byte trailer, the error is detectable. A torn marker with a bad checksum is likewise
+  detectable. Either check can accept a different internally consistent record. No collision
+  is needed to substitute an entirely valid frame of equal length with the expected sequence.
+  A checksum-valid header with the wrong sequence produces a gap error. Admitting that image
+  after an ordinary crash would require revisiting the healthy-reopen claim.
+- **Protocol response.** Log-only recovery can discard that detectable final frame. A strict
+  scan through it fails. A selected marker ending before it lets recovery drop the unpublished
+  suffix. If a valid replacement fits the original published sequence and length, *both*
+  healthy openers can return the replacement. The independent client history rejects it.
+  [Scanner theorem](../../lean/Alvoki/Experiments/WAL/Proofs/Scan.lean) · [Substitution theorem](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean) · [Simulation oracle](../../lean/Alvoki/Checks/Tests/WalRecoverySlice.lean)

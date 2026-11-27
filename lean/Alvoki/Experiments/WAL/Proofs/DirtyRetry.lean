@@ -12,12 +12,23 @@ def pendingFrame (known : List Bytes) (pending : Option Bytes) : Bytes :=
 def Image.MarkersSettled (image : Image) : Prop :=
   image.slot0.live = image.slot0.durable ∧ image.slot1.live = image.slot1.durable
 
+/-- Only the outstanding submission can contribute a tail. A complete
+torn tail preserves the expected frame header and length and fails the
+payload checksum. -/
+inductive LogTail (known : List Bytes) (pending : Option Bytes) : Bytes → Prop where
+  | cut (count : Nat) : LogTail known pending ((pendingFrame known pending).take count)
+  | damaged {submitted corrupted check : Bytes}
+      (present : pending = some submitted) (sameSize : corrupted.length = submitted.length)
+      (size : check.length = 8)
+      (bad : check ≠ checksumBytes ([42, 1, (1 + known.length).toUInt8, corrupted.length.toUInt8] ++ corrupted)) :
+      LogTail known pending (frameWithTrailer (1 + known.length) corrupted check)
+
 /-- Raw contents of one observation of the files. Each observation uses
-one complete marker pair. The log-only reader sees a prefix of the one
-submitted frame following the canonical acknowledged bytes. -/
+one complete marker pair. The log-only reader sees an admitted tail of the
+one submitted frame following the canonical acknowledged bytes. -/
 def ReplayView (policy : Policy) (known : List Bytes) (pending : Option Bytes) (image : Image) : Prop :=
   match policy with
-  | .logOnly => ∃ count, image.data.live = encodeFrames 1 known ++ (pendingFrame known pending).take count
+  | .logOnly => ∃ tail, LogTail known pending tail ∧ image.data.live = encodeFrames 1 known ++ tail
   | .boundary => ∃ selected, Permitted known pending selected ∧ BoundaryEntry image (historyCursor selected) ∧
       ∃ suffix, image.data.live = encodeFrames 1 selected ++ suffix
 
@@ -89,36 +100,56 @@ private theorem Dirty.selects {policy known pending image} (dirty : Dirty policy
       (policy = .boundary → BoundaryEntry image.liveSnapshot d.cursor) := by
   cases policy with
   | logOnly =>
-    obtain ⟨count, physical⟩ := dirty.live
-    change image.data.live = encodeFrames 1 known ++ (pendingFrame known pending).take count at physical
+    obtain ⟨tail, admitted, physical⟩ := dirty.live
     have ⟨oldBounded, oldFits⟩ := permitted_bounds (batches := known) (.inl rfl) dirty.bounded dirty.fits
     have takeOld (tail : Bytes) : (encodeFrames 1 known ++ tail).take (historyCursor known).endPos =
         encodeFrames 1 known := by simp [historyCursor]
-    cases pending with
-    | none =>
-      simp [pendingFrame] at physical
+    cases admitted with
+    | cut count =>
+      change image.data.live = encodeFrames 1 known ++ (pendingFrame known pending).take count at physical
+      cases pending with
+      | none =>
+        simp [pendingFrame] at physical
+        refine ⟨none, ⟨known, historyCursor known⟩, ?_, .inl rfl, rfl, ?_, fun branch => by cases branch⟩
+        · change scan image.data.live image.data.live.length .logOnly = _
+          rw [physical]
+          exact scan_encodeFrames .logOnly oldBounded oldFits
+        · simpa only [physical, List.append_nil] using takeOld []
+      | some payload =>
+        change image.data.live = encodeFrames 1 known ++ (frame (1 + known.length) payload).take count at physical
+        have fits : (known ++ [payload]).length ≤ 255 := dirty.fits
+        have nextBounded := dirty.bounded payload (by simp)
+        by_cases short : count < (frame (1 + known.length) payload).length
+        · refine ⟨none, ⟨known, historyCursor known⟩, ?_, .inl rfl, rfl, ?_, fun branch => by cases branch⟩
+          · change scan image.data.live image.data.live.length .logOnly = _
+            rw [physical]
+            exact scan_torn_encodeFrames payload count oldBounded (by simp at fits; omega) nextBounded short
+          · simpa only [physical] using takeOld ((frame (1 + known.length) payload).take count)
+        · rw [List.take_of_length_le (Nat.le_of_not_gt short), ← encodeFrames_snoc] at physical
+          let kept := known ++ [payload]
+          refine ⟨none, ⟨kept, historyCursor kept⟩, ?_, .inr rfl, rfl, ?_, fun branch => by cases branch⟩
+          · change scan image.data.live image.data.live.length .logOnly = _
+            rw [physical]
+            exact scan_encodeFrames .logOnly dirty.bounded fits
+          · simp [historyCursor, physical, kept]
+    | @damaged submitted corrupted check present sameSize size bad =>
+      have fits : known.length < 255 := by
+        have full := dirty.fits
+        rw [present] at full
+        simp at full
+        omega
+      have nextBounded : corrupted.length ≤ 32 := by
+        rw [sameSize]
+        apply dirty.bounded
+        simp [present]
+      change image.data.live = encodeFrames 1 known ++ frameWithTrailer (1 + known.length) corrupted check at physical
       refine ⟨none, ⟨known, historyCursor known⟩, ?_, .inl rfl, rfl, ?_, fun branch => by cases branch⟩
       · change scan image.data.live image.data.live.length .logOnly = _
         rw [physical]
-        exact scan_encodeFrames .logOnly oldBounded oldFits
-      · simpa only [physical, List.append_nil] using takeOld []
-    | some payload =>
-      change image.data.live = encodeFrames 1 known ++ (frame (1 + known.length) payload).take count at physical
-      have fits : (known ++ [payload]).length ≤ 255 := dirty.fits
-      have nextBounded := dirty.bounded payload (by simp)
-      by_cases short : count < (frame (1 + known.length) payload).length
-      · refine ⟨none, ⟨known, historyCursor known⟩, ?_, .inl rfl, rfl, ?_, fun branch => by cases branch⟩
-        · change scan image.data.live image.data.live.length .logOnly = _
-          rw [physical]
-          exact scan_torn_encodeFrames payload count oldBounded (by simp at fits; omega) nextBounded short
-        · simpa only [physical] using takeOld ((frame (1 + known.length) payload).take count)
-      · rw [List.take_of_length_le (Nat.le_of_not_gt short), ← encodeFrames_snoc] at physical
-        let kept := known ++ [payload]
-        refine ⟨none, ⟨kept, historyCursor kept⟩, ?_, .inr rfl, rfl, ?_, fun branch => by cases branch⟩
-        · change scan image.data.live image.data.live.length .logOnly = _
-          rw [physical]
-          exact scan_encodeFrames .logOnly dirty.bounded fits
-        · simp [historyCursor, physical, kept]
+        have logOnly : (Policy.logOnly == .logOnly) = true := rfl
+        simpa [logOnly, historyCursor] using
+          scan_damaged_encodeFrames .logOnly corrupted check [] oldBounded fits nextBounded size bad
+      · simpa only [physical] using takeOld (frameWithTrailer (1 + known.length) corrupted check)
   | boundary =>
     obtain ⟨selected, permitted, entry, suffix, physical⟩ := dirty.live
     have ⟨bounded, fits⟩ := permitted_bounds permitted dirty.bounded dirty.fits
@@ -204,6 +235,49 @@ private theorem Dirty.afterSlot {known pending image} (dirty : Dirty .boundary k
       refine ⟨dirty.bounded, dirty.fits, live, whole.symm ▸ dirty.live, fun _ => .inl ?_⟩
       simpa [settleMarker, Image.withMarker, Image.marker, Image.MarkersSettled, zero] using shared.2
 
+/-- Background writeback is invisible to the running filesystem reader. -/
+theorem Writeback.liveSnapshot_eq {before after : Image} (written : Writeback before after) :
+    after.liveSnapshot = before.liveSnapshot := by
+  cases written <;> rfl
+
+theorem Writeback.keepsMarkersSettled {before after : Image} (written : Writeback before after)
+    (stable : before.MarkersSettled) : after.MarkersSettled := by
+  cases written
+  · exact stable
+  · exact ⟨rfl, stable.2⟩
+  · exact ⟨stable.1, rfl⟩
+
+private theorem Dirty.afterDataWriteback {policy known pending image} (dirty : Dirty policy known pending image) :
+    Dirty policy known pending {image with data.durable := image.data.live} := by
+  cases policy with
+  | logOnly =>
+    exact ⟨dirty.bounded, dirty.fits, dirty.live, dirty.live, fun impossible => by cases impossible⟩
+  | boundary =>
+    rcases dirty.markers rfl with clean | ⟨sameData, _⟩
+    · let after := {image with data.durable := image.data.live}
+      have settled : after.powerLoss = image.liveSnapshot := by
+        simp [after, Image.powerLoss, FileImage.powerLoss, Image.liveSnapshot, FileImage.liveSnapshot,
+          clean.1, clean.2]
+      exact ⟨dirty.bounded, dirty.fits, dirty.live, settled.symm ▸ dirty.live, fun _ => .inl clean⟩
+    · change Dirty .boundary known pending ({image with data := image.data.liveSnapshot})
+      rw [FileImage.liveSnapshot_eq sameData]
+      exact dirty
+
+/-- A single independent file writeback preserves both possible recovery
+views. Boundary publication cannot expose mixed data and marker choices
+through this step. -/
+theorem Dirty.writeback {policy known pending before after}
+    (dirty : Dirty policy known pending before) (written : Writeback before after) :
+    Dirty policy known pending after := by
+  cases written
+  · exact dirty.afterDataWriteback
+  · cases policy
+    · exact ⟨dirty.bounded, dirty.fits, dirty.live, dirty.durable, fun impossible => by cases impossible⟩
+    · exact dirty.afterSlot 0
+  · cases policy
+    · exact ⟨dirty.bounded, dirty.fits, dirty.live, dirty.durable, fun impossible => by cases impossible⟩
+    · exact dirty.afterSlot 1
+
 private theorem Image.bothSynced_clean (image : Image) (marker : Marker) :
     (image.bothSynced (some marker)).MarkersSettled := by
   let slot := marker.lastSeq % 2
@@ -272,7 +346,7 @@ private theorem Dirty.finish {policy known pending image d}
     cases policy with
     | logOnly =>
       obtain ⟨count, encoded⟩ := allowed_data allowed
-      exact ⟨count, bytes.trans encoded⟩
+      exact ⟨_, .cut count, bytes.trans encoded⟩
     | boundary =>
       have original := selected rfl
       rw [cursor] at original
@@ -284,7 +358,7 @@ private theorem Dirty.finish {policy known pending image d}
     cases policy with
     | logOnly =>
       obtain ⟨count, encoded⟩ := allowed_data allowed
-      exact ⟨count, bytes.trans encoded⟩
+      exact ⟨_, .cut count, bytes.trans encoded⟩
     | boundary =>
       have clean : synced.powerLoss = synced := Image.stableDataAndMarkers rfl (settled rfl)
       have same : synced.liveSnapshot = synced := Image.liveSnapshot_eq rfl (settled rfl)

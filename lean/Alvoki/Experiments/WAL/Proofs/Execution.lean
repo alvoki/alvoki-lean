@@ -1,6 +1,6 @@
 import Alvoki.Experiments.WAL.Contract
 import Alvoki.Experiments.WAL.Proofs.Client
-import Alvoki.Experiments.WAL.Proofs.DirtyAppend
+import Alvoki.Experiments.WAL.Proofs.TornAppend
 
 namespace WalRecoverySlice.Persistence
 open Contract (Batch History Event Allows Permitted)
@@ -30,10 +30,20 @@ inductive Run (policy : Policy) : List Event → Session → Prop where
   | uncertain (prior : Run policy events (.online image cursor cached)) (effects : Effects) :
       Run policy (events ++ [.uncertain p])
         (.offline (reached ((appendBatch (ops effects) policy cursor p).run image)))
+  /-- An issued append stops before its first barrier, leaving an admitted
+  data residue at the original cursor. There is no acknowledgement. -/
+  | tornAppend (prior : Run policy events (.online image cursor cached)) (cut : TornAppend)
+      (sized : p.length ≤ 32) (fits : cursor.nextSeq ≤ 255)
+      (extent : cut.SameExtent p) (detected : policy = .logOnly → cut.Detected cursor.nextSeq) :
+      Run policy (events ++ [.uncertain p])
+        (.offline (reached ((appendBatch cut.ops policy cursor p).run image)))
   | stop (mode : Restart) (prior : Run policy events (.online image cursor cached)) :
       Run policy (events ++ [.stop]) (.offline (mode.image image))
   | stoppedAgain (mode : Restart) (prior : Run policy events (.offline image)) :
       Run policy (events ++ [.stop]) (.offline (mode.image image))
+  /-- Background file settlement is silent in the client's event list. -/
+  | writeback (prior : Run policy events (.offline before)) (written : Writeback before after) :
+      Run policy events (.offline after)
   | failed (prior : Run policy events (.offline image)) (effects : Effects)
       (returned : (reopen (ops effects) policy).run image = .ok (.error error) after) :
       Run policy (events ++ [.openFailed]) (.offline after)
@@ -107,6 +117,16 @@ private theorem sound {policy events session} (run : Run policy events session) 
         intro h allowedHistory
         simp [Contract.Permitted] at allowedHistory
         exact .inl allowedHistory
+  | @tornAppend events image cursor cached p prior cut sized fits extent detected ih =>
+    obtain ⟨_, allowed, rep⟩ := ih
+    cases rep with
+    | online entry old clean =>
+      have room : cached.length < 255 := by
+        simp [historyCursor] at fits
+        omega
+      obtain ⟨dirty, markers⟩ := tornAppend_dirty policy cut image cached p
+        entry clean old.1 room sized extent detected
+      exact ⟨_, .next allowed .uncertain, .offline dirty (fun _ => markers) (fun _ h => h)⟩
   | stop mode prior ih =>
     obtain ⟨_, allowed, rep⟩ := ih
     cases rep with
@@ -118,6 +138,12 @@ private theorem sound {policy events session} (run : Run policy events session) 
     cases rep with
     | offline dirty markers permit =>
       exact ⟨_, .next allowed .stoppedAgain, restart_represents dirty markers permit mode⟩
+  | writeback prior written ih =>
+    obtain ⟨_, allowed, rep⟩ := ih
+    cases rep with
+    | offline dirty markers permit =>
+      exact ⟨_, allowed, .offline (dirty.writeback written)
+        (fun log => written.keepsMarkersSettled (markers log)) permit⟩
   | failed prior effects returned ih =>
     obtain ⟨_, allowed, rep⟩ := ih
     cases rep with
@@ -147,6 +173,13 @@ private theorem sound {policy events session} (run : Run policy events session) 
     obtain ⟨_, allowed, rep⟩ := ih
     cases rep with
     | online entry sized clean => exact ⟨_, .next allowed .scan, .online entry sized clean⟩
+
+/-- A returned online session has no uncommitted volatile file state. -/
+theorem Run.onlineImageClean {policy events image cursor cached}
+    (run : Run policy events (.online image cursor cached)) : image.powerLoss = image := by
+  obtain ⟨_, _, represented⟩ := sound run
+  cases represented with
+  | online _ _ clean => exact clean
 
 /-- The only client histories observable on any finite source execution are
 those admitted by the batch-level contract. -/

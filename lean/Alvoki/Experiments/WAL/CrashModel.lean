@@ -26,13 +26,34 @@ def FileImage.powerLoss (image : FileImage) : FileImage :=
 def Image.powerLoss (image : Image) : Image :=
   ⟨image.data.powerLoss, image.slot0.powerLoss, image.slot1.powerLoss⟩
 
+inductive WalFile where
+  | data
+  | slot0
+  | slot1
+  deriving DecidableEq
+
+/-- Background settlement of one entire file's current visible contents and length. -/
+def WalFile.settle (file : WalFile) (image : Image) : Image :=
+  match file with
+  | .data => { image with data.durable := image.data.live }
+  | .slot0 => { image with slot0.durable := image.slot0.live }
+  | .slot1 => { image with slot1.durable := image.slot1.live }
+
+/-- A background step settles one file's complete visible contents and
+length independently of the other files. No visible bytes or client response
+change. In particular, a completed live truncate can become durable. -/
+inductive Writeback : Image → Image → Prop where
+  | data (before : Image) : Writeback before (WalFile.data.settle before)
+  | slot0 (before : Image) : Writeback before (WalFile.slot0.settle before)
+  | slot1 (before : Image) : Writeback before (WalFile.slot1.settle before)
+
 inductive Abort where
   | error
   | interrupted
 
 abbrev M := ExceptT String (EStateM Unit Image)
 
-def Abort.result (abort : Abort) (after : Image) : EStateM.Result Unit Image (Except String Unit) :=
+def Abort.result {α : Type} (abort : Abort) (after : Image) : EStateM.Result Unit Image (Except String α) :=
   match abort with
   | .error => .ok (.error "primitive I/O error") after
   | .interrupted => .error () after
@@ -132,6 +153,50 @@ def ops (effects : Effects) : Ops M where
       match abort with
       | none => .ok (.ok ()) repaired
       | some fault => fault.result repaired
+
+/-- Physical residue of an append that stopped before the data barrier.
+A torn frame retains the four header bytes and their eight-byte checksum. -/
+inductive DataResidue where
+  | prefix (count : Nat)
+  | torn (observed trailer : Bytes)
+
+def DataResidue.bytes (residue : DataResidue) (requested : Bytes) : Bytes :=
+  match residue with
+  | .prefix n => requested.take n
+  | .torn observed trailer => requested.take 12 ++ observed ++ trailer
+
+def DataResidue.SameExtent (residue : DataResidue) (submitted : Bytes) : Prop :=
+  match residue with
+  | .prefix _ => True
+  | .torn observed trailer => observed.length = submitted.length ∧ trailer.length = 8
+
+/-- Log-only recovery needs a checksum mismatch to identify a full-width
+corrupt frame. Boundary recovery ignores any suffix beyond its intact marker. -/
+def DataResidue.Detected (residue : DataResidue) (seq : Nat) : Prop :=
+  match residue with
+  | .prefix _ => True
+  | .torn observed trailer =>
+    trailer ≠ checksumBytes ([42, 1, seq.toUInt8, observed.length.toUInt8] ++ observed)
+
+structure TornAppend where
+  live : DataResidue
+  durable : DataResidue
+  abort : Abort
+
+def TornAppend.SameExtent (cut : TornAppend) (submitted : Bytes) : Prop :=
+  cut.live.SameExtent submitted ∧ cut.durable.SameExtent submitted
+
+def TornAppend.Detected (cut : TornAppend) (seq : Nat) : Prop :=
+  cut.live.Detected seq ∧ cut.durable.Detected seq
+
+def TornAppend.after (cut : TornAppend) (s : Image) (requested : Bytes) : Image :=
+  { s with data := ⟨s.data.live ++ cut.live.bytes requested, s.data.durable ++ cut.durable.bytes requested⟩ }
+
+def TornAppend.ops (cut : TornAppend) : Ops M :=
+  let callbacks := Persistence.ops {
+    appendData := .full .old none, dataSync := .after none,
+    writeMarker := .full .old none, markerSync := fun _ => .after none }
+  { callbacks with append := fun requested s => cut.abort.result (cut.after s requested) }
 
 abbrev Result (α : Type) := EStateM.Result Unit Image (Except String α)
 

@@ -89,7 +89,9 @@ private theorem append_durable_view (p : Policy) (e : Effects) (s : Image) (know
     ReplayView p known (some payload)
       (reached ((appendBatch (ops e) p (historyCursor known) payload).run s)).powerLoss := by
   cases p with
-  | logOnly => exact (effectOfReady e payload ready bounded fits wellSized).durablePrefix
+  | logOnly =>
+    obtain ⟨n, eqn⟩ := (effectOfReady e payload ready bounded fits wellSized).durablePrefix
+    exact ⟨_, .cut n, eqn⟩
   | boundary =>
     have ext : (encodeFrames 1 known).length + (frame (1 + known.length) payload).length ≤ 65535 := by
       have size := encoded_history_size known 1 bounded
@@ -141,7 +143,7 @@ theorem ready_dirty (p : Policy) (s : Image) (known : List Bytes)
   have view : ReplayView p known none s := by
     have data := congrArg FileImage.live entry.1.1
     cases p with
-    | logOnly => exact ⟨0, by simpa using data⟩
+    | logOnly => exact ⟨_, .cut 0, by simpa using data⟩
     | boundary => exact ⟨known, .inl rfl, entry.2 rfl, [], by simpa using data⟩
   refine ⟨by simpa using bounded, by simpa using fits, ?_, ?_, fun _ => .inl ?_⟩
   · rwa [liveSnapshot_eq_of_clean clean]

@@ -30,7 +30,7 @@ def step (effect : Sim → Sim) : M Unit := do
 def simOps : Ops M where
   append b := do
     if (← get).faults.headD .none == .tear then
-      let partialBytes := b.take 12 ++ List.replicate (b.length - 12) 0
+      let partialBytes := b.take 13 ++ List.replicate (b.length - 13) 0
       modify fun s => {s with faults := s.faults.drop 1, visible := s.visible ++ partialBytes,
                               durable := s.durable ++ partialBytes}
       stop
@@ -185,10 +185,155 @@ private def checkWireFormat : IO Unit := do
   require ((scan collision collision.length .boundary) matches .error "damaged batch")
     "accepted changed payload with the old checksum collision"
 
+/-- The oracle tracks the exact history established by ACKs and successful
+opens, plus at most one submitted batch with an unknown result. -/
+private structure ClientHistory where
+  known : List Bytes := []
+  pending : Option Bytes := none
+
+private def ClientHistory.submit (c : ClientHistory) (batch : Bytes) : ClientHistory :=
+  {c with pending := some batch}
+
+private def ClientHistory.ack (c : ClientHistory) : ClientHistory :=
+  match c.pending with
+  | none => c
+  | some batch => {known := c.known ++ [batch], pending := none}
+
+private def ClientHistory.allows (c : ClientHistory) (history : List Bytes) : Bool :=
+  history == c.known || match c.pending with
+    | none => false
+    | some batch => history == c.known ++ [batch]
+
+private def oracleOpen (policy : Policy) (s : Sim) (client : ClientHistory) : IO (Decoded × Sim × ClientHistory) := do
+  let (result, reached) := run (reopen simOps policy) s
+  match result with
+  | .error e => throw <| IO.userError s!"oracle open failed: {e}"
+  | .ok decoded =>
+    require (client.allows decoded.batches) s!"oracle rejected history {repr decoded.batches}"
+    return (decoded, reached, {known := decoded.batches, pending := none})
+
+/-- Background writeback is not a caller barrier. It can make the reached
+volatile bytes durable at a primitive cut without returning an ACK. -/
+private def writebackData (s : Sim) : Sim := {s with durable := s.visible}
+
+private def checkAdversarial (policy : Policy) : IO Unit := do
+  let a : Bytes := [11, 12]
+  let b : Bytes := [21, 22, 23]
+  let c : Bytes := [31]
+  let alternate : Bytes := [81, 82, 83]
+  let initial : ClientHistory := {}
+  let submittedA := initial.submit a
+  let (ackA, stateA) := run (appendBatch simOps policy {} a) {}
+  let .ok cursorA := ackA | throw <| IO.userError "A was not acknowledged"
+  let clientA := submittedA.ack
+  let clientB := clientA.submit b
+  -- Same-block, full-length tear happens inside B's append, before its data sync.
+  let (stopped, torn) := run (appendBatch simOps policy cursorA b) {stateA with faults := [.tear]}
+  require (stopped matches .error "crash") "torn B must stop before sync"
+  require (torn.durable.length == stateA.durable.length + (frame 2 b).length) "tear changed declared extent"
+  require (torn.durable.length < 512) "fixture batches must share a block"
+  require ((torn.durable.drop stateA.durable.length).take 13 == (frame 2 b).take 13)
+    "tear did not preserve the first payload byte"
+  -- Probe the settled-prefix assumption: a tear in B's block also damages A's
+  -- header checksum. The two small frames together fit within one possible tail.
+  let damagedPrefix := torn.durable.modify 4 (fun byte => byte ^^^ 1)
+  let (lost, _) := run (reopen simOps policy) (powerLoss {torn with durable := damagedPrefix})
+  match policy, lost with
+  | .logOnly, .ok decoded =>
+    require (decoded.batches.isEmpty && !clientB.allows decoded.batches)
+      "expected an undetectable loss of acknowledged A"
+  | .boundary, .error "damaged header" => pure ()
+  | _, _ => throw <| IO.userError "unexpected response to a damaged acknowledged prefix"
+  -- Start with a cached tear only. Write it back just before recovery truncates;
+  -- process death after the truncate must still leave that old extent durable.
+  let beforeTrim : Ops M := {simOps with truncate := fun n => do
+    modify writebackData
+    simOps.truncate n}
+  let cuts := if policy == .boundary then [.none, .none, .none, .crashBefore]
+    else [.none, .crashBefore]
+  let (aborted, cropped) := run (reopen beforeTrim policy)
+    {torn with durable := stateA.durable, faults := cuts}
+  require (aborted matches .error "crash") "repair must stop after truncate"
+  require (cropped.visible == stateA.visible && cropped.durable == torn.visible)
+    "pre-truncate writeback lost the older durable extent"
+  let (retry, _, _) ← oracleOpen policy (powerLoss cropped) clientB
+  require (retry.batches == [a]) "retry after pre-truncate writeback lost A"
+  let (recovered, repaired, recoveredClient) ← oracleOpen policy (powerLoss torn) clientB
+  require (recovered.batches == [a]) "invalid torn B survived"
+  require (!recoveredClient.allows [a, b]) "oracle allowed discarded B to reappear"
+  let (_, repairedAgain, recoveredClient) ← oracleOpen policy (powerLoss repaired) recoveredClient
+  -- The first open's published decision is the new client base before C.
+  let clientC := recoveredClient.submit c
+  let (ackC, afterC) := run (appendBatch simOps policy recovered.cursor c) repairedAgain
+  require ackC.isOk "C was not acknowledged after torn B"
+  let _ ← oracleOpen policy (powerLoss afterC) clientC.ack
+  -- Valid dirty B becomes durable through background writeback, before B's sync.
+  let (failed, dirty) := run (appendBatch simOps policy cursorA b)
+    {stateA with faults := [.none, .eioBefore]}
+  require (failed matches .error "eio") "expected ordinary pre-sync EIO"
+  let persisted := powerLoss (writebackData dirty)
+  let (recovered, afterOpen, observed) ← oracleOpen policy persisted clientB
+  let expected := if policy == .logOnly then [a, b] else [a]
+  require (recovered.batches == expected) "background data writeback decision changed"
+  let reversed := if policy == .logOnly then [a] else [a, b]
+  require (!observed.allows reversed) "oracle allowed first open decision to reverse"
+  let (again, afterAgain, observed) ← oracleOpen policy (powerLoss afterOpen) observed
+  let nextClient := observed.submit c
+  let (ackNext, afterNext) := run (appendBatch simOps policy again.cursor c) afterAgain
+  require ackNext.isOk "C after adopted or discarded B failed"
+  let _ ← oracleOpen policy (powerLoss afterNext) nextClient.ack
+  -- Interrupt recovery immediately before data sync. Then let the repair's
+  -- truncate (boundary) or adopted cached bytes (log-only) reach the disk.
+  let interruptedInput := processExit dirty
+  let cuts := if policy == .boundary then [.none, .none, .none, .crashBefore] else [.crashBefore]
+  let (interrupted, duringRepair) := run (reopen simOps policy) {interruptedInput with faults := cuts}
+  require (interrupted matches .error "crash") "recovery must stop before data barrier"
+  require (duringRepair.visible == (if policy == .boundary then stateA.visible else dirty.visible))
+    "unexpected repair effect before data barrier"
+  let (afterRetry, _, _) ← oracleOpen policy (powerLoss (writebackData duringRepair)) clientB
+  require (afterRetry.batches == expected) "writeback during interrupted repair changed decision"
+  if policy == .boundary then
+    -- Background writeback can publish a complete marker before its explicit
+    -- sync. A retry must preserve B even when that retry is interrupted.
+    let (stopped, written) := run (appendBatch simOps policy cursorA b)
+      {stateA with faults := [.none, .none, .none, .crashBefore]}
+    require (stopped matches .error "crash") "marker sync cut did not stop"
+    let writtenBack := {written with durableMarker0 := written.marker0}
+    let (interrupted, cut) := run (reopen simOps policy)
+      {(processExit writtenBack) with faults := [.none, .crashBefore]}
+    require (interrupted matches .error "crash") "marker recovery cut did not stop"
+    let (afterRetry, _, _) ← oracleOpen policy (powerLoss cut) clientB
+    require (afterRetry.batches == [a, b]) "background marker writeback lost B"
+  -- A byte-for-byte valid replacement with B's generation and sequence is not
+  -- an admitted torn-write image. The wire checksum cannot authenticate its origin.
+  -- Exercise that limitation explicitly: the independent client oracle rejects it.
+  let replacement := stateA.durable ++ frame 2 alternate
+  require (replacement.length == stateA.durable.length + (frame 2 b).length) "replacement extent changed"
+  let beforeBarrier : Sim := {dirty with visible := replacement, durable := replacement}
+  let (early, _) := run (reopen simOps policy) (powerLoss beforeBarrier)
+  match early with
+  | .ok decoded =>
+    if policy == .logOnly then
+      require (!clientB.allows decoded.batches) "oracle accepted pre-sync replacement"
+    else
+      require (clientB.allows decoded.batches && decoded.batches == [a]) "unpublished replacement was exposed"
+  | .error e => throw <| IO.userError s!"unexpected pre-sync replacement failure: {e}"
+  let (ackB, stateB) := run (appendBatch simOps policy cursorA b) stateA
+  require ackB.isOk "B must be acknowledged before replacement"
+  let substituted : Sim := {stateB with visible := replacement, durable := replacement}
+  let (result, _) := run (reopen simOps policy) (powerLoss substituted)
+  match result with
+  | .ok decoded =>
+    require (decoded.batches == [a, alternate]) "expected coherent replacement to decode"
+    require (!clientB.ack.allows decoded.batches) "oracle accepted an unsubmitted replacement"
+  | .error e => throw <| IO.userError s!"coherent replacement unexpectedly failed: {e}"
+
 def main : IO Unit := do
   checkWireFormat
   checkPolicy .logOnly
   checkPolicy .boundary
+  checkAdversarial .logOnly
+  checkAdversarial .boundary
   -- A byte-perfect prefix has no internal indication that the last frame was lost.
   -- The intact marker for B supplies the larger expected extent.
   let a := frame 1 [10]
