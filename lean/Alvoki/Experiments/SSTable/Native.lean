@@ -13,7 +13,7 @@ private opaque pread (handle : @& IO.FS.Handle) (offset : UInt64) (count : USize
 def handleSource (handle : IO.FS.Handle) : Source (EIO String) where
   size := (handleSize handle).toEIO toString
   readAt offset count := do
-    if count > rowSize || offset + count > 2^63 - 1 then
+    if count > maxRowSize || offset + count > maxFileSize then
       throw "SSTable read outside positional I/O bounds"
     (pread handle offset.toUInt64 count.toUSize).toEIO toString
 
@@ -21,15 +21,62 @@ def openNative (path : System.FilePath) : EIO String (Table (EIO String)) := do
   let handle ← (IO.FS.Handle.mk path .read).toEIO toString
   openTable (handleSource handle)
 
-/-- Build at a fresh path owned exclusively by the caller until return.
-    Retains one entry at a time. After acquiring the handle, a caught error triggers
-    best-effort removal of the incomplete file. Crash publication and durability belong to the caller. -/
-def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat := do
-  let handle ← IO.FS.Handle.mk path .writeNew
+private def copyOffsets (scratch output : IO.FS.Handle) : IO Unit := do
+  scratch.flush
+  let size ← handleSize scratch
+  if size > maxFileSize then
+    throw (IO.userError "SSTable offset table exceeds signed offset limit")
+  let mut offset := 0
+  while offset < size do
+    let count := min (64 * 1024) (size - offset)
+    let bytes ← pread scratch offset.toUInt64 count.toUSize
+    unless bytes.size = count do
+      throw (IO.userError "short read from SSTable offset table")
+    output.write bytes
+    offset := offset + count
+
+/-- On Linux an unlinked temporary file remains accessible through its open
+    descriptor. Releasing the handle also releases the scratch space. -/
+private def openScratch : IO IO.FS.Handle := do
+  let (scratch, path) ← IO.FS.createTempFile
   try
-    buildStream ⟨handle.write, handle.flush, handle.rewind⟩ nextRow IO.userError
+    IO.FS.removeFile path
   catch err =>
     try IO.FS.removeFile path catch _ => pure ()
     throw err
+  return scratch
+
+@[extern "alvoki_fsync"]
+private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
+
+/-- Build at a fresh path with exclusive name ownership. After flushing the
+complete image, call `syncOutput` on the original write handle, before reporting
+success. The callback must leave the bytes and name unchanged and must not
+retain the handle. -/
+def buildFileWithSync (path : System.FilePath) (nextRow : IO (Option Entry))
+    (syncOutput : IO.FS.Handle → IO Unit) : IO Nat := do
+  let handle ← IO.FS.Handle.mk path .writeNew
+  try
+    let scratch ← openScratch
+    let count ← buildStream {
+      writeData := handle.write
+      writeOffset := scratch.write
+      appendOffsets := copyOffsets scratch handle
+      flush := handle.flush
+    } nextRow IO.userError
+    syncOutput handle
+    return count
+  catch err =>
+    try IO.FS.removeFile path catch _ => pure ()
+    throw err
+
+/-- Build and flush the image. The caller owns publication. -/
+def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
+  buildFileWithSync path nextRow (fun _ => pure ())
+
+/-- Build, flush, then fsync the original write descriptor. The caller owns
+directory syncing and publication. -/
+def buildFileSynced (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
+  buildFileWithSync path nextRow syncHandle
 
 end ImmutableSSTable

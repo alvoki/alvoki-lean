@@ -4,7 +4,7 @@ open ImmutableSSTable
 
 namespace ImmutableSSTable.NativeTests
 
-private def check (condition : Bool) (label : String) : IO Unit := do
+private def check (condition : Bool) (label : String) : IO Unit :=
   unless condition do throw (IO.userError label)
 
 private def ok (act : EIO String α) : IO α := act.adapt IO.userError
@@ -19,67 +19,141 @@ private def build (path : System.FilePath) (rows : List Entry) : IO Nat := do
     | [] => return none
     | r :: rs => ref.set rs; return some r
 
-def run : IO Unit := IO.FS.withTempDir fun dir => do
+private def keyCodec : Codec UInt8 where
+  encode key := ⟨#[key, 0]⟩
+  decode bytes :=
+    match bytes.data.toList with
+    | [key, 0] => .ok key
+    | _ => .error "invalid test key"
+
+private def valueCodec : Codec UInt8 where
+  encode value := ⟨#[255 - value]⟩
+  decode bytes :=
+    match bytes.data.toList with
+    | [value] => .ok (255 - value)
+    | _ => .error "invalid test value"
+
+private def checkNativeReads (dir : System.FilePath) : IO Unit := do
   let path := dir / "run"
-  let rows : List Entry := [⟨2, 200⟩, ⟨7, 700⟩, ⟨11, 1100⟩]
+  let key := keyCodec.encode
+  let value := valueCodec.encode
+  let rows : List Entry := ⟨.empty, .empty⟩ :: [(2, 20), (7, 70)].map (Entry.encode keyCodec valueCodec)
   check ((← build path rows) == 3) "streamed count"
   check ((← IO.FS.readBinFile path) == encodeImage rows) "native builder image"
   let table ← ok (openNative path)
-  check ((← ok (table.lookup 7)) == some 700) "point hit"
-  check ((← ok (table.lookup 3)) == none) "point miss"
-  check ((← ok (table.seek 3)) == 1) "lower bound"
-  check ((← ok (table.next 3)).isNone) "logical EOF"
+  let typed := TypedTable.mk table keyCodec valueCodec
+  check ((← ok (typed.lookup 7)) == some 70) "typed point hit"
+  check ((← ok (typed.lookup 3)).isNone) "typed point miss"
+  check ((← ok (table.lookup .empty)) == some .empty) "empty key/value"
+  check ((← ok (typed.seek 3)) == 2) "typed lower bound"
+  check ((← ok (typed.next 1)) == some ((2, 20), 2)) "typed iteration"
+  check ((← ok (typed.next 3)).isNone) "typed logical EOF"
+  expectError (typed.next 0) "typed iteration hid caller decoding error"
 
   -- Replacing the path cannot retarget pread on this live table.
   IO.FS.rename path (dir / "old")
-  discard <| build path [⟨7, 77⟩]
-  check ((← ok (table.lookup 7)) == some 700) "retained inode after rename"
+  discard <| build path [⟨key 7, value 77⟩]
+  check ((← ok (table.lookup (key 7))) == some (value 70)) "retained inode after rename"
   let other ← ok (openNative path)
-  check ((← ok (other.lookup 7)) == some 77) "replacement file"
+  check ((← ok (other.lookup (key 7))) == some (value 77)) "replacement file"
   expectError (openNative (dir / "missing")) "missing file"
   check (!(← (build path []).toBaseIO).isOk) "builder overwrote existing file"
+  check ((← ok (other.lookup (key 7))) == some (value 77)) "failed build modified existing file"
 
-  let bad := dir / "bad"
-  for invalid in [[(⟨2, 1⟩ : Entry), ⟨2, 2⟩], [⟨2, 1⟩, ⟨1, 2⟩]] do
-    check (!(← (build bad invalid).toBaseIO).isOk) "builder accepted unordered key"
-    check (!(← bad.pathExists)) "failed construction left an incomplete file"
-  -- Force both failures: the input callback removes the incomplete file before
-  -- throwing, so the builder's cleanup sees ENOENT.
+  -- Truncate the same inode after open. The offset pair now reads short.
+  let image ← IO.FS.readBinFile path
+  IO.FS.writeBinFile path (image.extract 0 (image.size - footerSize - 1))
+  expectError (other.next 0) "short index pair accepted"
+  expectError (openNative path) "truncated extent accepted"
+  IO.FS.writeBinFile path .empty
+  expectError (other.lookup (key 7)) "physical EOF reported as key miss"
+  check ((← ok (other.next 1)).isNone) "logical EOF after truncation"
+
+private def checkBuildFailures (dir : System.FilePath) : IO Unit := do
+  let path := dir / "bad"
+  let byte (x : UInt8) := ByteArray.mk #[x]
+  for invalid in [[(⟨byte 2, .empty⟩ : Entry), ⟨byte 2, byte 3⟩],
+                  [⟨byte 2, .empty⟩, ⟨byte 1, .empty⟩],
+                  [⟨.empty, ⟨Array.replicate maxRowSize 0⟩⟩]] do
+    check (!(← (build path invalid).toBaseIO).isOk) "builder accepted invalid row"
+    check (!(← path.pathExists)) "failed construction left an incomplete file"
+
+  -- The input callback fails after the builder has already written a row.
+  -- Removing the unfinished file also makes final cleanup encounter ENOENT.
   let primary := IO.userError "input stream failed"
-  let result ← (buildFile bad (do IO.FS.removeFile bad; throw primary)).toBaseIO
+  let supplied ← IO.mkRef false
+  let result ← (buildFile path do
+    if ← supplied.get then
+      IO.FS.removeFile path
+      throw primary
+    supplied.set true
+    return some ⟨.empty, .empty⟩).toBaseIO
   match result with
   | .error err => check (err.toString == primary.toString) "cleanup masked input error"
-  | .ok _ => throw <| IO.userError "failed input reported success"
-  discard <| build bad []
-  let empty ← ok (openNative bad)
-  check ((← ok (empty.next 0)).isNone) "empty table"
+  | .ok _ => throw (IO.userError "failed input reported success")
 
-  -- Truncate the same inode after open. An in-range short or empty read is an
-  -- error; the cursor one past the end still denotes logical EOF.
-  IO.FS.writeBinFile path ((encodeHeader 1) ++ ByteArray.mk #[1, 2, 3])
-  expectError (other.next 0) "short row accepted"
-  expectError (openNative path) "truncated extent accepted"
-  IO.FS.writeBinFile path (encodeHeader 1)
-  expectError (other.lookup 7) "physical EOF reported as key miss"
-  check ((← ok (other.next 1)).isNone) "logical EOF after truncation"
-  IO.FS.writeBinFile path ((encodeHeader 0) ++ ByteArray.mk #[0])
-  expectError (openNative path) "trailing bytes accepted"
-  IO.FS.writeBinFile path (ByteArray.mk (Array.replicate 16 0))
-  expectError (openNative path) "bad magic accepted"
-  IO.FS.writeBinFile path ((encodeHeader 0).set! 7 49)
-  expectError (openNative path) "accepted v1 table as v2"
-  IO.FS.writeBinFile path (ByteArray.mk #[1])
-  expectError (openNative path) "short header accepted"
+  discard <| build path []
+  let empty ← ok (openNative path)
+  check ((← IO.FS.readBinFile path) == encodeImage []) "empty file image"
+  check ((← ok (empty.seek .empty)) == 0 && (← ok (empty.next 0)).isNone) "empty table"
+
+  let image := encodeImage []
+  for invalid in [image ++ byte 0, image.set! 8 0, image.set! 15 50, byte 1] do
+    IO.FS.writeBinFile path invalid
+    expectError (openNative path) "invalid footer accepted"
 
   -- fstat succeeds on a write-only regular file; pread itself returns EBADF.
-  let writeOnly ← IO.FS.Handle.mk bad .write
-  writeOnly.write (encodeHeader 0)
+  let writeOnly ← IO.FS.Handle.mk path .write
+  writeOnly.write image
   writeOnly.flush
   let source := handleSource writeOnly
-  check ((← ok source.size) == 16) "fixture extent"
+  check ((← ok source.size) == image.size) "fixture extent"
   expectError (source.readAt 0 16) "pread error became EOF"
-  expectError (source.readAt 0 25) "oversized read accepted"
+  expectError (source.readAt 0 (maxRowSize + 1)) "oversized read accepted"
   expectError (source.readAt (2^64) 1) "offset wrapped before pread"
+
+private def checkStreamedIndex (dir : System.FilePath) : IO Unit := do
+  let path := dir / "large"
+  let count := 16385
+  let row (i : Nat) : Entry :=
+    ⟨⟨#[(i / 256).toUInt8, (i % 256).toUInt8]⟩,
+      ⟨Array.replicate (i % 5) (i % 256).toUInt8⟩⟩
+  let cursor ← IO.mkRef 0
+  let written ← buildFile path do
+    let i ← cursor.get
+    if i == count then return none
+    cursor.set (i + 1)
+    return some (row i)
+  check (written == count) "large streamed row count"
+  let table ← ok (openNative path)
+  for i in [0, 8191, 8192, count - 1] do
+    check ((← ok (table.next i)) == some (row i, i + 1)) "large index offset"
+    check ((← ok (table.lookup (row i).key)) == some (row i).value) "large index lookup"
+
+private def checkSync (dir : System.FilePath) : IO Unit := do
+  let path := dir / "sync"
+  let primary := IO.userError "injected table sync error"
+  let called ← IO.mkRef false
+  let result ← (buildFileWithSync path (pure none) fun handle => do
+    let size ← ok (handleSource handle).size
+    check (size == (encodeImage []).size) "sync ran before the image was flushed"
+    called.set true
+    throw primary).toBaseIO
+  match result with
+  | .error err => check (err.toString == primary.toString) "cleanup masked sync error"
+  | .ok _ => throw (IO.userError "sync failure reported success")
+  check (← called.get) "sync was skipped"
+  check (!(← path.pathExists)) "failed sync left output"
+
+  let written ← buildFileSynced path (pure none)
+  let table ← ok (openNative path)
+  check (written == 0 && table.rowCount == 0) "synced empty table"
+
+def run : IO Unit := IO.FS.withTempDir fun dir => do
+  checkNativeReads dir
+  checkBuildFailures dir
+  checkStreamedIndex dir
+  checkSync dir
   IO.println "immutable SSTable native fixtures passed"
 
 end ImmutableSSTable.NativeTests

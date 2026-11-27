@@ -1,49 +1,65 @@
-import Alvoki.Codec.WordChecksum
 import Alvoki.Experiments.SSTable.Search
+import Alvoki.Codec.Block
 
 namespace ImmutableSSTable
 
-/-- The header is an eight-byte format identifier followed by the row count. -/
-def magic : ByteArray := "ALVSST02".toUTF8
+def magic : ByteArray := "ALVSST03".toUTF8
 
-def headerSize : Nat := 16
+def footerSize : Nat := 24
 
-def rowSize : Nat := 24
+def maxFileSize : Nat := 2 ^ 63 - 1
 
-/-- All valid file sizes fit a nonnegative signed 64-bit positional offset. -/
-def maxRows : Nat := (2 ^ 63 - 1 - headerSize) / rowSize
+/-- The largest physical row, including its length and checksum words. -/
+def maxRowSize : Nat := 16 * 1024 * 1024
 
-def fileSize (rows : Nat) : Nat := headerSize + rowSize * rows
+def encodeOffset (offset : Nat) : ByteArray :=
+  Alvoki.pushWordFast ByteArray.empty offset.toUInt64
 
-def rowOffset (index : Nat) : Nat := fileSize index
+def encodeFooter (rows indexStart : Nat) : ByteArray :=
+  Alvoki.pushWordFast (Alvoki.pushWordFast magic rows.toUInt64) indexStart.toUInt64
 
-def encodeHeader (rows : Nat) : ByteArray :=
-  Alvoki.pushWordFast magic rows.toUInt64
+def checksum (bytes : ByteArray) : UInt64 :=
+  bytes.foldl (fun hash byte => (hash ^^^ byte.toUInt64) * 1099511628211) 14695981039346656037
+
+def entrySize (row : Entry) : Nat := row.key.size + row.value.size + 16
 
 def encodeEntry (row : Entry) : ByteArray :=
-  let fields := Alvoki.pushWordFast (Alvoki.pushWordFast (ByteArray.emptyWithCapacity rowSize) row.key) row.value
-  Alvoki.pushWordFast fields (Alvoki.ByteWords.checksumWords [row.key, row.value])
+  let payload := encodeOffset row.key.size ++ row.key ++ row.value
+  Alvoki.pushWordFast payload (checksum payload)
 
-/-- Row bytes produced by repeated streaming writes, in their given order. -/
-def encodeRows (rows : List Entry) : ByteArray :=
-  (rows.flatMap fun row => (encodeEntry row).data.toList).toByteArray
+/-- Specification of the bytes emitted by the streaming builder. -/
+def encodeRows : List Entry → ByteArray
+  | [] => ByteArray.empty
+  | row :: rest => encodeEntry row ++ encodeRows rest
 
-def encodeImage (rows : List Entry) : ByteArray := encodeHeader rows.length ++ encodeRows rows
+def encodeOffsets (start : Nat) : List Entry → ByteArray
+  | [] => encodeOffset start
+  | row :: rest => encodeOffset start ++ encodeOffsets (start + (encodeEntry row).size) rest
 
-def decodeHeader (bytes : ByteArray) : Except String Nat := do
-  unless bytes.size = headerSize do throw "invalid SSTable header size"
-  unless (bytes.extract 0 8).data = magic.data do throw "invalid SSTable format"
-  let count := (Alvoki.word bytes 8).toNat
-  unless count ≤ maxRows do throw "SSTable row count exceeds signed offset limit"
-  return count
+def encodeImage (rows : List Entry) : ByteArray :=
+  encodeRows rows ++ encodeOffsets 0 rows ++ encodeFooter rows.length (encodeRows rows).size
+
+def Fits (rows : List Entry) : Prop :=
+  (∀ row ∈ rows, (encodeEntry row).size ≤ maxRowSize) ∧
+    (encodeRows rows).size + 8 * (rows.length + 1) + footerSize ≤ maxFileSize
+
+def decodeFooter (bytes : ByteArray) : Except String (Nat × Nat) := do
+  unless bytes.size = footerSize do throw "invalid SSTable footer size"
+  unless bytes.extract 0 8 == magic do throw "invalid SSTable format"
+  return ((Alvoki.word bytes 8).toNat, (Alvoki.word bytes 16).toNat)
+
+def decodeOffsetPair (bytes : ByteArray) : Except String (Nat × Nat) := do
+  unless bytes.size = 16 do throw "invalid SSTable offset pair size"
+  return ((Alvoki.word bytes 0).toNat, (Alvoki.word bytes 8).toNat)
 
 def decodeEntry (bytes : ByteArray) : Except String Entry := do
-  unless bytes.size = rowSize do throw "invalid SSTable row size"
-  let key := Alvoki.word bytes 0
-  let value := Alvoki.word bytes 8
-  unless Alvoki.word bytes 16 = Alvoki.ByteWords.checksumWords [key, value] do
+  unless 16 ≤ bytes.size ∧ bytes.size ≤ maxRowSize do throw "invalid SSTable row size"
+  let keySize := (Alvoki.word bytes 0).toNat
+  unless keySize ≤ bytes.size - 16 do throw "invalid SSTable key size"
+  let payload := bytes.extract 0 (bytes.size - 8)
+  unless Alvoki.word bytes (bytes.size - 8) = checksum payload do
     throw "invalid SSTable row checksum"
-  return ⟨key, value⟩
+  return ⟨bytes.extract 8 (8 + keySize), bytes.extract (8 + keySize) (bytes.size - 8)⟩
 
 /-- A source carries the size and positional read for the same immutable file. -/
 structure Source (m : Type → Type) where
@@ -56,42 +72,42 @@ def Source.memory [Monad m] (bytes : ByteArray) : Source m where
 
 structure Table (m : Type → Type) where private mk ::
   rowCount : Nat
+  private indexStart : Nat
   private source : Source m
 
-/-- Identifies the source and header count retained by the returned handle. -/
-def Table.BoundTo (table : Table m) (source : Source m) (count : Nat) : Prop :=
-  table.rowCount = count ∧ table.source = source
+/-- Identifies the layout and source retained by the returned handle. -/
+def Table.BoundTo (table : Table m) (source : Source m) (count indexStart : Nat) : Prop :=
+  table.rowCount = count ∧ table.indexStart = indexStart ∧ table.source = source
 
-private def liftDecode [Monad m] [MonadExceptOf String m] (result : Except String α) : m α :=
+def liftDecode [Monad m] [MonadExceptOf String m] (result : Except String α) : m α :=
   match result with
   | .ok value => pure value
   | .error error => throw error
 
-@[simp] private theorem liftDecode_ok [Monad m] [MonadExceptOf String m] (value : α) :
-    liftDecode (m := m) (.ok value) = pure value := rfl
-
-/-- Admit a correctly sized header and file, using at most one positional read.
-Strict key order comes from the immutable file's builder. -/
+/-- Admit a footer and the declared directory extent in one positional read. -/
 def openTable [Monad m] [MonadExceptOf String m] (source : Source m) : m (Table m) := do
   let size ← source.size
-  unless headerSize ≤ size do throw "SSTable is shorter than its header"
-  let bytes ← source.readAt 0 headerSize
-  let count ← liftDecode (decodeHeader bytes)
-  unless size = fileSize count do throw "SSTable file size does not match its header"
-  return ⟨count, source⟩
+  unless footerSize ≤ size ∧ size ≤ maxFileSize do throw "invalid SSTable file size"
+  let bytes ← source.readAt (size - footerSize) footerSize
+  let (count, indexStart) ← liftDecode (decodeFooter bytes)
+  unless indexStart + 8 * (count + 1) + footerSize = size do
+    throw "invalid SSTable index extent"
+  return ⟨count, indexStart, source⟩
 
-/-- Read one row at its positional offset. A short read is an error. -/
+/-- Read adjacent offsets together, then check the span before reading the row. -/
 def Table.readEntry [Monad m] [MonadExceptOf String m] (table : Table m) (index : Nat) : m Entry := do
   unless index < table.rowCount do throw "SSTable cursor out of bounds"
-  let bytes ← table.source.readAt (rowOffset index) rowSize
-  liftDecode (decodeEntry bytes)
+  let bytes ← table.source.readAt (table.indexStart + 8 * index) 16
+  let (start, stop) ← liftDecode (decodeOffsetPair bytes)
+  unless start < stop ∧ stop ≤ table.indexStart ∧ stop - start ≤ maxRowSize do
+    throw "invalid SSTable row span"
+  let row ← table.source.readAt start (stop - start)
+  unless row.size = stop - start do throw "short SSTable row read"
+  liftDecode (decodeEntry row)
 
-/-- Find the first row with key greater than or equal to the query. The cursor
-is `rowCount` when all keys are smaller. -/
-def Table.seek [Monad m] [MonadExceptOf String m] (table : Table m) (key : UInt64) : m Nat :=
+def Table.seek [Monad m] [MonadExceptOf String m] (table : Table m) (key : ByteArray) : m Nat :=
   seekBetween table.readEntry key 0 table.rowCount
 
-/-- Read the next row and advance one cursor position. End needs no file read. -/
 def Table.next [Monad m] [MonadExceptOf String m] (table : Table m) (index : Nat) :
     m (Option (Entry × Nat)) := do
   if index < table.rowCount then
@@ -100,11 +116,36 @@ def Table.next [Monad m] [MonadExceptOf String m] (table : Table m) (index : Nat
   else
     return none
 
-def Table.lookup [Monad m] [MonadExceptOf String m] (table : Table m) (key : UInt64) :
-    m (Option UInt64) := do
+def Table.lookup [Monad m] [MonadExceptOf String m] (table : Table m) (key : ByteArray) :
+    m (Option ByteArray) := do
   let index ← table.seek key
   match ← table.next index with
   | some (row, _) => return if row.key = key then some row.value else none
   | none => return none
+
+/-- A caller-selected typed view of a byte table. Retain the same codecs
+when building and reopening a table. -/
+structure TypedTable (m : Type → Type) (κ ν : Type) where
+  table : Table m
+  keyCodec : Codec κ
+  valueCodec : Codec ν
+
+def TypedTable.seek [Monad m] [MonadExceptOf String m] (table : TypedTable m κ ν) (key : κ) : m Nat :=
+  table.table.seek (table.keyCodec.encode key)
+
+def TypedTable.lookup [Monad m] [MonadExceptOf String m] (table : TypedTable m κ ν) (key : κ) :
+    m (Option ν) := do
+  match ← table.table.lookup (table.keyCodec.encode key) with
+  | none => return none
+  | some value => return some (← liftDecode (table.valueCodec.decode value))
+
+def TypedTable.next [Monad m] [MonadExceptOf String m] (table : TypedTable m κ ν) (index : Nat) :
+    m (Option ((κ × ν) × Nat)) := do
+  match ← table.table.next index with
+  | none => return none
+  | some (row, nextIndex) =>
+    let key ← liftDecode (table.keyCodec.decode row.key)
+    let value ← liftDecode (table.valueCodec.decode row.value)
+    return some ((key, value), nextIndex)
 
 end ImmutableSSTable
