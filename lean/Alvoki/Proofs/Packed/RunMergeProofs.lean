@@ -1,4 +1,4 @@
-import RunProofs
+import Alvoki.Proofs.Packed.RunProofs
 import CompactionModel
 
 namespace Alvoki.Packed

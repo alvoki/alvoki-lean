@@ -60,7 +60,8 @@ lean_lib BlockCodec
 
 lean_lib CompactionModel
 
-lean_lib RunProofs
+lean_lib RunProofs where
+  roots := #[`Alvoki.Proofs.Packed.RunProofs]
 
 lean_lib ByteWords
 
@@ -69,7 +70,8 @@ lean_lib CompactionCodec
 lean_lib CompactionProofs where
   roots := #[`Alvoki.Storage.Proofs.Table.Compaction]
 
-lean_lib RunMergeProofs
+lean_lib RunMergeProofs where
+  roots := #[`Alvoki.Proofs.Packed.RunMergeProofs]
 
 lean_lib CodecVariants
 

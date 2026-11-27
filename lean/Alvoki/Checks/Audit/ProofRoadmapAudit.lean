@@ -1,5 +1,5 @@
 import Alvoki.Checks.Audit.AxiomPolicy
-import RunMergeProofs
+import Alvoki.Proofs.Packed.RunMergeProofs
 import CodecVariants
 import Alvoki.Storage.Proofs.Table.Compaction
 

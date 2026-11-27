@@ -1,4 +1,4 @@
-import RunProofs
+import Alvoki.Proofs.Packed.RunProofs
 import Optimizations
 import Init.Internal.Order.While
 
