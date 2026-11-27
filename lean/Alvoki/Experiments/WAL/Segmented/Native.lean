@@ -128,7 +128,7 @@ private def Store.callbacks (s : Store) : Ops FileM where
     -- The version, policy, capacity, two UInt64 decimal fields and digest fit in 80 bytes.
     if md.byteSize > 80 then throw "oversized segmented WAL control"
     let some c := ControlCodec.decode (← IO.FS.readBinFile file)
-      | throw <| IO.userError "invalid segmented WAL control"
+      | throw "invalid segmented WAL control"
     return c
   openSegment p id := s.openChild p id
   appendSegment _ id batch := do
