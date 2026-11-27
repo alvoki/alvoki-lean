@@ -1,3 +1,5 @@
+#include <dirent.h>
+#include <errno.h>
 #include <lean/lean.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -49,4 +51,23 @@ lean_object *__wrap_alvoki_fsync(b_lean_obj_arg handle) {
             lean_mk_string("injected marker fsync reply loss")));
     }
     return result;
+}
+
+static int fail_directory_listing;
+
+lean_object *alvoki_test_fail_directory_listing(b_lean_obj_arg unit) {
+    (void)unit;
+    fail_directory_listing = 1;
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+struct dirent *__real_readdir(DIR *directory);
+
+struct dirent *__wrap_readdir(DIR *directory) {
+    if (fail_directory_listing) {
+        fail_directory_listing = 0;
+        errno = EIO;
+        return NULL;
+    }
+    return __real_readdir(directory);
 }

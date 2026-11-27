@@ -14,6 +14,9 @@ private opaque failDirectorySync (_ : Unit) : IO Unit
 @[extern "alvoki_test_lose_marker_sync_reply"]
 private opaque loseMarkerSyncReply (path : @& String) : IO Unit
 
+@[extern "alvoki_test_fail_directory_listing"]
+private opaque failDirectoryListing (_ : Unit) : IO Unit
+
 private def encodeBytes (xs : Bytes) : ByteArray :=
   ⟨xs.toArray⟩
 
@@ -205,6 +208,19 @@ private def partialWrite (dir : FilePath) (policy : Policy) : IO Unit := do
   unless (← SingleFile.scan reopened) == batches ++ [[100]] do throw <| IO.userError "unexpected suffix"
   SingleFile.close reopened
 
+private def refuseFailedListing (dir : FilePath) : IO Unit := do
+  failDirectoryListing ()
+  let result ← (SingleFile.create dir .boundary).toBaseIO
+  unless result matches .error (.hardwareFault _ _) do
+    throw <| IO.userError "failed directory listing was treated as an empty directory"
+  for name in ["policy", "segment", "commit.0", "commit.1"] do
+    if ← (dir / name).pathExists then
+      throw <| IO.userError s!"failed directory listing created {name}"
+  let h ← SingleFile.create dir .boundary
+  unless (← SingleFile.scan h).isEmpty do
+    throw <| IO.userError "retry of create did not install an empty WAL"
+  SingleFile.close h
+
 end WalRecoveryFiles
 
 def main (args : List String) : IO Unit := do
@@ -221,4 +237,5 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
   IO.FS.withTempDir WalRecoveryFiles.lostMarkerReply
   IO.FS.withTempDir WalRecoveryFiles.refuseNonempty
+  IO.FS.withTempDir WalRecoveryFiles.refuseFailedListing
   IO.println "WAL recovery file fixtures passed"
