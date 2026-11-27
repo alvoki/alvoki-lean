@@ -78,6 +78,11 @@ private def nativeSchedule : IO Unit := IO.FS.withTempDir fun root => do
   try expectError (Native.withOpen root fun _ => exposed.set true)
   finally IO.FS.rename hidden newTable
   check (!(← exposed.get)) "failed table check exposed an online session"
+  let intendedBytes ← IO.FS.readBinFile newTable
+  IO.FS.writeBinFile newTable (← IO.FS.readBinFile firstTable)
+  try expectError (Native.withOpen root fun _ => exposed.set true)
+  finally IO.FS.writeBinFile newTable intendedBytes
+  check (!(← exposed.get)) "recovery accepted a valid table under the wrong ID"
   Native.withOpen root fun db => do
     check ((← Native.get db 7).isNone) "tombstone disappeared on recovery"
     check ((← Native.get db 8) == some 20) "new run value"

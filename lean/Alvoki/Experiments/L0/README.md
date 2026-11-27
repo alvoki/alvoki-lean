@@ -115,18 +115,18 @@ Recovery failure skips the client callback,
 moves the cell offline before attempting WAL close, and attempts unlock even
 if close fails. Cleanup preserves the original error. Successful recovery
 publishes the session with the WAL acquired by that attempt. The table check
-and lookup use the same stat and scoped opening schedule. For the
-descriptor acquired by that schedule and serving
-the exact built bytes, [TableProofs](TableProofs.lean) derives both successful
-open and typed lookup from `open_built_table`. The check validates the footer
-and index extent. Row validation occurs on demand.
+and lookup use the same stat and scoped opening schedule. Both pass the
+catalog ID to the checked SSTable reader. For the descriptor acquired by
+that schedule and serving the exact built bytes,
+[TableProofs](TableProofs.lean) derives successful open and typed lookup
+from `open_built_table`. Open checks the table ID, footer and root index.
+Leaf and data packets are checked on demand.
 
 [TableAllocation](TableAllocation.lean) is the native create schedule. Its
 proofs show that probing picks a free ID and that a returned ID implies that
-the builder received the original rows and that the directory barrier
-succeeded after the synced build. The native row supplier shares
-`nextTableRow` with the supplier proof, which proves the exact encoded stream
-and EOF. The path-indexed creation proof uses that stream and the reached
+the builder received that ID and the original rows at its derived path. The
+directory barrier succeeded after the synced build. The supplier proof uses
+the native `nextTableRow` operation to prove the encoded stream and EOF. The path-indexed creation proof uses that stream and the reached
 build and directory effects to name the durable builder image.
 `tableOpenAt` constructs the check witness at that same ID-derived path
 and uses the descriptor acquired by the scoped read.

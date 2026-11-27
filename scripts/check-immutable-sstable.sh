@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fresh build of the immutable SSTable, including its native positional reader.
+# Kernel-check the immutable SSTable and exercise the native reader.
 set -euo pipefail
-ulimit -s unlimited
-cd "$(dirname "$0")/../lean"
+repo=$(cd "$(dirname "$0")/.." && pwd)
+cd "$repo/lean"
 if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
   export ELAN_HOME="$(cd "${ALVOKI_TOOLCHAINS:-../../work/toolchains}/elan" && pwd)"
   export PATH="$ELAN_HOME/bin:$PATH"
@@ -11,66 +11,93 @@ prefix=$(lean --print-prefix)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 export LEAN_PATH="$out"
+lake build crc32cArchive >&2
 table=Alvoki/Experiments/SSTable
 sources=()
 compile() {
   local module=$1
   mkdir -p "$out/$(dirname "$module")"
-  if [[ ${2:-} == native ]]; then
-    lean -o "$out/$module.olean" -c "$out/$module.c" "$module.lean"
-    sources+=("$out/$module.c")
-  else
-    lean -o "$out/$module.olean" "$module.lean"
-  fi
+  lean -o "$out/$module.olean" -c "$out/$module.c" "$module.lean"
+  leanchecker "${module//\//.}"
+  sources+=("$out/$module.c")
+}
+compile Alvoki/Codec/Block
+compile Alvoki/Codec/CRC32C
+for module in Contract Search Core Native \
+    UnifiedFormat UnifiedIntegrity UnifiedBuilder UnifiedReader UnifiedNative UnifiedFixtures; do
+  compile "$table/$module"
+done
+compile_proof() {
+  local module=$1
+  mkdir -p "$out/$(dirname "$module")"
+  lean -o "$out/$module.olean" "$module.lean"
   leanchecker "${module//\//.}"
 }
-compile Alvoki/Codec/Block native
-compile Alvoki/Codec/WordChecksum native
-for module in Contract Search Core Builder Native NativeTests; do
-  compile "$table/$module" native
+compile_proof Alvoki/Kernel/BlockContracts
+compile_proof Alvoki/Codec/WordChecksum
+compile_proof Alvoki/Codec/ByteWords
+compile_proof "$table/Representation"
+for module in Reader Search Typed UnifiedMetadata UnifiedData UnifiedImage UnifiedSearch \
+    UnifiedGroups UnifiedReads UnifiedOpen UnifiedBuilder UnifiedEndToEnd \
+    UnifiedNativeReader UnifiedReadErrors NativeWrite UnifiedNativeEndToEnd; do
+  compile_proof "$table/Proofs/$module"
 done
-compile "$table/Representation"
-compile Alvoki/Kernel/BlockContracts
-compile Alvoki/Codec/ByteWords
-for proof in Search Format Builder Reader ReadErrors Typed; do
-  compile "$table/Proofs/$proof"
-done
-compile Alvoki/Checks/Audit/AxiomPolicy
+compile_proof Alvoki/Checks/Tests/SSTableProducer
+compile_proof Alvoki/Checks/Audit/AxiomPolicy
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
-import Alvoki.Experiments.SSTable.Proofs.Builder
-import Alvoki.Experiments.SSTable.Proofs.Reader
-import Alvoki.Experiments.SSTable.Proofs.ReadErrors
+import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
+import Alvoki.Experiments.SSTable.Proofs.UnifiedReadErrors
+import Alvoki.Checks.Tests.SSTableProducer
 import Alvoki.Experiments.SSTable.Proofs.Typed
 open ImmutableSSTable
-#check_axioms open_built_table
-#check_axioms TypedTable.represents_of_bytes
-#check_axioms decodeEntry_rejects_checksum
+#check_axioms Unified.buildFileWith_refines
+#check_axioms Unified.buildFileWith_syncError
+#check_axioms Unified.buildFileWith_open_represents
+#check_axioms SSTableProducerCheck.checkedLookup
+#check_axioms SSTableProducerCheck.uncertainResult
+#check_axioms Unified.open_built_table
+#check_axioms Unified.Image.openCheckedWith_represents_at
+#check_axioms ReadSnapshot.readsExactly
+#check_axioms Unified.openCheckedWith_acquire_error
+#check_axioms Unified.openCheckedWith_size_error
+#check_axioms ReadPrimitives.source_pread_error
 #check_axioms RequiredProbeError.propagates
-#check_axioms Table.readEntry_index_error
-#check_axioms Table.readEntry_index_decode_error
-#check_axioms Table.readEntry_source_error
-#check_axioms Table.readEntry_decode_error
-#check_axioms Table.seek_read_error
-#check_axioms Table.next_read_error
-#check_axioms Table.lookup_search_error
-#check_axioms Table.lookup_final_read_error
-#check_axioms modelBuild_ok_iff
-#check_axioms push_rejects_key
-#check_axioms openTable_encoded
-#check_axioms decodeFooter_encodeFooter
-#check_axioms decodeEntry_encodeEntry
-#check_axioms Table.readEntry_encoded
-#check_axioms Table.next_encoded
-#check_axioms Table.lookup_encoded
-#check_axioms Table.seek_encoded
-#check_axioms encodeImage_size
-#check_axioms decodeImage_offsets
-#check_axioms encodeImage_extract_row
-#check_axioms seekBetween_correct
-#check_axioms seekBetween_probes
+#check_axioms Unified.readPacket_source_error
+#check_axioms Unified.readPacket_short_error
+#check_axioms Unified.readPacket_decode_error
+#check_axioms Unified.readFooter_size_error
+#check_axioms Unified.readFooter_extent_error
+#check_axioms Unified.readFooter_source_error
+#check_axioms Unified.readFooter_short_error
+#check_axioms Unified.readFooter_packet_error
+#check_axioms Unified.readFooter_decode_error
+#check_axioms Unified.openTableChecked_footer_error
+#check_axioms Unified.openTableChecked_identity_error
+#check_axioms Unified.openTableChecked_root_error
+#check_axioms Unified.openTableChecked_root_decode_error
+#check_axioms Unified.Handle.readLeaf_packet_error
+#check_axioms Unified.Handle.readLeaf_decode_error
+#check_axioms Unified.Handle.readData_packet_error
+#check_axioms Unified.Handle.readData_decode_error
+#check_axioms Unified.Handle.locate_leaf_error
+#check_axioms Unified.Handle.locate_data_error
+#check_axioms Unified.Handle.locate_row_probe_error
+#check_axioms Unified.Handle.table_lookup_seek_error
+#check_axioms Unified.Handle.table_lookup_row_error
+#check_axioms Unified.Handle.table_next_leaf_error
+#check_axioms Unified.Handle.table_next_data_error
+#check_axioms Unified.Handle.table_next_row_error
+#check_axioms Unified.Handle.lookup_leaf_error
+#check_axioms TypedTable.seek_read_error
+#check_axioms TypedTable.lookup_read_error
+#check_axioms TypedTable.lookup_decode_error
+#check_axioms TypedTable.next_read_error
+#check_axioms TypedTable.next_key_decode_error
+#check_axioms TypedTable.next_value_decode_error
+#check_axioms TypedTable.represents_of_bytes
 LEAN
-lean --run "$table/Tests.lean"
-cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
-  -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-sstable"
-"$out/test-sstable"
+cc -O2 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
+  ".lake/build/native/libalvoki_crc32c.a" -lstdc++ -L"$prefix/lib/lean" \
+  -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-unified-sstable"
+"$out/test-unified-sstable" "$@"

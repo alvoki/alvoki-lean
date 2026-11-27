@@ -1,6 +1,7 @@
 import Alvoki.Experiments.L0.TableAllocation
 import Alvoki.Experiments.L0.ComponentContract
 import Alvoki.Experiments.L0.TableRowProofs
+import Alvoki.Experiments.SSTable.Proofs.UnifiedBuilder
 
 namespace ExperimentalL0
 
@@ -128,23 +129,26 @@ The remaining build premise is the SSTable sink/output effect on the
 reached path. The directory premise is the filesystem name barrier. -/
 theorem createTableUnder_image {id : UInt64}
     {dir : System.FilePath} {occupied : System.FilePath → StorageM σ Bool}
-    {build : System.FilePath → Rows → StorageM σ Unit}
+    {build : System.FilePath → UInt64 → Rows → StorageM σ Unit}
     {syncDirectory : System.FilePath → StorageM σ Unit}
     (syncedFile durableFile : σ → System.FilePath → Option ByteArray)
-    (buildResult : ∀ path input before after, build path input before = .ok () after →
+    (buildResult : ∀ path allocated input before after, build path allocated input before = .ok () after →
       ∃ count bytes, syncedFile after path = some bytes ∧
-        ImmutableSSTable.modelBuild ((readSupplied input.length).run input).1 = .ok (count, bytes))
+        ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout allocated)
+          ((readSupplied input.length).run input).1 = .ok (count, bytes))
     (directoryEffect : ∀ before after, syncDirectory dir before = .ok () after →
       ∀ id bytes, syncedFile before (tablePath dir id) = some bytes →
         durableFile after (tablePath dir id) = some bytes)
     (created : createTableUnder dir occupied build syncDirectory rows s = .ok id after) :
     ∃ count bytes, durableFile after (tablePath dir id) = some bytes ∧
-      ImmutableSSTable.modelBuild
+      ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
         (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) := by
   obtain ⟨_, written, _, built, barrier⟩ := createTableAt_success created
-  obtain ⟨count, bytes, synced, image⟩ := buildResult _ _ _ _ built
-  have exactInput := (supplied_builder_input rows).2
-
-  exact ⟨count, bytes, directoryEffect _ _ barrier id bytes synced, exactInput.symm.trans image⟩
+  obtain ⟨count, bytes, synced, image⟩ := buildResult _ _ _ _ _ built
+  have exactInput : ((readSupplied rows.length).run rows).1 =
+      rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec) :=
+    (supplied_builder_input rows).2
+  rw [exactInput] at image
+  exact ⟨count, bytes, directoryEffect _ _ barrier id bytes synced, image⟩
 
 end ExperimentalL0

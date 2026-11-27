@@ -25,14 +25,15 @@ theorem WalReceipt.effect (receipt : WalReceipt before after batch) :
 
 /-- The actual read descriptor serves the durable image from the same table
 binding. The image comes from the shared builder on the logical rows. -/
-structure TableSource (file : Option ByteArray) (rows : Rows) (handle : IO.FS.Handle) : Prop where
-  image : ∃ count bytes, file = some bytes ∧ ImmutableSSTable.modelBuild
-    (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) ∧
+structure TableSource (id : UInt64) (file : Option ByteArray) (rows : Rows) (handle : IO.FS.Handle) : Prop where
+  image : ∃ count bytes, file = some bytes ∧
+    ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) ∧
     (ImmutableSSTable.handleSource handle).Serves bytes
 
 /-- A healthy acquired source is sufficient to derive the typed open. -/
-def TableOpen (file : Option ByteArray) (rows : Rows) : Prop :=
-  ∃ handle, TableSource file rows handle
+def TableOpen (id : UInt64) (file : Option ByteArray) (rows : Rows) : Prop :=
+  ∃ handle, TableSource id file rows handle
 
 /-- Produce the check result and its witness using the same ID and handle.
 Stat and descriptor acquisition are premises about the reached path. -/
@@ -40,22 +41,22 @@ theorem tableOpenAt {dir : System.FilePath} {id : UInt64}
     {stat : System.FilePath → ExceptT String IO IO.FS.Metadata}
     {withRead : System.FilePath → (IO.FS.Handle → ExceptT String IO Unit) → ExceptT String IO Unit}
     (report : stat (tablePath dir id) = pure metadata) (valid : isTableFile metadata = true)
-    (scope : withRead (tablePath dir id) (fun handle => nativeTableAction handle (fun _ => pure ())) =
-      nativeTableAction acquired (fun _ => pure ()))
+    (scope : withRead (tablePath dir id) (fun handle => nativeTableAction handle id (fun _ => pure ())) =
+      nativeTableAction acquired id (fun _ => pure ()))
     (files : System.FilePath → Option ByteArray)
     (binding : files (tablePath dir id) = some bytes)
-    (built : ImmutableSSTable.modelBuild
+    (built : ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
       (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : (ImmutableSSTable.handleSource acquired).Serves bytes) :
-    withTableAt stat withRead dir id (fun handle => nativeTableAction handle (fun _ => pure ())) =
-      pure () ∧ TableOpen (files (tablePath dir id)) rows :=
+    withTableAt stat withRead dir id (fun handle => nativeTableAction handle id (fun _ => pure ())) =
+      pure () ∧ TableOpen id (files (tablePath dir id)) rows :=
   ⟨native_table_descriptor_checked report valid scope built serves,
     acquired, ⟨count, bytes, binding, built, serves⟩⟩
 
-theorem TableOpen.represents (receipt : TableOpen file rows) :
+theorem TableOpen.represents {id : UInt64} (receipt : TableOpen id file rows) :
     ∃ (handle : IO.FS.Handle) (table : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation),
       table.Represents (· < ·) rows ∧
-      withTableSource (ImmutableSSTable.handleSource handle) (fun opened => pure opened) = pure table := by
+      withTableSource (ImmutableSSTable.handleSource handle) id (fun opened => pure opened) = pure table := by
   obtain ⟨handle, source⟩ := receipt
   obtain ⟨_, _, _, built, serves⟩ := source.image
   obtain ⟨table, represents, opened⟩ := native_table_source_built handle built serves
@@ -63,12 +64,12 @@ theorem TableOpen.represents (receipt : TableOpen file rows) :
 
 /-- A healthy lookup records the result of the very same open/read
 schedule used by the native adapter. -/
-inductive TableRead (file : Option ByteArray) (rows : Rows) (key : UInt64) (result : Option Mutation) : Prop where
-  | read (source : TableSource file rows handle)
-      (returned : withTableSource (ImmutableSSTable.handleSource handle) (·.lookup key) = pure result) :
-      TableRead file rows key result
+inductive TableRead (id : UInt64) (file : Option ByteArray) (rows : Rows) (key : UInt64) (result : Option Mutation) : Prop where
+  | read (source : TableSource id file rows handle)
+      (returned : withTableSource (ImmutableSSTable.handleSource handle) id (·.lookup key) = pure result) :
+      TableRead id file rows key result
 
-theorem TableRead.effect (receipt : TableRead file rows key result) : result = lookupRows rows key := by
+theorem TableRead.effect {id : UInt64} (receipt : TableRead id file rows key result) : result = lookupRows rows key := by
   cases receipt with
   | @read handle source returned =>
     obtain ⟨_, _, _, built, serves⟩ := source.image
@@ -131,12 +132,12 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (selected after).tables = (selected s).tables)
   create : Nonempty (TableCreationEvidence ops.tables.create selected)
   check : ∀ s id, match ops.tables.check id s with
-    | .ok _ after => (∃ rows, (selected s).tables id = some rows ∧ TableOpen (fileBytes s id) rows) ∧
+    | .ok _ after => (∃ rows, (selected s).tables id = some rows ∧ TableOpen id (fileBytes s id) rows) ∧
         selected after = selected s
     | .error _ after => selected after = selected s
   lookup : ∀ s id key rows, (selected s).tables id = some rows →
     match ops.tables.lookup id key s with
-    | .ok result after => TableRead (fileBytes s id) rows key result ∧ selected after = selected s
+    | .ok result after => TableRead id (fileBytes s id) rows key result ∧ selected after = selected s
     | .error _ after => selected after = selected s
 
 private theorem selected_eq {a b : Selected}

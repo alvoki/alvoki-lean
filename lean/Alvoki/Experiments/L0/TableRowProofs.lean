@@ -1,6 +1,5 @@
 import Alvoki.Experiments.L0.TableRows
 import Alvoki.Experiments.L0.CodecProofs
-import Alvoki.Experiments.SSTable.Proofs.Builder
 
 namespace ExperimentalL0
 open ImmutableSSTable
@@ -59,12 +58,12 @@ theorem readSupplied_exact (budget : Nat) (rows : Rows) :
       rw [ih]
       rfl
 
-/-- At the builder's full input length the supplier has exactly the input
-of the existing SSTable builder theorem, and its next observation is EOF. -/
+/-- At the builder's full input length the supplier has delivered exactly
+the encoded input, and its next observation is EOF. -/
 theorem supplied_builder_input (rows : Rows) :
     let (supplied, remaining) := (readSupplied rows.length).run rows
     rowSupply.run remaining = (none, []) ∧
-    modelBuild supplied = modelBuild (rows.map (Entry.encode keyCodec mutationCodec)) := by
+    supplied = rows.map (Entry.encode keyCodec mutationCodec) := by
   rw [readSupplied_exact]
   have allRows : (rows.map (Entry.encode keyCodec mutationCodec)).take rows.length =
       rows.map (Entry.encode keyCodec mutationCodec) := by

@@ -10,6 +10,7 @@ prefix=$(lean --print-prefix)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 export LEAN_PATH="$out"
+lake build crc32cArchive >&2
 declare -A compiled
 sources=()
 compile() {
@@ -32,7 +33,7 @@ compile() {
 l0=Alvoki/Experiments/L0
 compile "$l0/NativeTests" native
 cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,sstable}.c \
-  -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
+  .lake/build/native/libalvoki_crc32c.a -lstdc++ -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
 cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixture.so"
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
 compile "$l0/NativeBridge" proof

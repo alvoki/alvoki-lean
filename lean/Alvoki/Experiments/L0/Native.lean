@@ -3,7 +3,6 @@ import Alvoki.Experiments.L0.TableRows
 import Alvoki.Experiments.L0.TableAllocation
 import Alvoki.Experiments.L0.Lifecycle
 import Alvoki.Experiments.DurableBlob.Native
-import Alvoki.Experiments.SSTable.Native
 import Alvoki.Experiments.WAL.Segmented.Native
 
 namespace ExperimentalL0.Native
@@ -22,14 +21,14 @@ private def pathExists (path : FilePath) : IO Bool := do
     | .noFileOrDirectory .. => return false
     | err => throw err
 
-private def buildSynced (path : FilePath) (rows : Rows) : IO Unit := do
+private def buildSynced (path : FilePath) (id : UInt64) (rows : Rows) : IO Unit := do
   let remaining ← IO.mkRef rows
-  let _ ← ImmutableSSTable.buildFileSynced path
+  let _ ← ImmutableSSTable.Unified.buildFileSynced path (tableLayout id)
     (nextTableRow remaining.get remaining.set)
 
 private def createTable (dir : FilePath) (rows : Rows) : FileM UInt64 :=
   createTableUnder dir (fun path => liftM (pathExists path))
-    (fun path entries => liftM (buildSynced path entries))
+    (fun path id entries => liftM (buildSynced path id entries))
     (fun parent => liftM (IO.FS.withFile parent .read syncHandle)) rows
 
 private def checked (operation : FileM α) : IO α := do
@@ -44,7 +43,7 @@ private def withTable (dir : FilePath) (id : UInt64)
     (use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α) : FileM α :=
   withTableAt (fun path => liftM path.symlinkMetadata)
     (fun path action => ExceptT.mk (IO.FS.withFile path .read fun handle => (action handle).run))
-    dir id (fun handle => nativeTableAction handle use)
+    dir id (fun handle => nativeTableAction handle id use)
 
 private def tables (dir : FilePath) : Tables FileM where
   create := createTable dir

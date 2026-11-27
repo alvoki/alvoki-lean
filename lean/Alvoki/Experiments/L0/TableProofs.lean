@@ -1,7 +1,6 @@
 import Alvoki.Experiments.L0.TableSchedule
 import Alvoki.Experiments.L0.CodecProofs
-import Alvoki.Experiments.SSTable.Proofs.Reader
-import Alvoki.Experiments.SSTable.Native
+import Alvoki.Experiments.SSTable.Proofs.UnifiedEndToEnd
 
 namespace ExperimentalL0
 open ImmutableSSTable
@@ -9,15 +8,17 @@ open ImmutableSSTable
 /-- The table returned when opening the exact built source has the typed
 representation. Both native table callbacks use this very open schedule. -/
 theorem withTableSource_built [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {source : Source m}
-    (built : modelBuild (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+    {source : Source m} {id : UInt64}
+    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : source.Serves bytes) :
     ∃ table : TypedTable m UInt64 Mutation, table.Represents (· < ·) rows ∧
-      ∀ {α} (use : TypedTable m UInt64 Mutation → m α), withTableSource source use = use table := by
-  obtain ⟨table, opened, represents⟩ := open_built_table built serves
+      ∀ {α} (use : TypedTable m UInt64 Mutation → m α), withTableSource source id use = use table := by
+  obtain ⟨_, table, opened, represents⟩ := Unified.open_built_table built serves
   refine ⟨⟨table, keyCodec, mutationCodec⟩, typed_table_from_bytes represents, ?_⟩
   intro α use
   unfold withTableSource
+  change Unified.openTableChecked source Alvoki.CRC32C.extend id = pure table at opened
   rw [opened, pure_bind]
 
 private theorem lawfulEIO : LawfulMonad (EIO String) := .mk'
@@ -33,42 +34,47 @@ private theorem lawfulEIO : LawfulMonad (EIO String) := .mk'
 /-- The descriptor acquired by the native callback is the same descriptor
 used for the table's footer, index and row reads. The filesystem premise is
 that this specific descriptor serves the durable built bytes. -/
-theorem native_table_source_built (handle : IO.FS.Handle)
-    (built : modelBuild (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+theorem native_table_source_built (handle : IO.FS.Handle) {id : UInt64}
+    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : (handleSource handle).Serves bytes) :
     ∃ table : TypedTable (EIO String) UInt64 Mutation, table.Represents (· < ·) rows ∧
       ∀ {α} (use : TypedTable (EIO String) UInt64 Mutation → EIO String α),
-        withTableSource (handleSource handle) use = use table := by
+        withTableSource (handleSource handle) id use = use table := by
   letI := lawfulEIO
   exact withTableSource_built built serves
 
 theorem table_source_lookup [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {source : Source m}
-    (built : modelBuild (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+    {source : Source m} {id : UInt64}
+    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : source.Serves bytes) (key : UInt64) :
-    withTableSource source (·.lookup key) = pure (lookupRows rows key) := by
+    withTableSource source id (·.lookup key) = pure (lookupRows rows key) := by
   obtain ⟨table, represents, openTable⟩ := withTableSource_built built serves
   rw [openTable, typed_lookup_spec represents]
 
 theorem table_source_check [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {source : Source m} {rows : Rows}
-    (built : modelBuild (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+    {source : Source m} {id : UInt64} {rows : Rows}
+    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : source.Serves bytes) :
-    withTableSource source (fun _ => pure ()) = pure () := by
+    withTableSource source id (fun _ => pure ()) = pure () := by
   obtain ⟨_, _, openTable⟩ := withTableSource_built built serves
   exact openTable _
 
-theorem native_table_check (handle : IO.FS.Handle) {rows : Rows}
-    (built : modelBuild (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+theorem native_table_check (handle : IO.FS.Handle) {id : UInt64} {rows : Rows}
+    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : (handleSource handle).Serves bytes) :
-    withTableSource (handleSource handle) (fun _ => pure ()) = pure () := by
+    withTableSource (handleSource handle) id (fun _ => pure ()) = pure () := by
   obtain ⟨_, _, opened⟩ := native_table_source_built handle built serves
   exact opened _
 
-theorem native_table_lookup (handle : IO.FS.Handle)
-    (built : modelBuild (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+theorem native_table_lookup (handle : IO.FS.Handle) {id : UInt64}
+    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : (handleSource handle).Serves bytes) (key : UInt64) :
-    withTableSource (handleSource handle) (·.lookup key) = pure (lookupRows rows key) := by
+    withTableSource (handleSource handle) id (·.lookup key) = pure (lookupRows rows key) := by
   obtain ⟨_, represents, opened⟩ := native_table_source_built handle built serves
   rw [opened, typed_lookup_spec represents]
 
@@ -115,31 +121,31 @@ end Scope
 
 /-- After acquiring the actual descriptor, the table check succeeds once
 its source supplies the exact healthy builder image. -/
-theorem native_table_action_check (handle : IO.FS.Handle) {rows : Rows}
-    (built : ImmutableSSTable.modelBuild
+theorem native_table_action_check (handle : IO.FS.Handle) {id : UInt64} {rows : Rows}
+    (built : ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
       (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : (ImmutableSSTable.handleSource handle).Serves bytes) :
-    nativeTableAction handle (fun _ => pure ()) = pure () := by
+    nativeTableAction handle id (fun _ => pure ()) = pure () := by
   unfold nativeTableAction
   rw [native_table_check handle built serves]
   rfl
 
 
-theorem native_table_descriptor_checked {rows : Rows}
+theorem native_table_descriptor_checked {id : UInt64} {rows : Rows}
     {stat : ExceptT String IO IO.FS.Metadata}
     {withRead : (IO.FS.Handle → ExceptT String IO Unit) → ExceptT String IO Unit}
     (report : stat = pure metadata) (valid : isTableFile metadata = true)
-    (scope : withRead (fun handle => nativeTableAction handle (fun _ => pure ())) =
-      nativeTableAction acquired (fun _ => pure ()))
-    (built : ImmutableSSTable.modelBuild
+    (scope : withRead (fun handle => nativeTableAction handle id (fun _ => pure ())) =
+      nativeTableAction acquired id (fun _ => pure ()))
+    (built : ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
       (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
     (serves : (ImmutableSSTable.handleSource acquired).Serves bytes) :
-    withTableDescriptor stat withRead (fun handle => nativeTableAction handle (fun _ => pure ())) =
+    withTableDescriptor stat withRead (fun handle => nativeTableAction handle id (fun _ => pure ())) =
       pure () := by
   unfold withTableDescriptor
   rw [report]
   change (if isTableFile metadata then
-    withRead (fun handle => nativeTableAction handle (fun _ => pure ()))
+    withRead (fun handle => nativeTableAction handle id (fun _ => pure ()))
     else throw "expected a singly linked regular SSTable") = pure ()
   simp only [valid, ite_eq_left, scope, native_table_action_check acquired built serves]
 
