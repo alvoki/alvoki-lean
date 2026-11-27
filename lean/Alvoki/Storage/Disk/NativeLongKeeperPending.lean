@@ -37,29 +37,30 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {in
   {fileCalls : MarkedTemporaryReadCalls heap} {directoryCalls : MarkedDirectoryReadCalls heap stream}
   {prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls} {slotOf : heap → stream → DescriptorSlot}
 
-/-- A projection of the initialized cache survives checkpoint, listing and seal
-reads. Only that projection must survive the longer keeper’s temporary read. -/
-theorem MarkedDirectoryReadReport.keepsCellAfterLongKeeper
+/-- The checkpoint, listing and seal chain establish the cache and descriptor
+census at keeper entry. The longer keeper need only preserve the selected fact. -/
+theorem MarkedDirectoryReadReport.invariantAfterLongKeeper
     (listing : MarkedDirectoryReadReport prepared directoryCalls slotOf)
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
     {beforeKeeper afterKeeper : heap}
     (seals : MarkedSealReadChain seed fileCalls chronology.seals listing.reached beforeKeeper)
-    {α : Type} (cell : heap → α)
-    (project : ∀ {before after}, MarkedReadCacheFrame seed before after → cell after = cell before)
-    (readEffects : fileCalls.ScopeFrames (fun before after => cell after = cell before))
+    (invariant : heap → Prop)
+    (establish : view.descriptors beforeKeeper = keeper.atOpen →
+      MarkedReadCacheFrame seed seed.afterPending beforeKeeper → invariant beforeKeeper)
+    (readEffects : fileCalls.ScopeFrames (fun before after => invariant before → invariant after))
     (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
     (longer : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat)
     (read : fileCalls.readKeeperWithRelease remember (directory.file (.walSegment layout.keeper.first))
       layout.keeper.bytes.size reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper =
         .ok layout.keeper.bytes afterKeeper) :
-    cell afterKeeper = cell seed.afterPending := by
+    invariant afterKeeper := by
   obtain ⟨_, _, _, _, start, _, _, _⟩ := prepared.reachesScan selected (fun _ _ => pure (⟨[], []⟩, 0))
   obtain ⟨_, census, _, _, listed⟩ := listing.returns
-  obtain ⟨_, _, sealedReads, _⟩ := seals.reaches census
-  have keeperRead := fileCalls.longKeeperReadFrames readEffects (fun _ => rfl)
-    (fun first last => last.trans first) remember _ longer read
-  exact keeperRead.trans (project ((start.trans listed).trans sealedReads))
+  obtain ⟨_, _, sealedReads, afterSeals⟩ := seals.reaches census
+  have keeperRead := fileCalls.longKeeperReadFrames readEffects (fun _ => id)
+    (fun first last => last ∘ first) remember _ longer read
+  exact keeperRead (establish afterSeals ((start.trans listed).trans sealedReads))
 
 end FromAllocation
 

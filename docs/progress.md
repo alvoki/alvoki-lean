@@ -45,17 +45,17 @@ installation. Frames apply to the staging and rename heaps reached by that open.
 [Worker observation](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
 [Retry and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-The final sync group distinguishes cache-read failure, a closed cell and a raw
-fsync error. The marked open carries its allocated handle and descriptor slot
-through measured reads, repair and the final cache load. Existing storage frames
-carry the root binding observed at allocation to the fsync. The handle's cursor
-and captured inventory play no role in identifying the target.
+The marked reader's census shows the allocated directory slot survives the last
+seal. The keeper read, repair steps and final cache load preserve that slot and
+its inode under local descriptor conditions. The root name observed at cache
+allocation follows the storage frames to the same inode at fsync. Live retry
+and sampled reboot share the resulting facts.
 [Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Derive the issued directory slot’s liveness and
-inode from the reached descriptor changes. The current theorem still matches
-the issued census to the repair report and the allocated slot to that report's
-directory slot. The failed fsync's durability effect is a filesystem observation.
+**Next source boundary.** Derive the keeper name and its live and durable
+replacement bytes at the issued fsync from the reached staging write, file sync
+and rename. The failed directory fsync's durability effect remains an explicit
+filesystem observation.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)
