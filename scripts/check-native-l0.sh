@@ -34,31 +34,69 @@ compile "$l0/NativeTests" native
 cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,sstable}.c \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
 "$out/native-l0"
-compile "$l0/NativeSchedule" proof
+compile "$l0/NativeBridge" proof
+compile "$l0/LifecycleRefinement" proof
+compile "$l0/ScheduleSteps" proof
+compile "$l0/TableProofs" proof
+compile "$l0/TableAllocationProofs" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeBridge NativeSchedule; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.NativeBridge
-import Alvoki.Experiments.L0.NativeSchedule
+import Alvoki.Experiments.L0.ScheduleSteps
 import Alvoki.Experiments.L0.Lifecycle
+import Alvoki.Experiments.L0.LifecycleRefinement
+import Alvoki.Experiments.L0.TableProofs
+import Alvoki.Experiments.L0.TableAllocationProofs
 open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms keyCodec_roundtrips
 #check_axioms keyCodec_preservesOrder
 #check_axioms mutationCodec_roundtrips
 #check_axioms wal_append
+#check_axioms wal_scan
+#check_axioms wal_open
+#check_axioms manifest_open
 #check_axioms manifest_trace
-#check_axioms built_lookup
 #check_axioms manifest_publish
 #check_axioms CallbackEvidence.laws
-#check_axioms ObservedRun.refines
-#check_axioms native_schedules
-#check_axioms NativeRun.refines
+#check_axioms Execution.Run.refines
+#check_axioms Execution.Run.recoverOk
+#check_axioms Execution.Run.recoverError
 #check_axioms Lifecycle.Phase.online_owns_wal
 #check_axioms Lifecycle.Phase.publish_owns_wal
 #check_axioms Lifecycle.Phase.beginUpdate_hides_session
 #check_axioms Lifecycle.Phase.attachWal_keeps_session_private
 #check_axioms Lifecycle.Phase.offline_closed
+#check_axioms Lifecycle.Proof.withSession_closes
+#check_axioms Lifecycle.Proof.failed_recovery_closes
+#check_axioms Lifecycle.Proof.successful_recovery_publishes
+#check_axioms Lifecycle.Proof.update_success
+#check_axioms Lifecycle.Proof.update_error
+#check_axioms Lifecycle.Proof.reopen_attaches_before_scan
+#check_axioms Lifecycle.Proof.reopen_open_failure
+#check_axioms Lifecycle.recovery_online
+#check_axioms Lifecycle.recovery_offline
+#check_axioms Lifecycle.write_online
+#check_axioms Lifecycle.flush_online
+#check_axioms Lifecycle.write_offline
+#check_axioms Lifecycle.flush_offline
+#check_axioms Lifecycle.Proof.useSession_offline
+#check_axioms Lifecycle.get_online
+#check_axioms Lifecycle.get_online_error
+#check_axioms native_table_check
+#check_axioms native_table_descriptor_checked
+#check_axioms table_descriptor_acquired
+#check_axioms table_descriptor_stat_error
+#check_axioms table_descriptor_rejected
+#check_axioms table_descriptor_open_error
+#check_axioms native_table_lookup
+#check_axioms freeTableId_spec
+#check_axioms createTableAt_success
+#check_axioms createTableAt_bindings
+#check_axioms TableCreationEvidence.effect
+#check_axioms TableOpen.represents
+#check_axioms TableRead.effect
 LEAN

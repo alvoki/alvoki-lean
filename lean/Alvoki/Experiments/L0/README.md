@@ -96,41 +96,41 @@ attachment keeps the session private, only a phase owning a WAL can publish
 a session, mutation hides it, and cleanup first consumes the handle and
 installs the offline phase.
 
-[NativeBridge](NativeBridge.lean) derives the operation laws for a reported
-execution of the same schedule. Its append receipt names the existing
-segmented WAL execution and its exact reached sessions. The publication
-receipt uses the DurableBlob trace and its typed manifest refinement.
-`RecoveryChoices` discharges uncertain effects from the public steps.
-Successful table creation records the exact builder image under the
-new durable name and frames all other names. The read receipt serves
-that image through the opened descriptor. `open_built_table` and
-`TypedTable.represents_of_bytes` yield the lookup using the proved
-big-endian key and tagged mutation codecs. The bridge derives
-`ComponentLaws` and feeds `Execution.Run.refines` through
-`ObservedRun.refines`.
+[ScheduleSteps](ScheduleSteps.lean) takes the result of each reached
+operation directly to an `Execution.Run` step. The model uses these same
+lemmas. [NativeBridge](NativeBridge.lean) derives the operation laws from
+component observations. WAL and manifest receipts identify the actual
+modeled sessions or byte traces and use their public refinement theorems
+for the returned values. `RecoveryChoices` discharges uncertain effects
+from the public steps.
 
-[NativeSchedule](NativeSchedule.lean) proves that correspondence for each
-complete L0 schedule follows from correspondence for the individual
-callbacks in the record constructed by `Native.withOpen` and the runtime
-rules for bind, success and error. Given a runtime observation relation
-that reports the reached results faithfully, `NativeRun.refines` takes
-observations of those concrete callback records to the generic client
-trace. It uses the wrapper's serialized phase discipline and frame on
-cleanup. The remaining premises are at the IO boundary:
+The native wrapper and the lifecycle proofs run the same `Cell.withSession`
+and `Cell.update` schedules, and get uses the same online guard as its
+proof. [LifecycleRefinement](LifecycleRefinement.lean) uses one reached
+result for both the phase transition and the generic client trace step.
+Recovery failure skips the client callback,
+moves the cell offline before attempting WAL close, and attempts unlock even
+if close fails. Cleanup preserves the original error. Successful recovery
+publishes the session with the WAL acquired by that attempt. The table check
+and lookup use the same stat and scoped opening schedule. For the
+descriptor acquired by that schedule and serving
+the exact built bytes, [TableProofs](TableProofs.lean) derives both successful
+open and typed lookup from `open_built_table`. The check validates the footer
+and index extent. Row validation occurs on demand.
 
-- The WAL and blob primitives realize their modeled file effects, including
-  the effects that may precede an error. Successful reads/reopens report
-  the corresponding reached WAL view or decoded manifest. An open failure
-  frames the selection, even if private recovery progress changed.
-- Under stable, exclusive ownership, the WAL, manifest and table names
-  occupy disjoint namespaces. Creating a table uses an unused name,
-  `buildFileSynced` makes its complete builder output durable, and a
-  successful directory sync preserves the new name and the existing
-  bindings. A failed attempt may leave an orphan, which allocation skips.
-- The opened table descriptor serves the bytes bound to that name until the
-  operation returns. Linux lock and handle primitives and the runtime
-  implement the stated custody and cleanup behavior. The tests exercise
-  the IO adapter. The Lean proof does not interpret Linux syscalls.
+[TableAllocation](TableAllocation.lean) is the native create schedule. Its
+proofs show that probing picks a free ID and that a returned ID implies that
+the builder received the original rows and that the directory barrier
+succeeded after the synced build.
+
+The remaining IO premises are local: stat reports the occupied name,
+exclusive creation preserves unrelated names, the file and directory
+barriers establish the bindings, and the acquired descriptor serves the
+bound bytes. Native WAL and blob syscall observations must match their
+existing component models. Turning all of those Linux primitive
+observations into component receipts is still a refinement obligation. The runtime supplies reference-cell, error,
+lock and descriptor effects under stable, exclusive ownership. The Lean
+proofs do not interpret Linux syscalls.
 
 Bootstrap, WAL release, orphan collection, snapshots, concurrency,
 compaction and automatic flush are separate work.
@@ -141,3 +141,14 @@ fixture, kernel checks and axiom audit. The native fixture rotates the
 WAL, flushes multiple tables, checks persistent tombstones and WAL-suffix
 replay, retries a failed table open, and checks that a required read
 error never returns an older value.
+
+## Process interruption follow-up
+
+Add a subprocess cut after durable table creation and before manifest
+publication. Reopen twice and check that the old watermark remains usable,
+the orphan is skipped by allocation, and committed writes and tombstones
+are recovered from the retained WAL. Add a second cut after manifest rename
+and before directory sync. Reopen twice and check the watermark chosen by
+the first successful reopen and the logical database. These cases exercise
+process death and lock and descriptor release. They do not simulate power
+loss or discard filesystem cache.

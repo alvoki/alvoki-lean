@@ -33,9 +33,11 @@ def main : IO Unit := IO.FS.withTempDir fun root => do
   let hidden := root / "tables" / "hidden"
   -- Hide the required newest table to exercise the failed table-open path,
   -- after manifest and WAL recovery have already succeeded.
+  let exposed ← IO.mkRef false
   IO.FS.rename newTable hidden
-  try expectError (Native.withOpen root fun _ => pure ())
+  try expectError (Native.withOpen root fun _ => exposed.set true)
   finally IO.FS.rename hidden newTable
+  check (!(← exposed.get)) "failed table check exposed an online session"
   Native.withOpen root fun db => do
     check ((← Native.get db 7).isNone) "tombstone disappeared on recovery"
     check ((← Native.get db 8) == some 20) "new run value"

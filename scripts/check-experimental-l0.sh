@@ -23,7 +23,7 @@ compile Alvoki/Experiments/DurableBlob/Contract
 compile Alvoki/Experiments/Manifest/Basic
 compile Alvoki/Experiments/WAL/Segmented/Contract
 l0=Alvoki/Experiments/L0
-for module in Basic ComponentContract Model Client Proofs ComponentProofs Refinement ModelRefinement ReadErrors RecoveryChoices Trace Execution; do
+for module in Basic ComponentContract Model Client Proofs ComponentProofs Refinement ModelRefinement ReadErrors RecoveryChoices Trace ScheduleSteps Execution; do
   compile "$l0/$module"
 done
 compile Alvoki/Checks/Audit/AxiomPolicy

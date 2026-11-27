@@ -1,4 +1,5 @@
-import Alvoki.Experiments.L0.Codecs
+import Alvoki.Experiments.L0.TableSchedule
+import Alvoki.Experiments.L0.TableAllocation
 import Alvoki.Experiments.L0.Lifecycle
 import Alvoki.Experiments.DurableBlob.Native
 import Alvoki.Experiments.SSTable.Native
@@ -22,16 +23,7 @@ private def pathExists (path : FilePath) : IO Bool := do
     | .noFileOrDirectory .. => return false
     | err => throw err
 
-private def findFree (dir : FilePath) (next : Nat) : IO UInt64 :=
-  if full : next ≥ UInt64.size then throw (IO.userError "table IDs exhausted")
-  else do
-    let id := next.toUInt64
-    if ← pathExists (tablePath dir id) then findFree dir (next + 1) else return id
-termination_by UInt64.size - next
-decreasing_by omega
-
-private def createTable (dir : FilePath) (rows : Rows) : IO UInt64 := do
-  let id ← findFree dir 0
+private def buildSynced (dir : FilePath) (id : UInt64) (rows : Rows) : IO Unit := do
   let remaining ← IO.mkRef rows
   let _ ← ImmutableSSTable.buildFileSynced (tablePath dir id) do
     match ← remaining.get with
@@ -39,31 +31,29 @@ private def createTable (dir : FilePath) (rows : Rows) : IO UInt64 := do
     | row :: tail =>
       remaining.set tail
       return some (ImmutableSSTable.Entry.encode keyCodec mutationCodec row)
-  IO.FS.withFile dir .read syncHandle
-  return id
+
+private def createTable (dir : FilePath) (rows : Rows) : FileM UInt64 :=
+  createTableAt (fun id => liftM (pathExists (tablePath dir id)))
+    (fun id entries => liftM (buildSynced dir id entries))
+    (liftM (IO.FS.withFile dir .read syncHandle)) rows
 
 private def checked (operation : FileM α) : IO α := do
   match ← operation.run with
   | .ok result => return result
   | .error error => throw (IO.userError error)
 
-/-- The callback returns a value or error without exporting the descriptor. -/
+/-- The stat and open refer to the same stable path under root ownership.
+`IO.FS.withFile` drops its handle at the end of the call. Neither table
+operation retains it, so the runtime can close it on success or error. -/
 private def withTable (dir : FilePath) (id : UInt64)
-    (use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α) : FileM α := do
+    (use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α) : FileM α :=
   let path := tablePath dir id
-  let metadata ← liftM path.symlinkMetadata
-  unless metadata.type == .file && metadata.numLinks == 1 do
-    throw "expected a singly linked regular SSTable"
-  let result ← liftM <| IO.FS.withFile path .read fun handle => do
-    (do
-      let table ← ImmutableSSTable.openTable (ImmutableSSTable.handleSource handle)
-      use ⟨table, keyCodec, mutationCodec⟩).toBaseIO
-  match result with
-  | .ok result => return result
-  | .error error => throw error
+  withTableDescriptor (liftM path.symlinkMetadata)
+    (fun action => ExceptT.mk (IO.FS.withFile path .read fun handle => (action handle).run))
+    (fun handle => nativeTableAction handle use)
 
 private def tables (dir : FilePath) : Tables FileM where
-  create rows := liftM (createTable dir rows)
+  create := createTable dir
   check id := withTable dir id (fun _ => pure ())
   lookup id key := withTable dir id (·.lookup key)
 
@@ -71,27 +61,19 @@ private def requireWal (phase : IO.Ref (Phase Wal)) : IO Wal := do
   let some handle := (← phase.get).wal | throw (IO.userError "WAL is offline")
   return handle
 
-private def closeWal (phase : IO.Ref (Phase Wal)) : IO Unit := do
-  let previous ← phase.swap .offline
-  if let some handle := previous.wal then WalRecoverySlice.Segmented.Native.close handle
+private def phaseCell (phase : IO.Ref (Phase Wal)) : Cell IO Wal where
+  read := phase.get
+  swap := phase.swap
 
-private def publishSession (phase : IO.Ref (Phase Wal)) (session : Session) : IO Unit := do
-  let some next := (← phase.get).publish session | throw (IO.userError "L0 cannot publish a session")
-  phase.set next
-
-/-- The callbacks used by the Linux wrapper. Callers should use `withOpen`;
-this entry point exposes the callback boundary for the proof. -/
-def callbackComponents (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
+private def callbackComponents (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
   let blob := DurableBlob.native (root / "manifest")
   {
     append batch := liftM do
       let _ ← WalRecoverySlice.Segmented.Native.append (← requireWal phase) batch
     scan := liftM do WalRecoverySlice.Segmented.Native.scan (← requireWal phase)
-    reopenWal := liftM do
-      let some attach := (← phase.get).attachWal | throw (IO.userError "L0 cannot open a WAL")
-      let handle ← WalRecoverySlice.Segmented.Native.openExisting (root / "wal")
-      phase.set (attach handle)
-      WalRecoverySlice.Segmented.Native.scan handle
+    reopenWal := liftM <| (phaseCell phase).reopenWal (IO.userError "L0 cannot open a WAL")
+      (WalRecoverySlice.Segmented.Native.openExisting (root / "wal"))
+      WalRecoverySlice.Segmented.Native.scan
     manifest := L0Manifest.backend id {
       publish := fun bytes => liftM (blob.publish bytes)
       reopen := liftM blob.reopen
@@ -121,28 +103,13 @@ def withOpen (path : FilePath) (use : Handle → IO α) : IO α := do
     unless ← lock.tryLock do throw (IO.userError "L0 already open")
     let phase ← IO.mkRef (.opening : Phase Wal)
     let ops := callbackComponents root phase
-    let result ← (do
-      let recovered ← checked (recover ops)
-      publishSession phase recovered
-      use ⟨ops, phase⟩).toBaseIO
-    let closed ← (try closeWal phase finally lock.unlock).toBaseIO
-    match result, closed with
-    | .error error, _ | .ok _, .error error => throw error
-    | .ok result, .ok () => return result
-
-private def online (handle : Handle) : IO Session := do
-  let some session := (← handle.phase.get).session | throw (IO.userError "L0 requires reopen")
-  return session
+    (phaseCell phase).withSession (IO.userError "L0 cannot publish a session")
+      (checked (recover ops)) (use ⟨ops, phase⟩)
+      WalRecoverySlice.Segmented.Native.close lock.unlock
 
 private def update (handle : Handle) (operation : Session → FileM Session) : IO Unit := do
-  let some (next, session) := (← handle.phase.get).beginUpdate
-    | throw (IO.userError "L0 requires reopen")
-  handle.phase.set next
-  try
-    publishSession handle.phase (← checked (operation session))
-  catch error =>
-    try closeWal handle.phase catch _ => pure ()
-    throw error
+  (phaseCell handle.phase).update (IO.userError "L0 requires reopen")
+    (fun session => checked (operation session)) WalRecoverySlice.Segmented.Native.close
 
 def put (handle : Handle) (key value : UInt64) : IO Unit :=
   update handle (fun session => write handle.ops session (key, .put value))
@@ -153,7 +120,8 @@ def delete (handle : Handle) (key : UInt64) : IO Unit :=
 def flush (handle : Handle) : IO Unit :=
   update handle (ExperimentalL0.flush handle.ops)
 
-def get (handle : Handle) (key : UInt64) : IO (Option UInt64) := do
-  checked (ExperimentalL0.get handle.ops (← online handle) key)
+def get (handle : Handle) (key : UInt64) : IO (Option UInt64) :=
+  (phaseCell handle.phase).useSession (IO.userError "L0 requires reopen")
+    (fun session => checked (ExperimentalL0.get handle.ops session key))
 
 end ExperimentalL0.Native

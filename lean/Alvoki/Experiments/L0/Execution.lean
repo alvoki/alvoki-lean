@@ -1,4 +1,4 @@
-import Alvoki.Experiments.L0.Trace
+import Alvoki.Experiments.L0.ScheduleSteps
 import Alvoki.Experiments.L0.ModelRefinement
 
 namespace ExperimentalL0
@@ -43,49 +43,20 @@ theorem Run.projects (run : Run events session image) :
     Execution.Run events session image.selected := by
   induction run with
   | initial => exact .initial initial_durable
-  | @written _ session image faults change next after _ ran ih =>
-    refine .written ih fun _ installed => ?_
-    have effect := write_refines (componentLaws faults) image session installed change
-    rw [ran] at effect
-    exact effect
-  | @writeUncertain _ session image faults change result _ ran ih =>
-    refine .writeUncertain ih fun _ installed => ?_
-    have effect := write_refines (componentLaws faults) image session installed change
-    rw [ran] at effect
-    cases result with
-    | ok next after =>
-      obtain ⟨d, _, _⟩ := effect
-      exact Or.inr ⟨d⟩
-    | error error after => exact effect
-  | @got _ session image faults key value _ ran ih =>
-    refine .got ih fun _ installed => ?_
-    have read := get_refines (componentLaws faults) image session installed key
-    rw [ran] at read
-    exact read.1
-  | @flushed _ session image faults next after _ ran ih =>
-    refine .flushed ih fun _ installed => ?_
-    have effect := flush_refines (componentLaws faults) image session installed
-    rw [ran] at effect
-    exact effect
-  | @flushUncertain _ session image faults result _ ran ih =>
-    refine .flushUncertain ih fun _ installed => ?_
-    have effect := flush_refines (componentLaws faults) image session installed
-    rw [ran] at effect
-    cases result with
-    | ok next after =>
-      obtain ⟨d, _, _⟩ := effect
-      exact ⟨d⟩
-    | error error after => exact effect
-  | @reopened _ image faults session after _ ran ih =>
-    refine .reopened ih fun _ durable => ?_
-    have effect := recover_refines (componentLaws faults) image durable
-    rw [ran] at effect
-    exact effect.2
-  | @openFailed _ image faults error after _ ran ih =>
-    refine .openFailed ih fun _ durable => ?_
-    have effect := recover_refines (componentLaws faults) image durable
-    rw [ran] at effect
-    exact ⟨effect ▸ durable⟩
+  | @written _ _ _ faults _ _ _ _ ran ih =>
+    exact ih.writeOk (componentLaws faults) ran
+  | @writeUncertain _ _ _ faults _ result _ ran ih =>
+    cases result <;> exact ih.writeInterrupted (componentLaws faults) ran
+  | @got _ _ _ faults _ _ _ ran ih =>
+    exact ih.getOk (componentLaws faults) ran
+  | @flushed _ _ _ faults _ _ _ ran ih =>
+    exact ih.flushOk (componentLaws faults) ran
+  | @flushUncertain _ _ _ faults result _ ran ih =>
+    cases result <;> exact ih.flushInterrupted (componentLaws faults) ran
+  | @reopened _ _ faults _ _ _ ran ih =>
+    exact ih.recoverOk (componentLaws faults) ran
+  | @openFailed _ _ faults _ _ _ ran ih =>
+    exact ih.recoverError (componentLaws faults) ran
   | stop _ ih => exact .stop ih
 
 theorem Run.refines (run : Run events session image) :

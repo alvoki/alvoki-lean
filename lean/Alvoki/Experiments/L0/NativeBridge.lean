@@ -1,22 +1,10 @@
 import Alvoki.Experiments.L0.NativeFacts
+import Alvoki.Experiments.L0.RecoveryChoices
+import Alvoki.Experiments.L0.TableAllocationProofs
+import Alvoki.Experiments.L0.TableProofs
 
 namespace ExperimentalL0.NativeBridge
 open WalRecoverySlice.Segmented
-
-/-- The certificate names the exact builder result for the durable file
-that the adapter opened. Filesystem primitives establish the stable source
-premise, not the lookup result. -/
-theorem built_lookup [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {source : ImmutableSSTable.Source m}
-    (built : ImmutableSSTable.modelBuild
-      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : source.Serves bytes) (key : UInt64) :
-    (do
-      let table ← ImmutableSSTable.openTable source
-      (ImmutableSSTable.TypedTable.mk table keyCodec mutationCodec).lookup key) =
-      pure (lookupRows rows key) := by
-  obtain ⟨table, opened, rep⟩ := ImmutableSSTable.open_built_table built serves
-  rw [opened, pure_bind, typed_lookup_spec (typed_table_from_bytes rep)]
 
 /-- Records the actual before and returned WAL sessions for a successful
 native append at the boundary of the segmented effects model. -/
@@ -52,52 +40,76 @@ theorem ManifestReceipt.effect (receipt : ManifestReceipt proposed actual)
   | issued run submitted decoded =>
     exact Option.some.inj (decoded.symm.trans (manifest_publish run submitted valid))
 
-/-- A healthy table lookup records its actual result against a source
-serving one completed builder image. This ties the input rows to the
-observed result without a separate logical lookup assumption. -/
+/-- The actual read descriptor serves the durable image from the same table
+binding. The image comes from the shared builder on the logical rows. -/
+structure TableSource (file : Option ByteArray) (rows : Rows) (handle : IO.FS.Handle) : Prop where
+  image : ∃ count bytes, file = some bytes ∧ ImmutableSSTable.modelBuild
+    (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) ∧
+    (ImmutableSSTable.handleSource handle).Serves bytes
+
+/-- A successful open keeps the source and the observation of the shared
+open schedule together. -/
+inductive TableOpen (file : Option ByteArray) (rows : Rows) : Prop where
+  | opened (source : TableSource file rows handle)
+      (returned : withTableSource (ImmutableSSTable.handleSource handle) (fun _ => pure ()) = pure ()) :
+      TableOpen file rows
+
+theorem TableOpen.represents (receipt : TableOpen file rows) :
+    ∃ (handle : IO.FS.Handle) (table : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation),
+      table.Represents (· < ·) rows ∧
+      withTableSource (ImmutableSSTable.handleSource handle) (fun opened => pure opened) = pure table := by
+  cases receipt with
+  | @opened handle source _ =>
+    obtain ⟨_, _, _, built, serves⟩ := source.image
+    obtain ⟨table, represents, opened⟩ := native_table_source_built handle built serves
+    exact ⟨handle, table, represents, opened _⟩
+
+/-- A healthy lookup records the result of the very same open/read
+schedule used by the native adapter. -/
 inductive TableRead (file : Option ByteArray) (rows : Rows) (key : UInt64) (result : Option Mutation) : Prop where
-  | read {source : ImmutableSSTable.Source (Except String)}
-      (built : ImmutableSSTable.modelBuild
-        (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-      (binding : file = some bytes) (serves : source.Serves bytes)
-      (returned : (do
-        let table ← ImmutableSSTable.openTable source
-        (ImmutableSSTable.TypedTable.mk table keyCodec mutationCodec).lookup key) = .ok result) :
+  | read (source : TableSource file rows handle)
+      (returned : withTableSource (ImmutableSSTable.handleSource handle) (·.lookup key) = pure result) :
       TableRead file rows key result
 
 theorem TableRead.effect (receipt : TableRead file rows key result) : result = lookupRows rows key := by
   cases receipt with
-  | read built _ serves returned =>
-    rw [built_lookup built serves key] at returned
-    exact (Except.ok.inj returned).symm
+  | @read handle source returned =>
+    obtain ⟨_, _, _, built, serves⟩ := source.image
+    have equal := returned.symm.trans (native_table_lookup handle built serves key)
+    obtain ⟨world⟩ := (inferInstance : Nonempty (Void IO.RealWorld))
+    exact EST.Out.ok.inj (congrFun equal world) |>.1
 
-/-- Read-only component callbacks may change private handles or phase, but
-keep the selected durable image. On success they return its observation. -/
-def Observation (selected : σ → Selected) (before : σ) (value : α)
-    (result : EStateM.Result String σ α) : Prop :=
-  match result with
-  | .ok actual after => actual = value ∧ selected after = selected before
-  | .error _ after => selected after = selected before
+/-- Primitive effects on table names and the synced build artifact. The
+directory barrier turns that artifact into a durable catalog binding. -/
+structure TableCreationEvidence (create : Rows → StorageM σ UInt64)
+    (selected : σ → Selected) where
+  names : σ → UInt64 → Bool
+  prepared : σ → UInt64 → Rows → Prop
+  occupied : UInt64 → StorageM σ Bool
+  build : UInt64 → Rows → StorageM σ Unit
+  syncDirectory : StorageM σ Unit
+  schedule : create = createTableAt occupied build syncDirectory
+  absent : ∀ s id, names s id = false → (selected s).tables id = none
+  probe : ∀ s id, match occupied id s with
+    | .ok result after => result = names s id ∧ (names after, selected after) = (names s, selected s)
+    | .error _ after => (names after, selected after) = (names s, selected s)
+  buildEffect : ∀ s id rows, match build id rows s with
+    | .ok _ after => (selected s).TableFrame (selected after) ∧ prepared after id rows
+    | .error _ after => (selected s).TableFrame (selected after)
+  syncEffect : ∀ s, match syncDirectory s with
+    | .ok _ after => (selected s).TableFrame (selected after) ∧
+        ∀ id rows, prepared s id rows → (selected after).tables id = some rows
+    | .error _ after => (selected s).TableFrame (selected after)
 
-/-- Success of exclusive creation, file fsync and directory fsync establishes
-this binding of the builder image. Other names keep their prior contents. -/
-structure CreatedFile (before after : Catalog) (id : UInt64) (rows : Rows)
-    (file : Option ByteArray) : Prop where
-  unused : before id = none
-  bound : after id = some rows
-  outside : ∀ other, other ≠ id → after other = before other
-  image : ∃ count bytes, file = some bytes ∧ ImmutableSSTable.modelBuild
-    (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes)
-
-theorem CreatedFile.effect {id : UInt64} (made : CreatedFile before after id rows file) :
-    before.Created after id rows := by
-  refine ⟨made.unused, made.bound, ?_⟩
-  intro other existing previous
-  by_cases same : other = id
-  · subst other
-    rw [made.unused] at previous
-    contradiction
-  · rw [made.outside other same, previous]
+theorem TableCreationEvidence.effect {create : Rows → StorageM σ UInt64} (e : TableCreationEvidence create selected) (rows : Rows) (s : σ) :
+    match create rows s with
+    | .ok id after => (selected after).view = (selected s).view ∧
+        (selected after).version = (selected s).version ∧
+        (selected s).tables.Created (selected after).tables id rows
+    | .error _ after => (selected s).TableFrame (selected after) := by
+  rw [e.schedule]
+  exact createTableAt_bindings selected e.names e.prepared e.occupied e.build e.syncDirectory
+    e.absent e.probe e.buildEffect e.syncEffect rows s
 
 /-- Local evidence for reached callbacks. WAL and manifest mutation effects
 are obtained by eliminating component traces. Table creation carries the
@@ -106,9 +118,15 @@ built image served by its descriptor. State indices identify the reached
 phase. Relating the reported callbacks to native IO remains a premise. -/
 structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → Selected)
     (fileBytes : σ → UInt64 → Option ByteArray) : Prop where
-  scan : ∀ s, Observation selected s (selected s).view (ops.scan s)
-  reopenWal : ∀ s, Observation selected s (selected s).view (ops.reopenWal s)
-  reopenManifest : ∀ s, Observation selected s (selected s).version (ops.manifest.reopen s)
+  scan : ∀ s, match ops.scan s with
+    | .ok view after => WalScanReceipt (selected s).view view ∧ selected after = selected s
+    | .error _ after => selected after = selected s
+  reopenWal : ∀ s, match ops.reopenWal s with
+    | .ok view after => WalOpenReceipt (selected s).view view ∧ selected after = selected s
+    | .error _ after => selected after = selected s
+  reopenManifest : ∀ s, match ops.manifest.reopen s with
+    | .ok version after => ManifestOpenReceipt (selected s).version version ∧ selected after = selected s
+    | .error _ after => selected after = selected s
   append : ∀ s batch, match ops.append batch s with
     | .ok _ after => WalReceipt (selected s).view (selected after).view batch ∧
         (selected after).version = (selected s).version ∧ (selected after).tables = (selected s).tables
@@ -116,14 +134,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
         (RecoveryChoices.Retry (.offline (selected s).view (some (.append batch)))
           (.ready (selected s).version) (.online (selected after).view) (.ready (selected after).version) ∧
           (selected after).tables = (selected s).tables)
-  create : ∀ s rows, Rows.Ordered rows →
-    match ops.tables.create rows s with
-    | .ok id after => (selected after).view = (selected s).view ∧
-        (selected after).version = (selected s).version ∧
-        CreatedFile (selected s).tables (selected after).tables id rows (fileBytes after id)
-    | .error _ after => (selected after).view = (selected s).view ∧
-        (selected after).version = (selected s).version ∧
-        (selected s).tables.Preserves (selected after).tables
+  create : Nonempty (TableCreationEvidence ops.tables.create selected)
   publish : ∀ s proposal, proposal.Valid → match ops.manifest.publish proposal s with
     | .ok _ after => ManifestReceipt proposal (selected after).version ∧
         (selected after).view = (selected s).view ∧ (selected after).tables = (selected s).tables
@@ -131,7 +142,10 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
         (RecoveryChoices.Retry (.online (selected s).view)
           (.offline (selected s).version (some proposal)) (.online (selected after).view)
           (.ready (selected after).version) ∧ (selected after).tables = (selected s).tables)
-  check : ∀ s id, Observation selected s () (ops.tables.check id s)
+  check : ∀ s id, match ops.tables.check id s with
+    | .ok _ after => (∃ rows, (selected s).tables id = some rows ∧ TableOpen (fileBytes s id) rows) ∧
+        selected after = selected s
+    | .error _ after => selected after = selected s
   lookup : ∀ s id key rows, (selected s).tables id = some rows →
     match ops.tables.lookup id key s with
     | .ok result after => TableRead (fileBytes s id) rows key result ∧ selected after = selected s
@@ -145,13 +159,25 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
     ComponentLaws ops selected where
   scan s := by
     have read := evidence.scan s
-    cases ran : ops.scan s <;> simpa [Observation, ran] using read
+    cases ran : ops.scan s with
+    | ok value after =>
+      rw [ran] at read
+      exact ⟨read.1.effect, read.2⟩
+    | error error after => simpa [ran] using read
   reopenWal s := by
     have read := evidence.reopenWal s
-    cases ran : ops.reopenWal s <;> simpa [Observation, ran] using read
+    cases ran : ops.reopenWal s with
+    | ok value after =>
+      rw [ran] at read
+      exact ⟨read.1.effect, read.2⟩
+    | error error after => simpa [ran] using read
   reopenManifest s := by
     have read := evidence.reopenManifest s
-    cases ran : ops.manifest.reopen s <;> simpa [Observation, ran] using read
+    cases ran : ops.manifest.reopen s with
+    | ok value after =>
+      rw [ran] at read
+      exact ⟨read.1.effect, read.2⟩
+    | error error after => simpa [ran] using read
   append s batch := by
     have receipt := evidence.append s batch
     cases ran : ops.append batch s with
@@ -165,13 +191,10 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
       · obtain ⟨old | new, version⟩ := retry.afterAppend
         · exact Or.inl (selected_eq old version tables)
         · exact Or.inr (selected_eq new version tables)
-  create s rows ordered := by
-    have made := evidence.create s rows ordered
-    cases ran : ops.tables.create rows s with
-    | error error after => simpa [ran] using made
-    | ok id after =>
-      rw [ran] at made
-      exact ⟨made.1, made.2.1, made.2.2.effect⟩
+  create s rows _ := by
+    obtain ⟨creation⟩ := evidence.create
+    have made := creation.effect rows s
+    cases ran : ops.tables.create rows s <;> simpa [ran, Selected.TableFrame] using made
   publish s proposal valid := by
     have receipt := evidence.publish s proposal valid
     cases ran : ops.manifest.publish proposal s with
@@ -187,9 +210,11 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
         · exact Or.inr (selected_eq view new tables)
   check s id := by
     have read := evidence.check s id
-    cases ran : ops.tables.check id s <;> simp only [Observation, ran] at read ⊢
-    · exact read.2
-    · exact read
+    cases ran : ops.tables.check id s with
+    | ok value after =>
+      rw [ran] at read
+      exact read.2
+    | error error after => simpa [ran] using read
   lookup s id key rows bound := by
     have read := evidence.lookup s id key rows bound
     cases ran : ops.tables.lookup id key s with
@@ -197,115 +222,5 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
       rw [ran] at read
       exact ⟨read.1.effect, read.2⟩
     | error error after => simpa [ran] using read
-
-def reached : EStateM.Result String σ α → σ
-  | .ok _ after | .error _ after => after
-
-/-- Reports of the actual shared operation schedule. The callback interpreter
-can carry private adapter phase and effect observations. The initial image is
-provided by a previously initialized database. -/
-inductive ObservedRun (ops : Components (StorageM σ)) (selected : σ → Selected) :
-    List Event → Option Session → σ → Prop where
-  | initial : Nonempty (Durable (selected s) []) → ObservedRun ops selected [] none s
-  | written : ObservedRun ops selected events (some session) s →
-      write ops session change s = .ok next after →
-      ObservedRun ops selected (events ++ [.written change]) (some next) after
-  | writeUncertain : ObservedRun ops selected events (some session) s →
-      write ops session change s = result →
-      ObservedRun ops selected (events ++ [.writeUncertain change]) none (reached result)
-  | got : ObservedRun ops selected events (some session) s →
-      get ops session key s = .ok value after →
-      ObservedRun ops selected (events ++ [.got key value]) (some session) after
-  | readFailed : ObservedRun ops selected events (some session) s →
-      get ops session key s = .error error after →
-      ObservedRun ops selected events (some session) after
-  | flushed : ObservedRun ops selected events (some session) s →
-      flush ops session s = .ok next after →
-      ObservedRun ops selected (events ++ [.flushed]) (some next) after
-  | flushUncertain : ObservedRun ops selected events (some session) s →
-      flush ops session s = result →
-      ObservedRun ops selected (events ++ [.flushUncertain]) none (reached result)
-  | reopened : ObservedRun ops selected events none s →
-      recover ops s = .ok session after →
-      ObservedRun ops selected (events ++ [.reopened]) (some session) after
-  | openFailed : ObservedRun ops selected events none s →
-      recover ops s = .error error after →
-      ObservedRun ops selected (events ++ [.openFailed]) none after
-  | stopped : ObservedRun ops selected events session s → selected after = selected s →
-      ObservedRun ops selected (events ++ [.stop]) none after
-
-theorem ObservedRun.projects (run : ObservedRun ops selected events session s)
-    (evidence : CallbackEvidence ops selected fileBytes) : Execution.Run events session (selected s) := by
-  have laws := evidence.laws
-  induction run with
-  | initial durable => exact .initial durable
-  | @written _ session s change next after _ result ih =>
-    refine .written ih (fun _ installed => ?_)
-    have effect := write_refines laws s session installed change
-    rw [result] at effect
-    exact effect
-  | @writeUncertain _ session s change observed _ result ih =>
-    refine .writeUncertain ih (fun _ installed => ?_)
-    have effect := write_refines laws s session installed change
-    rw [result] at effect
-    cases observed with
-    | ok next after =>
-      obtain ⟨d, _, _⟩ := effect
-      exact Or.inr ⟨d⟩
-    | error error after => exact effect
-  | @got _ session s key value after _ result ih =>
-    have frame : selected after = selected s := by
-      obtain ⟨_ | _, _, represented⟩ := ih.refines
-      · obtain ⟨_, _, same, _, installed⟩ := represented
-        cases same
-        have effect := get_refines laws s session installed key
-        rw [result] at effect
-        exact effect.2
-      · have impossible := represented.1
-        contradiction
-    rw [frame]
-    refine .got ih (fun _ installed => ?_)
-    have effect := get_refines laws s session installed key
-    rw [result] at effect
-    exact effect.1
-  | @readFailed _ session s key error after _ result ih =>
-    obtain ⟨_ | _, _, represented⟩ := ih.refines
-    · obtain ⟨_, _, same, _, installed⟩ := represented
-      cases same
-      have effect := get_refines laws s session installed key
-      rw [result] at effect
-      exact effect ▸ ih
-    · have impossible := represented.1
-      contradiction
-  | flushed _ result ih =>
-    refine .flushed ih (fun _ installed => ?_)
-    have effect := flush_refines laws _ _ installed
-    rw [result] at effect
-    exact effect
-  | @flushUncertain _ session s observed _ result ih =>
-    refine .flushUncertain ih (fun _ installed => ?_)
-    have effect := flush_refines laws _ _ installed
-    rw [result] at effect
-    cases observed with
-    | ok next after =>
-      obtain ⟨d, _, _⟩ := effect
-      exact ⟨d⟩
-    | error error after => exact effect
-  | reopened _ result ih =>
-    refine .reopened ih (fun _ durable => ?_)
-    have effect := recover_refines laws _ durable
-    rw [result] at effect
-    exact effect.2
-  | openFailed _ result ih =>
-    refine .openFailed ih (fun _ durable => ?_)
-    have effect := recover_refines laws _ durable
-    rw [result] at effect
-    exact ⟨effect ▸ durable⟩
-  | stopped _ frame ih => exact frame ▸ .stop ih
-
-theorem ObservedRun.refines (run : ObservedRun ops selected events session s)
-    (evidence : CallbackEvidence ops selected fileBytes) :
-    ∃ state, Client.Allows events state ∧ Execution.Represents session (selected s) state :=
-  (run.projects evidence).refines
 
 end ExperimentalL0.NativeBridge
