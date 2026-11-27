@@ -6,7 +6,7 @@ import re
 
 IR = Path(".lake/build/ir")
 compaction = (IR / "Compaction.c").read_text()
-main = (IR / "CompactionMain.c").read_text()
+main = (IR / "Alvoki/Bench/Compaction/CompactionMain.c").read_text()
 
 
 def require(text, pattern, description):

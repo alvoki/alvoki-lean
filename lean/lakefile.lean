@@ -96,10 +96,10 @@ lean_exe «alvoki-fused-merge» where
   root := `Alvoki.Bench.Merge.FusedMergeMain
 
 lean_exe «alvoki-compaction» where
-  root := `CompactionMain
+  root := `Alvoki.Bench.Compaction.CompactionMain
 
 lean_exe «alvoki-compaction-cursor» where
-  root := `CompactionCursorMain
+  root := `Alvoki.Bench.Compaction.CompactionCursorMain
 
 lean_exe «alvoki-disk-checks» where
   root := `Alvoki.Checks.Tests.DiskTableChecks
