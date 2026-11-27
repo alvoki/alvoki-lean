@@ -61,7 +61,7 @@ Each WAL frame occupies 48 bytes. A checkpoint manifest has a 48-byte v2 header 
 
 Starting at offset 48, each manifest record stores a run's file length followed by the checksum over its complete bytes. The manifest length is exactly `48 + 16*runCount`. Records describe the v3 files in increasing index order for the named generation. The native reader accepts a v2 manifest or absence. It checks the recorded lengths and checksums and structurally validates the same ordered run bytes, including that row sequences stay at or below the watermark. Changes confined to one byte in a run change its checksum. Multiple changes can collide. [Manifest codec](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) · [Single-byte detection](../lean/Alvoki/Storage/Disk/Proofs/Session/ManifestIntegritySingleByte.lean)
 
-The commit marker selects a prefix of complete WAL frames. Frame decoding checks the format, checksum, and canonical operation fields. Recovery checks consecutive write sequences before replay. [WAL codec](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean) · [Publication protocol](architecture.md#sequential-storage)
+The commit marker selects a prefix of complete WAL frames. Frame decoding checks the format, checksum, and canonical operation fields. Recovery checks consecutive write sequences before replay. [WAL codec](../lean/Alvoki/Storage/Disk/WAL/WriteAheadLog.lean) · [Publication protocol](architecture.md#sequential-storage)
 
 ### Durable WAL boundary
 

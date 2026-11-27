@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.WAL.WalBoundary
 
 namespace Alvoki.Storage
 open WAL (frameSize)

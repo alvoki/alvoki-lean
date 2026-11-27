@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WAL.WalSegmentFileName
-import Alvoki.Storage.Disk.WriteAheadLog
+import Alvoki.Storage.Disk.WAL.WriteAheadLog
 
 namespace Alvoki.Storage
 open System

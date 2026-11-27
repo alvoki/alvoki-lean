@@ -268,7 +268,7 @@ and production coverage against the source separately. [Dependency probe](../../
 [write-stop]: ../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeRawWriteRootStop.lean
 [rename]: ../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperRenameError.lean
 [run-custody]: ../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointRunDurability.lean
-[wal]: ../../lean/Alvoki/Storage/Disk/WriteAheadLog.lean
+[wal]: ../../lean/Alvoki/Storage/Disk/WAL/WriteAheadLog.lean
 [stale-fd]: ../../lean/Alvoki/Storage/Disk/Proofs/WAL/ReplacedWalDescriptor.lean
 [pilot-early]: ../../lean/Alvoki/Storage/Disk/Proofs/Native/Checkpoint/NativeOpenedEarlyCheckpointReport.lean
 [pilot-read]: ../../lean/Alvoki/Storage/Disk/Proofs/Read/NativeOpenedSnapshotSessions.lean

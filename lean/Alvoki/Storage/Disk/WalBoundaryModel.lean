@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.WAL.WalBoundary
 import Alvoki.Storage.Publication.DiskPublicationModel
 
 namespace Alvoki.WAL.Boundary

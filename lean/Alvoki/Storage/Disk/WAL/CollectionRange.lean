@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.ManifestIntegrity
-import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.WAL.WalBoundary
 import Alvoki.Storage.Publication.DirectoryBindings
 
 namespace Alvoki.Storage

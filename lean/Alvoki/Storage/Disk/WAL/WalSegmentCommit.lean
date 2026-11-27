@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskPaths
-import Alvoki.Storage.Disk.WalBoundary
+import Alvoki.Storage.Disk.WAL.WalBoundary
 import Alvoki.Storage.Publication.DiskPublication
 
 namespace Alvoki.Storage.WalSegmentCommit

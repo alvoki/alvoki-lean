@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.DiskPaths
-import Alvoki.Storage.Disk.WriteAheadLog
+import Alvoki.Storage.Disk.WAL.WriteAheadLog
 import Alvoki.Storage.Publication.DiskPublication
 import Alvoki.Storage.Publication.RunCollection
 
