@@ -86,11 +86,11 @@ reopen once both reopen callbacks succeed. [Execution proof](Execution.lean)
 The proof applies to this interpreter. For the next slice, a native table
 adapter must make the exact built bytes and fresh name durable before
 returning an ID, preserve all existing bindings on error, and give the
-point observations specified by the rows on healthy open/read. This
-requires syncing through the descriptor that built the table, then syncing
-its directory, under exclusive ownership and the filesystem durability
-assumptions. File IDs must avoid retained orphans, and the adapter must
-own its handles. An order-preserving key codec and tagged mutation bytes
+point observations specified by the rows on healthy open/read. The adapter
+can use SSTable `buildFileSynced` for the file barrier on the original
+write descriptor, then sync the directory under exclusive ownership and
+the filesystem durability assumptions. File IDs must avoid retained
+orphans, and the adapter must own its handles. An order-preserving key codec and tagged mutation bytes
 can bridge to the opaque SSTable API. No SSTable offsets or file format
 appear in the L0 schedule or proof. [SSTable contract](../SSTable/README.md)
 
