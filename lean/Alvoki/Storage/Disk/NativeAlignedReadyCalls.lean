@@ -188,7 +188,9 @@ def OpenCloseHeapView.withLaterWalFromScan (view : OpenCloseHeapView heap FileIm
 
 /-- Continue from one retained WAL namespace through the literal open and
 start supported calls on the allocated table. The repair and allocation
-laws are indexed by the exact cache and keeper reached by the open. -/
+laws are indexed by the exact cache and keeper reached by the open.
+Bounded absence at entry makes the same attempt skip suffix pruning
+when its complete held listing has no candidates above the bound. -/
 abbrev RawMarkedOpenInterpreter.WritesAfterWalOpen
     {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream) (view : OpenCloseHeapView heap FileImage)
     (directory : DiskDirectory) (writer : SegmentedWriterState) (entry : heap)
@@ -221,7 +223,12 @@ abbrev RawMarkedOpenInterpreter.WritesAfterWalOpen
         ∃ (repaired : heap) (reopened : SegmentedWriterState)
           (allocation : OpenReferenceAllocations source.allocatePhase source.allocateToken view.phase reopened.installed repaired),
           source.AlignedReadyCalls input entry returnedAt table directory cache view reopened allocation phaseIdentity tokenIdentity
-            origin earlier inodes runs observe 0
+            origin earlier inodes runs observe 0 ∧
+          ∀ horizon, (∀ start ∈ namespaceView.laterWalStarts root writer.history.length, start ≤ horizon) →
+            (∀ start, writer.history.length < start → start ≤ horizon →
+              names entry (directory.file (.walSegment start)) = none) →
+            ∃ seen : source.LiteralAlignedSyncs directory layout cache view observe visible namespaceView root scope entry repaired,
+              seen.newer = [] ∧ seen.keeperEntry = seen.authorized
 
 section WalOnly
 
@@ -272,13 +279,14 @@ theorem RawMarkedOpenInterpreter.opensRetainedWalForCalls
       (managedPath directory) (fun _ _ => ⟨rfl, fun _ _ => rfl⟩)
       (fun path before => (reads.statFrame path before).1) reads.statMissing
       (fun start _ => .inr ⟨.walSegment start, rfl⟩) (laterAtScan scanned)) wal worker
+  have walNameAtScan (start : Nat) :
+      names listed (directory.file (.walSegment start)) = names entry (directory.file (.walSegment start)) :=
+    (entryToScan _ (.inr ⟨.walSegment start, rfl⟩)).1
   have completeLater (start : Nat) (beyond : layout.range.through < start)
       (found : ∃ inode, names entry (directory.file (.walSegment start)) = some inode) :
       ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
     apply (laterAtScan scan start beyond).mpr
-    have kept : names listed (directory.file (.walSegment start)) = names entry (directory.file (.walSegment start)) :=
-      (entryToScan _ (.inr ⟨.walSegment start, rfl⟩)).1
-    rw [kept]
+    rw [walNameAtScan]
     exact Option.isSome_iff_exists.mpr found
   have suffix (start : Nat) (member : start ∈ (projected.files entry).image.later.visible) :
       layout.range.through < start ∧ ∃ object, namespaceView.child root (renderWalSegmentName start) = some object := by
@@ -324,9 +332,20 @@ theorem RawMarkedOpenInterpreter.opensRetainedWalForCalls
   have atKeeper : (names entry (directory.file (.walSegment layout.keeper.first))).map (visible entry) =
       some (layout.keeper.bytes ++ layout.tail) := by
     simpa only [keeper, aligned, ByteArray.append_empty] using files.active
-  exact ⟨repaired, reopened, allocation, installed.refinesReadyCalls returned sameHistory prior inodes runs observe
+  refine ⟨repaired, reopened, allocation, installed.refinesReadyCalls returned sameHistory prior inodes runs observe
     namespaceView root seen repair allocates protectedFiles atMarker stable.parentSettled aligned keeper atKeeper
-    (fun start low high => files.catalog start low (layout.through ▸ high)) bounded completeLater phaseEffects ptrEq⟩
+    (fun start low high => files.catalog start low (layout.through ▸ high)) bounded completeLater phaseEffects ptrEq, ?_⟩
+  intro horizon scanBound absentAtEntry
+  have empty : seen.newer = [] := by
+    apply List.eq_nil_iff_forall_not_mem.mpr
+    intro start member
+    obtain ⟨beyond, named⟩ := (seen.scanned start).mp member
+    have cutoff := layout.through ▸ beyond
+    have upper := scanBound start
+      ((namespaceView.mem_laterWalStarts root writer.history.length start).mpr ⟨cutoff, named⟩)
+    have present := (laterAtScan scan start beyond).mp named
+    simp only [walNameAtScan, absentAtEntry start cutoff upper, Option.isSome_none, Bool.false_eq_true] at present
+  exact ⟨seen, empty, by simpa only [empty, ite_true] using seen.pruned⟩
 
 end WalOnly
 

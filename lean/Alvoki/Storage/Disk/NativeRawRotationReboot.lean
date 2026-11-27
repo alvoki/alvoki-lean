@@ -448,7 +448,8 @@ theorem SegmentedWriterState.VisibleWalFiles.durabilityAfterRebootRetries
     (fun prior inside returned => each prior (by simpa only [List.nil_append] using inside) returned))
 
 /-- The filesystem effects through a failed root barrier select the keeper
-and retained WAL files in one joint reboot sample. -/
+and retained WAL files in one joint reboot sample. The sampled namespace
+through the requested horizon has no segment above the committed cutoff. -/
 theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     {opened : NativeOpenedHandle heap} (current : NativeOpenedPosition opened)
     (calls : OpenRotationCallbacks heap) (raw : RawSyncCalls heap) (view : OpenCloseHeapView heap FileImage)
@@ -467,12 +468,12 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
       ⟨cache.directory, cache.active, cache.pending, cache.references,
         (congrArg DiskDirectory.path current.directory).symm ▸ cache.atRoot⟩ (storage current.reached)
       (visible current.reached))
-    (fileFrames : file.PreservesFiles view storage
-      (current.current.ready.state.rotationProtectedScope 0 current.current.ready.state.writer.target.range.through)
+    {horizon : Nat}
+    (fileFrames : file.PreservesFiles view storage (current.current.ready.state.rotationProtectedScope 0 horizon)
       current.reached barrier.issued)
+    (coversCutoff : current.current.ready.state.writer.target.range.through ≤ horizon)
     (window : current.current.ready.state.writer.wal.SettledNamespaceWindow
-      current.current.ready.state.session.directory 0 current.current.ready.state.writer.target.range.through
-      (storage current.reached))
+      current.current.ready.state.session.directory 0 horizon (storage current.reached))
     (chosen : (storage rebooted).files.names ∈ (storage barrier.failed).crashNames) :
     let state := current.current.ready.state
     let directory := state.session.directory
@@ -482,7 +483,9 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     let inode := view.capturedInode file.opened file.handle
     NativeReadyStorage state (storage barrier.failed) ∧ selected.RetainedReady directory state.session.descriptor ∧
     selected.history = state.writer.history ∧ selected.target.pair = state.writer.target.pair ∧
-    selected.wal.NamespaceWindow directory 0 selected.target.range.through names ∧
+    selected.wal.NamespaceWindow directory 0 horizon names ∧
+    (∀ start, state.writer.target.range.through < start → start ≤ horizon →
+      names (directory.file (.walSegment start)) = none) ∧
     (names path = none ∨ names path = some inode ∧ (storage barrier.failed).files.bytes inode = [ByteArray.empty]) ∧
     (effective = true → names path = some inode) ∧
     ((∀ selectedPath, checkpointSurvivorPath directory selected selected.target.pair.manifest selectedPath →
@@ -509,7 +512,7 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
   have history : selected.history = state.writer.history := state.rotationWriterAtSample_history valid names
   have cutoff : selected.target.range.through = state.writer.target.range.through :=
     ready.resumed.through.trans ((congrArg List.length history).trans valid.retained.resumed.through.symm)
-  have slice start (lower : 0 ≤ start) (upper : start ≤ state.writer.target.range.through) :
+  have slice start (lower : 0 ≤ start) (upper : start ≤ horizon) :
       state.writer.wal.SettledNamespaceWindow directory start start (storage current.reached) :=
     ⟨window.1.restrict lower upper, fun candidate allowed => (window.2 candidate allowed).restrict lower upper⟩
   have beforeRotation : state.writer.RetainedReady opened.directory state.session.descriptor :=
@@ -518,7 +521,7 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     Nat.le_of_eq (valid.retained.rotationAtEnd.trans valid.retained.resumed.through.symm)
   have successorWindow : state.writer.wal.SettledNamespaceWindow opened.directory
       state.writer.rotationInstalled.activeFirst state.writer.rotationInstalled.activeFirst (storage current.reached) :=
-    current.directory ▸ slice _ (Nat.zero_le _) successorBound
+    current.directory ▸ slice _ (Nat.zero_le _) (Nat.le_trans successorBound coversCutoff)
   have successor := file.observesSuccessorAtRootIssue view storage visible beforeRotation nonempty
     successorWindow barrier.loaded fileEffects
   have atIssue := file.preservesFilesAtRootIssue view barrier.loaded fileEffects fileFrames
@@ -548,7 +551,7 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
           (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr (.inl rfl))))
     exact fromEarlier.trans (fromReady.trans rootLive.symm)
   have old := effectAtDirectory.preservesReadyStorage oldAtIssue rootLive rootSurvives
-  have namesFrame : RotationWalNameFrame directory 0 state.writer.target.range.through
+  have namesFrame : RotationWalNameFrame directory 0 horizon
       state.writer.rotationInstalled.activeFirst (storage current.reached) (storage barrier.failed) := by
     intro start lower upper other
     have carried : WalNamePresenceFrame directory start start (storage current.reached) (storage barrier.issued) :=
@@ -557,16 +560,27 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
         subst observed
         exact .inr ⟨start, lower, upper, other, rfl⟩
     exact carried.trans (WalNamePresenceFrame.ofRootSync effectAtDirectory)
-  have catalog : selected.wal.NamespaceWindow directory 0 selected.target.range.through names := by
-    rw [cutoff]
-    exact state.rotationWriterAtSample_namespace valid nonempty (fun start low high _ => slice start low high)
+  have catalog : selected.wal.NamespaceWindow directory 0 horizon names :=
+    state.rotationWriterAtSample_namespace valid nonempty (fun start low high _ => slice start low high)
       namesFrame chosen
+  have noLater (start : Nat) (beyond : state.writer.target.range.through < start) (bounded : start ≤ horizon) :
+      names (directory.file (.walSegment start)) = none := by
+    cases binding : names (directory.file (.walSegment start)) with
+    | none => rfl
+    | some object =>
+      have member := (catalog start (Nat.zero_le _) bounded).mp (by simp only [binding, Option.isSome_some])
+      obtain ⟨segment, occurs, rfl⟩ := List.mem_map.mp member
+      have within : segment.first ≤ selected.target.range.through :=
+        ready.resumed.through.symm ▸ ready.layout.firstAtOrBeforeEnd occurs
+      exact False.elim ((Nat.not_lt_of_ge (cutoff ▸ within)) beyond)
   refine ⟨old, ready, history, state.rotationWriterAtSample_pair valid names,
-    catalog, survives, settled, ?_⟩
+    catalog, noLater, survives, settled, ?_⟩
   intro sampled noManifest
   exact @NativeReadyState.visibleWalAtRotationSample
     (storage := storage) («visible» := visible) (failed := barrier.failed) (rebooted := rebooted)
     (valid := valid) (chosen := chosen) (sampled := sampled)
-    (old := old) (ready := ready) (choice := survives) (window := catalog) (noManifest := noManifest)
+    (old := old) (ready := ready) (choice := survives)
+    (window := catalog.restrict (Nat.zero_le _) (Nat.le_trans (Nat.le_of_eq cutoff) coversCutoff))
+    (noManifest := noManifest)
 
 end Alvoki.Storage.DiskSession

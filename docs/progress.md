@@ -138,11 +138,17 @@ below the keeper, including gaps. A complete listing on its held directory
 identifies the later canonical names. Subsequent lookups track which of
 those names still exist after removal.
 
-**Next obligation.** Connect a failed repair that has already removed a later
-segment to the next literal open and writable session. Use a history in
-which the later segment is reachable. Establish
-its entry from the reached unlink and directory barrier, including the case
-where the barrier takes effect and returns an error.
+On the first failed rotation of a fresh database, the new segment starts
+at the acknowledged batch cutoff. Through the sampled horizon, no higher
+segment name is bound on reboot. The failed-open frame carries that fact to
+the successful retry. If the horizon covers its held scan, repair has no
+later segment to unlink. Directory and keeper sync still take place.
+
+**Next obligation.** Carry the namespace bound through earlier successful
+writes on the same handle before a failed rotation. A separate obligation
+covers repair after an interrupted append leaves extra bytes in the keeper.
+Cleanup of extra files requires deriving the retry entry after an unlink
+and a directory barrier that may take effect before reporting failure.
 The filesystem's survival and byte-sampling laws
 remain explicit. Further mixed calls, interruptions and maintenance
 remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).

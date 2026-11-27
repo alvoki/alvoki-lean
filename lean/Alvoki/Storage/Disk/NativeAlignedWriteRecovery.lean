@@ -2034,15 +2034,25 @@ abbrev VisibleWalFrame (directory : DiskDirectory) (through : Nat)
     (fun path => ∃ name, checkpointFreeWalChild through name ∧ path = ⟨directory.path.toString ++ "/" ++ name⟩)
     before after
 
+theorem VisibleWalFrame.segment
+    {directory : DiskDirectory} {through start : Nat}
+    {bindings : heap → FilePath → Option Nat} {contents : heap → Nat → ByteArray} {before after : heap}
+    (kept : VisibleWalFrame directory through bindings contents before after) (covered : start ≤ through) :
+    let path := directory.file (.walSegment start)
+    bindings after path = bindings before path ∧
+      ∀ inode, bindings before path = some inode → contents after inode = contents before inode :=
+  kept _ ⟨_, .inr ⟨start, covered, rfl⟩, DiskDirectory.walSegment_path ..⟩
+
 theorem SegmentedWriterState.VisibleWalFiles.frame
     {directory : DiskDirectory} {writer : SegmentedWriterState}
     {bindings : heap → FilePath → Option Nat} {contents : heap → Nat → ByteArray} {before after : heap}
     (files : writer.VisibleWalFiles directory (bindings before) (contents before))
     (layout : writer.wal.ReadLayout writer.history)
-    (kept : VisibleWalFrame directory writer.history.length bindings contents before after) :
+    {through : Nat} (covers : writer.history.length ≤ through)
+    (kept : VisibleWalFrame directory through bindings contents before after) :
     writer.VisibleWalFiles directory (bindings after) (contents after) := by
   have segment (start : Nat) (bounded : start ≤ writer.history.length) :=
-    kept (directory.file (.walSegment start)) ⟨_, .inr ⟨start, bounded, rfl⟩, DiskDirectory.walSegment_path ..⟩
+    VisibleWalFrame.segment kept (Nat.le_trans bounded covers)
   have payload {path : FilePath} (framed : bindings after path = bindings before path ∧
       ∀ inode, bindings before path = some inode → contents after inode = contents before inode) :
       (bindings after path).map (contents after) = (bindings before path).map (contents before) :=
@@ -2066,15 +2076,13 @@ def RawMarkedOpenInterpreter.FailedCalls.PreserveWalFiles
     source.FailedCalls first prior before → List.IsPrefix (prior ++ [(input, cause)]) errors →
     source.openTable input before = .error cause after → VisibleWalFrame directory through bindings contents before after
 
-theorem SegmentedWriterState.VisibleWalFiles.afterFailedCalls
-    {writer : SegmentedWriterState} {directory : DiskDirectory}
+theorem RawMarkedOpenInterpreter.FailedCalls.visibleWalFrame
+    {directory : DiskDirectory} {through : Nat}
     {bindings : heap → FilePath → Option Nat} {contents : heap → Nat → ByteArray}
     {source : RawMarkedOpenInterpreter heap stream} {first last : heap} {errors : List (FilePath × IO.Error)}
-    (files : writer.VisibleWalFiles directory (bindings first) (contents first)) (layout : writer.wal.ReadLayout writer.history)
     (attempts : source.FailedCalls first errors last)
-    (effects : attempts.PreserveWalFiles (directory := directory) writer.history.length bindings contents) :
-    writer.VisibleWalFiles directory (bindings last) (contents last) := by
-  apply files.frame layout
+    (effects : attempts.PreserveWalFiles (directory := directory) through bindings contents) :
+    VisibleWalFrame directory through bindings contents first last := by
   exact attempts.framesAfter .empty _ (fun _ _ _ => ⟨rfl, fun _ _ => rfl⟩)
     (fun first last => FileObservationFrame.trans first last)
     (fun prior inside returned => effects prior (by simpa only [List.nil_append] using inside) returned)

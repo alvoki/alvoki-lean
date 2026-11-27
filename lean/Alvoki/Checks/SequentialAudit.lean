@@ -2774,7 +2774,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.opensRetainedWalForCalls
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.visibleWalAtRotationSample
-#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.VisibleWalFiles.afterFailedCalls
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.visibleWalFrame
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEntry.readyRebootLayout
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.visibleReopenLayout
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.protectedAfterRotation

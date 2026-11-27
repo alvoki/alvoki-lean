@@ -951,8 +951,9 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
   rw [← submitted, ← noReads, ← batchHistory]
   exact @readsAfterOpen
 
-include covered in
 /-- A failed rotation and one reboot preserve the first batch for reads.
+The sampled map has no WAL segment between the committed cutoff and
+the requested horizon, with the cutoff itself excluded.
 A durable reset and scoped retry frames also support calls on the reopened writer. -/
 theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWrite)
     (source : RawMarkedOpenInterpreter heap stream) (rotation : OpenRotationCallbacks heap) :
@@ -978,15 +979,16 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
         (barrier : rotation.FailedRootBarrier syncer usedCache afterFileSync),
         rotation.run opened.handle guard.lookup usedCache.active next.reached =
           .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {barrier.cause}") barrier.failed ∧
-        ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 request.rows.length)
+        ∀ (horizon : Nat) (_cutoffCovered : request.rows.length ≤ horizon) (_horizonCovered : horizon ≤ through)
+          (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 horizon)
           (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
-            WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
+            WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 horizon
               (storage preReady) (storage reached))
           {rebooted : heap} {effective : Bool}
           (file : filePrefix.ExclusiveSync stager syncer usedCache)
           (_fileEffects : file.SuccessorEffects clientView storage visible next.reached barrier.issued)
           (_rootEffects : filePrefix.RootErrorEffects barrier clientView storage effective next.reached)
-          (_fileFrames : file.PreservesFiles clientView storage (state.rotationProtectedScope 0 state.writer.target.range.through)
+          (_fileFrames : file.PreservesFiles clientView storage (state.rotationProtectedScope 0 horizon)
             next.reached barrier.issued),
           let valid := next.current.ready.readPrefix.refines.1
           let selected := state.withRotationSample valid (names rebooted)
@@ -995,12 +997,16 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
           ∀ (_chosen : names rebooted ∈ (storage barrier.failed).crashNames),
             (names rebooted path = none ∨ names rebooted path = some inode) ∧
             (effective = true → names rebooted path = some inode) ∧
+            (∀ start, request.rows.length < start → start ≤ horizon →
+              names rebooted (dir.file (.walSegment start)) = none) ∧
             ∀ (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
               (_sampled : ∀ path, checkpointSurvivorPath dir selected.writer selected.writer.target.pair.manifest path →
                 ∀ object, names rebooted path = some object → visible rebooted object ∈ (storage barrier.failed).files.bytes object)
               {errors : List (FilePath × IO.Error)} {retryAt : heap}
               (attempts : source.FailedCalls rebooted errors retryAt)
-              (_effects : attempts.PreserveWalFiles (directory := dir) selected.writer.history.length names visible),
+              (_effects : attempts.PreserveWalFiles (directory := dir) horizon names visible),
+              (∀ start, request.rows.length < start → start ≤ horizon →
+                names retryAt (dir.file (.walSegment start)) = none) ∧
               source.ReadsClientHistoryAtOpen
                 ((clientView).withObservedWalFiles dir selected.writer.wal.active.first names visible)
                 dir storage visible retryAt namespaceView root [.acknowledgedBatch batch] [] batch ∧
@@ -1027,16 +1033,25 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
   have nonemptyWal := next.current.ready.readPrefix.refines.1.retained.activeBeforeCutoffOfFirstBatch noManifest noSeals positive
   refine ⟨(next.rotationReturnsDirectoryError rotation syncer _ guard nonemptyWal poisonedAt filePrefix
     barrier.route barrier.loaded barrier.returned).2.2.1, ?_⟩
-  intro firstNames restore rebooted effective file fileEffects rootEffects fileFrames valid selected path createdInode chosen
-  have window := (carries request.rows.length covered firstNames restore).2
-  rw [← cutoff] at window
-  obtain ⟨_, ready, sameHistory, pair, _, choice, settled, sampledFiles⟩ := next.samplesFailedRotationDirectory
+  intro horizon cutoffCovered horizonCovered firstNames restore rebooted effective file fileEffects rootEffects
+    fileFrames valid selected path createdInode chosen
+  have window := (carries horizon horizonCovered firstNames restore).2
+  have withinHorizon : next.current.ready.state.writer.target.range.through ≤ horizon := by
+    rw [cutoff]
+    exact cutoffCovered
+  obtain ⟨_, ready, sameHistory, pair, _, noLater, choice, settled, sampledFiles⟩ := next.samplesFailedRotationDirectory
     rotation syncer clientView _ storage visible filePrefix file barrier fileEffects rootEffects
-    nonemptyWal physical fileFrames window chosen
-  refine ⟨choice.imp id And.left, settled, ?_⟩
+    nonemptyWal physical fileFrames withinHorizon window chosen
+  refine ⟨choice.imp id And.left, settled, fun start past bound => noLater start (cutoff.symm ▸ past) bound, ?_⟩
   intro namespaceView root sampled errors retryAt attempts effects
   have bootFiles := sampledFiles sampled noManifest
-  have filesAtRetry := bootFiles.afterFailedCalls ready.layout attempts effects
+  have kept := attempts.visibleWalFrame (directory := next.current.ready.state.session.directory)
+    (bindings := names) (contents := visible) effects
+  have selectedLength := (congrArg List.length sameHistory).trans
+    ((congrArg List.length history).trans (prepareBatch_spec prepared).1)
+  have filesAtRetry := bootFiles.frame ready.layout (Nat.le_trans (Nat.le_of_eq selectedLength) cutoffCovered) kept
+  refine ⟨fun start past bound => (VisibleWalFrame.segment kept bound).1.trans
+    (noLater start (cutoff.symm ▸ past) bound), ?_⟩
   have missing := (congrArg DirectoryPublication.Bindings.manifest pair).trans noManifest
   constructor
   · have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen

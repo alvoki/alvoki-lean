@@ -310,6 +310,15 @@ at the completed scan must agree with the canonical names actually listed.
 The repair tracks their bindings as it prunes, under the local unlink
 and barrier effects. These arguments cover the reopened session's ready
 calls through writes and snapshots.
+
+For the first acknowledged batch followed by a failed rotation, the sampled
+directory also rules out segment names strictly above the cutoff through
+the chosen horizon. Failed attempts transport this observation to the
+successful opener. When the horizon covers all later names in its held
+listing, its prune list is empty and it enters keeper repair at the heap
+reached by the first directory sync. Longer mixed write histories still
+need their own namespace bound.
+[Fresh rotation and retry](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
 [Writable reopen](../../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean) · [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
