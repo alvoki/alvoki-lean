@@ -65,23 +65,38 @@ private def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
   truncateAt h n := truncateAt h n
   sync h := syncHandle h
 
-private def fileOps (writer reader : IO.FS.Handle) (markers : Option (IO.FS.Handle × IO.FS.Handle)) : Ops FileM where
-  append xs := do
-    writer.write (encodeBytes xs)
-    writer.flush
-  syncData := syncHandle writer
-  writeMarker slot bytes := do
-    let some (a, b) := markers | throw "marker unavailable"
-    let h := if slot == 0 then a else b
+structure AppendFiles (handle : Type) where
+  writer : handle
+  markers : Option (handle × handle)
+
+def appendFiles (writer _reader : handle) (markers : Option (handle × handle)) : AppendFiles handle :=
+  ⟨writer, markers⟩
+
+structure AppendIO (m : Type → Type) (handle : Type) where
+  appendFlushed : handle → Bytes → m Unit
+  writeFromStart : handle → Bytes → m Unit
+  sync : handle → m Unit
+
+@[inline] def appendOps [Monad m] [MonadExceptOf String m]
+    (io : AppendIO m handle) (files : AppendFiles handle) : Ops m where
+  append := io.appendFlushed files.writer
+  syncData := io.sync files.writer
+  writeMarker slot bytes := do io.writeFromStart (← markerHandle files.markers slot) bytes
+  syncMarker slot := do io.sync (← markerHandle files.markers slot)
+  readData := throw "read during append"
+  readMarker _ := throw "read during append"
+  truncate _ := throw "truncate during append"
+
+private def writeFlushed (h : IO.FS.Handle) (bytes : Bytes) : IO Unit := do
+  h.write (encodeBytes bytes)
+  h.flush
+
+private def nativeAppend : AppendIO FileM IO.FS.Handle where
+  appendFlushed h bytes := writeFlushed h bytes
+  writeFromStart h bytes := do
     h.rewind
-    h.write (encodeBytes bytes)
-    h.flush
-  syncMarker slot := do
-    let some (a, b) := markers | throw "marker unavailable"
-    syncHandle (if slot == 0 then a else b)
-  readData := readFromStart reader
-  readMarker slot := do readFromStart (← markerHandle markers slot)
-  truncate n := truncateAt reader n
+    writeFlushed h bytes
+  sync h := syncHandle h
 
 private def checked (action : FileM α) : IO α := do
   match ← action.run with
@@ -96,7 +111,7 @@ inductive Phase (handle payload : Type) where
 /-- An alias of a handle shares its phase and mutex; closing any alias closes all. -/
 structure Handle where private mk ::
   private policy : Policy
-  private state : IO.Ref (Phase IO.FS.Handle (Ops FileM))
+  private state : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle))
   private mutex : Std.BaseMutex
 
 private def withMutex (h : Handle) (action : IO α) : IO α := do
@@ -222,21 +237,21 @@ private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
   let state ← newRef ready.phase
   return (state, ← newMutex)
 
-private def installReady (ready : Opened IO.FS.Handle (Ops FileM)) : IO Handle := do
+private def installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
   let (state, mutex) ← storeReadyWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
   return ⟨ready.policy, state, mutex⟩
 
 private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
 
 private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
-  checked (installWith nativeOpen recoverNative fileOps dir lock) >>= installReady
+  checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= installReady
 
 /-- Open a previously initialized directory, holding a nonblocking exclusive file
 lock through recovery and until close. Failure releases the lock. -/
 def openExisting (dir : FilePath) : IO Handle :=
   checked <| openExistingWith nativeOpen
     (fun action => (checked action).toBaseIO)
-    (fun err => liftM (throw err : IO _)) recoverNative fileOps (fun ready => installReady ready) dir
+    (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => installReady ready) dir
 
 /-- Initialize an empty caller-owned directory. Existing files are never replaced;
 an interrupted initialization is not automatically retried. -/
@@ -256,17 +271,22 @@ def create (dir : FilePath) (policy : Policy) : IO Handle := do
     lock.unlock
     throw e
 
-/-- An ACK means that the schedule's policy-specific durability barriers succeeded.
-Any error poisons this handle; reopen to determine the durable history. -/
+@[inline] def appendWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload)
+    (store : Phase handle payload → m Unit)
+    (run : payload → Cursor → m Cursor)
+    (payload : Bytes) : m Unit := do
+  match phase with
+  | .closed => throw "WAL closed"
+  | .poisoned _ => throw "WAL poisoned; reopen required"
+  | .active lock files cursor entries =>
+    store (.poisoned lock) >>= fun _ => do
+      let next ← run files cursor
+      store (.active lock files next (entries ++ [payload]))
+
+/-- An ACK follows the required barriers. Errors leave the shared phase poisoned. -/
 def append (h : Handle) (payload : Bytes) : IO Unit := withMutex h do
-  match ← h.state.get with
-  | .closed => throw <| IO.userError "WAL closed"
-  | .poisoned _ => throw <| IO.userError "WAL poisoned; reopen required"
-  | .active lock ops cursor entries =>
-    -- Set the poison before entering IO, so every exceptional exit is conservative.
-    h.state.set (.poisoned lock)
-    let next ← checked (appendBatch ops h.policy cursor payload)
-    h.state.set (.active lock ops next (entries ++ [payload]))
+  checked (appendWith (← h.state.get) h.state.set
+    (fun files cursor => appendBatch (appendOps nativeAppend files) h.policy cursor payload) payload)
 
 def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload) : m (List Bytes) :=
   match phase with

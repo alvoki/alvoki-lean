@@ -2,6 +2,20 @@
 
 **Current direction.** Alvoki is being simplified around independent Lean storage components. DurableBlob, Manifest, immutable SSTable, and segmented WAL retain their contracts, models, proofs, and selected native fixtures. L0 integration and native WAL refinement remain active follow-up work. The retired `DiskTable` engine was a separate implementation and is no longer the baseline for those components.
 
-**Next open obligation.** Continue the native WAL refinement from the shared segmented schedule to the actual Linux operations. In particular, account for an error reported after a file or directory sync has taken effect, preserve the reached handles and namespace state for retry, and establish that repeated successful opens select the same history. The filesystem decides whether the failed sync took effect; the proof must consume that observation rather than infer it from the error alone. See the [segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md) and [WAL fault assumptions](design/wal-recovery.md).
+**Single-file WAL.** Public native recovery settles and installs the selected
+history (#8). The append producer uses the same installed writer and marker
+roles, preserves the sole submitted batch as the retry choice after an
+uncertain result, and composes with the existing segmented child contract.
+[Native proofs and premises](../lean/Alvoki/Experiments/WAL/Proofs/README.md)
 
-**Verification baseline.** Cleanup is based on `ab79e5f8` (#7). On the cleanup candidate, `lake build` completed 146 jobs; the DurableBlob/Manifest, segmented WAL model, kernel and axiom checks, WAL native and physical-model fixtures, immutable SSTable proof and native fixtures, and Markdown link check passed through `bash scripts/reproduce.sh`.
+**Next open obligation.** Connect segmented root recovery, CONTROL
+publication, and rotation to the actual Linux operations. Preserve the
+reached state after a sync that may have taken effect, and show that
+repeated successful opens select the same view. The filesystem supplies
+the effect of a failed sync. [Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
+· [WAL fault assumptions](design/wal-recovery.md)
+
+**Verification baseline.** The integrated recovery candidate for #8 passed
+`bash scripts/reproduce.sh` on the repository after the legacy-engine
+cleanup. The command checks the kernel and axioms, modeled fault schedules,
+and selected native fixtures. [Checks](../lean/Alvoki/Checks/README.md)

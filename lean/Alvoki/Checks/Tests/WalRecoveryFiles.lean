@@ -11,6 +11,9 @@ private opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
 @[extern "alvoki_test_fail_directory_sync"]
 private opaque failDirectorySync (_ : Unit) : IO Unit
 
+@[extern "alvoki_test_lose_marker_sync_reply"]
+private opaque loseMarkerSyncReply (path : @& String) : IO Unit
+
 private def encodeBytes (xs : Bytes) : ByteArray :=
   ⟨xs.toArray⟩
 
@@ -131,6 +134,29 @@ private def lateOpenFailure (dir : FilePath) (policy : Policy) : IO Unit := do
   finally
     SingleFile.close retry
 
+private def lostMarkerReply (dir : FilePath) : IO Unit := do
+  let first ← SingleFile.create dir .boundary
+  SingleFile.append first [7]
+  SingleFile.close first
+  let writer ← SingleFile.openExisting dir
+  loseMarkerSyncReply (dir / "commit.0").toString
+  match ← (SingleFile.append writer [9]).toBaseIO with
+  | .error (.userError "injected marker fsync reply loss") => pure ()
+  | .error err => throw err
+  | .ok () => throw <| IO.userError "append acknowledged the injected sync error"
+  unless (← (SingleFile.scan writer).toBaseIO) matches .error _ do
+    throw <| IO.userError "uncertain append left the handle scannable"
+  unless (← (SingleFile.append writer [10]).toBaseIO) matches .error _ do
+    throw <| IO.userError "uncertain append left the handle writable"
+  SingleFile.close writer
+  for _ in [:2] do
+    let reopened ← SingleFile.openExisting dir
+    try
+      unless (← SingleFile.scan reopened) == [[7], [9]] do
+        throw <| IO.userError "retry did not select exactly the durable uncertain append"
+    finally
+      SingleFile.close reopened
+
 private def refuseNonempty (dir : FilePath) : IO Unit := do
   IO.FS.writeBinFile (dir / "segment") ⟨#[17, 18]⟩
   let result ← (SingleFile.create dir .boundary).toBaseIO
@@ -193,5 +219,6 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.lateOpenFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
+  IO.FS.withTempDir WalRecoveryFiles.lostMarkerReply
   IO.FS.withTempDir WalRecoveryFiles.refuseNonempty
   IO.println "WAL recovery file fixtures passed"
