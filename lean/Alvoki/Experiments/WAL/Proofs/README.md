@@ -69,17 +69,40 @@ and the recovered history on retry. The fixtures sample
 behavior of Linux and its runtime. The proof establishes the contract
 relative to the primitive assumptions in the table.
 
-Native append, bootstrap, segmented root recovery, and CONTROL publication
-retain their separate refinement obligations.
+## Public native append
 
-The Unit payload in the recovery interpreter erases the append closures.
-The shared phase constructor keeps the lock, cursor and history, and scan
-and close ignore the append payload. Native installation supplies
-`fileOps` with the actual writer, reader and marker pair from those same
-opens. The append proof must retain these roles and their ownership. The
-writer is an unbuffered append description of the repaired data inode,
-and each boundary marker description belongs to its own numbered slot.
-Writes and their barriers must use the same description. The held lock
-and stable bindings exclude competing changes. The runtime must retain
-those descriptions until phase replacement or last drop, and preserve
-the shared reference under the mutex.
+The ready phase stores the writer and marker pair acquired by open, in the
+order fixed by the shared dispatcher. The recovery reader can drop after
+installation. The append schedule constructs its callbacks from those
+stored descriptions. It poisons the shared phase before issuing writes
+and reinstalls the same bindings with the advanced cursor and history
+only after all required barriers. Scan and append reject a poisoned
+phase. Close clears it before releasing the same lock.
+
+[`SingleFile.append_refines`](NativeAppend.lean) uses the existing
+scheduled writeback, dirty append and torn append proofs at the reached
+writer and marker slot. An ACK establishes the extended durable history.
+An error or interruption leaves at most the submitted batch pending.
+A lost reply can leave that batch fully durable. Oversized or exhausted
+submissions poison the handle before any write and leave the image alone.
+[`Child.Recoverable.nativeAppendAfterOpen`](../Segmented/Proofs/SegmentRecovery.lean)
+composes the public open and append interpretations on the same stored
+phase, yielding the existing child installation and recovery facts.
+
+The native premise is local to each issued operation. On the unbuffered
+append description, a successful write and flush appends the frame at the
+actual end. A marker rewind followed by write and flush starts at offset
+zero on the selected slot, or returns a primitive error with its reached
+bytes. A rewind error issues no write. Writebacks before a write, including
+between rewind and write, change only the corresponding durable image.
+File sync acts on the supplied writing description and may report an
+error before or after persistence. The admitted partial writes, tears,
+and crash choices remain those of the existing WAL model. Ref and mutex
+semantics preserve the shared phase under aliases. A normal error keeps
+the lock in the poisoned phase, and a process stop releases its private
+descriptions by last drop. The test-only wrapper checks the reached marker inode and reports an error
+after its successful native fsync and checks that two reopens recover the
+same confirmed history plus the pending batch.
+
+Native bootstrap, segmented root recovery, CONTROL publication, and
+native rotation retain separate refinement obligations.

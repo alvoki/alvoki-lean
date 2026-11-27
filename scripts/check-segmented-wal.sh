@@ -33,7 +33,7 @@ cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" \
 lean -o "$scratch/$wal/CrashModel.olean" "$wal/CrashModel.lean"
 lean -o "$scratch/$wal/Contract.olean" "$wal/Contract.lean"
 lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
-for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution NativeRecovery NativeOpen; do
+for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
 done
 for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution; do
@@ -71,6 +71,7 @@ open WalRecoverySlice.Segmented
 #check_axioms reopen_spec
 #check_axioms Child.Recoverable.nativeRecovery
 #check_axioms Child.Recoverable.nativeOpen
+#check_axioms Child.Recoverable.nativeAppendAfterOpen
 #check_axioms reopensSettledSegment
 #check_axioms scheduledReopen_selected
 #check_axioms reopensSettledSegmentScheduled

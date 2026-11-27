@@ -5,7 +5,7 @@ inductive Policy where | logOnly | boundary deriving BEq, Repr
 
 abbrev Bytes := List UInt8
 
-private def maxPayload := 32
+def maxPayload := 32
 private def frameOverhead := 20 -- four header bytes and two eight-byte checksums
 
 /-- Eight little-endian bytes of Lean's standard 64-bit list hash. -/

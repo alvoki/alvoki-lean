@@ -1,5 +1,5 @@
 import Alvoki.Experiments.WAL.Proofs.DirtyAppend
-import Alvoki.Experiments.WAL.Proofs.NativeOpen
+import Alvoki.Experiments.WAL.Proofs.NativeAppend
 import Alvoki.Experiments.WAL.Proofs.Client
 import Alvoki.Experiments.WAL.Proofs.ReopenWriteback
 
@@ -92,6 +92,50 @@ theorem Recoverable.nativeOpen (dir : System.FilePath) (reports : SingleFile.Ope
     | ok ready =>
       obtain ⟨_, _, _, _, _, held, stamp, names, chosen, cursor, valid, settled, installed⟩ := result
       exact ⟨held, stamp, names, chosen, ⟨⟨valid, settled⟩, cursor⟩, SingleFile.scan_opened ready after installed⟩
+
+/-- Compose the public open producer with append on its exact stored
+writer and marker bindings. The single-file contract lifts directly to
+the child recovery or installation required by the segmented schedule. -/
+theorem Recoverable.nativeAppendAfterOpen (dir : System.FilePath)
+    (openReports : SingleFile.OpenReports) (start : SingleFile.OpenImage)
+    (free : start.held = false) (prior : Recoverable policy known pending start.image)
+    (returned : SingleFile.openExistingModel dir policy openReports start = .ok (.ok ready) after)
+    (reports : ∀ cursor, SingleFile.AppendReports policy cursor batch)
+    (room : ready.recovered.batches.length < 255) (size : batch.length ≤ 32) :
+    let old := ready.recovered.batches
+    let result := SingleFile.appendModel reports ⟨after.image, SingleFile.storedPhase ready⟩
+    Recoverable policy old (some batch) (SingleFile.appendReached result).image ∧
+    SingleFile.AppendGuarantee policy old batch result ∧
+    match result with
+    | .ok (.ok ()) next =>
+      Installed policy next.image (historyCursor (old ++ [batch])) (old ++ [batch])
+    | .ok (.error _) _ | .error _ _ => True := by
+  have opened := SingleFile.openExisting_refines dir policy openReports start free prior.dirty prior.markers
+  rw [returned] at opened
+  have bindings := SingleFile.openedAppendPhase opened
+  obtain ⟨_, _, _, _, _, _, _, _, permitted, _, entry, clean, _⟩ := opened.2.2
+  have bounded : ∀ b ∈ ready.recovered.batches, b.length ≤ 32 := by
+    intro b member
+    apply prior.dirty.bounded b
+    rcases permitted with same | same
+    · exact List.mem_append_left _ (same ▸ member)
+    · exact same ▸ member
+  have appended := SingleFile.append_refines reports entry clean bounded room size
+  simp only [bindings]
+  refine ⟨⟨appended.1, appended.2.1⟩, appended, ?_⟩
+  have outcome := appended.2.2
+  cases run : SingleFile.appendModel reports
+      ⟨after.image, .active .lock (SingleFile.appendBindings policy)
+        (historyCursor ready.recovered.batches) ready.recovered.batches⟩ with
+  | error => trivial
+  | ok response _ =>
+    cases response with
+    | error => trivial
+    | ok ack =>
+      cases ack
+      rw [run] at outcome
+      obtain ⟨_, _, valid, settled⟩ := outcome
+      exact ⟨⟨valid, settled⟩, rfl⟩
 
 end Child
 
