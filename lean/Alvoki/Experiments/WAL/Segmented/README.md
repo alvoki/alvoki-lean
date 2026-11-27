@@ -44,6 +44,8 @@ sealed prefix before publishing a successor, and specify which frontier recovery
 select after a crash during rotation or release. This saves two files per
 additional segment. It still requires a marker barrier when acknowledging a marked append.
 
+## Verification
+
 Run `bash scripts/check-segmented-wal.sh` from the repository root on Linux with the
 pinned Lean toolchain and a C compiler. Set `TMPDIR=/dev/shm` when working space is
 limited. The check builds the shared protocol and native adapter, runs the
@@ -59,6 +61,8 @@ a second execution of the single-file byte scanner. The native fixtures exercise
 actual files and locks; neither they nor the simulator demonstrate device power-loss
 behavior.
 
+## Proof boundary
+
 [Execution proofs](Proofs/Execution.lean) show that every modeled finite trace
 starting with a successfully returned create satisfies the client contract
 (`Run.refines`), and that a healthy open can complete from every reachable offline
@@ -67,11 +71,20 @@ until release, and persistence of an acknowledged release. The proof composes th
 actual segmented schedules with modeled namespace and child operations; the
 [layout](Proofs/Layout.lean), [child](Proofs/Child.lean),
 [publication](Proofs/Publication.lean), and [reopen](Proofs/Reopen.lean) modules
-own its intermediate obligations. Rotation consumes a settled sealed history and an
-installed empty successor. An uncertain append produces a recoverable child with one
-pending batch; successful reopen selects a permitted history and installs the child
-for the next append. The [child predicates](Proofs/SegmentRecovery.lean) and their
-operation proofs own the local cursor, marker and durability details.
+own its intermediate obligations. The [child contracts](Proofs/SegmentRecovery.lean) express what the next operation needs:
+
+| Contract | Established by | Consumed by |
+| --- | --- | --- |
+| `Child.Installed` | Fresh preparation, successful append or successful reopen places the cursor after the settled batches. | Append extends that history. Rotation installs an empty successor. |
+| `Child.Settled` | An installed child already has this property when rotation seals it. | Reopen reads the full sealed history after a restart. |
+| `Child.Recoverable` | An uncertain append leaves at most its issued batch pending. An interrupted reopen preserves the retry guarantee. | Successful reopen installs one permitted history for subsequent calls. |
+
+The [layout and frame proofs](Proofs/Invariant.lean) still refer to concrete child
+images, equality of untouched selected files and the active cursor. They also use the
+32-byte payload and 255-batch limits. The [effects model](Proofs/Model.lean) still
+names individual files for writeback and constrains admissible tears. Replacing the
+single-file format may require revisiting these internal obligations. The LSM can
+reason about absolute positions and the retained suffix using the [client contract](Contract.lean).
 
 ### Namespace assumptions
 
@@ -102,3 +115,32 @@ establish native creation or locking. Mapping native syscalls, descriptors and d
 syncs to the modeled effects, filesystem durability, exclusive ownership and the
 compiler/runtime remain assumptions. Segment recycling and checkpoints of application
 state are outside this experiment.
+
+## Roadmap
+
+**Minimal LSM integration.** Record the absolute WAL position covered by a durable
+LSM checkpoint. Replay the retained batches after that position, and release through
+it only once the checkpoint can be recovered. After an uncertain append or release,
+reopen and use the recovered view. A bounded prototype can use today's scan and
+payload limits. For larger inputs, provide streaming recovery and ordered iteration
+with bounded memory, preserving the same suffix and positions. Align the limits of
+append replies, checkpoints and persistent release metadata so every acknowledged
+position can be represented throughout its lifetime. Define exhaustion before accepting
+a batch, or widen the format.
+
+**Independent WAL improvements.**
+
+- Rotate by bytes and widen the batch and sequence fields. Byte-based rotation
+  needs a durable way to derive each segment's first absolute position; the current
+  calculation assumes every sealed segment has the same number of batches.
+- For recycling, bind frames and recovery metadata to the intended segment generation
+  and reject stale generations, including old frames with valid checksums. Revisit a
+  [WAL-wide commit boundary](#who-owns-the-commit-boundary) independently of recycling.
+- Extend the [physical model and native adapter guarantees](#namespace-assumptions)
+  when a concrete target filesystem or failure trace needs a stronger claim, for
+  example independent directory writeback. Check that the trace is admitted and
+  that the same client guarantee follows under the stated assumptions.
+- Compare group commit and buffering against the existing path with reproducible
+  throughput and acknowledgement-latency benchmarks. Record batch sizes,
+  concurrency, sync policy and storage setup. Every acknowledged batch must still
+  survive recovery until released.
