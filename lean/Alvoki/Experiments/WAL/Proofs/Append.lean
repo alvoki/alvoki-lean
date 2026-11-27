@@ -196,7 +196,7 @@ private theorem afterDataSync {effects : Effects} {cursor : Cursor} {payload pri
       cases abort <;> run_effects [written] <;>
         exact afterMarker rfl (persisted.slotOutcome _ _ _ _) (by simp [acknowledged])
     | none =>
-      cases syncedMarker : effects.markerSync with
+      cases syncedMarker : effects.markerSync (destination cursor) with
       | before abort =>
         cases abort <;> run_effects [written, syncedMarker, markerBytes, markerFragment_complete] <;>
           exact afterMarker rfl (persisted.slotOutcome _ _ _ _) (by simp [acknowledged])

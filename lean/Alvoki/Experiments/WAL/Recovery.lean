@@ -133,8 +133,11 @@ def reopen [Monad m] [MonadExceptOf String m] (ops : Ops m) (policy : Policy) : 
     | .error e => throw e
   if let some selected := marker then
     if decoded.cursor.nextSeq != selected.lastSeq + 1 then throw "marker sequence mismatch"
-    -- A process may have left a valid marker visible only in cache.
-    ops.syncMarker (selected.lastSeq % 2)
+    -- Settle both visible slots before truncation. The other slot may
+    -- still hold a newer durable record behind a torn visible overwrite.
+    let slot := selected.lastSeq % 2
+    ops.syncMarker slot
+    ops.syncMarker (1 - slot)
   if decoded.cursor.endPos < bytes.length then ops.truncate decoded.cursor.endPos
   ops.syncData
   return decoded

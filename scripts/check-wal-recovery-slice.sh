@@ -18,7 +18,9 @@ lean -o "$scratch/$wal/SingleFile.olean" -c "$scratch/single.c" "$wal/SingleFile
 leanchecker Alvoki.Experiments.WAL.Recovery Alvoki.Experiments.WAL.SingleFile
 lean -o "$scratch/$wal/CrashModel.olean" "$wal/CrashModel.lean"
 leanchecker Alvoki.Experiments.WAL.CrashModel
-for proof in Marker Scan Append Persistence Client; do
+lean -o "$scratch/$wal/Contract.olean" "$wal/Contract.lean"
+leanchecker Alvoki.Experiments.WAL.Contract
+for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend Execution; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Proofs.$proof"
 done
@@ -28,10 +30,11 @@ lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.WAL.Proofs.Scan
 import Alvoki.Experiments.WAL.Proofs.Marker
-import Alvoki.Experiments.WAL.Proofs.Client
+import Alvoki.Experiments.WAL.Proofs.Execution
 open WalRecoverySlice
-#check_axioms Persistence.Confirmed.recover
-#check_axioms Persistence.Confirmed.settled
+#check_axioms Persistence.Run.refines
+#check_axioms Persistence.Run.healthy_open
+#check_axioms Persistence.reopen_live_retry
 #check_axioms Persistence.repeats_healthyReopen
 #check_axioms Persistence.appendBatch_effects
 #check_axioms decodeMarker_bad_check

@@ -2,7 +2,7 @@ import Alvoki.Experiments.WAL.Recovery
 
 namespace WalRecoverySlice
 
-inductive Fault where | none | crashBefore | eioBefore | eioAfter | tear deriving BEq, Repr
+inductive Fault where | none | crashBefore | eioBefore | eioAfter | tear | tornCacheFullDisk deriving BEq, Repr
 structure Sim where
   visible : Bytes := []
   durable : Bytes := []
@@ -37,6 +37,11 @@ def simOps : Ops M where
     step fun s => {s with visible := s.visible ++ b}
   syncData := step fun s => {s with durable := s.visible}
   writeMarker slot bytes := do
+    if (← get).faults.headD .none == .tornCacheFullDisk then
+      let s ← get
+      set (if slot == 0 then {s with faults := s.faults.drop 1, marker0 := [], durableMarker0 := bytes}
+        else {s with faults := s.faults.drop 1, marker1 := [], durableMarker1 := bytes})
+      stop
     if (← get).faults.headD .none == .tear then
       let s ← get
       let previous := if slot == 0 then s.marker0 else s.marker1
@@ -107,7 +112,7 @@ def checkPolicy (policy : Policy) : IO Unit := do
   let (readResult, _) := run (reopen simOps policy) {s with readError := true}
   require (!readResult.isOk) "read EIO must fail open"
   -- Recovery interrupted before the repair sync can be retried after reboot.
-  let (repairResult, interrupted) := run (reopen simOps policy) {tornImage with faults := (if policy == .boundary then [.none] else []) ++ [.none, .crashBefore]}
+  let (repairResult, interrupted) := run (reopen simOps policy) {tornImage with faults := (if policy == .boundary then [.none, .none] else []) ++ [.none, .crashBefore]}
   require (repairResult matches .error "crash") "repair should stop before its sync"
   let _ ← expectOpen policy (powerLoss interrupted) [a]
   if policy == .boundary then
@@ -124,6 +129,20 @@ def checkPolicy (policy : Policy) : IO Unit := do
       require (!submitted.isOk) "publication error acknowledged B"
       let history := if fault == .eioAfter then [a, b] else [a]
       let _ ← expectOpen policy (powerLoss reached) history
+    -- The uncertain write left B's full marker durable but unreadable in cache.
+    -- Adopting A on process restart must retire that durable marker before truncating B.
+    let (uncertain, mixed) := run (appendBatch simOps policy afterA b)
+      {s with faults := [.none, .none, .tornCacheFullDisk]}
+    require (uncertain matches .error "crash") "expected interrupted marker write"
+    let _ ← expectOpen policy (powerLoss mixed) [a, b]
+    let (_, repaired) ← expectOpen policy (processExit mixed) [a]
+    let _ ← expectOpen policy (powerLoss repaired) [a]
+    for fault in [Fault.eioBefore, .eioAfter] do
+      let (failure, atFailure) := run (reopen simOps policy)
+        {(processExit mixed) with faults := [.none, fault]}
+      require (!failure.isOk) "sibling barrier error must stop recovery"
+      require (atFailure.visible == mixed.visible) "repair truncated before both barriers succeeded"
+      let _ ← expectOpen policy (powerLoss atFailure) (if fault == .eioAfter then [a] else [a, b])
     -- B tears while overwriting the inactive slot; A's slot remains intact.
     let (tornResult, tornSlot) := run (appendBatch simOps policy afterA b)
       {s with faults := [.none, .none, .tear]}

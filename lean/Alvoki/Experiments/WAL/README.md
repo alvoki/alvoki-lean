@@ -7,6 +7,7 @@ must not be assumed to describe `DiskTable`.
 
 Start with the [design and executable walkthrough](../../../../docs/design/wal-recovery.md#run-the-one-segment-experiment).
 [SingleFile](SingleFile.lean) provides the experimental directory API;
+[Contract](Contract.lean) defines permitted observations in batches,
 [Recovery](Recovery.lean) contains framing and recovery decisions, and
 [CrashModel](CrashModel.lean) defines the modeled persistence outcomes.
 [Proofs](Proofs/README.md) explains the verified slice and its limits. The

@@ -102,7 +102,7 @@ structure Effects where
   appendData : Write
   dataSync : Primitive
   writeMarker : Write
-  markerSync : Primitive
+  markerSync : Nat → Primitive
   tornSlot : Option DamagedMarker := none
   truncate : Primitive := .after none
   readDataError : Bool := false
@@ -118,7 +118,7 @@ def ops (effects : Effects) : Ops M where
   writeMarker slot bytes := fun image =>
     effects.writeMarker.result (markerFragment effects.tornSlot) bytes image (image.marker slot) (image.withMarker slot)
   syncMarker slot := fun image =>
-    effects.markerSync.syncResult image (image.marker slot) (image.withMarker slot)
+    (effects.markerSync slot).syncResult image (image.marker slot) (image.withMarker slot)
   readData := fun image =>
     .ok (if effects.readDataError then .error "data read error" else .ok image.data.live) image
   readMarker slot := fun image =>
