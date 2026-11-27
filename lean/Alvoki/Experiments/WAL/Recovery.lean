@@ -54,13 +54,49 @@ def scan (bytes : Bytes) (limit : Nat) (policy : Policy) : Except String Decoded
   if selected.length != limit then throw "missing bytes"
   loop (limit + 1) 0 1 selected []
 
+def markerSize : Nat := 7
+
+/-- Seven-byte fixed record; checksum is a torn-write detector, not authentication. -/
+def encodeMarker (endPos lastSeq : Nat) : Bytes :=
+  let fields : Bytes := [77, 1, 1, lastSeq.toUInt8, (endPos / 256).toUInt8, (endPos % 256).toUInt8]
+  fields ++ [(checksum fields).toUInt8]
+
+private structure Marker where
+  endPos : Nat
+  lastSeq : Nat
+
+/-- A short record or invalid checksum may be a torn slot. A checksum-valid record with
+wrong format, generation, slot, or empty-cursor fields is a protocol error. -/
+private def decodeMarker (slot : Nat) (bytes : Bytes) : Except String (Option Marker) := do
+  if bytes.length > markerSize then throw "oversized marker file"
+  match bytes with
+  | [magic, format, generation, seq, hi, lo, check] =>
+    let fields : Bytes := [magic, format, generation, seq, hi, lo]
+    if check != (checksum fields).toUInt8 then return none
+    let n := seq.toNat
+    let offset := hi.toNat * 256 + lo.toNat
+    if magic != 77 || format != 1 || generation != 1 || n % 2 != slot ||
+        !((n == 0 && offset == 0) || (n > 0 && offset > 0)) then
+      throw "invalid marker fields"
+    return some ⟨offset, n⟩
+  | _ => return none
+
+/-- Both reads are required, including when the first record is valid. -/
+private def selectMarker (a b : Bytes) : Except String Marker := do
+  let a ← decodeMarker 0 a
+  let b ← decodeMarker 1 b
+  match a, b with
+  | none, none => throw "no valid marker"
+  | some m, none | none, some m => return m
+  | some left, some right => return if left.lastSeq > right.lastSeq then left else right
+
 structure Ops (m : Type → Type) where
   append : Bytes → m Unit
   syncData : m Unit
-  replaceMarker : Nat → Nat → m Unit
-  syncDirectory : m Unit
+  writeMarker : Nat → Bytes → m Unit
+  syncMarker : Nat → m Unit
   readData : m Bytes
-  readMarker : m (Nat × Nat)
+  readMarker : Nat → m Bytes
   truncate : Nat → m Unit
 
 /-- All successful returns from append follow the data barrier and, if selected,
@@ -70,27 +106,35 @@ def appendBatch [Monad m] [MonadExceptOf String m] (ops : Ops m) (policy : Polic
   let seq := cursor.nextSeq
   if payload.length > maxPayload || seq == 0 || seq > 255 then throw "batch out of bounds"
   let bytes := frame seq payload
+  let next := cursor.endPos + bytes.length
+  if policy == .boundary && next > 65535 then throw "marker offset out of bounds"
   ops.append bytes
   ops.syncData
-  let next := cursor.endPos + bytes.length
   if policy == .boundary then
-    ops.replaceMarker next seq
-    ops.syncDirectory
+    let slot := seq % 2
+    ops.writeMarker slot (encodeMarker next seq)
+    ops.syncMarker slot
   return ⟨next, seq + 1⟩
 
 /-- Recovery synchronizes even an unchanged end: process exit can leave a valid
 frame visible only in cache. The marker is read before the segment. -/
 def reopen [Monad m] [MonadExceptOf String m] (ops : Ops m) (policy : Policy) : m Decoded := do
-  let marker ← if policy == .boundary then some <$> ops.readMarker else pure none
+  let marker ← if policy == .boundary then do
+    let a ← ops.readMarker 0
+    let b ← ops.readMarker 1
+    match selectMarker a b with
+    | .ok marker => pure (some marker)
+    | .error e => throw e
+    else pure none
   let bytes ← ops.readData
-  let endPos := marker.map Prod.fst |>.getD bytes.length
+  let endPos := marker.map Marker.endPos |>.getD bytes.length
   let decoded ← match scan bytes endPos policy with
     | .ok d => pure d
     | .error e => throw e
-  if let some (_, lastSeq) := marker then
-    if decoded.cursor.nextSeq != lastSeq + 1 then throw "marker sequence mismatch"
-    -- A previous process may have renamed this visible marker without syncing its directory.
-    ops.syncDirectory
+  if let some selected := marker then
+    if decoded.cursor.nextSeq != selected.lastSeq + 1 then throw "marker sequence mismatch"
+    -- A process may have left a valid marker visible only in cache.
+    ops.syncMarker (selected.lastSeq % 2)
   if decoded.cursor.endPos < bytes.length then ops.truncate decoded.cursor.endPos
   ops.syncData
   return decoded

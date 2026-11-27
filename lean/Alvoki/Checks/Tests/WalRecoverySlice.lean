@@ -6,8 +6,11 @@ inductive Fault where | none | crashBefore | eioBefore | eioAfter | tear derivin
 structure Sim where
   visible : Bytes := []
   durable : Bytes := []
-  marker : Option (Nat × Nat) := some (0, 0)
-  durableMarker : Option (Nat × Nat) := some (0, 0)
+  marker0 : Bytes := encodeMarker 0 0
+  marker1 : Bytes := List.replicate markerSize 0
+  durableMarker0 : Bytes := encodeMarker 0 0
+  durableMarker1 : Bytes := List.replicate markerSize 0
+  markerReadError : Option Nat := none
   faults : List Fault := []
   readError : Bool := false
   deriving Repr
@@ -33,16 +36,25 @@ def simOps : Ops M where
       stop
     step fun s => {s with visible := s.visible ++ b}
   syncData := step fun s => {s with durable := s.visible}
-  replaceMarker n seq := step fun s => {s with marker := some (n, seq)}
-  syncDirectory := step fun s => {s with durableMarker := s.marker}
+  writeMarker slot bytes := do
+    if (← get).faults.headD .none == .tear then
+      let s ← get
+      let previous := if slot == 0 then s.marker0 else s.marker1
+      let tornMarker := bytes.take 4 ++ previous.drop 4
+      set (if slot == 0 then {s with faults := s.faults.drop 1, marker0 := tornMarker, durableMarker0 := tornMarker}
+        else {s with faults := s.faults.drop 1, marker1 := tornMarker, durableMarker1 := tornMarker})
+      stop
+    step fun s => if slot == 0 then {s with marker0 := bytes} else {s with marker1 := bytes}
+  syncMarker slot := step fun s => if slot == 0 then {s with durableMarker0 := s.marker0}
+    else {s with durableMarker1 := s.marker1}
   readData := do
     let s ← get
     if s.readError then throw "read eio"
     return s.visible
-  readMarker := do
-    match (← get).marker with
-    | some marker => return marker
-    | none => throw "missing marker"
+  readMarker slot := do
+    let s ← get
+    if s.markerReadError == some slot then throw "marker read eio"
+    return if slot == 0 then s.marker0 else s.marker1
   truncate n := step fun s => {s with visible := s.visible.take n}
 
 def run (m : M α) (s : Sim) : Except String α × Sim :=
@@ -50,7 +62,7 @@ def run (m : M α) (s : Sim) : Except String α × Sim :=
   | .ok r state => (r, state)
   | .error _ state => (.error "crash", state)
 
-def powerLoss (s : Sim) : Sim := {s with visible := s.durable, marker := s.durableMarker, faults := [], readError := false}
+def powerLoss (s : Sim) : Sim := {s with visible := s.durable, marker0 := s.durableMarker0, marker1 := s.durableMarker1, faults := [], readError := false, markerReadError := none}
 def processExit (s : Sim) : Sim := {s with faults := [], readError := false}
 
 def require (b : Bool) (msg : String) : IO Unit := unless b do throw <| IO.userError msg
@@ -99,12 +111,12 @@ def checkPolicy (policy : Policy) : IO Unit := do
   require (repairResult matches .error "crash") "repair should stop before its sync"
   let _ ← expectOpen policy (powerLoss interrupted) [a]
   if policy == .boundary then
-    -- The process stops after rename. Open must settle B before exposing it.
-    let (stoppedAtRename, renamed) := run (appendBatch simOps policy afterA b)
+    -- The process stops after the marker write. Open must settle B before exposing it.
+    let (stoppedAtWrite, written) := run (appendBatch simOps policy afterA b)
       {s with faults := [.none, .none, .none, .crashBefore]}
-    require (stoppedAtRename matches .error "crash") "expected interrupted directory sync"
-    let _ ← expectOpen policy (powerLoss renamed) [a]
-    let (_, adopted) ← expectOpen policy (processExit renamed) [a, b]
+    require (stoppedAtWrite matches .error "crash") "expected interrupted marker sync"
+    let _ ← expectOpen policy (powerLoss written) [a]
+    let (_, adopted) ← expectOpen policy (processExit written) [a, b]
     let _ ← expectOpen policy (powerLoss adopted) [a, b]
     for fault in [Fault.eioBefore, .eioAfter] do
       let (submitted, reached) := run (appendBatch simOps policy afterA b)
@@ -112,7 +124,20 @@ def checkPolicy (policy : Policy) : IO Unit := do
       require (!submitted.isOk) "publication error acknowledged B"
       let history := if fault == .eioAfter then [a, b] else [a]
       let _ ← expectOpen policy (powerLoss reached) history
-    let (missing, _) := run (reopen simOps policy) {s with marker := none}
+    -- B tears while overwriting the inactive slot; A's slot remains intact.
+    let (tornResult, tornSlot) := run (appendBatch simOps policy afterA b)
+      {s with faults := [.none, .none, .tear]}
+    require (tornResult matches .error "crash") "marker tear must stop"
+    let (cursor, recovered) ← expectOpen policy (powerLoss tornSlot) [a]
+    let (rc, afterC) := run (appendBatch simOps policy cursor c) recovered
+    require rc.isOk "C after torn marker failed"
+    let _ ← expectOpen policy (powerLoss afterC) [a, c]
+    for slot in [0, 1] do
+      let (result, _) := run (reopen simOps policy) {s with markerReadError := some slot}
+      require (!result.isOk) "either marker read EIO must fail"
+    let (misplaced, _) := run (reopen simOps policy) {s with marker0 := encodeMarker 1 1}
+    require (!misplaced.isOk) "checksum-valid wrong-slot marker must fail"
+    let (missing, _) := run (reopen simOps policy) {s with marker0 := [], marker1 := []}
     require (!missing.isOk) "missing marker must fail"
     let (rb, committed) := run (appendBatch simOps policy afterA b) s
     require rb.isOk "B should be acknowledged"
