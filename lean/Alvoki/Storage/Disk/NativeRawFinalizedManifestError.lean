@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawManifestDecodeError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestDecodeError
 import Alvoki.Storage.Disk.NativeRawFinalizedOpenError
 
 namespace Alvoki.Storage.DiskSession

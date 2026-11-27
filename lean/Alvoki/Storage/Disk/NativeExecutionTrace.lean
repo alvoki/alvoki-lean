@@ -34,7 +34,7 @@ import Alvoki.Storage.Disk.NativeRunMaintenance
 import Alvoki.Storage.Disk.NativeRunMaintenanceReopen
 import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen
 import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
-import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeContendedOpen
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeUncertainStageRetry

@@ -334,8 +334,8 @@ import Alvoki.Storage.Disk.NativeBootstrapMarkerStopSessions
 import Alvoki.Storage.Disk.NativeBootstrapMarkerBeforeEffectSessions
 import Alvoki.Storage.Disk.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.NativeFreshTableOpen
-import Alvoki.Storage.Disk.NativeOpenEarlyError
-import Alvoki.Storage.Disk.NativeRawManifestDecodeError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenEarlyError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestDecodeError
 import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 import Alvoki.Storage.Disk.NativeRawFinalizedOpenError
 import Alvoki.Storage.Disk.NativeRawFinalizedLateGuardError
@@ -379,7 +379,7 @@ import Alvoki.Storage.Disk.NativeRawContendedOpen
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeManifestDecodeError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenListingError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenLineage
-import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeUncertainExecution
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss

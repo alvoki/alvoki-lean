@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeOpenEarlyError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenEarlyError
 
 namespace Alvoki.Storage.DiskSession
 

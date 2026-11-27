@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeCheckpointManifestRenameReboot
-import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenAlignedRecovery
 
 namespace Alvoki.Storage.DiskSession
 
