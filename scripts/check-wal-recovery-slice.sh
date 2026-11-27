@@ -41,6 +41,7 @@ open WalRecoverySlice
 #check_axioms scan_damaged_encodeFrames
 #check_axioms Persistence.reopen_published_scan_error
 #check_axioms Persistence.reopen_substituted_batch
+#check_axioms Persistence.reopen_unpublished_suffix
 #check_axioms Persistence.reopen_unpublished_batch
 #check_axioms Persistence.reopen_missing_published_batch
 #check_axioms Persistence.tornAppend_stops

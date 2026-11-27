@@ -42,6 +42,24 @@ private theorem reopen_logOfEncoded {before : Image} {batches : List Bytes}
   · rw [physical]
     exact List.take_length
 
+/-- The selected marker delimits the entire published history. Any bytes after
+it, of any length or provenance, are absent from both live and durable data
+when healthy boundary recovery returns. -/
+theorem reopen_unpublished_suffix (before : Image) (history : List Bytes) (suffix : Bytes)
+    (physical : before.data.live = encodeFrames 1 history ++ suffix)
+    (published : selectMarker before.slot0.live before.slot1.live =
+      .ok ⟨(encodeFrames 1 history).length, history.length⟩)
+    (bounded : ∀ b ∈ history, b.length ≤ 32) (fits : history.length ≤ 255) :
+    ∃ after, (reopen (ops healthyReopen) .boundary).run before =
+      .ok (.ok ⟨history, historyCursor history⟩) after ∧
+      AtEnd after (historyCursor history) (encodeFrames 1 history) := by
+  apply reopen_canonical (marker := some ⟨(encodeFrames 1 history).length, history.length⟩)
+  · refine ⟨published, ?_, by simp [historyCursor, Nat.add_comm]⟩
+    change scan before.data.live (encodeFrames 1 history).length .boundary = _
+    rw [physical]
+    exact scan_encodeFrames_append suffix .boundary bounded fits
+  · simp [physical, historyCursor]
+
 /-- With a complete extra frame on disk, log-only recovery adopts it.
 The boundary policy returns the marker's history and settles the
 truncated segment. Both calls start with the same physical image. -/
@@ -58,16 +76,8 @@ theorem reopen_unpublished_batch (before : Image) (history : List Bytes) (batch 
       AtEnd after (historyCursor history) (encodeFrames 1 history)) := by
   have extendedFits : (history ++ [batch]).length ≤ 255 := by simp; omega
   refine ⟨reopen_logOfEncoded physical bounded extendedFits, ?_⟩
-  let suffix := frame (1 + history.length) batch
-  have observed : before.data.live = encodeFrames 1 history ++ suffix :=
-    physical.trans (encodeFrames_snoc 1 history batch)
-  apply reopen_canonical (marker := some ⟨(encodeFrames 1 history).length, history.length⟩)
-  · refine ⟨published, ?_, by simp [historyCursor, Nat.add_comm]⟩
-    change scan before.data.live (encodeFrames 1 history).length .boundary = _
-    rw [observed]
-    exact scan_encodeFrames_append suffix .boundary
-      (fun b member => bounded b (List.mem_append_left _ member)) (Nat.le_of_lt fits)
-  · simp [observed, historyCursor]
+  exact reopen_unpublished_suffix before history _ (physical.trans (encodeFrames_snoc 1 history batch))
+    published (fun b member => bounded b (List.mem_append_left _ member)) (Nat.le_of_lt fits)
 
 /-- A decode error inside the published extent returns before the first
 recovery write. Both marker slots and the segment retain their entry images. -/

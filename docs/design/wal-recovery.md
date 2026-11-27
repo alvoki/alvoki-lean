@@ -72,16 +72,21 @@ contract describes observations across successive calls, including a crash durin
 | Storage, both | One writer owns initialized, durably named files. Reads return live bytes or an error. Process exit can retain cache, power loss selects durable bytes. | Recovery can distinguish a failed read from an empty log. Native ownership and initialization are entry assumptions. [Primitive interpreter](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L135) · [Native adapter](../../lean/Alvoki/Experiments/WAL/SingleFile.lean) |
 | Storage, both | Append preserves earlier synchronized bytes. Truncate preserves the bytes below its requested end. Successful sync fixes bytes and length. Background writeback can settle one whole file at a time. | An ACK survives later operations, including repair interrupted before its final barrier. [Physical write outcomes](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L76) · [Writeback schedule](../../lean/Alvoki/Experiments/WAL/Writeback.lean#L41) |
 | Encoding, log-only | A full-length torn final frame retains its first 12 bytes (header and header hash), the declared payload length, and a mismatching trailer. Genuine prefixes are also admitted. | The scanner can locate the uncertain frame and discard the checksum-invalid frame while preserving the known history. The physical shape and checksum mismatch are separate premises. [Residue bytes](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L163) · [Detection premise](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L175) · [Scanner theorem](../../lean/Alvoki/Experiments/WAL/Proofs/Scan.lean#L216) |
-| Publication, boundary | An interrupted write to the inactive slot preserves the active slot and cannot forge a newer valid marker. Detecting subsequent loss requires the authoritative marker to survive. | The selected marker excludes unpublished bytes without a suffix checksum premise. A scan error inside the published extent fails open before repair. [Admitted traces](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean#L24) · [Published scan error](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L74) |
-| Encoding, both | Within the replayed history, arbitrary substitution by another valid frame falls outside the fault model. | A returned batch comes from the submitted history. Length, sequence and the existing marker cannot authenticate a coherent replacement. [Substitution counterexample](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L116) |
+| Publication, boundary | An interrupted write to the inactive slot preserves the active slot and cannot forge a newer valid marker. Detecting subsequent loss requires the authoritative marker to survive. | The selected marker excludes unpublished bytes without a suffix checksum premise. A scan error inside the published extent fails open before repair. [Admitted traces](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean#L24) · [Published scan error](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L84) |
+| Encoding, both | Within the replayed history, arbitrary substitution by another valid frame falls outside the fault model. | A returned batch comes from the submitted history. Length, sequence and the existing marker cannot authenticate a coherent replacement. [Substitution counterexample](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L126) |
 | Client, both | Safety quantifies over all admitted traces. Progress requires a healthy open attempt from a reachable offline state. | Every successful open retains the known history and resolves the outstanding batch as a whole. Once I/O succeeds, recovery can return. [Allowed histories](../../lean/Alvoki/Experiments/WAL/Contract.lean#L20) · [Safety and progress](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean#L186) |
 
 For a stopped append, the model chooses visible and durable residues independently.
 Each may contain a genuine prefix, or the full expected header followed by an observed
 payload of the submitted length and an eight-byte trailer. Log-only recovery admits the
 latter as a damaged frame when its trailer disagrees with its observed payload and header.
-With an intact earlier marker, boundary recovery ignores that unpublished tail even if
-the observed payload and trailer agree. The ordinary append model still covers the complete
+For a healthy modeled boundary open, a separate theorem admits arbitrary bytes after the selected
+marker, including a destroyed header or a complete frame copied from elsewhere. If the
+published prefix is intact, the call returns exactly that history and makes its byte end
+durable. This result describes recovery from the given image independently of how it arose.
+[Arbitrary unpublished suffix](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L48)
+
+The ordinary append model still covers the complete
 genuine frame. Marker overwrites admit old, new, short and full-length checksum-rejected
 slot images. The trace assumes an interrupted overwrite cannot forge a newer valid marker.
 
