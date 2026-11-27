@@ -119,8 +119,10 @@ state are outside this experiment.
 ## Roadmap
 
 **Minimal LSM integration.** Record the absolute WAL position covered by a durable
-LSM checkpoint. Replay the retained batches after that position, and release through
-it only once the checkpoint can be recovered. After an uncertain append or release,
+LSM checkpoint. Replay the retained batches after that position. Before releasing
+through position `k`, make checkpoint publication durable so every checkpoint
+recovery could still select covers at least `k`. Otherwise a crash could pair an
+older checkpoint with a WAL whose required prefix has already been released. After an uncertain append or release,
 reopen and use the recovered view. A bounded prototype can use today's scan and
 payload limits. For larger inputs, provide streaming recovery and ordered iteration
 with bounded memory, preserving the same suffix and positions. Align the limits of
