@@ -1,8 +1,7 @@
 # Experimental segmented WAL
 
-This isolated experiment adds fixed-capacity segment rotation and prefix release to the
-existing [single-file WAL](../README.md). It does not change the production DiskTable
-format or API. The caller supplies an empty, durably named root directory on one
+This component adds fixed-capacity segment rotation and prefix release to the
+[single-file WAL](../README.md). The caller supplies an empty, durably named root directory on one
 filesystem and owns it exclusively for the lifetime of the handle.
 
 `Native.create dir policy capacity` creates a WAL with 1–255 batches per segment.
@@ -116,6 +115,23 @@ syncs to the modeled effects, filesystem durability, exclusive ownership and the
 compiler/runtime remain assumptions. Segment recycling and checkpoints of application
 state are outside this experiment.
 
+## Native refinement follow-up
+
+The public single-file recovery schedule supplies the child
+`Recoverable` and `Installed` facts and the cached scan result from local
+primitive effects. Native segmented recovery still needs to bind that
+child to the root session that `openExisting` and `scan` expose to L0.
+[Single-file premise audit](../Proofs/README.md#public-native-recovery)
+
+For CONTROL, consider reusing DurableBlob's write, sync, rename and
+directory-barrier semantics with the existing control codec and the
+original writer used by PR #5. Check that the CONTROL projection of
+the WAL disk model admits DurableBlob's publication outcomes and that
+the root barrier also settles the successor's directory entry.
+Keep segment creation, prefix release and collection under the
+existing WAL invariants. Coordinate the adapter change with the L0
+branch when taking up that work.
+
 ## Roadmap
 
 **Minimal LSM integration.** Record the absolute WAL position covered by a durable
@@ -143,6 +159,6 @@ a batch, or widen the format.
   example independent directory writeback. Check that the trace is admitted and
   that the same client guarantee follows under the stated assumptions.
 - Compare group commit and buffering against the existing path with reproducible
-  throughput and acknowledgement-latency benchmarks. Record batch sizes,
+  throughput and acknowledgement-latency measurements. Record batch sizes,
   concurrency, sync policy and storage setup. Every acknowledged batch must still
   survive recovery until released.

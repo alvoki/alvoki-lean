@@ -1,35 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
-case "${1:-}" in
-  "")
-    for suite in reproduce optimize native merge-phases stock-builder fused-merge compaction; do
-      bash "scripts/$suite.sh"
-    done
-    toolchains=$(cd "${ALVOKI_TOOLCHAINS:-../work/toolchains}" && pwd)
-    export ELAN_HOME="$toolchains/elan" RUSTUP_HOME="$toolchains/rustup" CARGO_HOME="$toolchains/cargo"
-    export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
-    (cd rust && cargo test --release --lib)
-    (
-      cd lean
-      lake build Alvoki.Checks.Audit.AxiomPolicy MergeProofs RunMergeProofs CodecVariants CompactionProofs
-      for module in Alvoki.Proofs.Packed.PackedViewProofs Alvoki.Proofs.Merge.MergeProofs Alvoki.Codec.BlockCodec Alvoki.Proofs.Packed.RunProofs Alvoki.Proofs.Packed.RunMergeProofs Alvoki.Experiments.Packed.CodecVariants \
-        Alvoki.Compaction.Model Alvoki.Compaction.Core Alvoki.Compaction.Codec Alvoki.Storage.Proofs.Table.Compaction Alvoki.Storage.Table.SequentialModel; do
-        lake env leanchecker "$module"
-      done
-      lake env lean Alvoki/Checks/Audit/ProofRoadmapAudit.lean
-      lake env lean --run Alvoki/Checks/Tests/CoreChecks.lean
-    )
-    ;;
-  --runtime)
-    bash scripts/packed.sh
-    # The scoped suite also runs the fixed-copy fixture checks.
-    bash scripts/scoped-builder.sh
-    bash scripts/compaction.sh --fixed-copy
-    ;;
-  *)
-    echo "Usage: bash scripts/check.sh [--runtime]" >&2
-    exit 2
-    ;;
-esac
+exec bash scripts/reproduce.sh "$@"

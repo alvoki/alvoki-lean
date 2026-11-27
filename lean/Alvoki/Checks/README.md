@@ -1,7 +1,5 @@
-# Checks
+# Checks and audits
 
-Executable scenario fixtures and formal proof audits are separate; the sequential script runs the storage checks.
+The retained repository has component-specific model and native fixtures plus an axiom policy. The focused scripts compile and check the component modules without mixing their evidence.
 
-Start: [Executable fixtures](Tests) · [Audits](Audit).
-
-Checks: [Sequential verification](../../../scripts/check-sequential.sh).
+Start: [Axiom audits](Audit/README.md) · [Reproducibility checks](../../../scripts/reproduce.sh).
