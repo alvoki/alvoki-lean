@@ -1687,10 +1687,6 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       retryNames synced ((dir).file (.walSegment layout.keeper.first)) ≠ some replacement →
       WalKeeperRenameEffect dir layout.keeper.first replacement true
         (storage synced) (storage renamedHeap) (visible synced) (visible renamedHeap))
-    (stagingInode : ∀ {authorized pruned recorded synced issued file slot inode},
-      stagedFrom afterKeeper authorized pruned recorded synced →
-      (callbacks).sync file issued = .ok () synced → attachedReadSlot view file slot inode issued →
-      retryNames issued ((dir).file .stagedWal) = some inode → inode = staged.inventory.inode staged.slot.description)
     (loadKeeper : (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue →
       ∀ inode, retryNames renamedHeap ((dir).file (.walSegment layout.keeper.first)) = some inode →
         retryNames finalIssue ((dir).file (.walSegment layout.keeper.first)) = some inode ∧
@@ -1749,10 +1745,17 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
         .error (dispose.diagnostic publicError) finalized.reached,
       RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath selectedWal
         (prior.next input returned) ∧
-      retryNames finalized.reached ((dir).file (.walSegment layout.keeper.first)) =
-        some (staged.inventory.inode staged.slot.description) ∧
-      (storage finalized.reached).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed] ∧
-      visible finalized.reached (staged.inventory.inode staged.slot.description) = target.trimmed ∧
+      (∃ replacement,
+        retryNames finalized.reached ((dir).file (.walSegment layout.keeper.first)) = some replacement ∧
+        (storage finalized.reached).files.bytes replacement = [layout.target.trimmed] ∧
+        visible finalized.reached replacement = target.trimmed ∧
+        ∃ authorized pruned recorded synced created file slot,
+          stagedFrom afterKeeper authorized pruned recorded synced ∧
+          source.stage.acquire ((dir).file .stagedWal) pruned = .ok file created ∧
+          attachedReadSlot view file slot replacement created ∧
+          retryNames created ((dir).file .stagedWal) = some replacement ∧
+          (staged.bindings ((dir).file .stagedWal) = retryNames created ((dir).file .stagedWal) →
+            replacement = staged.inventory.inode staged.slot.description)) ∧
       (view.files finalized.reached).image.keeper.active = some target.trimmed ∧
       (view.files finalized.reached).image.later.DurablyEmpty ∧
       (∀ {failed} (reboot : RawWriteRebootEntry state view storage retryNames visible failed first),
@@ -1843,7 +1846,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     rw [layout.boundedPlan_extractKeeper]
     exact written
   obtain ⟨durableFrame, _, syncedRoot, _, stageWalNames, keeperUnchanged, childrenSettled, ⟨prunedNames, prunedSettled⟩,
-    stageIssued, file, slot, replacement, stageSynced, stageSlot, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtFileSync, _⟩ :=
+    stageIssued, file, slot, replacement, ⟨created, acquired, attachedStage, boundStage⟩, stageSynced, stageSlot, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtFileSync, _⟩ :=
     source.stage.prunedAndSyncedReplacement callbacks
       (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible buffered
       seed.directoryRef seed.activeRef seed.pendingRef source.remove source.rename seed.handle physical
@@ -1920,7 +1923,6 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have keeperBytes := loadedBytes.trans ((inodeMove.liveBytes keeperPath managed replacement atRename).trans
     (liveAtFileSync.trans bytePrefix))
   have keeperDurable := loadedDurable.trans ((inodeMove.durableBytes _ (.inl rfl) keeperPath managed replacement atRename).trans stagedAtSync)
-  have reported := stagingInode staging stageSynced stageSlot stageAtIssue
   obtain ⟨repair, workerImage, trace, carried, kept, named, durable, _⟩ :=
     issue.returnsSelectedRepairError view state rfl storage visible callbacks seed.directoryRef seed.activeRef seed.pendingRef
       source.remove source.stage source.rename startFiles observed keeperAtIssue keeperBytes keeperDurable reachedIssue errorEffect
@@ -1957,8 +1959,9 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       (view.files finalized.reached).image.later.DurablyEmpty := by
     rw [finalImage, workerImage, ← sameTarget]
     exact issue.visibleAfterRename effective
-  refine ⟨returned, selectedEffects, reported ▸ sameName.trans named, reported ▸ (sameBytes _ named).trans durable,
-    reported ▸ live, active, later, ?_⟩
+  refine ⟨returned, selectedEffects, ⟨replacement, sameName.trans named, (sameBytes _ named).trans durable,
+    live, authorized, pruned, recorded, synced, created, file, slot, staging, acquired, attachedStage, boundStage,
+    fun shared => Option.some.inj (boundStage.symm.trans (shared.symm.trans staged.stageBound))⟩, active, later, ?_⟩
   intro beforeReboot reboot reset atBoot failedKeeper cacheKeeper readKeeper listKeeper
     loadSurvivors cleanupSurvivors
   have liveBeforeRepair : RawOpenRetryTrace.LiveKeeperCrashChoices dir layout.target (storage afterKeeper) :=
@@ -2200,7 +2203,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     rw [layout.boundedPlan_extractKeeper]
     exact written
   obtain ⟨durableFrame, rootFrame, _, authorizedScope, stageScope, oldAtRename, childrenSettled,
-    ⟨prunedNames, prunedSettled⟩, issued, file, slot, replacement, _, _, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, protects⟩ :=
+    ⟨prunedNames, prunedSettled⟩, issued, file, slot, replacement, _, _, _, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, protects⟩ :=
     source.stage.prunedAndSyncedReplacement callbacks
       (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible buffered
       seed.directoryRef seed.activeRef seed.pendingRef source.remove source.rename seed.handle physical

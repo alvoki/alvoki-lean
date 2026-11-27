@@ -481,6 +481,9 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       ∀ names ∈ (observe pruned).crashNames, ∀ file,
         names (state.session.directory.file file) = (observe pruned).files.names (state.session.directory.file file)) ∧
     ∃ (issued : heap) (file : IO.FS.Handle) (slot : DescriptorSlot) (replacement : Nat),
+      (∃ created, stage.acquire (state.session.directory.file .stagedWal) pruned = .ok file created ∧
+        attachedReadSlot view file slot replacement created ∧
+        (observe created).files.names (state.session.directory.file .stagedWal) = some replacement) ∧
       calls.sync file issued = .ok () synced ∧
       attachedReadSlot view file slot replacement issued ∧
       (observe synced).files.names (state.session.directory.file (.walSegment plan.keeper)) ≠ some replacement ∧
@@ -558,7 +561,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
         congrFun fileSync.names (dir.file (.walSegment start)))))))))
   refine ⟨prunedFootprint.trans toSynced.visible, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
     keeperAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
-    ⟨prunedNames, settled⟩, consumed, file, slot, replacement, stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
+    ⟨prunedNames, settled⟩, consumed, file, slot, replacement, ⟨opened, acquired, openedStage.1, openedStage.2.1⟩,
+    stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
     syncedVisible, ?_⟩
   intro liveEffects pendingAtEntry
   obtain ⟨authReadLive, authReadPending⟩ := liveEffects.loadRoot authLoaded
@@ -676,7 +680,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
     wroteStage, syncedStage, moved, finalGroup⟩ :=
     finishBoundedMarkedOpen_replacementReached dir plan physicalSize remove write group rename longer returned
   obtain ⟨atSync, parentAtSync, heldAtSync, authNames, stageNames, oldAtRename, _, _,
-    issued, _, _, replacement, _, _, separate, stagedBinding, stagedBytes, fileSync, syncedVisible, _⟩ :=
+    issued, _, _, replacement, _, _, _, separate, stagedBinding, stagedBytes, fileSync, syncedVisible, _⟩ :=
     stage.prunedAndSyncedReplacement calls state view observe visible buffered cached active pending remove rename
       root effects.toReplacementPrefixStorageEffects plan keeper heldRoot protectedFiles.directoryBound laterOutside unlink records readsPending
       readsDirectory firstRoot unlinks pruneRoot wroteStage syncedStage
