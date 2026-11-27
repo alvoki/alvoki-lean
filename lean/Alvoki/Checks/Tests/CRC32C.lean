@@ -7,6 +7,7 @@ private def check (condition : Bool) (label : String) : IO Unit :=
 
 def main : IO Unit := do
   let vector := "123456789".toUTF8
+  check (crc32c 0 vector == 0xe3069283) "portable CRC32C standard vector"
   check (extend 0 vector == 0xe3069283) "CRC32C standard vector"
   for size in [0, 1, 7, 8, 9, 63, 64, 255, 256, 1024, 4096, 16384] do
     let bytes : ByteArray := ⟨(Array.range size).map fun i => (i * 37 + i / 256).toUInt8⟩
