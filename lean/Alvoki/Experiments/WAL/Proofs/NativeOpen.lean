@@ -410,26 +410,30 @@ private def storePhase (phase : Phase OpenTarget (AppendFiles OpenTarget)) : Ope
 private theorem clear_run (s : OpenImage) :
     (storePhase .closed).run s = .ok (.ok ()) {s with closed := true} := rfl
 
+def closeModel (policy : Policy) (r : OpenReports)
+    (phase : Phase OpenTarget (AppendFiles OpenTarget)) (s : OpenImage) :=
+  (closeWith phase storePhase (openEffects policy r).unlock).run s
+
 /-- Closing a ready handle clears its shared phase before unlocking its
 description. An alias subsequently observes the cleared phase. -/
 theorem close_opened (policy : Policy) (r : OpenReports) (ready : Opened OpenTarget (AppendFiles OpenTarget))
     (lock : ready.lock = .lock) (s : OpenImage)
     (installed : ready.phase = .active ready.lock (appendFiles ready.writer ready.reader ready.markers) ready.recovered.cursor ready.recovered.batches) :
-    let result := (closeWith (storedPhase ready) storePhase (openEffects policy r).unlock).run s
+    let result := closeModel policy r (storedPhase ready) s
     let after := postState result
     after.closed = true ∧ after.held = false ∧ after.image = s.image ∧
     (scanWith (if after.closed then .closed else ready.phase) : OpenM _).run after =
       .ok (.error "WAL closed") after := by
-  simp only [storedPhase_eq, installed, closeWith, lock, runBind, clear_run, unlock_run]
+  simp only [closeModel, storedPhase_eq, installed, closeWith, lock, runBind, clear_run, unlock_run]
   cases h : r.unlockError <;> simp_all [finish, postState] <;> rfl
 
 /-- An uncertain append retains the original private lock in the poisoned
 phase. The public close schedule still clears that phase and releases it. -/
 theorem close_poisoned (policy : Policy) (r : OpenReports) (s : OpenImage) :
-    let result := (closeWith (.poisoned .lock) storePhase (openEffects policy r).unlock).run s
+    let result := closeModel policy r (.poisoned .lock) s
     let after := postState result
     after.closed = true ∧ after.held = false ∧ after.image = s.image := by
-  simp only [closeWith, runBind, clear_run, unlock_run]
+  simp only [closeModel, closeWith, runBind, clear_run, unlock_run]
   cases h : r.unlockError <;> simp_all [finish, postState] <;> rfl
 
 end WalRecoverySlice.SingleFile

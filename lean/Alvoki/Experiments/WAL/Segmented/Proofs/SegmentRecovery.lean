@@ -137,6 +137,122 @@ theorem Recoverable.nativeAppendAfterOpen (dir : System.FilePath)
       obtain ⟨_, _, valid, settled⟩ := outcome
       exact ⟨⟨valid, settled⟩, rfl⟩
 
+/-- A retry after close selects only an admitted history. Closing that
+recovered handle pins the same history for the next successful open. -/
+theorem Recoverable.nativeReopenTwice (dir : System.FilePath)
+    (first cleanup second : SingleFile.OpenReports)
+    (start : SingleFile.OpenImage) (free : start.held = false)
+    (entry : Recoverable policy known pending start.image)
+    (opened : SingleFile.openExistingModel dir policy first start = .ok (.ok ready) after)
+    (reopened : SingleFile.openExistingModel dir policy second
+      (SingleFile.postState (SingleFile.closeModel policy cleanup (SingleFile.storedPhase ready) after)) =
+      .ok (.ok again) final) :
+    WalRecoverySlice.Contract.Permitted known pending ready.recovered.batches ∧
+      again.recovered.batches = ready.recovered.batches := by
+  have found := SingleFile.openExisting_refines dir policy first start free entry.dirty entry.markers
+  rw [opened] at found
+  obtain ⟨lock, _, _, _, _, _, _, _, permitted, cursor, valid, settled, phase⟩ := found.2.2
+  have release := SingleFile.close_opened policy cleanup ready lock after phase
+  have bounds : ∀ b ∈ ready.recovered.batches, b.length ≤ 32 := by
+    intro b member
+    apply entry.dirty.bounded b
+    rcases permitted with same | same
+    · exact List.mem_append_left _ (same ▸ member)
+    · exact same ▸ member
+  have fits : ready.recovered.batches.length ≤ 255 := by
+    rcases permitted with same | same
+    · rw [same]
+      have bound := entry.dirty.fits
+      simp only [List.length_append] at bound
+      omega
+    · exact same ▸ entry.dirty.fits
+  have stable : Settled policy after.image ready.recovered.batches := ⟨valid, settled⟩
+  have closed := stable.recoverable bounds fits
+  have againFact := Recoverable.nativeOpen dir second _ release.2.1 (release.2.2.1.symm ▸ closed)
+  rw [reopened] at againFact
+  have allowed := againFact.2.2.2.2.1
+  exact ⟨permitted, by simpa [WalRecoverySlice.Contract.Permitted] using allowed⟩
+
+/-- Ordinary errors close the original poisoned phase on the reached image.
+A process exit or power loss instead drops the lock on termination, using
+the standard restart image. The subsequent open consumes the same invariant. -/
+theorem nativeRetryAfterAppend (dir : System.FilePath) (cleanup first second : SingleFile.OpenReports)
+    (result : SingleFile.AppendResult)
+    (outcome : SingleFile.AppendGuarantee policy known batch result)
+    (stop : Option Persistence.Restart)
+    (namespaceState : SingleFile.OpenImage)
+    (opened : SingleFile.openExistingModel dir policy first
+      (match stop with
+      | none => SingleFile.postState (SingleFile.closeModel policy cleanup
+          (SingleFile.appendReached result).phase
+          {namespaceState with image := (SingleFile.appendReached result).image, held := true})
+      | some mode => {namespaceState with
+          image := mode.image (SingleFile.appendReached result).image
+          held := false}) = .ok (.ok ready) after)
+    (reopened : SingleFile.openExistingModel dir policy second
+      (SingleFile.postState (SingleFile.closeModel policy cleanup (SingleFile.storedPhase ready) after)) =
+      .ok (.ok again) final) :
+    WalRecoverySlice.Contract.Permitted known (some batch) ready.recovered.batches ∧
+      again.recovered.batches = ready.recovered.batches := by
+  have entry : Recoverable policy known (some batch) (SingleFile.appendReached result).image :=
+    ⟨outcome.1, outcome.2.1⟩
+  cases stop with
+  | none =>
+    have closeSame (state : SingleFile.OpenImage) :
+        SingleFile.closeModel policy cleanup (SingleFile.appendReached result).phase state =
+          SingleFile.closeModel policy cleanup (.poisoned .lock) state := by
+      have phase := outcome.2.2
+      cases result with
+      | error => simp only [SingleFile.appendReached, phase.2]
+      | ok response _ =>
+        cases response with
+        | error => simp only [SingleFile.appendReached, phase.2]
+        | ok ack =>
+          cases ack
+          simp only [SingleFile.appendReached, phase.2.1]
+          rfl
+    simp only [closeSame] at opened
+    have released := SingleFile.close_poisoned policy cleanup
+      {namespaceState with image := (SingleFile.appendReached result).image, held := true}
+    have retry : Recoverable policy known (some batch)
+        (SingleFile.postState (SingleFile.closeModel policy cleanup (.poisoned .lock)
+          {namespaceState with image := (SingleFile.appendReached result).image, held := true})).image := by
+      rw [released.2.2]
+      exact entry
+    exact retry.nativeReopenTwice dir first cleanup second _ released.2.1 opened reopened
+  | some mode =>
+    cases mode with
+    | processExit => exact Recoverable.nativeReopenTwice dir first cleanup second _ rfl entry opened reopened
+    | powerLoss => exact Recoverable.nativeReopenTwice dir first cleanup second _ rfl entry.powerLoss opened reopened
+
+/-- A rejected append leaves no physical pending batch, even when the caller
+conservatively treats an error as uncertain. -/
+theorem Installed.nativeRetryAfterRejected (entry : Installed policy image cursor known)
+    (bounded : ∀ b ∈ known, b.length ≤ 32) (fits : known.length ≤ 255)
+    (dir : System.FilePath) (cleanup first second : SingleFile.OpenReports)
+    (reports : ∀ cursor, SingleFile.AppendReports policy cursor batch)
+    (invalid : batch.length > 32 ∨ known.length ≥ 255) (namespaceState : SingleFile.OpenImage)
+    (opened : SingleFile.openExistingModel dir policy first
+      (let issued := SingleFile.appendReached (SingleFile.appendModel reports
+        ⟨image, .active .lock (SingleFile.appendBindings policy) cursor known⟩)
+       SingleFile.postState (SingleFile.closeModel policy cleanup issued.phase
+        {namespaceState with image := issued.image, held := true})) = .ok (.ok ready) after)
+    (reopened : SingleFile.openExistingModel dir policy second
+      (SingleFile.postState (SingleFile.closeModel policy cleanup (SingleFile.storedPhase ready) after)) =
+      .ok (.ok again) final) :
+    ready.recovered.batches = known ∧ again.recovered.batches = known := by
+  rw [entry.position, SingleFile.append_rejected reports invalid] at opened
+  have released := SingleFile.close_poisoned policy cleanup {namespaceState with image, held := true}
+  have original := entry.toSettled.recoverable bounded fits
+  have retry : Recoverable policy known none
+      (SingleFile.postState (SingleFile.closeModel policy cleanup (.poisoned .lock)
+        {namespaceState with image, held := true})).image := by
+    rw [released.2.2]
+    exact original
+  obtain ⟨unchanged, same⟩ := retry.nativeReopenTwice dir first cleanup second _ released.2.1 opened reopened
+  have old : ready.recovered.batches = known := by simpa [WalRecoverySlice.Contract.Permitted] using unchanged
+  exact ⟨old, same.trans old⟩
+
 end Child
 
 private theorem selectedUnchanged {image : Image}

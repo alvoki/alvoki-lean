@@ -104,5 +104,12 @@ descriptions by last drop. The test-only wrapper checks the reached marker inode
 after its successful native fsync and checks that two reopens recover the
 same confirmed history plus the pending batch.
 
+The segmented child also checks append through close or process stop and
+two successful public reopens. The first reopen uses the exact reached
+image, with the existing restart projection for power loss. The second
+starts from the now-settled selected history. A preflight rejection passes
+the original image with no physical pending batch and both reopens keep
+the original history.
+
 Native bootstrap, segmented root recovery, CONTROL publication, and
 native rotation retain separate refinement obligations.
