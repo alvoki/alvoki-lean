@@ -76,6 +76,8 @@ private def retryAfterRelease (dir : FilePath) (p : Policy) : IO Unit := do
   Native.close h
   require ((← IO.FS.readFile unknown) == "keep") "deleted unrelated file during cleanup"
   failed (Native.openExisting dir) "ignored failed cleanup on reopen"
+  -- Leave a partial retired directory after the release authority has settled.
+  IO.FS.removeFile (dir / "segment-0" / "segment")
   IO.FS.removeFile unknown
   let h ← Native.openExisting dir
   check h 1 [[11]]

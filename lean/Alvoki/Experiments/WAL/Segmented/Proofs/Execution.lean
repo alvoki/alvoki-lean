@@ -1,4 +1,5 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.Append
+import Alvoki.Experiments.WAL.Segmented.Proofs.Artifacts
 import Alvoki.Experiments.WAL.Segmented.Proofs.Bootstrap
 import Alvoki.Experiments.WAL.Segmented.Proofs.Discard
 import Alvoki.Experiments.WAL.Segmented.Proofs.Reopen
@@ -57,6 +58,9 @@ inductive Run : List Event → Running → Prop where
       Run (events ++ [.stop]) (.offline (mode.after state))
   | writeback (prior : Run events (.offline state)) (id : Nat) (file : Persistence.WalFile) :
       Run events (.offline { state with disk := state.disk.writeback id file })
+  | artifact (prior : Run events (.offline state)) (id : Nat) (image : Model.DataImage) (live durable : Bool)
+      (unselected : ∀ c, state.disk.liveControl = some c ∨ state.disk.durableControl = some c → ¬ c.selects id) :
+      Run events (.offline { state with disk := state.disk.withArtifact id image live durable })
   | failed (prior : Run events (.offline state)) (effects : Model.Effects)
       (got : (reopen (Model.ops effects)).run state = .ok (.error error) after) :
       Run (events ++ [.openFailed]) (.offline after)
@@ -125,6 +129,11 @@ private theorem sound {events running} (run : Run events running) :
     cases represented with
     | offline canOpen =>
       exact ⟨_, allowed, .offline (canOpen.writeback id file)⟩
+  | artifact prior id image live durable unselected ih =>
+    obtain ⟨_, allowed, represented⟩ := ih
+    cases represented with
+    | offline canOpen =>
+      exact ⟨_, allowed, .offline ((Recoverable.withUnselectedArtifact unselected image live durable).mpr canOpen)⟩
   | failed prior effects got ih =>
     obtain ⟨_, allowed, represented⟩ := ih
     cases represented with
