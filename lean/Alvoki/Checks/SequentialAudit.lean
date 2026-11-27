@@ -2055,7 +2055,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeHealthyMarkedKeeperReport.recovers
 #check_axioms Alvoki.Storage.DiskSession.MarkedOpenSuccessReports.opensHealthyFromAdmission
 #check_axioms Alvoki.Storage.DiskSession.NativeMarkedCheckpointReadHeap.reachesScan
-#check_axioms Alvoki.Storage.DiskSession.NativeMarkedCheckpointReadHeap.reachesMarkedScan
 #check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.returns
 #check_axioms Alvoki.Storage.WalSegmentRepair.CachedWalKeeperReached.reachesReadWithPayloads
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.selects
@@ -2231,6 +2230,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.ScopeFrames.afterWorker
 #check_axioms Alvoki.Storage.DiskSession.RawOpenCacheDisposal.returnsAfterLockFinalizationAt
 #check_axioms Alvoki.Storage.DiskSession.RawFinalizedOpenAttempt.fromWorkerError
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.preparesMeasuredWal
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.worker_markedError_iff
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.workerReturnsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.extendsFailedRepair
 #check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.finalizesFailedRepairWithFrame

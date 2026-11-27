@@ -31,11 +31,17 @@ sync fails, the live suffix is already pruned. Another reboot selects a director
 map admitted by the observed durability effects.
 [Failed repair and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Trace a failed keeper replacement from the marked
-open worker itself. Its successful preparation determines the selected files,
-the measured keeper extent and the heap at which repair begins. The error
-at the final directory sync must feed the same retry and ledger proof.
-[Marked worker](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
+**Where a marked open failed.** Once the flat-WAL and marker probes select
+the marked branch, a worker error comes from preparation, repair or installation.
+If repair ran, its plan, keeper extent and entry heap come from the successful
+reader of that worker. The failed-retry proof uses this same boundary.
+[Worker classification](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
+[Measured preparation](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedWorker.lean)
+
+**Next source boundary.** Within the failed repair, identify the prefix through
+the successful replacement rename and the issued final directory sync. Use that
+prefix and the observed sync effect to establish the retry frame for the same
+heap. Earlier failures may report the same diagnostic.
 [Replacement error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·

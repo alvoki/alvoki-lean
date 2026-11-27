@@ -562,6 +562,69 @@ theorem RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
     | ok _ afterDisposal | error _ afterDisposal =>
       cases unlocked : source.calls.unlock raw.lock afterDisposal <;> simp [unlocked]
 
+/-- After the two marked guards, the literal worker hands the values and heap
+returned by its reader to repair. Errors from preparation, repair and
+installation are carried by separate binds and may have the same diagnostic. -/
+theorem RawMarkedOpenInterpreter.worker_markedError_iff
+    (source : RawMarkedOpenInterpreter heap stream) (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cache : DiskTable.OpenSyncFiles)
+    {entry checked marked : heap} {metadata : IO.FS.Metadata}
+    {cause : IO.Error} {failed : heap}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      entry = .ok () checked)
+    (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) marked) :
+    let keeper := source.keeperCallbacks.withFileReads source.fileCalls
+    let optional := source.fileCalls.readOptional directory
+    let prepare := prepareBoundedMarkedFromReaders directory
+      (readIntegrityCheckpointSized directory (optional (directory.file .manifest))
+        source.fileCalls.runSize source.fileCalls.runPrefix) optional
+      (fun watermark length => readSelectedWithCachedExtents directory watermark length source.directoryCalls.run
+        (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
+        (source.fileCalls.readKeeperWithRelease
+          (fun path handle => keeper.modifyPending pending (pushPending path handle))))
+    let repair := fun plan extent => finishBoundedMarkedOpen directory plan extent source.remove
+      (source.stage.stage pending keeper.modifyPending) (keeper.syncPaths directory.path cached active pending) source.rename
+    let install := fun (opened : Reopened) => installReady opened.installed source.allocatePhase source.allocateToken
+      fun phase token => pure (RawMarkedOpenInterpreter.assemble directory lock cache phase token)
+    source.worker cached active pending directory lock cache entry = .error cause failed ↔
+      prepare marked = .error cause failed ∨
+      ∃ plan opened extent prepared, prepare marked = .ok (plan, opened, extent) prepared ∧
+        (repair plan extent prepared = .error cause failed ∨
+          ∃ repaired, repair plan extent prepared = .ok () repaired ∧ install opened repaired = .error cause failed) := by
+  intro keeper optional prepare repair install
+  have dispatch : recoverHealthyMarkedWithRefs source.fileCalls source.directoryCalls source.keeperCallbacks
+      cached active pending source.remove source.stage source.rename source.calls.lookup directory
+      (source.bootstrap directory cache) entry = (do
+        let (plan, opened, extent) ← prepare
+        repair plan extent
+        pure opened) marked := by
+    simp only [recoverHealthyMarkedWithRefs, recoverSegmentedWalWith, Bind.bind, EStateM.bind,
+      flat, marker, Option.isSome, ↓reduceIte]
+    rfl
+  change ((recoverHealthyMarkedWithRefs _ _ _ _ _ _ _ _ _ _ _ _ >>= install) entry = _) ↔ _
+  simp only [Bind.bind, EStateM.bind, dispatch]
+  cases ready : prepare marked with
+  | error why reached => simp
+  | ok payload reached =>
+    obtain ⟨plan, opened, extent⟩ := payload
+    constructor
+    · intro failedWorker
+      refine .inr ⟨plan, opened, extent, reached, rfl, ?_⟩
+      cases finished : repair plan extent reached with
+      | error why ended =>
+        exact .inl (by simpa only [finished, EStateM.Result.error.injEq] using failedWorker)
+      | ok result ended =>
+        cases result
+        exact .inr ⟨ended, rfl, by simpa only [finished, Pure.pure, EStateM.pure] using failedWorker⟩
+    · rintro (impossible | ⟨_, _, _, _, h, failedStep⟩)
+      · cases impossible
+      · cases h
+        rcases failedStep with failedRepair | ⟨_, finished, failedInstall⟩
+        · simp only [failedRepair]
+        · simpa only [finished, Pure.pure, EStateM.pure] using failedInstall
+
 /-- A successful held worker returns the recovered state through its own
 phase and token allocations to the table it assembled. -/
 theorem RawMarkedOpenInterpreter.worker_reachesMarkedInstallation

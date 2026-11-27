@@ -962,31 +962,6 @@ theorem reachesScan (report : NativeMarkedCheckpointReadHeap seed chronology cal
     rfl
   · simp only [prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, checkpointRead, markerRead, Pure.pure, EStateM.pure]
 
-/-- The reported retained marker selects this guarded branch of the source
-open schedule. The bounded continuation receives the same reached raw heap. -/
-theorem reachesMarkedScan (report : NativeMarkedCheckpointReadHeap seed chronology calls)
-    {checkpoint : Option (PackedTable × UInt64)}
-    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
-    (flat : optionalMetadataWith (calls.stat (directory.file .wal)) seed.afterPending = .ok none seed.afterPending)
-    {metadata : IO.FS.Metadata}
-    (marker : optionalMetadataWith (calls.stat (directory.file .walBoundary)) seed.afterPending =
-      .ok (some metadata) seed.afterPending)
-    (readWal : Nat → UInt64 → EStateM IO.Error heap (WalSegmentMarkerReads × Nat))
-    (finish : Plan × Reopened × Nat → EStateM IO.Error heap Reopened)
-    (bootstrap : EStateM IO.Error heap Reopened) :
-    recoverSegmentedWalWith
-      (rejectFlatWalWith directory (optionalMetadataWith (calls.stat (directory.file .wal))))
-      (optionalMetadataWith (calls.stat (directory.file .walBoundary)))
-      (prepareBoundedMarkedFromReaders directory
-        (readIntegrityCheckpointSized directory (calls.readOptional directory (directory.file .manifest))
-          calls.runSize calls.runPrefix) (calls.readOptional directory) readWal >>= finish) bootstrap seed.afterPending =
-      (prepareBoundedMarkedFromReaders directory (pure checkpoint) (fun _ => pure (some chronology.marker.bytes))
-        readWal >>= finish) report.atScan := by
-  obtain ⟨_, _, _, _, _, _, _, reached⟩ := report.reachesScan selected readWal
-  simp [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker, Pure.pure, EStateM.pure]
-  rw [reached]
-  rfl
-
 end NativeMarkedCheckpointReadHeap
 
 end Alvoki.Storage.DiskSession

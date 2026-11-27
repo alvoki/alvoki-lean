@@ -26,6 +26,57 @@ variable {input : FilePath} {directory : DiskDirectory} {inventory : DescriptorI
   {slotOf : heap → stream → DescriptorSlot} {listing : MarkedDirectoryReadReport prepared directoryCalls slotOf}
   {beforeKeeper afterKeeper : heap}
 
+/-- The selected checkpoint and WAL observations identify the result and heap
+of the real preparation before any repair callback can mutate that heap. -/
+theorem MarkedWalExtentReports.preparesMeasuredWal
+    (extents : MarkedWalExtentReports prepared listing)
+    (seals : MarkedSealReadChain seed fileCalls chronology.seals listing.reached beforeKeeper)
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (valid : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (readKeeper : FilePath → Nat → Nat → EStateM IO.Error heap ByteArray)
+    (keeperRead : readKeeper (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
+      reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper) :
+    ∃ opened,
+      prepareBoundedMarkedFromReaders directory
+        (readIntegrityCheckpointSized directory (fileCalls.readOptional directory (directory.file .manifest))
+          fileCalls.runSize fileCalls.runPrefix) (fileCalls.readOptional directory)
+        (fun watermark length => readSelectedWithCachedExtents directory watermark length directoryCalls.run
+          (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal readKeeper) seed.afterPending =
+        .ok (layout.boundedPlan, opened, reads.wal.keeper.calls.metadata.byteSize.toNat) afterKeeper ∧
+      reads.walReads.prepare reads.reads.readPrefix (admission.reached, admission.held) =
+        .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) := by
+  let readWal := fun watermark length =>
+    readSelectedWithCachedExtents directory watermark length directoryCalls.run
+      (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal readKeeper
+  have later := valid.newer _ List.mem_cons_self
+  obtain ⟨length, decoded, _, requested, _, _, _, _, reachedKeeper⟩ :=
+    extents.reachesKeeper seals selected following later readKeeper
+  have extent : reads.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
+    reads.wal.keeper.observesFile.extent
+  have covers : layout.keeper.bytes.size ≤ reads.wal.keeper.calls.metadata.byteSize.toNat := by
+    rw [extent]
+    change layout.keeper.bytes.size ≤ (layout.keeper.bytes ++ layout.tail).size
+    rw [ByteArray.size_append]
+    exact Nat.le_add_right ..
+  have finishKeeper := readCachedWalPayloads_keeperSuccess directory (length.toNat / WAL.frameSize)
+    fileCalls.seal readKeeper requested.symm covers keeperRead
+  have wal : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat length prepared.atScan =
+      .ok (⟨layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++
+        [(layout.keeper.first, layout.keeper.bytes)], retry.image.later.visible⟩,
+        reads.wal.keeper.calls.metadata.byteSize.toNat) afterKeeper := by
+    unfold readWal
+    rw [reachedKeeper]
+    simp only [Bind.bind, EStateM.bind, finishKeeper, Pure.pure, EStateM.pure]
+  obtain ⟨opened, actual, projected⟩ :=
+    reads.preparesFromSelectedWal selected chronology.marker.bound decoded following valid.newer accepted ordered readWal wal
+  obtain ⟨_, _, _, _, _, _, _, atScan⟩ := prepared.reachesScan selected readWal
+  exact ⟨opened, atScan.trans (extent ▸ actual), projected⟩
+
 /-- Run the guarded marked worker on the opened cache. The keeper
 callback and the chosen repair start at their actual reached heaps.
 Both the raw worker and the read-only comparison use the same prepared
@@ -68,49 +119,13 @@ theorem MarkedWalExtentReports.recoversFromOpenedCacheWith
           | .error cause ended => .error cause ended) ∧
       reads.walReads.prepare reads.reads.readPrefix (admission.reached, admission.held) =
         .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) := by
-  let readWal := fun watermark length =>
-    readSelectedWithCachedExtents directory watermark length directoryCalls.run
-      (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal readKeeper
-  let settle := fun (result : Plan × Reopened × Nat) => do
-    finishBoundedMarkedOpen directory result.1 result.2.2 remove write sync rename
-    pure result.2.1
-  have later := valid.newer _ List.mem_cons_self
-  obtain ⟨length, decoded, _, requested, _, _, _, _, reachedKeeper⟩ :=
-    extents.reachesKeeper seals selected following later readKeeper
-  have extent : reads.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
-    reads.wal.keeper.observesFile.extent
-  have covers : layout.keeper.bytes.size ≤ reads.wal.keeper.calls.metadata.byteSize.toNat := by
-    rw [extent]
-    change layout.keeper.bytes.size ≤ (layout.keeper.bytes ++ layout.tail).size
-    rw [ByteArray.size_append]
-    exact Nat.le_add_right ..
-  have finishKeeper := readCachedWalPayloads_keeperSuccess directory (length.toNat / WAL.frameSize)
-    fileCalls.seal readKeeper requested.symm covers keeperRead
-  have wal : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat length prepared.atScan =
-      .ok (⟨layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++
-        [(layout.keeper.first, layout.keeper.bytes)], retry.image.later.visible⟩,
-        reads.wal.keeper.calls.metadata.byteSize.toNat) afterKeeper := by
-    unfold readWal
-    rw [reachedKeeper]
-    simp only [Bind.bind, EStateM.bind, finishKeeper, Pure.pure, EStateM.pure]
-  obtain ⟨opened, actual, projected⟩ :=
-    reads.preparesFromSelectedWal selected chronology.marker.bound decoded following valid.newer accepted ordered readWal wal
-  have guarded := prepared.reachesMarkedScan selected flat marker readWal settle bootstrap
-  rw [extent] at repaired
+  obtain ⟨opened, actual, projected⟩ := extents.preparesMeasuredWal seals selected valid following accepted ordered
+    readKeeper keeperRead
   refine ⟨opened, ?_, projected⟩
-  unfold reopenMarkedBoundedWithCachedExtents
-  change recoverSegmentedWalWith _ _
-    (prepareBoundedMarkedFromReaders directory _ (fileCalls.readOptional directory) readWal >>= settle)
-    bootstrap seed.afterPending = _
-  rw [guarded]
-  simp only [Bind.bind, EStateM.bind, actual]
-  dsimp only [settle]
-  cases result with
-  | ok value ended =>
-    cases value
-    simp only [Bind.bind, EStateM.bind, repaired, Pure.pure, EStateM.pure]
-  | error cause ended =>
-    simp only [Bind.bind, EStateM.bind, repaired]
+  simp only [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker,
+    Option.isSome, Bool.false_eq_true, ↓reduceIte, Pure.pure, EStateM.pure,
+    reopenMarkedBoundedWithCachedExtents, actual, repaired]
+  cases result <;> rfl
 
 end
 

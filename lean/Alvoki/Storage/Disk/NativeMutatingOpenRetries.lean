@@ -53,11 +53,12 @@ theorem MarkedWalExtentReports.workerReturnsFailedRepair
     ∀ cache, source.worker seed.directoryRef seed.activeRef seed.pendingRef directory raw.lock cache seed.afterPending =
       .error cause failedHeap := by
   intro cache
-  obtain ⟨_, returned, _⟩ := extents.recoversFromOpenedCacheWith seals selected valid following accepted ordered
-    flat marked _ keeperRead source.remove _ _ source.rename repair (source.bootstrap directory cache)
-  unfold RawMarkedOpenInterpreter.worker recoverHealthyMarkedWithRefs
-  rw [← sameStat]
-  simp only [Bind.bind, EStateM.bind, returned]
+  obtain ⟨opened, actual, _⟩ := extents.preparesMeasuredWal seals selected valid following accepted ordered _ keeperRead
+  have guard : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      seed.afterPending = .ok () seed.afterPending := by
+    simp [← sameStat, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, Pure.pure, EStateM.pure]
+  exact (source.worker_markedError_iff directory raw.lock seed.directoryRef seed.activeRef seed.pendingRef cache
+    guard (sameStat ▸ marked)).2 (.inr ⟨_, opened, _, afterKeeper, actual, .inl repair⟩)
 
 /-- Identify a reported failed worker and its finalizers with one fixed
 opener. The worker is applied to the cache from this admission. -/
