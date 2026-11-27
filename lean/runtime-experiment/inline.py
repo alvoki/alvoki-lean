@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 
 if len(sys.argv) == 1:
-    target, temp, modules = "alvoki-merge-phases", ".lake/fixed-inline", ("MergePhases", "Alvoki/Codec/PackedRun")
+    target, temp, modules = "alvoki-merge-phases", ".lake/fixed-inline", ("Alvoki/Experiments/Merge/MergePhases", "Alvoki/Codec/PackedRun")
 else:
     target, temp, *modules = sys.argv[1:]
     if not modules:

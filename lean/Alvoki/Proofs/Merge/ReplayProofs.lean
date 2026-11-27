@@ -1,4 +1,4 @@
-import MergePhases
+import Alvoki.Experiments.Merge.MergePhases
 import Alvoki.Proofs.Bytes.ScopedBytesProofs
 
 namespace Alvoki.ScopedBytes

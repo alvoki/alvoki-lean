@@ -1,4 +1,4 @@
-import MergePhases
+import Alvoki.Experiments.Merge.MergePhases
 import Alvoki.Experiments.Packed.NativeTune
 
 open Alvoki Alvoki.Opt Alvoki.Packed Alvoki.MergePhases

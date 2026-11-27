@@ -50,7 +50,8 @@ lean_lib NativeTune where
   roots := #[`Alvoki.Experiments.Packed.NativeTune]
   moreLeancArgs := #["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize", "-Rpass-analysis=loop-vectorize"]
 
-lean_lib MergePhases
+lean_lib MergePhases where
+  roots := #[`Alvoki.Experiments.Merge.MergePhases]
 
 lean_lib ScopedBytes where
   roots := #[`Alvoki.Kernel.ScopedBytes]

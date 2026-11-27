@@ -19,6 +19,9 @@ fi
 if [[ -f "$scratch/lean/Alvoki/Experiments/Packed/NativeTune.lean" ]]; then
   sed -i 's|lean/NativeTune.lean|lean/Alvoki/Experiments/Packed/NativeTune.lean|g' "$scratch/mark-output.patch"
 fi
+if [[ -f "$scratch/lean/Alvoki/Experiments/Merge/MergePhases.lean" ]]; then
+  sed -i 's|lean/MergePhases.lean|lean/Alvoki/Experiments/Merge/MergePhases.lean|g' "$scratch/mark-output.patch"
+fi
 git -C "$scratch" apply "$scratch/mark-output.patch"
 
 printf 'Source %s\n' "$(git rev-parse "$ref")"
@@ -38,6 +41,9 @@ printf 'CPU affinity %s\n' "$(taskset -pc $$ | cut -d : -f 2-)"
     fi
     if [[ "$module" == NativeTune && -f Alvoki/Experiments/Packed/NativeTune.lean ]]; then
       module_path=Alvoki/Experiments/Packed/NativeTune
+    fi
+    if [[ "$module" == MergePhases && -f Alvoki/Experiments/Merge/MergePhases.lean ]]; then
+      module_path=Alvoki/Experiments/Merge/MergePhases
     fi
     markers=$(rg -c '= lean_sarray_mark_linear\(' ".lake/build/ir/$module_path.c")
     printf 'Native destination markers in %s: %s\n' "$module" "$markers"

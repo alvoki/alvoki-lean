@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 
 ir = Path(".lake/build/ir")
-phase = (ir / "MergePhases.c").read_text()
+phase = (ir / "Alvoki/Experiments/Merge/MergePhases.c").read_text()
 packed = (ir / "Alvoki/Codec/PackedRun.c").read_text()
 main = (ir / "Alvoki/Bench/Merge/MergePhasesMain.c").read_text()
 view = (ir / "Alvoki/Codec/PackedView.c").read_text()
