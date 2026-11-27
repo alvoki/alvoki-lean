@@ -284,32 +284,20 @@ which leaves exactly absence or the new inode here. An earlier unsynced
 unlink would make the settled-catalog premise important. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean) ·
 [Sampled reboot](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
 
-Both continuations pass the visible marker, keeper, seals and bounded name
-catalog to the same retained-WAL reader. The write establishes its live
-marker at acknowledgement. The file barrier synchronizes the staged inode,
-rename publishes that inode, and the directory barrier and phase setter
-preserve its bytes. The live reader observes that inode through the close.
-The rotation error follows from the reached callbacks alone. Selecting a reboot
-map determines the possible successor before any later open is considered.
-After power loss the fresh proof derives the successor inode from the
-exclusive-create handle. With one sampled map and its inode bytes, the
-lookup extends the original batch's client ledger. The exclusive-create and file-sync callback frames preserve the old
-files up to the directory-sync call. Its local namespace law preserves
-the other WAL names. The sampled map establishes `VisibleWalFiles`, which
-the shared reader consumes. A finite sequence of rejected opens preserves
-this invariant when each reached attempt preserves the bounded name
-bindings and visible bytes. Successful open still relies on truthful
-enumeration and reads. For a writable reopen, the reboot also resets the
-marker and seals to the sampled bytes and settles the parent binding of the
-directory. Failed attempts must preserve these durable observations. The
-literal WAL reader then supplies the held cache and keeper to the ordinary
-write and snapshot proof. Bindings and visible bytes supply the marker, keeper and seals. The
-bounded catalog rules out holes being mistaken for seals. Beyond the
-cutoff, the captured listing supplies candidate names. Physical presence
-at the completed scan must agree with the canonical names actually listed.
-The repair tracks their bindings as it prunes, under the local unlink
-and barrier effects. These arguments cover the reopened session's ready
-calls through writes and snapshots.
+The live-close and reboot paths share one reader. At acknowledgement, file
+sync settles the staged marker inode, rename publishes it, and directory
+sync and the phase store preserve its bytes. After a failed rotation, the
+exclusive-create handle identifies the new inode. Under the callback frames,
+one surviving directory map selects the keeper and seals. Their observed
+bindings and bytes establish `VisibleWalFiles`. A finite sequence of failed
+opens can reuse it when each attempt preserves its bounded names and bytes.
+
+On successful open, the held directory listing must enumerate the physical
+canonical names above the marker. The repair looks up those bindings as it
+prunes. To support another write, the reboot must also settle the selected
+marker and seals and the directory's own binding in its parent. When failed
+attempts preserve these durable observations, the opener supplies the actual
+cache and keeper for writes and snapshots on the returned table.
 
 For the first acknowledged batch followed by a failed rotation, the sampled
 directory also rules out segment names strictly above the cutoff through

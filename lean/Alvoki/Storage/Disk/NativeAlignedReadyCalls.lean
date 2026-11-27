@@ -347,6 +347,38 @@ theorem RawMarkedOpenInterpreter.opensRetainedWalForCalls
     simp only [walNameAtScan, absentAtEntry start cutoff upper, Option.isSome_none, Bool.false_eq_true] at present
   exact ⟨seen, empty, by simpa only [empty, ite_true] using seen.pruned⟩
 
+/-- Scoped file frames carry the selected WAL and bounded gaps across
+failed attempts to the next entry. The literal lookup uses these visible
+files. With durability at that entry, the writer also takes the client ledger. -/
+theorem RawMarkedOpenInterpreter.FailedCalls.reopensSampledWal
+    {rebooted : heap} {errors : List (FilePath × IO.Error)} {horizon : Nat}
+    (attempts : source.FailedCalls rebooted errors entry)
+    (ready : writer.RetainedReady directory descriptor) (missing : writer.target.pair.manifest = none)
+    (bootFiles : writer.VisibleWalFiles directory (names rebooted) (visible rebooted))
+    (covers : writer.history.length ≤ horizon)
+    (effects : attempts.PreserveWalFiles (directory := directory) horizon names visible) :
+    ((∀ start, writer.history.length < start → start ≤ horizon →
+      names rebooted (directory.file (.walSegment start)) = none) →
+      ∀ start, writer.history.length < start → start ≤ horizon →
+        names entry (directory.file (.walSegment start)) = none) ∧
+    source.ReplaysWalBeforeCheckpointAtOpen (view.withObservedWalFiles directory writer.wal.active.first names visible)
+      directory writer.wal.active.first observe visible entry namespaceView root writer.history ∧
+    ∀ {previous origin : NativeExecutionPosition} {earlier : List NativeExecutionEvent},
+      writer.history = previous.history → origin.LedgerSuffix earlier previous →
+      writer.WalOpenDurability directory (observe entry) →
+      source.WritesAfterWalOpen view directory writer entry namespaceView root origin earlier inodes runs observe := by
+  have frame := attempts.visibleWalFrame (directory := directory) (bindings := names) (contents := visible) effects
+  have files := bootFiles.frame ready.layout covers frame
+  refine ⟨fun absent start past bound => (VisibleWalFrame.segment frame bound).1.trans (absent start past bound), ?_, ?_⟩
+  · exact @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
+      (source := source) (view := view) («storage» := observe) («visible» := visible) (entry := entry)
+      (namespaceView := namespaceView) (root := root) (ready := ready) (missing := missing) (files := files)
+  · intro previous origin earlier sameHistory prior durable
+    exact @RawMarkedOpenInterpreter.opensRetainedWalForCalls
+      (source := source) (view := view) (entry := entry) (namespaceView := namespaceView) (root := root)
+      (inodes := inodes) (runs := runs) (observe := observe) (ready := ready) (missing := missing)
+      (files := files) (durable := durable) (sameHistory := sameHistory) (prior := prior)
+
 end WalOnly
 
 end Alvoki.Storage.DiskSession

@@ -1005,7 +1005,7 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
               {errors : List (FilePath × IO.Error)} {retryAt : heap}
               (attempts : source.FailedCalls rebooted errors retryAt)
               (_effects : attempts.PreserveWalFiles (directory := dir) horizon names visible),
-              (∀ start, request.rows.length < start → start ≤ horizon →
+              (∀ start, selected.writer.history.length < start → start ≤ horizon →
                 names retryAt (dir.file (.walSegment start)) = none) ∧
               source.ReadsClientHistoryAtOpen
                 ((clientView).withObservedWalFiles dir selected.writer.wal.active.first names visible)
@@ -1045,20 +1045,14 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
   refine ⟨choice.imp id And.left, settled, fun start past bound => noLater start (cutoff.symm ▸ past) bound, ?_⟩
   intro namespaceView root sampled errors retryAt attempts effects
   have bootFiles := sampledFiles sampled noManifest
-  have kept := attempts.visibleWalFrame (directory := next.current.ready.state.session.directory)
-    (bindings := names) (contents := visible) effects
   have selectedLength := (congrArg List.length sameHistory).trans
     ((congrArg List.length history).trans (prepareBatch_spec prepared).1)
-  have filesAtRetry := bootFiles.frame ready.layout (Nat.le_trans (Nat.le_of_eq selectedLength) cutoffCovered) kept
-  refine ⟨fun start past bound => (VisibleWalFrame.segment kept bound).1.trans
-    (noLater start (cutoff.symm ▸ past) bound), ?_⟩
   have missing := (congrArg DirectoryPublication.Bindings.manifest pair).trans noManifest
-  constructor
-  · have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
-      (source := source) (view := clientView) («storage» := storage) («visible» := visible) (entry := retryAt)
-      (namespaceView := namespaceView) (root := root) (ready := ready) (missing := missing)
-      (files := filesAtRetry)
-    have replay := @Eq.mp _ _ (congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen
+  obtain ⟨carriesAbsence, openedRetry, startsWriter⟩ := attempts.reopensSampledWal (view := clientView)
+    (namespaceView := namespaceView) (root := root) seen.keeperPhysical.inodes runs storage ready missing bootFiles
+    (by simpa only [selectedLength] using cutoffCovered) effects
+  refine ⟨carriesAbsence (fun start past bound => noLater start (cutoff.symm ▸ (selectedLength ▸ past)) bound), ?_, ?_⟩
+  · have replay := @Eq.mp _ _ (congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen
       ((clientView).withObservedWalFiles next.current.ready.state.session.directory selected.writer.wal.active.first names visible)
       next.current.ready.state.session.directory selected.writer.wal.active.first storage visible retryAt namespaceView root writes)
       (sameHistory.trans history)) (@openedRetry)
@@ -1072,11 +1066,7 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
     have durable := bootFiles.durabilityAfterRebootRetries (source := source)
       («storage» := storage) («visible» := visible) (rebooted := rebooted) (entry := retryAt)
       ready restored rootSettled attempts (fun prior inside returned => kept prior inside returned)
-    intro input admitted returnedAt table returned
-    exact RawMarkedOpenInterpreter.opensRetainedWalForCalls (source := source) (view := clientView)
-      (entry := retryAt) (namespaceView := namespaceView) (root := root)
-      seen.keeperPhysical.inodes runs storage ready missing filesAtRetry durable
-      (sameHistory.trans next.current.ready.readPrefix.refines.2.1) ledger admitted returned
+    exact @startsWriter _ _ _ (sameHistory.trans next.current.ready.readPrefix.refines.2.1) ledger durable
 
 /-- The actual first acknowledgement starts the interrupted second
 write. One reboot sample selects its replay and the subsequent lookup
