@@ -487,6 +487,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached, bat
         else:
             require(staged_marker.read_bytes() == submitted_marker, "paused write had not staged the submitted marker")
         original_wal = wal.stat()
+        original_marker = marker.stat()
         original_target = database.stat() if after_rename else original_wal
         if detached:
             held_target = Path(f"/proc/{sync_pid}/fd/0")
@@ -500,24 +501,45 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached, bat
         require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "fixture owner was not killed")
         if detached:
             require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child did not outlive its owner")
-        # A detached old sync stays blocked across a directory failure and a
-        # retry whose file sync succeeds before fsync reports failure.
-        file_sync = wal if after_rename else database / "WAL.next"
-        for target, phase in ((database, "before"), (file_sync, "after")):
+        # A detached old sync stays blocked through all the failed opens.
+        sync_log = root / "failed-reopen-sync.log"
+
+        def check_failed_open(target, phase, sync_paths):
+            sync_log.write_text("")
             status, stderr = run_probe(binary, "--open-once", database, env={
                 **sync_env,
                 "ALVOKI_CHECK_SYNC_FAIL": str(target),
                 "ALVOKI_CHECK_SYNC_FAIL_MODE": phase,
+                "ALVOKI_CHECK_SYNC_LOG": str(sync_log),
             })
             require(status != 0 and f"sync failed for '{target}':" in stderr,
                     f"reopen did not report the injected failure: {stderr}")
+            expected = [str(path) for path in sync_paths]
+            if phase == "after":
+                expected.append(f"synced before error: {target}")
+            calls = sync_log.read_text().splitlines()
+            require(calls == expected, f"unexpected syncs at {target} ({phase} effect): {calls}")
             if detached:
                 require(os.waitpid(sync_pid, os.WNOHANG) == (0, 0), "sync child exited during failed reopen")
             require(os.path.samestat(wal.stat(), original_wal) and wal.read_bytes() == appended
+                    and os.path.samestat(marker.stat(), original_marker)
                     and marker.read_bytes() == expected_marker, "failed reopen changed the WAL or its marker")
             check_fixed_files()
-        if not after_rename:
-            require(file_sync.read_bytes() == acknowledged, "failed repair did not stage the exact prefix")
+
+        check_failed_open(database, "before", [database])
+        if after_rename:
+            check_failed_open(wal, "after", [database, wal])
+        else:
+            staged_wal = database / "WAL.next"
+            repair_syncs = [database, database, staged_wal]
+            check_failed_open(staged_wal, "before", repair_syncs)
+            require(staged_wal.read_bytes() == acknowledged, "failed repair did not stage the exact prefix")
+            with staged_wal.open("rb") as stale:
+                stale_inode = os.fstat(stale.fileno())
+                check_failed_open(staged_wal, "after", repair_syncs)
+                require(not os.path.samestat(staged_wal.stat(), stale_inode)
+                        and stale.read() == acknowledged and staged_wal.read_bytes() == acknowledged,
+                        "retry did not restage the exact prefix on a fresh inode")
         status, stderr = run_probe(binary, check_operation, database, *recovery_args)
         require(status == 0, f"reopen after owner death returned the wrong table: {stderr}")
         if detached:
@@ -525,6 +547,7 @@ def check_process_death(binary, shim, root, after_rename, rotated, detached, bat
         recovered_wal = wal.stat()
         if not after_rename:
             require(not os.path.samestat(recovered_wal, original_wal), "repair did not replace the WAL inode")
+            require(not staged_wal.exists(), "successful repair left the staged WAL name")
             if detached:
                 require(os.path.samestat(held_target.stat(), original_wal), "held WAL descriptor changed inode")
                 require(held_target.read_bytes() == appended and wal.read_bytes() == acknowledged,
