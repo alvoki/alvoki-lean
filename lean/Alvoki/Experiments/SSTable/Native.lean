@@ -39,18 +39,37 @@ private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 /-- Sync file contents through an already flushed output handle. -/
 def syncFileHandle (handle : IO.FS.Handle) : IO Unit := syncHandle handle
 
+/-- Local operations for one exclusively owned output file. The schedule
+uses the description returned by the exclusive open for all file mutations. -/
+structure OutputOps (m : Type → Type) (handle : Type) where
+  openFile : System.FilePath → IO.FS.Mode → m handle
+  append : handle → ByteArray → m Unit
+  flush : handle → m Unit
+  sync : handle → m Unit
+  remove : System.FilePath → m Unit
+
+@[inline] def OutputOps.sink (ops : OutputOps m handle) (output : handle) : Sink m :=
+  ⟨ops.append output, ops.flush output⟩
+
 /-- Own a fresh output path through build, flush and sync. The writer must
-flush the complete image before returning. Callbacks must leave the name
-unchanged and must not retain the handle. -/
-def withFreshOutput (path : System.FilePath) (writeImage : IO.FS.Handle → IO Nat)
-    (syncOutput : IO.FS.Handle → IO Unit) : IO Nat := do
-  let handle ← IO.FS.Handle.mk path .writeNew
-  try
+flush the complete image before returning. Callbacks leave the name unchanged
+and do not retain the handle. Cleanup preserves the primary error. -/
+@[inline] def withFreshOutputWith [Monad m] [MonadExceptOf ε m] (ops : OutputOps m handle)
+    (path : System.FilePath) (writeImage : handle → m Nat) : m Nat := do
+  let handle ← ops.openFile path .writeNew
+  let writeAndSync : m Nat := do
     let count ← writeImage handle
-    syncOutput handle
+    ops.sync handle
     return count
-  catch err =>
-    try IO.FS.removeFile path catch _ => pure ()
-    throw err
+  tryCatchThe ε writeAndSync fun error => do
+    tryCatchThe ε (ops.remove path) (fun _ => pure ())
+    throwThe ε error
+
+@[inline] def nativeOutputOps (syncOutput : IO.FS.Handle → IO Unit) : OutputOps IO IO.FS.Handle :=
+  ⟨IO.FS.Handle.mk, IO.FS.Handle.write, IO.FS.Handle.flush, syncOutput, IO.FS.removeFile⟩
+
+def withFreshOutput (path : System.FilePath) (writeImage : IO.FS.Handle → IO Nat)
+    (syncOutput : IO.FS.Handle → IO Unit) : IO Nat :=
+  withFreshOutputWith (ε := IO.Error) (nativeOutputOps syncOutput) path writeImage
 
 end ImmutableSSTable

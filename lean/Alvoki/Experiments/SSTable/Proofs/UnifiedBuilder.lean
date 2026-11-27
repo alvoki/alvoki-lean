@@ -5,17 +5,17 @@ namespace ImmutableSSTable.Unified
 
 open Std
 
-private structure ModelFile where
+structure ModelFile where
   rows : List Entry
   bytes : ByteArray := .empty
 
-private abbrev ModelM := StateT ModelFile (Except String)
+abbrev ModelM := StateT ModelFile (Except String)
 
-private def modelSink : Sink ModelM where
+def modelSink : Sink ModelM where
   write bytes := fun file => .ok ((), { file with bytes := file.bytes ++ bytes })
   flush := pure ()
 
-private def modelNext : ModelM (Option Entry) := fun file =>
+def modelNext : ModelM (Option Entry) := fun file =>
   match file.rows with
   | [] => .ok (none, file)
   | row :: rows => .ok (some row, { file with rows })
@@ -27,7 +27,7 @@ def modelBuild (crc : Checksum) (layout : Layout) (rows : List Entry)
   let (count, file) ← (buildStream crc layout modelSink modelNext id options).run { rows }
   return (count, file.bytes)
 
-private def modelWriter (crc : Checksum) (layout : Layout) (options : BuildOptions) :
+def modelWriter (crc : Checksum) (layout : Layout) (options : BuildOptions) :
     Writer ModelM String :=
   ⟨crc, layout, modelSink, id, options⟩
 
