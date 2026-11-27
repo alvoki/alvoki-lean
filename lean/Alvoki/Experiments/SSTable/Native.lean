@@ -68,8 +68,4 @@ and do not retain the handle. Cleanup preserves the primary error. -/
 @[inline] def nativeOutputOps (syncOutput : IO.FS.Handle → IO Unit) : OutputOps IO IO.FS.Handle :=
   ⟨IO.FS.Handle.mk, IO.FS.Handle.write, IO.FS.Handle.flush, syncOutput, IO.FS.removeFile⟩
 
-def withFreshOutput (path : System.FilePath) (writeImage : IO.FS.Handle → IO Nat)
-    (syncOutput : IO.FS.Handle → IO Unit) : IO Nat :=
-  withFreshOutputWith (ε := IO.Error) (nativeOutputOps syncOutput) path writeImage
-
 end ImmutableSSTable
