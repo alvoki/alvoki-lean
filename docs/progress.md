@@ -49,12 +49,15 @@ The marked open carries its allocated directory slot to the final fsync. The
 successful staging-file fsync makes the trimmed prefix durable on the fresh
 inode. Rename binds that inode at the keeper path, and the cache load preserves
 its live and durable bytes. This same staged inode feeds live retry and reboot.
-An observation at the staging-file fsync identifies it with the report’s inode.
+The returned prune, staged write and fsync, rename and cache load determine the
+logical image at the issued directory fsync. Its error may occur before or after
+the directory update takes effect. The proof tracks lock ownership separately through cleanup.
 [Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Derive the logical file image at the issued directory
-fsync from the reached prune, staging and rename operations. This is separate
-from observing whether the failed directory fsync persisted the new binding.
+**Next source boundary.** Carry the entry’s logical image through the measured
+marked reads to the returned keeper. Both repair-error proofs currently take
+that equality as input. The staging inode still needs an explicit identity
+observation at the staged-file fsync.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)
