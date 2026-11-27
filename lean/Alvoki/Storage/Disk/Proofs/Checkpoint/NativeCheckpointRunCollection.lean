@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableCompaction
 import Alvoki.Storage.Disk.Proofs.Collection.NativeObsoleteRunCollection
 import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeRunMaintenanceReopen
 

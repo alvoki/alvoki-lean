@@ -35,6 +35,8 @@ lake env leanchecker Alvoki.Storage.Table.MemTableContract
 lake env leanchecker Alvoki.Storage.Table.MemTableTree
 lake env leanchecker Alvoki.Storage.Table.MemTable
 lake env leanchecker Alvoki.Storage.Table.PackedTable
+lake env leanchecker Alvoki.Storage.Proofs.Table.CheckedRunCompaction
+lake env leanchecker Alvoki.Storage.Proofs.Table.PackedTableCompaction
 lake env leanchecker Alvoki.Storage.Disk.WriteAheadLog
 lake env leanchecker Alvoki.Storage.Disk.Recovery
 lake env leanchecker Alvoki.Storage.Disk.Manifest

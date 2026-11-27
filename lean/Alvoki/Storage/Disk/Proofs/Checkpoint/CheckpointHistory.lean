@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableCompaction
 import Alvoki.Storage.Proofs.Table.PackedTableLookup
 import Alvoki.Storage.Disk.Proofs.Checkpoint.MarkedCheckpointPublication
 import Alvoki.Storage.Disk.Proofs.Write.MarkedWriteTrace

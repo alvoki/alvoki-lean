@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableCompaction
 import Alvoki.Storage.Disk.Proofs.Read.ClientReadTrace
 
 namespace Alvoki.Storage.DiskSession

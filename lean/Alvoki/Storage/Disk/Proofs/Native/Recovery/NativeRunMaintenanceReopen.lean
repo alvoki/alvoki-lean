@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableCompaction
 import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeExecutionClose
 import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeReadyCheckpoint
 import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeRunMaintenance

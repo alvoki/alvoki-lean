@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableCompaction
 import Alvoki.Storage.Table.PackedTable
 import Alvoki.Storage.Proofs.Table.CheckedRunLookup
 

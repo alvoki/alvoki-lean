@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableCompaction
 import Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendTrace
 import Alvoki.Storage.Disk.Proofs.Append.RetainedAppendReports
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedCheckpointStep

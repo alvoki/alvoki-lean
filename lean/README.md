@@ -8,8 +8,9 @@
 implements checked-run reads, including the ordered history used by range reads.
 [CompactionReadContract.lean](Alvoki/Storage/Table/CompactionReadContract.lean)
 contains accepted-run validity and history definitions shared with compaction.
-The runtime module still imports `CompactionProofs` and `OptProofs`; in
-particular, the range history construction requires ordering evidence.
+The runtime module imports `OptProofs`: range history construction requires
+ordering evidence. `CompactionProofs` and the checked-run and packed-table
+compaction correctness modules are outside the runtime import chain.
 
 The checked-run lookup-to-history theorems are in
 [CheckedRunLookup.lean](Alvoki/Storage/Proofs/Table/CheckedRunLookup.lean);
@@ -19,3 +20,8 @@ The `CompactionRead` module remains the runtime implementation. Code that used
 its lookup theorems, or the packed-table lookup refinements previously imported
 through `PackedTable` or `DiskTable`, must import the relevant proof module
 explicitly.
+
+For compaction and retention guarantees, import
+[CheckedRunCompaction.lean](Alvoki/Storage/Proofs/Table/CheckedRunCompaction.lean)
+or [PackedTableCompaction.lean](Alvoki/Storage/Proofs/Table/PackedTableCompaction.lean)
+explicitly. Their operation definitions remain in the runtime modules.
