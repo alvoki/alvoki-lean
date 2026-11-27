@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.HeldWalDecodeRejection
+import Alvoki.Storage.Disk.Proofs.WAL.HeldWalDecodeRejection
 import Alvoki.Storage.Disk.NativeRawPresentManifestListing
 
 namespace Alvoki.Storage.DiskSession

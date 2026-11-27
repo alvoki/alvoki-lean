@@ -279,8 +279,8 @@ lake env leanchecker Alvoki.Storage.Disk.NativeRawManifestStatError
 lake env leanchecker Alvoki.Storage.Disk.NativeCheckpointOpenChronology
 lake env leanchecker Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
-lake env leanchecker Alvoki.Storage.Disk.NativeRawAlignedWalDecodeError
-lake env leanchecker Alvoki.Storage.Disk.NativeFinalizedWalDecodeError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.NativeRawAlignedWalDecodeError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.NativeFinalizedWalDecodeError
 lake env leanchecker Alvoki.Storage.Disk.NativePopulatedOpenCleanup
 lake env leanchecker Alvoki.Storage.Disk.NativeRawMarkerChunkError
 lake env leanchecker Alvoki.Storage.Disk.NativeRawFinalizedManifestError
@@ -670,7 +670,7 @@ lake env leanchecker Alvoki.Storage.Disk.HeldLaterWalPrune
 lake env leanchecker Alvoki.Storage.Disk.HeldLaterWalPruneFailure
 lake env leanchecker Alvoki.Storage.Disk.HeldMetadataReadObservations
 lake env leanchecker Alvoki.Storage.Disk.HeldWalPayloadObservations
-lake env leanchecker Alvoki.Storage.Disk.HeldWalDecodeRejection
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.HeldWalDecodeRejection
 lake env leanchecker Alvoki.Storage.Disk.HeldWalInstallation
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalInventorySortWork
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalInventoryWork

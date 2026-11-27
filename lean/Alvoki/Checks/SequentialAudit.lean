@@ -365,8 +365,8 @@ import Alvoki.Storage.Disk.NativeRawManifestStatError
 import Alvoki.Storage.Disk.NativeCheckpointOpenChronology
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerStatError
 import Alvoki.Storage.Disk.NativeRawSelectedMarkerDecodeError
-import Alvoki.Storage.Disk.NativeRawAlignedWalDecodeError
-import Alvoki.Storage.Disk.NativeFinalizedWalDecodeError
+import Alvoki.Storage.Disk.Proofs.WAL.NativeRawAlignedWalDecodeError
+import Alvoki.Storage.Disk.Proofs.WAL.NativeFinalizedWalDecodeError
 import Alvoki.Storage.Disk.NativePopulatedOpenCleanup
 import Alvoki.Storage.Disk.NativeRawMarkerChunkError
 import Alvoki.Storage.Disk.NativeRawFinalizedManifestError
@@ -604,7 +604,7 @@ import Alvoki.Storage.Disk.HeldLaterWalPrune
 import Alvoki.Storage.Disk.HeldLaterWalPruneFailure
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.HeldWalPayloadObservations
-import Alvoki.Storage.Disk.HeldWalDecodeRejection
+import Alvoki.Storage.Disk.Proofs.WAL.HeldWalDecodeRejection
 import Alvoki.Storage.Disk.HeldWalInstallation
 import Alvoki.Storage.Disk.Proofs.WAL.WalInventoryWork
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure

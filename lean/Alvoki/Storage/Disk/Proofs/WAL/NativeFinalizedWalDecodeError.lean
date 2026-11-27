@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawAlignedWalDecodeError
+import Alvoki.Storage.Disk.Proofs.WAL.NativeRawAlignedWalDecodeError
 
 namespace Alvoki.Storage.DiskSession
 
