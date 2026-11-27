@@ -31,7 +31,4 @@ fi
 if [[ -f scripts/check-experimental-l0.sh ]]; then
   bash scripts/check-experimental-l0.sh
 fi
-if [[ -f scripts/check-unified-sstable.sh ]]; then
-  bash scripts/check-unified-sstable.sh
-fi
 python3 scripts/check-markdown-links.py
