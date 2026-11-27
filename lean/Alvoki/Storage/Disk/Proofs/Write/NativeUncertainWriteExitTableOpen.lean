@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Write.NativeUncertainWriteTableOpen
 import Alvoki.Storage.Disk.Proofs.Write.NativePendingWriteProcessExit
-import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+import Alvoki.Storage.Disk.Proofs.Native.Open.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeExecutionTrace
 
 namespace Alvoki.Storage.DiskSession

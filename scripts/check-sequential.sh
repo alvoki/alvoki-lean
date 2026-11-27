@@ -90,7 +90,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDi
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Open.NativeStoppedRunDirectoryTableOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileReboot
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Open.NativeStoppedRunFileTableOpen
-lake env leanchecker Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativePendingCheckpointOpenPhase
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativePendingCheckpointRecovery
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeStoppedCheckpointTableOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointErrorReopen
@@ -118,7 +118,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunBarrierReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestStageCut
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestStageFailure
-lake env leanchecker Alvoki.Storage.Disk.CheckpointHeldOpen
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.CheckpointHeldOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestStageFailureReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryCut
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryReopen
@@ -250,7 +250,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Bootstrap.NativeFreshBootstrapOp
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Open.NativeFreshTableOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenEarlyError
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestDecodeError
-lake env leanchecker Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Open.NativeRawOpenCacheDisposal
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawFinalizedOpenError
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRawFinalizedLateGuardError
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries
@@ -304,7 +304,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.NativePendingFirstAppend
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.NativeFirstAppendExitReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.NativeFirstAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.NativePendingFirstAppendOpenPhase
-lake env leanchecker Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Open.RawHealthyMarkedOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.NativeStoppedFirstAppendTableOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Execution.NativeExecutionPendingClose
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Native.Execution.NativePendingCloseRetries
@@ -457,7 +457,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendRecovery
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.SegmentedCleanReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.UncheckpointedCachedReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.SegmentedReadyPowerLoss
-lake env leanchecker Alvoki.Storage.Disk.SegmentedFailureRelease
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.SegmentedFailureRelease
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionReadPlan
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionInventory
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Write.SegmentedRetainedWriter
@@ -470,7 +470,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.AppendRetrySession
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.WalBatchAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.WalBatchAppendProcessExit
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentMarkerPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.SegmentedMarkerPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendPowerLoss
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotationPowerLoss
@@ -563,7 +563,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.VersionedRunCollectio
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.RecoveryProgress
 lake env leanchecker Alvoki.Storage.Disk.LockedOpenFileReads
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.LockedMarkedRead
-lake env leanchecker Alvoki.Storage.Disk.LockedRecoveryReads
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.LockedRecoveryReads
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.LockedRecoveryCompletion
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Write.UncertainWriteTraceEntry
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.LockedInterruptedCheckpoint
@@ -684,7 +684,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.FailedMarkerReadCensus
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.FailedCheckpointDigestCensus
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.CachedOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.CachedWalExtentRetry
-lake env leanchecker Alvoki.Storage.Disk.CachedCheckpointExtentRetry
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.CachedCheckpointExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.RecoveryRequestCount
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork

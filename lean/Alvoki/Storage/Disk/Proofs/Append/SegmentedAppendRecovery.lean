@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Append.AppendRetrySession
-import Alvoki.Storage.Disk.SegmentedFailureRelease
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedFailureRelease
 import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterState
 
 namespace Alvoki.Storage.DiskSession

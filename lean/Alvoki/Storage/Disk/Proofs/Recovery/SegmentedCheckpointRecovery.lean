@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRetrySession
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedCheckpointStep
 
-import Alvoki.Storage.Disk.SegmentedFailureRelease
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedFailureRelease
 import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterReopen
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointPowerLoss

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointHeldOpen
+import Alvoki.Storage.Disk.Proofs.Recovery.CheckpointHeldOpen
 import Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork
 import Alvoki.Storage.Disk.Proofs.Recovery.SelectedRecoveryPayload
 

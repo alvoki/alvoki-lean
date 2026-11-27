@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunFileStop
-import Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativePendingCheckpointOpenPhase
 
 namespace Alvoki.Storage.DiskSession
 

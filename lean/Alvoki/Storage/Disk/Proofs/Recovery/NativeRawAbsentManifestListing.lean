@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedTableOpen
-import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeRawOpenCacheDisposal
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunPrefixReports
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedCheckpointStep
-import Alvoki.Storage.Disk.SegmentedFailureRelease
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedFailureRelease
 import Alvoki.Storage.Disk.Proofs.Filesystem.StagedHandleCustody
 import Alvoki.Storage.Disk.Proofs.WAL.ReplacedWalDescriptor
 import Alvoki.Storage.Disk.Proofs.Filesystem.DescriptorInventory

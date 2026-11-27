@@ -20,7 +20,7 @@ import Alvoki.Storage.Disk.Proofs.Append.AppendRetrySession
 import Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendPowerLoss
 import Alvoki.Storage.Disk.Proofs.Append.WalBatchAppendPowerLoss
 import Alvoki.Storage.Disk.Proofs.Append.WalBatchAppendProcessExit
-import Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentMarkerPowerLoss
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.Proofs.Append.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRetrySession
@@ -121,7 +121,7 @@ import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryCut
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunDirectoryStop
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeStoppedRunDirectoryTableOpen
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeStoppedRunFileTableOpen
-import Alvoki.Storage.Disk.NativePendingCheckpointOpenPhase
+import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativePendingCheckpointOpenPhase
 import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeStoppedCheckpointTableOpen
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointErrorReopen
@@ -145,7 +145,7 @@ import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRenameReopen
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunBarrierReopen
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestStageCut
-import Alvoki.Storage.Disk.CheckpointHeldOpen
+import Alvoki.Storage.Disk.Proofs.Recovery.CheckpointHeldOpen
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestStageFailureReopen
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryCut
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryReopen
@@ -166,7 +166,7 @@ import Alvoki.Storage.Disk.Proofs.Collection.VersionedRunCollection
 import Alvoki.Storage.Disk.Proofs.Recovery.RecoveryProgress
 import Alvoki.Storage.Disk.LockedOpenFileReads
 import Alvoki.Storage.Disk.Proofs.Recovery.LockedMarkedRead
-import Alvoki.Storage.Disk.LockedRecoveryReads
+import Alvoki.Storage.Disk.Proofs.Recovery.LockedRecoveryReads
 import Alvoki.Storage.Disk.Proofs.Recovery.LockedRecoveryCompletion
 import Alvoki.Storage.Disk.Proofs.Write.UncertainWriteTraceEntry
 import Alvoki.Storage.Disk.Proofs.Recovery.LockedInterruptedCheckpoint
@@ -336,7 +336,7 @@ import Alvoki.Storage.Disk.Proofs.Bootstrap.NativeFreshBootstrapOpenHeap
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeFreshTableOpen
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenEarlyError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawManifestDecodeError
-import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
+import Alvoki.Storage.Disk.Proofs.Native.Open.NativeRawOpenCacheDisposal
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawFinalizedOpenError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawFinalizedLateGuardError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeFinalizedOpenRetries
@@ -614,7 +614,7 @@ import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalMarkerOpenFailure
 import Alvoki.Storage.Disk.Proofs.Recovery.FailedMarkerReadCensus
 import Alvoki.Storage.Disk.Proofs.Recovery.FailedCheckpointDigestCensus
 import Alvoki.Storage.Disk.Proofs.Recovery.CachedWalExtentRetry
-import Alvoki.Storage.Disk.CachedCheckpointExtentRetry
+import Alvoki.Storage.Disk.Proofs.Recovery.CachedCheckpointExtentRetry
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRunRetentionReopen
 import Alvoki.Storage.Disk.Proofs.Collection.RunRetentionCheckpoint
 import Alvoki.Storage.Disk.Proofs.Collection.RunRetentionCollection

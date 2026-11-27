@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeAlignedCheckpointReopenEffects
 import Alvoki.Storage.Disk.Proofs.Native.Execution.NativeExecutionTrace
 import Alvoki.Storage.Disk.Proofs.Append.NativePendingFirstAppendOpenPhase
-import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+import Alvoki.Storage.Disk.Proofs.Native.Open.RawHealthyMarkedOpenEffects
 
 namespace Alvoki.Storage.DiskSession
 

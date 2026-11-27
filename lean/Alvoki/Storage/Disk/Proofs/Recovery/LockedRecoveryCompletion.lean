@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.LockedRecoveryReads
+import Alvoki.Storage.Disk.Proofs.Recovery.LockedRecoveryReads
 
 namespace Alvoki.WAL.Boundary
 

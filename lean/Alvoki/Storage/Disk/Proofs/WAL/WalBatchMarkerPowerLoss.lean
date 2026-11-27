@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.WAL.WalBatchCommitEffects
-import Alvoki.Storage.Disk.WalSegmentMarkerPowerLoss
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentMarkerPowerLoss
 
 namespace Alvoki.WAL.Boundary.MarkerInterruption
 

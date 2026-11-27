@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRenameCut
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointLiveHeldReopen
-import Alvoki.Storage.Disk.SegmentedFailureRelease
+import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedFailureRelease
 
 namespace Alvoki.Storage.DiskSession
 

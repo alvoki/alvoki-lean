@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Native.Checkpoint.NativeAlignedCheckpointReopenEffects
-import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+import Alvoki.Storage.Disk.Proofs.Native.Open.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.Proofs.Native.WAL.NativePendingMarkerDirectoryOpenPhase
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativePendingGroupedSyncOpenPhase
 import Alvoki.Storage.Disk.Proofs.Write.NativePendingMarkerStageWriteOpenPhase

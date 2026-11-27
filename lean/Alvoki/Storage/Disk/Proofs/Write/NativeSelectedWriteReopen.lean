@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.Proofs.Write.NativeRawWriteReboot
 import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeMarkedEntryObservations
 import Alvoki.Storage.Disk.Proofs.Native.Open.NativeMarkedOpenInterpreter
 import Alvoki.Storage.Disk.Proofs.Write.NativeWriteCrashReads
-import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+import Alvoki.Storage.Disk.Proofs.Native.Open.RawHealthyMarkedOpenEffects
 
 namespace Alvoki.Storage.DiskSession
 
