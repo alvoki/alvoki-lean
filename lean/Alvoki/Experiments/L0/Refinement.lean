@@ -239,6 +239,18 @@ private def Durable.flush (d : Durable prior history)
     · exact ordered
     · exact stored.ordered table older
 
+/-- Once table creation has passed its directory barrier, either manifest
+choice is recoverable from the same catalog and WAL. -/
+def flushPublicationChoices {id : UInt64} (prior : Durable before history)
+    (view : stored.view = before.view) (version : stored.version = before.version)
+    (created : before.tables.Created stored.tables id rows)
+    (contents : ∀ key, lookupRows rows key = latest prior.pending key)
+    (ordered : Rows.Ordered rows) (fits : before.view.tail < UInt64.size) :
+    Durable stored history × Durable (stored.publish ⟨id :: before.version.tables,
+      before.view.tail.toUInt64⟩) history := by
+  let old := prior.frame view version created.2.2
+  exact ⟨old, prior.flush old id rows created.1 created.2.1 version contents ordered fits⟩
+
 theorem flush_refines (laws : ComponentLaws ops selected) (s : σ) (session : Session)
     (prior : Installed session (selected s) history) :
     match flush ops session s with
@@ -269,11 +281,12 @@ theorem flush_refines (laws : ComponentLaws ops selected) (s : σ) (session : Se
       | ok id allocated =>
         rw [made, frame] at created
         obtain ⟨sameWal, sameVersion, fresh, bound, preserves⟩ := created
-        let stored := d.frame sameWal sameVersion preserves
-        have contents (key : UInt64) : lookupRows rows key = latest stored.pending key := by
-          change lookupRows rows key = latest d.pending key
+        have contents (key : UInt64) : lookupRows rows key = latest d.pending key := by
           simp [rows, rows_lookup, mem, replay_lookup]
-        let committed := d.flush stored id rows fresh bound sameVersion contents ordered fit
+        let choices := flushPublicationChoices d sameWal sameVersion
+          ⟨fresh, bound, preserves⟩ contents ordered fit
+        let stored := choices.1
+        let committed := choices.2
         let proposed := proposal (selected s) id
         have issued := laws.publish allocated proposed (proposal_valid d fresh)
         have sameProposal : (⟨id :: session.version.tables, (selected s).view.tail.toUInt64⟩ :

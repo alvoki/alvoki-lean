@@ -1,7 +1,7 @@
 import Alvoki.Experiments.L0.TableAllocation
 import Alvoki.Experiments.L0.ComponentContract
 import Alvoki.Experiments.L0.TableRowProofs
-import Alvoki.Experiments.SSTable.Proofs.UnifiedBuilder
+import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
 
 namespace ExperimentalL0
 
@@ -124,31 +124,45 @@ theorem createTableAt_bindings
         simp [Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, allocated, done, barrier]
         exact ⟨kept.1, kept.2.1, absent s id free.1, synced.2 id rows built.2, kept.2.2⟩
 
-/-- Connect the exact L0 supplier and ID to the durable directory binding.
-The remaining build premise is the SSTable sink/output effect on the
-reached path. The directory premise is the filesystem name barrier. -/
+open ImmutableSSTable Unified
+
+/-- The successful writer and parent barrier publish the same inode at
+the allocated name. The contents and format come from the writer theorem. -/
 theorem createTableUnder_image {id : UInt64}
     {dir : System.FilePath} {occupied : System.FilePath → StorageM σ Bool}
     {build : System.FilePath → UInt64 → Rows → StorageM σ Unit}
     {syncDirectory : System.FilePath → StorageM σ Unit}
-    (syncedFile durableFile : σ → System.FilePath → Option ByteArray)
-    (buildResult : ∀ path allocated input before after, build path allocated input before = .ok () after →
-      ∃ count bytes, syncedFile after path = some bytes ∧
-        ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout allocated)
-          ((readSupplied input.length).run input).1 = .ok (count, bytes))
+    {inode writer : Type}
+    (names durableNames : σ → System.FilePath → Option inode)
+    (contents : σ → inode → Option ByteArray)
+    (outputOps : OutputOps (NativeWriteM writer inode) writer)
+    (nextRow : NativeWriteM writer inode (Option Entry))
+    (effects : ∀ path, NativeWriteEffects outputOps path nextRow)
+    (buildCall : ∀ path allocated input before after, build path allocated input before = .ok () after →
+      ∃ initial written count,
+        initial.rows = (readSupplied input.length |>.run input).1 ∧
+        (buildFileWith outputOps Alvoki.CRC32C.extend path (tableLayout allocated) nextRow (fun message => message)).run initial =
+          .ok count written ∧
+        ∀ output identity bytes, written.BoundTo path output identity →
+          written.durable = some (identity, bytes) →
+          names after path = some identity ∧ contents after identity = some bytes)
     (directoryEffect : ∀ before after, syncDirectory dir before = .ok () after →
-      ∀ id bytes, syncedFile before (tablePath dir id) = some bytes →
-        durableFile after (tablePath dir id) = some bytes)
+      ∀ id identity bytes, names before (tablePath dir id) = some identity →
+        contents before identity = some bytes →
+        durableNames after (tablePath dir id) = some identity ∧ contents after identity = some bytes)
     (created : createTableUnder dir occupied build syncDirectory rows s = .ok id after) :
-    ∃ count bytes, durableFile after (tablePath dir id) = some bytes ∧
-      ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-        (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) := by
+    ∃ identity bytes, durableNames after (tablePath dir id) = some identity ∧ contents after identity = some bytes ∧
+      Image Alvoki.CRC32C.extend (tableLayout id)
+        (rows.map (Entry.encode keyCodec mutationCodec)) bytes := by
   obtain ⟨_, written, _, built, barrier⟩ := createTableAt_success created
-  obtain ⟨count, bytes, synced, image⟩ := buildResult _ _ _ _ _ built
-  have exactInput : ((readSupplied rows.length).run rows).1 =
-      rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec) :=
-    (supplied_builder_input rows).2
-  rw [exactInput] at image
-  exact ⟨count, bytes, directoryEffect _ _ barrier id bytes synced, image⟩
+  obtain ⟨initial, reached, _, input, run, installed⟩ := buildCall _ _ _ _ _ built
+  obtain ⟨_, _, image, output, identity, bound, _, durable, _⟩ :=
+    buildFileWith_refines (effects (tablePath dir id)) run
+  obtain ⟨name, content⟩ := installed output identity reached.appended bound durable
+  obtain ⟨published, persisted⟩ := directoryEffect written after barrier id identity reached.appended name content
+  have exactInput : (readSupplied rows.length |>.run rows).1 =
+      rows.map (Entry.encode keyCodec mutationCodec) := (supplied_builder_input rows).2
+  rw [input, exactInput] at image
+  exact ⟨identity, reached.appended, published, persisted, image⟩
 
 end ExperimentalL0

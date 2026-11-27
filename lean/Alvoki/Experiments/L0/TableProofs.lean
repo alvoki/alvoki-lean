@@ -1,6 +1,7 @@
 import Alvoki.Experiments.L0.TableSchedule
 import Alvoki.Experiments.L0.CodecProofs
-import Alvoki.Experiments.SSTable.Proofs.UnifiedEndToEnd
+import Alvoki.Experiments.L0.ComponentContract
+import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
 
 namespace ExperimentalL0
 open ImmutableSSTable
@@ -9,17 +10,42 @@ open ImmutableSSTable
 representation. Both native table callbacks use this very open schedule. -/
 theorem withTableSource_built [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {source : Source m} {id : UInt64}
-    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
+    (built : Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) bytes)
     (serves : source.Serves bytes) :
     ∃ table : TypedTable m UInt64 Mutation, table.Represents (· < ·) rows ∧
       ∀ {α} (use : TypedTable m UInt64 Mutation → m α), withTableSource source id use = use table := by
-  obtain ⟨_, table, opened, represents⟩ := Unified.open_built_table built serves
+  obtain ⟨table, opened, represents⟩ := built.open_represents serves
   refine ⟨⟨table, keyCodec, mutationCodec⟩, typed_table_from_bytes represents, ?_⟩
   intro α use
   unfold withTableSource
   change Unified.openTableChecked source Alvoki.CRC32C.extend id = pure table at opened
   rw [opened, pure_bind]
+
+/-- Run the owned writer and acquire the published inode. The SSTable
+producer supplies checked open and the byte-level representation. -/
+theorem table_open_published_inode [DecidableEq inode]
+    {ops : OutputOps (Unified.NativeWriteM writer inode) writer}
+    {nextRow : Unified.NativeWriteM writer inode (Option Entry)}
+    {acquire : System.FilePath → IO.FS.Mode → StorageM σ reader}
+    {before written : Unified.NativeWriteState writer inode}
+    {dir : System.FilePath} {id : UInt64} {rows : Rows}
+    {start acquired : σ} {held : reader} {inodeAt : reader → Option inode}
+    (effects : Unified.NativeWriteEffects ops (tablePath dir id) nextRow)
+    (input : before.rows = rows.map (Entry.encode keyCodec mutationCodec))
+    (built : (Unified.buildFileWith ops Alvoki.CRC32C.extend (tablePath dir id) (tableLayout id)
+      nextRow (fun message => message)).run before = .ok count written)
+    (opened : acquire (tablePath dir id) .read start = .ok held acquired)
+    (selected : ∀ output identity, written.BoundTo (tablePath dir id) output identity →
+      inodeAt held = some identity) :
+    ∃ table : TypedTable (StorageM σ) UInt64 Mutation,
+      Unified.openCheckedWith ((written.readSnapshot inodeAt).primitives acquire)
+        Alvoki.CRC32C.extend (tablePath dir id) id start = .ok table.table acquired ∧
+      table.Represents (· < ·) rows := by
+  obtain ⟨_, table, checked, represents⟩ :=
+    Unified.buildFileWith_open_represents effects built opened selected
+  rw [input] at represents
+  exact ⟨⟨table, keyCodec, mutationCodec⟩, checked, typed_table_from_bytes represents⟩
 
 private theorem lawfulEIO : LawfulMonad (EIO String) := .mk'
   (id_map := fun x => funext fun state => by
@@ -35,45 +61,27 @@ private theorem lawfulEIO : LawfulMonad (EIO String) := .mk'
 used for the table's footer, index and row reads. The filesystem premise is
 that this specific descriptor serves the durable built bytes. -/
 theorem native_table_source_built (handle : IO.FS.Handle) {id : UInt64}
-    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : (handleSource handle).Serves bytes) :
+    (built : Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) bytes)
+    (serves : nativeReadPrimitives.ReadsExactly handle bytes) :
     ∃ table : TypedTable (EIO String) UInt64 Mutation, table.Represents (· < ·) rows ∧
       ∀ {α} (use : TypedTable (EIO String) UInt64 Mutation → EIO String α),
         withTableSource (handleSource handle) id use = use table := by
   letI := lawfulEIO
-  exact withTableSource_built built serves
-
-theorem table_source_lookup [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {source : Source m} {id : UInt64}
-    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : source.Serves bytes) (key : UInt64) :
-    withTableSource source id (·.lookup key) = pure (lookupRows rows key) := by
-  obtain ⟨table, represents, openTable⟩ := withTableSource_built built serves
-  rw [openTable, typed_lookup_spec represents]
-
-theorem table_source_check [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {source : Source m} {id : UInt64} {rows : Rows}
-    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : source.Serves bytes) :
-    withTableSource source id (fun _ => pure ()) = pure () := by
-  obtain ⟨_, _, openTable⟩ := withTableSource_built built serves
-  exact openTable _
+  exact withTableSource_built built (serves.source_serves built.extent)
 
 theorem native_table_check (handle : IO.FS.Handle) {id : UInt64} {rows : Rows}
-    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : (handleSource handle).Serves bytes) :
+    (built : Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) bytes)
+    (serves : nativeReadPrimitives.ReadsExactly handle bytes) :
     withTableSource (handleSource handle) id (fun _ => pure ()) = pure () := by
   obtain ⟨_, _, opened⟩ := native_table_source_built handle built serves
   exact opened _
 
 theorem native_table_lookup (handle : IO.FS.Handle) {id : UInt64}
-    (built : Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : (handleSource handle).Serves bytes) (key : UInt64) :
+    (built : Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) bytes)
+    (serves : nativeReadPrimitives.ReadsExactly handle bytes) (key : UInt64) :
     withTableSource (handleSource handle) id (·.lookup key) = pure (lookupRows rows key) := by
   obtain ⟨_, represents, opened⟩ := native_table_source_built handle built serves
   rw [opened, typed_lookup_spec represents]
@@ -122,9 +130,9 @@ end Scope
 /-- After acquiring the actual descriptor, the table check succeeds once
 its source supplies the exact healthy builder image. -/
 theorem native_table_action_check (handle : IO.FS.Handle) {id : UInt64} {rows : Rows}
-    (built : ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : (ImmutableSSTable.handleSource handle).Serves bytes) :
+    (built : ImmutableSSTable.Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) bytes)
+    (serves : ImmutableSSTable.nativeReadPrimitives.ReadsExactly handle bytes) :
     nativeTableAction handle id (fun _ => pure ()) = pure () := by
   unfold nativeTableAction
   rw [native_table_check handle built serves]
@@ -137,9 +145,9 @@ theorem native_table_descriptor_checked {id : UInt64} {rows : Rows}
     (report : stat = pure metadata) (valid : isTableFile metadata = true)
     (scope : withRead (fun handle => nativeTableAction handle id (fun _ => pure ())) =
       nativeTableAction acquired id (fun _ => pure ()))
-    (built : ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : (ImmutableSSTable.handleSource acquired).Serves bytes) :
+    (built : ImmutableSSTable.Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) bytes)
+    (serves : ImmutableSSTable.nativeReadPrimitives.ReadsExactly acquired bytes) :
     withTableDescriptor stat withRead (fun handle => nativeTableAction handle id (fun _ => pure ())) =
       pure () := by
   unfold withTableDescriptor

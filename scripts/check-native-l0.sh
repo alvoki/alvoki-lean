@@ -38,16 +38,18 @@ cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixtur
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
 compile "$l0/NativeBridge" proof
 compile "$l0/LifecycleRefinement" proof
+compile "$l0/ManifestRecovery" proof
 compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts ManifestComposition NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts ManifestComposition ManifestRecovery NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.NativeBridge
+import Alvoki.Experiments.L0.ManifestRecovery
 import Alvoki.Experiments.L0.ScheduleSteps
 import Alvoki.Experiments.L0.Lifecycle
 import Alvoki.Experiments.L0.LifecycleRefinement
@@ -115,7 +117,12 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms nextTableRow_nil
 #check_axioms supplied_builder_input
 #check_axioms TableCreationEvidence.effect
-#check_axioms TableOpen.represents
+#check_axioms table_open_published_inode
+#check_axioms nextTableRow_writerEffect
+#check_axioms flushPublicationChoices
+#check_axioms ManifestComposition.StateWithImage.interpretation
+#check_axioms ManifestComposition.recoverPublication
+#check_axioms ManifestComposition.reopenAfterRestart
 #check_axioms tableOpenAt
 #check_axioms TableRead.effect
 LEAN

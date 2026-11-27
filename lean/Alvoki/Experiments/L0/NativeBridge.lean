@@ -5,6 +5,7 @@ import Alvoki.Experiments.L0.TableProofs
 
 namespace ExperimentalL0.NativeBridge
 open WalRecoverySlice.Segmented
+open ImmutableSSTable Unified
 
 /-- Records the actual before and returned WAL sessions for a successful
 native append at the boundary of the segmented effects model. -/
@@ -26,14 +27,10 @@ theorem WalReceipt.effect (receipt : WalReceipt before after batch) :
 /-- The actual read descriptor serves the durable image from the same table
 binding. The image comes from the shared builder on the logical rows. -/
 structure TableSource (id : UInt64) (file : Option ByteArray) (rows : Rows) (handle : IO.FS.Handle) : Prop where
-  image : ∃ count bytes, file = some bytes ∧
-    ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes) ∧
-    (ImmutableSSTable.handleSource handle).Serves bytes
-
-/-- A healthy acquired source is sufficient to derive the typed open. -/
-def TableOpen (id : UInt64) (file : Option ByteArray) (rows : Rows) : Prop :=
-  ∃ handle, TableSource id file rows handle
+  image : ∃ bytes, file = some bytes ∧
+    ImmutableSSTable.Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) bytes ∧
+    ImmutableSSTable.nativeReadPrimitives.ReadsExactly handle bytes
 
 /-- Produce the check result and its witness using the same ID and handle.
 Stat and descriptor acquisition are premises about the reached path. -/
@@ -43,24 +40,20 @@ theorem tableOpenAt {dir : System.FilePath} {id : UInt64}
     (report : stat (tablePath dir id) = pure metadata) (valid : isTableFile metadata = true)
     (scope : withRead (tablePath dir id) (fun handle => nativeTableAction handle id (fun _ => pure ())) =
       nativeTableAction acquired id (fun _ => pure ()))
-    (files : System.FilePath → Option ByteArray)
-    (binding : files (tablePath dir id) = some bytes)
-    (built : ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) = .ok (count, bytes))
-    (serves : (ImmutableSSTable.handleSource acquired).Serves bytes) :
+    (names : System.FilePath → Option inode) (contents : inode → Option ByteArray)
+    (inodeAt : IO.FS.Handle → Option inode)
+    (binding : names (tablePath dir id) = some identity)
+    (persisted : contents identity = some bytes)
+    (selected : inodeAt acquired = names (tablePath dir id))
+    (built : ImmutableSSTable.Unified.Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) bytes)
+    (readEffects : ∀ file image, inodeAt acquired = some file → contents file = some image →
+      ImmutableSSTable.nativeReadPrimitives.ReadsExactly acquired image) :
     withTableAt stat withRead dir id (fun handle => nativeTableAction handle id (fun _ => pure ())) =
-      pure () ∧ TableOpen id (files (tablePath dir id)) rows :=
-  ⟨native_table_descriptor_checked report valid scope built serves,
-    acquired, ⟨count, bytes, binding, built, serves⟩⟩
-
-theorem TableOpen.represents {id : UInt64} (receipt : TableOpen id file rows) :
-    ∃ (handle : IO.FS.Handle) (table : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation),
-      table.Represents (· < ·) rows ∧
-      withTableSource (ImmutableSSTable.handleSource handle) id (fun opened => pure opened) = pure table := by
-  obtain ⟨handle, source⟩ := receipt
-  obtain ⟨_, _, _, built, serves⟩ := source.image
-  obtain ⟨table, represents, opened⟩ := native_table_source_built handle built serves
-  exact ⟨handle, table, represents, opened _⟩
+      pure () ∧ TableSource id ((names (tablePath dir id)).bind contents) rows acquired := by
+  have serves := readEffects identity bytes (selected.trans binding) persisted
+  exact ⟨native_table_descriptor_checked report valid scope built serves,
+    ⟨bytes, by simp [binding, persisted], built, serves⟩⟩
 
 /-- A healthy lookup records the result of the very same open/read
 schedule used by the native adapter. -/
@@ -72,7 +65,7 @@ inductive TableRead (id : UInt64) (file : Option ByteArray) (rows : Rows) (key :
 theorem TableRead.effect {id : UInt64} (receipt : TableRead id file rows key result) : result = lookupRows rows key := by
   cases receipt with
   | @read handle source returned =>
-    obtain ⟨_, _, _, built, serves⟩ := source.image
+    obtain ⟨_, _, built, serves⟩ := source.image
     have equal := returned.symm.trans (native_table_lookup handle built serves key)
     obtain ⟨world⟩ := (inferInstance : Nonempty (Void IO.RealWorld))
     exact EST.Out.ok.inj (congrFun equal world) |>.1
@@ -82,7 +75,13 @@ directory barrier turns that artifact into a durable catalog binding. -/
 structure TableCreationEvidence (create : Rows → StorageM σ UInt64)
     (selected : σ → Selected) where
   names : σ → UInt64 → Bool
-  prepared : σ → UInt64 → Rows → Prop
+  directory : System.FilePath
+  inode : Type
+  writer : Type
+  synced : σ → UInt64 → Option (inode × ByteArray)
+  output : OutputOps (NativeWriteM writer inode) writer
+  supplier : NativeWriteM writer inode (Option Entry)
+  primitiveEffects : ∀ id, NativeWriteEffects output (tablePath directory id) supplier
   occupied : UInt64 → StorageM σ Bool
   build : UInt64 → Rows → StorageM σ Unit
   syncDirectory : StorageM σ Unit
@@ -91,12 +90,21 @@ structure TableCreationEvidence (create : Rows → StorageM σ UInt64)
   probe : ∀ s id, match occupied id s with
     | .ok result after => result = names s id ∧ (names after, selected after) = (names s, selected s)
     | .error _ after => (names after, selected after) = (names s, selected s)
-  buildEffect : ∀ s id rows, match build id rows s with
-    | .ok _ after => (selected s).TableFrame (selected after) ∧ prepared after id rows
-    | .error _ after => (selected s).TableFrame (selected after)
+  buildFrame : ∀ s id rows, match build id rows s with
+    | .ok _ after | .error _ after => (selected s).TableFrame (selected after)
+  writerCall : ∀ s id rows after, build id rows s = .ok () after →
+    ∃ initial reached count,
+      initial.rows = rows.map (Entry.encode keyCodec mutationCodec) ∧
+      (buildFileWith output Alvoki.CRC32C.extend (tablePath directory id) (tableLayout id)
+        supplier (fun message => message)).run initial = .ok count reached ∧
+      ∀ handle identity bytes, reached.BoundTo (tablePath directory id) handle identity →
+        reached.durable = some (identity, bytes) → synced after id = some (identity, bytes)
   syncEffect : ∀ s, match syncDirectory s with
     | .ok _ after => (selected s).TableFrame (selected after) ∧
-        ∀ id rows, prepared s id rows → (selected after).tables id = some rows
+        ∀ id rows identity bytes, synced s id = some (identity, bytes) →
+          Image Alvoki.CRC32C.extend (tableLayout id)
+            (rows.map (Entry.encode keyCodec mutationCodec)) bytes →
+          (selected after).tables id = some rows
     | .error _ after => (selected s).TableFrame (selected after)
 
 theorem TableCreationEvidence.effect {create : Rows → StorageM σ UInt64} (e : TableCreationEvidence create selected) (rows : Rows) (s : σ) :
@@ -106,8 +114,35 @@ theorem TableCreationEvidence.effect {create : Rows → StorageM σ UInt64} (e :
         (selected s).tables.Created (selected after).tables id rows
     | .error _ after => (selected s).TableFrame (selected after) := by
   rw [e.schedule]
-  exact createTableAt_bindings selected e.names e.prepared e.occupied e.build e.syncDirectory
-    e.absent e.probe e.buildEffect e.syncEffect rows s
+  let prepared (state : σ) (id : UInt64) (rows : Rows) :=
+    ∃ identity bytes, e.synced state id = some (identity, bytes) ∧
+      Image Alvoki.CRC32C.extend (tableLayout id)
+        (rows.map (Entry.encode keyCodec mutationCodec)) bytes
+  apply createTableAt_bindings selected e.names prepared e.occupied e.build e.syncDirectory
+    e.absent e.probe _ _ rows s
+  · intro before id input
+    have frame := e.buildFrame before id input
+    cases ran : e.build id input before with
+    | error error reached => simpa [ran] using frame
+    | ok value after =>
+      cases value
+      rw [ran] at frame
+      obtain ⟨initial, reached, count, exactInput, built, installed⟩ :=
+        e.writerCall before id input after ran
+      obtain ⟨_, _, image, handle, identity, bound, _, durable, _⟩ :=
+        buildFileWith_refines (e.primitiveEffects id) built
+      exact ⟨frame, identity, reached.appended, installed handle identity reached.appended bound durable,
+        exactInput ▸ image⟩
+  · intro before
+    have effect := e.syncEffect before
+    cases ran : e.syncDirectory before with
+    | error error reached => simpa [ran] using effect
+    | ok value after =>
+      rw [ran] at effect
+      refine ⟨effect.1, ?_⟩
+      intro id rows witnessed
+      obtain ⟨identity, bytes, synced, image⟩ := witnessed
+      exact effect.2 id rows identity bytes synced image
 
 /-- Local evidence for reached callbacks. Manifest effects are derived from the shared schedule and primitive
 reports. WAL effects are obtained from component traces. Table creation carries the
@@ -132,9 +167,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (selected after).tables = (selected s).tables)
   create : Nonempty (TableCreationEvidence ops.tables.create selected)
   check : ∀ s id, match ops.tables.check id s with
-    | .ok _ after => (∃ rows, (selected s).tables id = some rows ∧ TableOpen id (fileBytes s id) rows) ∧
-        selected after = selected s
-    | .error _ after => selected after = selected s
+    | .ok _ after | .error _ after => selected after = selected s
   lookup : ∀ s id key rows, (selected s).tables id = some rows →
     match ops.tables.lookup id key s with
     | .ok result after => TableRead id (fileBytes s id) rows key result ∧ selected after = selected s
@@ -183,13 +216,7 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
   publish s proposal valid := by
     obtain ⟨manifest⟩ := evidence.manifest
     exact manifest.publishEffect s proposal valid
-  check s id := by
-    have read := evidence.check s id
-    cases ran : ops.tables.check id s with
-    | ok value after =>
-      rw [ran] at read
-      exact read.2
-    | error error after => simpa [ran] using read
+  check := evidence.check
   lookup s id key rows bound := by
     have read := evidence.lookup s id key rows bound
     cases ran : ops.tables.lookup id key s with

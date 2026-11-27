@@ -1,5 +1,6 @@
 import Alvoki.Experiments.L0.TableRows
 import Alvoki.Experiments.L0.CodecProofs
+import Alvoki.Experiments.SSTable.Proofs.NativeWrite
 
 namespace ExperimentalL0
 open ImmutableSSTable
@@ -23,6 +24,39 @@ theorem nextTableRow_nil {read : EStateM ε σ Rows}
     (got : read before = .ok [] after) :
     nextTableRow read write before = .ok none after := by
   simp [nextTableRow, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, got]
+
+/-- The L0 cursor reads the logical suffix and updates only the encoded
+row projection of the writer state. Supply the writer's row effect from
+the executable supplier, including its EOF branch. -/
+theorem nextTableRow_writerEffect
+    {read : Unified.NativeWriteM writer inode Rows}
+    {write : Rows → Unified.NativeWriteM writer inode Unit}
+    (readCursor : ∀ before rows reached, read before = .ok rows reached →
+      reached = before ∧ before.rows = rows.map (Entry.encode keyCodec mutationCodec))
+    (writeCursor : ∀ remaining before after, write remaining before = .ok () after →
+      after = {before with rows := remaining.map (Entry.encode keyCodec mutationCodec)})
+    (ran : nextTableRow read write before = .ok row after) :
+    row = before.rows.head? ∧ after = {before with rows := before.rows.tail} := by
+  cases got : read before with
+  | error message reached =>
+    simp [nextTableRow, Bind.bind, EStateM.bind, got] at ran
+  | ok rows reached =>
+    obtain ⟨same, exactRows⟩ := readCursor before rows reached got
+    subst reached
+    cases rows with
+    | nil =>
+      rw [nextTableRow_nil got] at ran
+      cases ran
+      exact ⟨by simp [exactRows], by cases before; simp_all⟩
+    | cons first remaining =>
+      cases advanced : write remaining before with
+      | error message reached =>
+        simp [nextTableRow, Bind.bind, EStateM.bind, got, advanced] at ran
+      | ok value reached =>
+        cases value
+        rw [nextTableRow_cons got advanced] at ran
+        cases ran
+        exact ⟨by simp [exactRows], by rw [writeCursor remaining before _ advanced, exactRows]; rfl⟩
 
 /-- The actual supplier step, with all encoded rows still to be delivered
 at the next cursor. -/

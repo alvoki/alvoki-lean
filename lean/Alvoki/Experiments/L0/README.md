@@ -122,23 +122,24 @@ that schedule and serving the exact built bytes,
 from `open_built_table`. Open checks the table ID, footer and root index.
 Leaf and data packets are checked on demand.
 
-[TableAllocation](TableAllocation.lean) is the native create schedule. Its
-proofs show that probing picks a free ID and that a returned ID implies that
-the builder received that ID and the original rows at its derived path. The
-directory barrier succeeded after the synced build. The supplier proof uses
-the native `nextTableRow` operation to prove the encoded stream and EOF. The path-indexed creation proof uses that stream and the reached
-build and directory effects to name the durable builder image.
-`tableOpenAt` constructs the check witness at that same ID-derived path
-and uses the descriptor acquired by the scoped read.
+[TableAllocation](TableAllocation.lean) probes for a free ID and syncs the
+parent directory after the builder returns. The creation law now consumes
+`buildFileWith_refines` on the reported writer run. It derives the image and
+synced inode used to justify the prepared artifact. The directory report
+preserves that inode and publishes its name. The L0 row cursor proof
+explains the exact encoded suffix and EOF. `tableOpenAt` uses the ID-derived
+name and the inode selected at scoped open to apply the primitive read
+effects. `table_open_published_inode` checks the typed producer-to-reader
+handoff with `buildFileWith_open_represents`. Checked open validates metadata.
+Row validation occurs on demand.
 
-The remaining IO premises are local: stat reports the occupied name,
-exclusive creation preserves unrelated names, the file and directory
-barriers establish the bindings, and the acquired descriptor serves the bound bytes. The blob producer
-runs the shared schedule over Linux primitive reports. Applying its
-result to an L0 IO call requires the reached reports, the manifest
-projection, and namespace frames. The runtime supplies reference-cell,
-error, lock and descriptor effects under stable, exclusive ownership.
-The WAL and native SSTable producer connections remain open.
+The native boundary still supplies correspondence from IO to the shared
+writer and reader schedules, including allocation, cursor effects, the
+reached file and directory barriers, path-to-inode selection and immutability
+during the read scope. `fstat` and `pread` report effects on that description.
+The scope holds the descriptor until the reader returns, and closes it on
+success or error. WAL and manifest namespace frames stay separate from
+the table directory.
 
 Bootstrap, WAL release, orphan collection, snapshots, concurrency,
 compaction and automatic flush are separate work.
@@ -175,10 +176,15 @@ derives its manifest fields from that execution. Reopen preserves the live
 binding on either outcome, including a sync error after the barrier.
 Publication success installs the proposal. A returned error can retain
 the old live binding or expose the proposal. The reached image is kept
-on both paths, including its survivors for later recovery. Power loss
-selects from those survivors at the DurableBlob boundary. Connecting that
-selection to the state from which the next integrated L0 attempt starts
-remains part of the native refinement.
+on both paths, including its survivors for later recovery.
+[ManifestRecovery](ManifestRecovery.lean) instantiates the manifest
+interpretation with that complete image and unchanged WAL and catalog
+projections. A process exit keeps the reached image. Power loss selects a
+survivor. Both permitted manifest choices are durable against the same
+retained WAL and table catalog by `flushPublicationChoices`. A failed open
+keeps recovery admissible. A successful open pins its version for another
+open, including across another restart. The proof interprets the component
+reports. Connecting the reached Linux state to those reports remains open.
 
 The interpretation needs the active image projection, installation of the
 reached image and frames for the WAL and table namespaces. The reports
