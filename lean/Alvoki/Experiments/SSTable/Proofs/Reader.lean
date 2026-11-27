@@ -1,3 +1,4 @@
+import Alvoki.Experiments.SSTable.Representation
 import Alvoki.Experiments.SSTable.Proofs.Builder
 import Alvoki.Experiments.SSTable.Proofs.Search
 
@@ -158,14 +159,11 @@ theorem open_built_table [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {source : Source m} {rows : List Entry} {count bytes}
     (built : modelBuild rows = .ok (count, bytes))
     (observed : source.Serves bytes) :
-    ∃ table, openTable source = pure table ∧
-      (∀ key, table.lookup key = pure (Contents.lookup rows key)) ∧
-      (∀ key, ∃ i, table.seek key = pure i ∧ Contents.IsSeek rows key i) ∧
-      (∀ i, table.next i = pure (Contents.next rows i)) := by
+    ∃ table, openTable source = pure table ∧ table.Represents rows := by
   obtain ⟨fits, ordered, _, image⟩ := modelBuild_ok_iff.mp built
   rw [image] at observed
   obtain ⟨table, opened, bound⟩ := openTable_encoded fits observed
-  exact ⟨table, opened, table.lookup_encoded bound observed ordered,
+  exact ⟨table, opened, ordered, table.lookup_encoded bound observed ordered,
     table.seek_encoded bound observed ordered, table.next_encoded bound observed⟩
 
 end ImmutableSSTable

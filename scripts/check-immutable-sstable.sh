@@ -29,6 +29,7 @@ compile Alvoki/Codec/WordChecksum native
 for module in Contract Search Core Builder Native NativeTests; do
   compile "$table/$module" native
 done
+compile "$table/Representation"
 compile Alvoki/Kernel/BlockContracts
 compile Alvoki/Codec/ByteWords
 for proof in Search Format Builder Reader ReadErrors; do
