@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
 import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 
@@ -78,6 +79,129 @@ noncomputable def worker (cached : IO.Ref (Option IO.FS.Handle))
     (source.bootstrap directory cache)
   installReady opened.installed source.allocatePhase source.allocateToken fun phase token =>
     pure (assemble directory lock cache phase token)
+
+
+/-- The marked reader returns both the installable replay and the measured
+physical extent used to choose the keeper repair. -/
+noncomputable abbrev markedPreparation (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
+    (directory : DiskDirectory) :=
+  let keeper := source.keeperCallbacks.withFileReads source.fileCalls
+  let read := source.fileCalls.readOptional directory
+  prepareBoundedMarkedFromReaders directory
+    (readIntegrityCheckpointSized directory (read (directory.file .manifest))
+      source.fileCalls.runSize source.fileCalls.runPrefix) read
+    (fun watermark length => readSelectedWithCachedExtents directory watermark length source.directoryCalls.run
+      (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
+      (source.fileCalls.readKeeperWithRelease (fun path handle => keeper.modifyPending pending (pushPending path handle))))
+
+private noncomputable def interpretWorker {state : Type}
+    (ordinary : {α : Type} → EStateM IO.Error heap α → EStateM IO.Error state α)
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (cache : DiskTable.OpenSyncFiles) (repair : Plan → Nat → EStateM IO.Error state Unit) :
+    EStateM IO.Error state DiskTable := do
+  let reopened ← recoverSegmentedWalWith
+    (ordinary (rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))))
+    (ordinary (optionalMetadataWith (source.calls.lookup (directory.file .walBoundary))))
+    (do
+      let (plan, opened, extent) ← ordinary (source.markedPreparation pending directory)
+      repair plan extent
+      pure opened)
+    (ordinary (source.bootstrap directory cache))
+  ordinary (installReady reopened.installed source.allocatePhase source.allocateToken
+    fun phase token => pure (assemble directory lock cache phase token))
+
+private def outsideRepair (action : EStateM IO.Error heap α) : EStateM IO.Error (heap × Option heap) α :=
+  fun (before, _) => match action before with
+    | .ok value after => .ok value (after, none)
+    | .error error after => .error error (after, none)
+
+/-- Interpret the held worker, retaining a successful replacement rename only
+on errors inside repair. Installation can report the same error on the same
+heap after a successful repair. It starts outside the observed interval. -/
+noncomputable def workerObservingRepairRename (cached : IO.Ref (Option IO.FS.Handle))
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (directory : DiskDirectory)
+    (lock : IO.FS.Handle) (cache : DiskTable.OpenSyncFiles) (entry : heap) :=
+  let keeper := source.keeperCallbacks.withFileReads source.fileCalls
+  source.interpretWorker outsideRepair pending directory lock cache
+    (fun plan extent (prepared, _) => LongKeeperRepair.observeRename directory plan extent source.remove
+      (source.stage.stage pending keeper.modifyPending) (keeper.syncPaths directory.path cached active pending)
+      source.rename prepared) (entry, none)
+
+/-- A rename-tagged worker error identifies the successful preparation and the
+failed finisher at its returned heap, before installation can run. -/
+theorem worker_observesRepairError_iff (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cache : DiskTable.OpenSyncFiles)
+    {entry checked marked : heap} {metadata : IO.FS.Metadata} {cause : IO.Error} {failed renamed : heap}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      entry = .ok () checked)
+    (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) marked) :
+    let keeper := source.keeperCallbacks.withFileReads source.fileCalls
+    source.workerObservingRepairRename cached active pending directory lock cache entry =
+        .error cause (failed, some renamed) ↔
+      ∃ plan opened extent prepared, source.markedPreparation pending directory marked =
+          .ok (plan, opened, extent) prepared ∧
+        LongKeeperRepair.observeRename directory plan extent source.remove (source.stage.stage pending keeper.modifyPending)
+          (keeper.syncPaths directory.path cached active pending) source.rename prepared =
+          .error cause (failed, some renamed) := by
+  intro keeper
+  simp only [workerObservingRepairRename, interpretWorker, recoverSegmentedWalWith, Bind.bind, EStateM.bind,
+    outsideRepair, flat, marker, Option.isSome, ↓reduceIte]
+  cases h : source.markedPreparation pending directory marked with
+  | error cause reached => simp
+  | ok payload prepared =>
+    obtain ⟨plan, opened, extent⟩ := payload
+    have select {P : Plan → Nat → heap → Prop} :
+        (∃ p o n atHeap, (EStateM.Result.ok (plan, opened, extent) prepared :
+          EStateM.Result IO.Error heap (Plan × Reopened × Nat)) = .ok (p, o, n) atHeap ∧ P p n atHeap) ↔
+          P plan extent prepared := by
+      constructor
+      · rintro ⟨_, _, _, _, eq, fact⟩
+        cases eq
+        exact fact
+      · exact fun fact => ⟨_, _, _, _, rfl, fact⟩
+    rw [select]
+    cases observed : LongKeeperRepair.observeRename directory plan extent source.remove
+      (source.stage.stage pending keeper.modifyPending) (keeper.syncPaths directory.path cached active pending)
+      source.rename prepared with
+    | error why reached =>
+      simp only [keeper] at observed ⊢
+      simp [observed]
+    | ok value reached =>
+      simp only [keeper] at observed ⊢
+      simp only [observed, Pure.pure, EStateM.pure]
+      cases installReady opened.installed source.allocatePhase source.allocateToken
+        (fun phase token => pure (assemble directory lock cache phase token)) reached.1 <;> simp
+
+/-- Erasing the observation preserves the literal worker's result and heap
+even outside the marked branch and through either allocation failure. -/
+theorem forget_workerObservingRepairRename (directory : DiskDirectory) (lock : IO.FS.Handle)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cache : DiskTable.OpenSyncFiles) (entry : heap) :
+    LongKeeperRepair.forgetRename (source.workerObservingRepairRename cached active pending directory lock cache entry) =
+      source.worker cached active pending directory lock cache entry := by
+  let keeper := source.keeperCallbacks.withFileReads source.fileCalls
+  let write := source.stage.stage pending keeper.modifyPending
+  let sync := keeper.syncPaths directory.path cached active pending
+  have outside {α : Type} (action : EStateM IO.Error heap α) : LongKeeperRepair.Erases (outsideRepair action) action := by
+    intro before prior
+    cases result : action before <;> simp [outsideRepair, result, LongKeeperRepair.forgetRename]
+  change LongKeeperRepair.forgetRename _ =
+    source.interpretWorker (fun action => action) pending directory lock cache
+      (fun plan extent => finishBoundedMarkedOpen directory plan extent source.remove write sync source.rename) entry
+  apply LongKeeperRepair.Erases.bind _ (fun opened => outside _) entry none
+  apply LongKeeperRepair.Erases.bind (outside _) (fun _ => ?_)
+  apply LongKeeperRepair.Erases.bind (outside _) (fun metadata => ?_)
+  cases metadata with
+  | none => exact outside _
+  | some _ =>
+    apply LongKeeperRepair.Erases.bind (outside _) (fun payload => ?_)
+    obtain ⟨plan, opened, extent⟩ := payload
+    apply LongKeeperRepair.Erases.bind _ (fun _ _ _ => rfl)
+    exact fun prepared _ => LongKeeperRepair.forget_observeRename directory plan extent source.remove write sync
+      source.rename prepared
 
 /-- Open the directory and allocate the three references used by the held worker. -/
 noncomputable abbrev cacheInitialization (directory : DiskDirectory) :=
@@ -576,14 +700,7 @@ theorem RawMarkedOpenInterpreter.worker_markedError_iff
     (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
       .ok (some metadata) marked) :
     let keeper := source.keeperCallbacks.withFileReads source.fileCalls
-    let optional := source.fileCalls.readOptional directory
-    let prepare := prepareBoundedMarkedFromReaders directory
-      (readIntegrityCheckpointSized directory (optional (directory.file .manifest))
-        source.fileCalls.runSize source.fileCalls.runPrefix) optional
-      (fun watermark length => readSelectedWithCachedExtents directory watermark length source.directoryCalls.run
-        (MarkedWalExtentReports.inspect source.fileCalls) source.fileCalls.seal
-        (source.fileCalls.readKeeperWithRelease
-          (fun path handle => keeper.modifyPending pending (pushPending path handle))))
+    let prepare := source.markedPreparation pending directory
     let repair := fun plan extent => finishBoundedMarkedOpen directory plan extent source.remove
       (source.stage.stage pending keeper.modifyPending) (keeper.syncPaths directory.path cached active pending) source.rename
     let install := fun (opened : Reopened) => installReady opened.installed source.allocatePhase source.allocateToken
@@ -593,7 +710,7 @@ theorem RawMarkedOpenInterpreter.worker_markedError_iff
       ∃ plan opened extent prepared, prepare marked = .ok (plan, opened, extent) prepared ∧
         (repair plan extent prepared = .error cause failed ∨
           ∃ repaired, repair plan extent prepared = .ok () repaired ∧ install opened repaired = .error cause failed) := by
-  intro keeper optional prepare repair install
+  intro keeper prepare repair install
   have dispatch : recoverHealthyMarkedWithRefs source.fileCalls source.directoryCalls source.keeperCallbacks
       cached active pending source.remove source.stage source.rename source.calls.lookup directory
       (source.bootstrap directory cache) entry = (do

@@ -102,6 +102,14 @@ private theorem observePrune (newer : List Nat) :
     change (seen (.unlink first) >>= fun _ => _) = observe (perform (.unlink first) >>= fun _ => _)
     rw [ih, observeUnlink, observe_bind]
 
+/-- The literal prefix from repair entry through staging-file sync. Physical
+frame laws at staging or rename can be restricted to these reached heaps. -/
+def StagedFrom (start authorized pruned staged synced : heap) : Prop :=
+    sync #[dir.path] start = .ok () authorized ∧
+    ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM perform) authorized = .ok () pruned ∧
+    write (dir.file .stagedWal) plan.keeperBytes pruned = .ok () staged ∧
+    sync #[dir.file .stagedWal] staged = .ok () synced
+
 /-- Reaching an error with a recorded rename is equivalent to the ordinary
 prefix returning, the actual rename returning at that heap, and the final
 directory group failing there. Both earlier directory syncs share its target. -/
@@ -110,13 +118,11 @@ theorem observeRename_error_iff
     (long : plan.keeperSize < extent) {start renamed reached : heap} {cause : IO.Error} :
     observeRename dir plan extent remove write sync rename start = .error cause (reached, some renamed) ↔
       ∃ authorized pruned staged synced,
-        sync #[dir.path] start = .ok () authorized ∧
-        ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM perform) authorized = .ok () pruned ∧
-        write (dir.file .stagedWal) plan.keeperBytes pruned = .ok () staged ∧
-        sync #[dir.file .stagedWal] staged = .ok () synced ∧
+        StagedFrom dir plan remove write sync rename start authorized pruned staged synced ∧
         rename (dir.file .stagedWal) (dir.file (.walSegment plan.keeper)) synced = .ok () renamed ∧
         sync #[dir.path] renamed = .error cause reached := by
-  unfold observeRename
+  unfold StagedFrom observeRename
+  simp only [and_assoc]
   rw [finishBoundedMarkedOpen_long _ _ _ _ _ _ _ valid size long]
   have bytes : plan.keeperBytes.extract 0 plan.keeperSize = plan.keeperBytes := by
     rw [← size, ByteArray.extract_zero_size]
@@ -138,6 +144,62 @@ theorem observeRename_error_iff
   · subst renamedHeap
     cases final : sync #[dir.path] renamed <;> simp [Pure.pure, EStateM.pure]
   · cases final : sync #[dir.path] renamedHeap <;> simp [same, Pure.pure, EStateM.pure]
+
+/-- Forget the repair-local rename observation while retaining the native
+return or error and the exact heap, including effects before an error. -/
+def forgetRename : EStateM.Result IO.Error (heap × Option heap) α → EStateM.Result IO.Error heap α
+  | .ok value (after, _) => .ok value after
+  | .error cause (after, _) => .error cause after
+
+/-- An observed action projects to the same return and heap for every incoming observation. -/
+def Erases (tagged : EStateM IO.Error (heap × Option heap) α) (ordinary : EStateM IO.Error heap α) : Prop :=
+  ∀ before prior, forgetRename (tagged (before, prior)) = ordinary before
+
+theorem Erases.bind {tagged : EStateM IO.Error (heap × Option heap) α} {ordinary : EStateM IO.Error heap α}
+    {nextTagged : α → EStateM IO.Error (heap × Option heap) β} {next : α → EStateM IO.Error heap β}
+    (first : Erases tagged ordinary) (later : ∀ x, Erases (nextTagged x) (next x)) :
+    Erases (tagged >>= nextTagged) (ordinary >>= next) := by
+  intro before prior
+  have same := first before prior
+  cases step : tagged (before, prior) with
+  | error cause pair =>
+    obtain ⟨after, memo⟩ := pair
+    simp only [step, forgetRename] at same
+    simp [Bind.bind, EStateM.bind, step, ← same, forgetRename]
+  | ok value pair =>
+    obtain ⟨after, memo⟩ := pair
+    simp only [step, forgetRename] at same
+    simpa only [Bind.bind, EStateM.bind, step, ← same] using later value after memo
+
+private theorem eraseObserved (action : EStateM IO.Error heap α) (record : Bool) :
+    Erases (observe action record) action := by
+  intro before prior
+  cases h : action before <;> simp [observe, h, forgetRename]
+
+private theorem eraseSteps (steps : List Step) : Erases (steps.forM seen) (steps.forM perform) := by
+  induction steps with
+  | nil => exact fun _ _ => rfl
+  | cons step tail ih =>
+    change Erases (seen step >>= fun _ => _) (perform step >>= fun _ => _)
+    apply Erases.bind _ (fun _ => ih)
+    cases step with
+    | unlink first =>
+      rw [observeUnlink]
+      exact eraseObserved _ _
+    | replace op => cases op <;> exact eraseObserved _ _
+    | syncPruned | syncKeeper => exact eraseObserved _ _
+
+/-- Every outcome of the instrumented finisher projects to the literal
+finisher, including invalid plans, aligned repairs and failed renames. -/
+theorem forget_observeRename (entry : heap) :
+    forgetRename (observeRename dir plan extent remove write sync rename entry) =
+      finishBoundedMarkedOpen dir plan extent remove write sync rename entry := by
+  unfold observeRename finishBoundedMarkedOpen
+  split
+  · split
+    · exact Erases.bind (eraseObserved _ false) (fun _ => eraseObserved _ false) entry none
+    · exact Erases.bind (eraseObserved _ false) (fun _ => eraseSteps dir plan remove write sync rename _) entry none
+  · rfl
 
 end LongKeeperRepair
 

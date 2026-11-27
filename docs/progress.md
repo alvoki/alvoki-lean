@@ -38,17 +38,17 @@ reader of that worker. The failed-retry proof uses this same boundary.
 [Worker classification](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
 [Measured preparation](../lean/Alvoki/Storage/Disk/NativeAlignedMarkedWorker.lean)
 
-The long-keeper finisher can record the heap returned by a successful
-replacement rename during that open. With this observation, a final sync error
-determines the earlier authorization, prune, stage write, stage sync and rename.
-The earlier directory barriers can report the same error.
-[Rename observation](../lean/Alvoki/Storage/Disk/NativeLongKeeperRepairPrefix.lean)
+For a failed marked worker, observing its successful keeper rename connects the
+same measured preparation, staged-file sync and final directory error to cleanup
+and a subsequent sampled reboot. The rename observation is cleared before
+installation. Frames apply to the staging and rename heaps reached by that open.
+[Worker observation](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
+[Retry and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Carry the rename observation from the marked worker
-into the full retry proof. Its cleanup and reboot frames still refer to separately
-supplied intermediate heaps. Establish those frames on the heaps derived from
-the observed repair and the actual cached directory handle.
-[Replacement error and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+**Next source boundary.** Identify the cached directory handle and failed raw
+fsync inside the final sync group. A cache lookup can itself fail. The physical
+effect on surviving directory entries still needs a filesystem observation.
+[Final directory error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncError.lean)
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)
