@@ -4096,7 +4096,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedStorageFromStaging
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedStorageFromPublication
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.groupedKeeperVisible
-#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedKeeperVisible
+#check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedFileVisible
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publicationReturned
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publicationOutcome
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootBarrierResult

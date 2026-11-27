@@ -85,6 +85,12 @@ structure NativeOpenedPosition.WriteStorageEntry {heap image : Type} {opened : N
     storage.files.names current.current.ready.state.session.directory.path =
       some ((view.handle current.reached literal).1.inode (view.handle current.reached literal).2.1.description)
 
+/-- The canonical marker's live binding carries the exact bytes of this
+writer's selected marker. Durability is proved separately. -/
+def NativeReadyState.ObservesLiveWalMarker (state : NativeReadyState)
+    (storage : CheckpointStorageObservation) (visible : Nat → ByteArray) : Prop :=
+  (storage.files.names (state.session.directory.file .walBoundary)).map visible = state.writer.target.pair.walBoundary
+
 private def observedStorage {heap : Type} {directory : DiskDirectory}
     {inodes : heap → WalInodeImage} {runs : heap → RunUnlinkImage}
     (observe : ∀ heap, RunDirectoryInodeView directory (inodes heap) (runs heap))
@@ -116,6 +122,10 @@ local notation "storage" => observedStorage observe
 local notation "keeperPath" => current.current.ready.state.session.directory.file
   (DiskFile.walSegment current.current.ready.state.writer.installed.activeFirst)
 local notation "keepsVisibleKeeper" => keepsVisibleBytes keeperPath
+  (fun atHeap => RunDirectoryInodeView.visible (observe atHeap)) inodes
+
+local notation "markerPath" => current.current.ready.state.session.directory.file DiskFile.walBoundary
+local notation "keepsVisibleMarker" => keepsVisibleBytes markerPath
   (fun atHeap => RunDirectoryInodeView.visible (observe atHeap)) inodes
 
 /-- Physical effects at the individual callbacks of a published write.
@@ -171,7 +181,8 @@ structure NativeOpenedPosition.PublishedWriteEffects
       ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
         (storage after).files.names ((dir).file .walBoundary) = some inode ∧
         (storage after).files.names ((dir).file .stagedWalBoundary) = none ∧
-        (storage after).files.bytes inode = (storage entry).files.bytes inode
+        (storage after).files.bytes inode = (storage entry).files.bytes inode ∧
+        (inodes after).visible inode = (inodes entry).visible inode
   stagedPrivate : ∀ {entry after}, rename ((dir).file .stagedWalBoundary) ((dir).file .walBoundary) entry = .ok () after →
       ∀ inode, (storage entry).files.names ((dir).file .stagedWalBoundary) = some inode →
         (storage entry).files.names ((dir).file .walBoundary) ≠ some inode
@@ -183,13 +194,16 @@ structure NativeOpenedPosition.PublishedWriteEffects
       (storage entry).files.names (dir).path = some ((view.handle entry handle).1.inode
         (view.handle entry handle).2.1.description) ∧
       (storage entry).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
-        (storage after).files ∧ keepsVisibleKeeper entry after
+        (storage after).files ∧ keepsVisibleKeeper entry after ∧ keepsVisibleMarker entry after
   syncEffect : ∀ {issued after handle}, syncer.fsync handle issued = .ok () after →
       (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
       (storage issued).files.names (dir).path = some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
       (storage issued).files.Frames (fun path => path = (dir).path ∨ ∃ file, path = (dir).file file)
-        (storage after).files ∧ keepsVisibleKeeper issued after ∧ (storage after).crashNames ≠ [] ∧
+        (storage after).files ∧ keepsVisibleKeeper issued after ∧ keepsVisibleMarker issued after ∧
+        (storage after).crashNames ≠ [] ∧
       ∀ names ∈ (storage after).crashNames, ∀ file, names ((dir).file file) = (storage after).files.names ((dir).file file)
+  readyMarkerFrame : ∀ {installed entry after}, opened.set opened.phase (.ready installed) entry = .ok () after →
+    keepsVisibleMarker entry after
 
 /-- One acknowledged raw call supplies the next retained writer and its
 prior read ledger. The committed storage is observed at the last
@@ -221,6 +235,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (storage next.reached) (inodes next.reached).visible ∧
+      next.current.ready.state.ObservesLiveWalMarker (storage next.reached) (inodes next.reached).visible ∧
       (next.current.ready.state.writer.target.pair.manifest = (before).writer.target.pair.manifest ∧
         next.current.ready.state.writer.wal.sealed = (before).writer.wal.sealed) ∧
       next.current.ready.state.writer.wal.segments.map WalSegment.first =
@@ -231,7 +246,8 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
   obtain ⟨batch, table, prepared, fits⟩ := request.runOnRawOpenPhase_prepared dir lookup append stage sync rename
     opened.phase opened.get opened.set loaded nonempty (by rw [returned]; trivial)
   obtain ⟨guardEffect, phaseEffect, appendFrame, stageFrame, groupFrame, renameFrame, rootFrame,
-    appendEffects, stageEffects, barrierEffects, renameEffect, stagedPrivate, renameFiles, loadEffect, syncEffect⟩ := effects prepared
+    appendEffects, stageEffects, barrierEffects, renameEffect, stagedPrivate, renameFiles, loadEffect, syncEffect,
+    readyMarkerFrame⟩ := effects prepared
   obtain ⟨guarded, poisoned, settled, guard, excluded, committed, installed, number, _, _⟩ :=
     request.runOnRawOpenPhase_acknowledges dir lookup append stage sync rename opened.phase opened.get opened.set
       loaded nonempty prepared fits returned
@@ -270,17 +286,19 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (scope := (before).writeFramePath) fun _ kept => NativeReadyState.crashPath_iff_write.mpr (.inr (.inr kept))
   obtain ⟨appended, staged, grouped, renamed, issued, directoryHandle, wrote, stagedMarker, filesSynced, moved,
     loadedRoot, syncedRoot⟩ := syncer.publicationReturned cache appender stager rename committed
-  obtain ⟨keeperGrouped, markerGrouped, keeperName, keeperBytesAtGroup, _⟩ := syncer.groupedStorageFromPublication
+  obtain ⟨keeperGrouped, markerGrouped, keeperName, keeperBytesAtGroup, markerBytesAtGroup, _⟩ := syncer.groupedStorageFromPublication
     cache view appender stager inodes observe inode buffered atPoison keeperAtPoison wrote stagedMarker filesSynced
     (appendEffects wrote atPoison) (fun named => stageEffects named stagedMarker) (barrierEffects filesSynced)
-  obtain ⟨target, rootBound, loadedFiles, loadVisible⟩ := loadEffect loadedRoot
+  obtain ⟨target, rootBound, loadedFiles, loadVisible, loadMarkerVisible⟩ := loadEffect loadedRoot
   have issuedRoot := (loadedFiles (dir).path (.inl rfl)).1.trans rootBound
   rw [← target.inode] at issuedRoot
-  obtain ⟨syncedFiles, syncVisible, crashNonempty, crashSettled⟩ := syncEffect syncedRoot target.live issuedRoot
+  obtain ⟨syncedFiles, syncVisible, syncMarkerVisible, crashNonempty, crashSettled⟩ := syncEffect syncedRoot target.live issuedRoot
   obtain ⟨renamedFiles, renameVisible⟩ := renameFiles moved
   obtain ⟨keeper, marker, _, settledNames⟩ := syncer.publishedStorage cache view rename storage moved loadedRoot syncedRoot
     target rootBound keeperGrouped markerGrouped (stagedPrivate moved)
-    (fun renamed inode named _ => renameEffect renamed inode named) (fun _ => renamedFiles) (fun _ => loadedFiles)
+    (fun renamed inode named _ =>
+      let kept := renameEffect renamed inode named
+      ⟨kept.1, kept.2.1, kept.2.2.1⟩) (fun _ => renamedFiles) (fun _ => loadedFiles)
     (fun _ _ _ => ⟨syncedFiles, crashNonempty, crashSettled⟩)
   have separate : keeperPath ≠ (dir).file .stagedWalBoundary ∧ keeperPath ≠ (dir).file .walBoundary := by
     constructor <;> intro equal <;>
@@ -289,7 +307,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
   have renameName := (renamedFiles _ separate).1
   have loadName := (loadedFiles _ child).1
   have syncName := (syncedFiles _ child).1
-  have exactKeeper := syncer.publishedKeeperVisible cache rename opened.set
+  have exactKeeper := syncer.publishedFileVisible cache rename opened.set keeperPath keeperPath
     (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible)
     keeperName keeperBytesAtGroup moved loadedRoot syncedRoot installed
     (fun _ => ⟨renameName, renameVisible _ keeperName⟩)
@@ -297,6 +315,20 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     (fun _ => ⟨syncName, syncVisible _ (loadName.trans (renameName.trans keeperName))⟩)
     (fun _ => ⟨(restored.visible _ selectedPath).1,
       restoreVisible _ (syncName.trans (loadName.trans (renameName.trans keeperName)))⟩)
+  obtain ⟨markerInode, stagedName, _⟩ := markerGrouped
+  have movedMarker := renameEffect moved markerInode stagedName
+  have markerChild : markerPath = (dir).path ∨ ∃ file, markerPath = (dir).file file := .inr ⟨_, rfl⟩
+  have renamedMarker := movedMarker.1
+  have issuedMarker := (loadedFiles markerPath markerChild).1.trans renamedMarker
+  have syncedMarker := (syncedFiles markerPath markerChild).1.trans issuedMarker
+  have selectedMarker : (before).crashPath markerPath := NativeReadyState.crashPath_iff_write.mpr (.inl rfl)
+  have exactMarker := syncer.publishedFileVisible cache rename opened.set ((dir).file .stagedWalBoundary) markerPath
+    (fun heap => (observe heap).visible) (fun heap => (inodes heap).visible)
+    stagedName (markerBytesAtGroup markerInode stagedName) moved loadedRoot syncedRoot installed
+    (fun _ => ⟨renamedMarker.trans stagedName.symm, movedMarker.2.2.2⟩)
+    (fun _ => ⟨(loadedFiles markerPath markerChild).1, loadMarkerVisible _ renamedMarker⟩)
+    (fun _ => ⟨(syncedFiles markerPath markerChild).1, syncMarkerVisible _ issuedMarker⟩)
+    (fun _ => ⟨(restored.visible markerPath selectedMarker).1, readyMarkerFrame installed _ syncedMarker⟩)
   rw [first] at keeper settledNames
   have commitFrame := startFrame.trans committedFrame.2
   let custody := NativePendingWriteCensus.ofRawAuthority view cache valid entryCensus entryCache authority
@@ -328,6 +360,9 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
     · rw [← retained.resumed.bytes]
       exact marker
     · exact fun names member => ⟨(settledNames names member).1, (settledNames names member).2.1⟩
+  have liveMarker : state.ObservesLiveWalMarker (storage reached) (inodes reached).visible := by
+    change ((observe reached).visible markerPath).map (inodes reached).visible = target.pair.walBoundary
+    rw [exactMarker.1, Option.map_some, exactMarker.2, selected]
   have ledger : current.current.LedgerSuffix [.acknowledged request batch] next.current := by
     refine ⟨?_, rfl, ?_, ?_⟩
     · simp [next, NativeExecutionEvent.writes]
@@ -337,7 +372,7 @@ theorem NativeOpenedPosition.acknowledgesPublishedWrite
       obtain rfl := List.mem_singleton.mp member
       trivial
   refine ⟨current.uses.writeSchedules, batch, table, next, rfl, prepared, number, rfl, rfl, rfl, ledger, ?_,
-    ⟨sameManifest, rfl⟩, ?_⟩
+    liveMarker, ⟨sameManifest, rfl⟩, ?_⟩
   · refine ⟨rfl, rfl, afterStorage, ?_, ?_⟩
     · intro namedInode named
       change (observe reached).visible ((dir).file (.walSegment (before).writer.wal.active.first)) = some namedInode at named
@@ -410,6 +445,7 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (observe next.reached) (inodes next.reached).visible ∧
+      next.current.ready.state.ObservesLiveWalMarker (observe next.reached) (inodes next.reached).visible ∧
       (next.current.ready.state.writer.target.pair.manifest = start.current.ready.state.writer.target.pair.manifest ∧
         next.current.ready.state.writer.wal.sealed = start.current.ready.state.writer.wal.sealed) ∧
       ∀ {firstOffset through : Nat},
@@ -428,11 +464,12 @@ theorem NativeOpenedPosition.acknowledgesObservedWrite
     exact entry
 
   obtain ⟨schedule, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger, physical,
-    preserved, sameStarts⟩ :=
+    liveMarker, preserved, sameStarts⟩ :=
     start.acknowledgesPublishedWrite appender stager syncer view cache inodes runs files inode buffered
       request lookup rename nonempty returned atWrite effects
   refine ⟨schedule, returned, batch, table, next, sameDirectory, prepared, committed, nextHeap, pins, installed, ledger,
-    ?_, preserved, ?_⟩
+    ?_, ?_, preserved, ?_⟩
+  · rwa [← sameStorage next.reached]
   · rwa [← sameStorage next.reached]
   · intro firstOffset through covers initial nameEffects restore
     refine ⟨sameStarts.symm ▸ covers, ?_⟩

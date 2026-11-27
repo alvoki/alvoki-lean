@@ -462,6 +462,7 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (observe next.reached) (inodes next.reached).visible ∧
+      next.current.ready.state.ObservesLiveWalMarker (observe next.reached) (inodes next.reached).visible ∧
       (let writer := next.current.ready.state.writer
        writer.target.pair.manifest = none ∧ writer.wal.sealed = [] ∧ writer.history = batch ∧
        writer.target.range.through = request.rows.length) ∧
@@ -474,7 +475,7 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
   obtain ⟨cache, sameDir, sameActive, samePending, writeEntry⟩ :=
     opened.writeStorageEntry used view resolved references atDirectory census cacheAt settled
   obtain ⟨schedule, returned, batch, table, next, sameDirectory, prepared, number, atReturn, pins, _, ledger, physical,
-    preserved, keepsNames⟩ :=
+    liveMarker, preserved, keepsNames⟩ :=
     opened.start.acknowledgesObservedWrite appender stager syncer view cache inodes runs observe inode buffered
       request lookup rename nonempty writeEntry (seen cache sameDir sameActive samePending)
   obtain ⟨history, submissions, reads, _⟩ := opened.refinesLedger ledger
@@ -487,7 +488,7 @@ theorem acknowledgesFirstWrite {input : FilePath} {directory : DiskDirectory}
   have cutoff := afterReady.retained.resumed.through.trans
     ((congrArg List.length batchHistory).trans (prepareBatch_spec prepared).1)
   refine ⟨opened.opened, schedule, cache, batch, table, next, sameDirectory, sameDir, sameActive, samePending, returned,
-    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, exactHistory, ?_, ?_, physical,
+    number, prepared, atReturn, pins.trans opened.emptyPins, ledger, exactHistory, ?_, ?_, physical, liveMarker,
     ⟨preserved.1.trans (opened.freshManifestAbsent used), preserved.2.trans seals, batchHistory, cutoff⟩, ?_⟩
   · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.submissions] using submissions
   · simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.reads] using reads
@@ -693,6 +694,7 @@ theorem acknowledgesFirstWriteWithWindow (wrote : observedFirstWrite) :
         ⟨cache.directory, cache.active, cache.pending, cache.references,
           (congrArg DiskDirectory.path sameDirectory).symm ▸ cache.atRoot⟩
         (storage next.reached) (visible next.reached) ∧
+      state.ObservesLiveWalMarker (storage next.reached) (visible next.reached) ∧
       (state.writer.target.pair.manifest = none ∧ state.writer.wal.sealed = [] ∧ state.writer.history = batch ∧
         state.writer.target.range.through = request.rows.length) ∧
       ∀ horizon ≤ through,
@@ -705,7 +707,7 @@ theorem acknowledgesFirstWriteWithWindow (wrote : observedFirstWrite) :
     createdKeeps createdWal rootNames liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame
     phaseInodes tokenInodes
   obtain ⟨initial, _, cache, batch, preparedTable, next, sameDirectory, dirRef, activeRef, pendingRef, write, number,
-    prepared, exactHeap, emptyPins, ledger, batchHistory, _, _, physical, shape, carries⟩ :=
+    prepared, exactHeap, emptyPins, ledger, batchHistory, _, _, physical, liveMarker, shape, carries⟩ :=
     opened.acknowledgesFirstWrite used clientView resolved references atDirectory census cacheAt
       seen.keeperPhysical.inodes runs storage settled appender stager syncer inode buffered request lookup rename nonempty wrote
   rw [dirRef, activeRef, pendingRef, opened.start.directory.trans resolved] at write
@@ -717,7 +719,7 @@ theorem acknowledgesFirstWriteWithWindow (wrote : observedFirstWrite) :
   have count : sequence.toNat = batch.length := by
     rw [number, replay_committed_count batch (prepareBatch_spec prepared).2.1, initialCount, Nat.zero_add]
   refine ⟨cache, batch, preparedTable, next, sameDirectory, initial, write, prepared, number, count,
-    dirRef, activeRef, pendingRef, exactHeap, emptyPins, batchHistory, ledger, physical, shape, ?_⟩
+    dirRef, activeRef, pendingRef, exactHeap, emptyPins, batchHistory, ledger, physical, liveMarker, shape, ?_⟩
   intro horizon covered nameEffects restore
   exact ⟨fun offset _ => Nat.zero_le offset,
     carries horizon (freshWindow.restrictUpper covered).2 nameEffects restore⟩
@@ -748,7 +750,7 @@ theorem replaysFirstAcknowledgedWrite {stream : Type} (wrote : observedFirstWrit
         source.ReplaysWalBeforeCheckpointAtOpen clientView (state).session.directory (state).writer.wal.active.first
           storage visible rebooted namespaceView root batch := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, dirRef, activeRef, pendingRef,
-    exactHeap, _, _, ledger, physical, ⟨noManifest, _, history, cutoff⟩, carries⟩ :=
+    exactHeap, _, _, ledger, physical, _, ⟨noManifest, _, history, cutoff⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
       liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
       modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
@@ -798,7 +800,7 @@ theorem readsAfterCreatedRotation {stream : Type} (wrote : observedFirstWrite)
             source.ReadsClientHistoryAtOpen reopenView (state).session.directory storage visible rebooted
               namespaceView root [.acknowledgedBatch batch] [] batch := by
   obtain ⟨cache, batch, preparedTable, next, _, atOpen, write, prepared, number, count, _, _, _,
-    exactHeap, _, batchHistory, firstLedger, physical, ⟨noManifest, _, _, _⟩, carries⟩ :=
+    exactHeap, _, batchHistory, firstLedger, physical, _, ⟨noManifest, _, _, _⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
       liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
       modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
@@ -898,10 +900,8 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
           (_atClose : ∀ name, checkpointFreeWalChild state.writer.history.length name →
             names released ⟨dir.path.toString ++ "/" ++ name⟩ =
               (observed.view.child directoryObject name).map observed.view.modelObject)
-          (_keeperObserved : ∀ inode, names next.reached (dir.file (.walSegment state.writer.wal.active.first)) = some inode →
-            live next.reached inode = visible next.reached inode)
-          (_markerObserved : ∀ inode, names next.reached (dir.file .walBoundary) = some inode →
-            live next.reached inode ∈ (storage next.reached).files.bytes inode)
+          (_entryBytes : ∀ path, path = dir.file (.walSegment state.writer.wal.active.first) ∨ path = dir.file .walBoundary →
+            ∀ inode, names next.reached path = some inode → live next.reached inode = visible next.reached inode)
           (_pairAt : (modeledFiles released).directory.active =
             ⟨(names released (dir.file .manifest)).map (live released),
               (names released (dir.file .walBoundary)).map (live released)⟩)
@@ -918,14 +918,14 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
           source.ReadsClientHistoryAtOpen openView dir storage live released observed.view directoryObject
             [.acknowledgedBatch batch] [] batch := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
-    _, batchHistory, ledger, physical, ⟨noManifest, noSeals, history, _⟩, carries⟩ :=
+    _, batchHistory, ledger, physical, liveMarker, ⟨noManifest, noSeals, history, _⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
       liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
       modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
   refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, exactHeap, ledger, ?_⟩
   intro firstNames restore cause poisoned synced issued failed afterUnlock root directoryObject guard poisonedAt
     filePrefix file rootRoute loaded rootFailed rotationEffects drops unlocked unlockEffect clears
-  intro released observed live openView successor atEntry atClose keeperObserved markerObserved pairAt keeperAt
+  intro released observed live openView successor atEntry atClose entryBytes pairAt keeperAt
   have positive : 0 < next.current.ready.state.writer.history.length := by
     rw [history, (prepareBatch_spec prepared).1]
     exact List.length_pos_iff.mpr nonempty
@@ -936,10 +936,17 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
     guard returned phase owner held liveLock drops unlocked unlockEffect clears
   have catalog := (carries request.rows.length covered firstNames restore).2.1
   rw [← (prepareBatch_spec prepared).1, ← history] at catalog
+  let markerPath := next.current.ready.state.session.directory.file .walBoundary
+  have markerBytes : (names next.reached markerPath).map (visible next.reached) =
+      next.current.ready.state.writer.target.pair.walBoundary := liveMarker
+  have markerAtEntry : next.current.ready.state.ObservesLiveWalMarker (storage next.reached) (live next.reached) := by
+    change (names next.reached markerPath).map (live next.reached) = _
+    rw [← markerBytes]
+    exact Option.map_congr (entryBytes markerPath (.inr rfl))
   obtain ⟨_, readsAfterOpen⟩ := closed.readsAfterRotationDirectoryError («storage» := storage) _ nonemptyWal
     directoryObject child created empty kept physical.physical
-    (fun inode bound => (keeperObserved inode bound).trans (physical.keeper inode bound))
-    markerObserved (by simp [noSeals]) catalog atEntry atClose modeledFiles pairAt keeperAt noManifest source
+    (fun inode bound => (entryBytes _ (.inl rfl) inode bound).trans (physical.keeper inode bound))
+    markerAtEntry (by simp [noSeals]) catalog atEntry atClose modeledFiles pairAt keeperAt noManifest source
   simp only [returned, Option.some.injEq, Prod.mk.injEq, true_and] at rawClose
   obtain ⟨_, submissions, reads, _⟩ := opened.refinesLedger ledger
   have submitted : next.current.submissions = [.acknowledgedBatch batch] := by
@@ -993,7 +1000,7 @@ theorem readsAfterInterruptedSecondBatch {stream : Type}
             source.ReadsClientHistoryAtOpen clientView next.current.ready.state.session.directory observedStorage visible rebooted
               namespaceView root [.acknowledgedBatch firstBatch, .uncertainBatch stop.batch] [] history := by
   obtain ⟨cache, firstBatch, firstTable, next, sameDirectory, atOpen, write, prepared, _, count, _, _, _,
-    exactHeap, _, batchHistory, firstLedger, physical, ⟨noManifest, _, _, _⟩, carries⟩ :=
+    exactHeap, _, batchHistory, firstLedger, physical, _, ⟨noManifest, _, _, _⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
       liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
       modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote

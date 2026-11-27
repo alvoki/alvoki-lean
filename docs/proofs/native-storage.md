@@ -277,15 +277,21 @@ For reboot, the original writer identifies the directory inode. The
 rotation preserves the root path and cached inode up to the failed fsync.
 The file-sync law settles the new inode's bytes. Under the separate
 directory-sync law, one crash map determines which name survives. The
-exclusive-create proof requires an absent or new binding in every allowed
-map just after create. An earlier unsynced unlink could otherwise leave an
-older inode at that name. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean) ·
+settled WAL catalog excludes an older binding at the successor offset in
+every prior crash map. The phase change and probe preserve that fact. The
+exclusive-create law allows a prior binding or the newly created inode,
+which leaves exactly absence or the new inode here. An earlier unsynced
+unlink would make the settled-catalog premise important. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean) ·
 [Sampled reboot](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
 
-Both continuations use the same reader. A successful open still relies on
-truthful directory enumeration and file observations. On the live path the
-write's durable marker must agree with the marker bytes seen by the reader.
-On reboot the reset must expose the chosen map.
+Both continuations pass the visible marker, keeper, seals and bounded name
+catalog to the same retained-WAL reader. The write establishes its live
+marker at acknowledgement. The file barrier synchronizes the staged inode,
+rename publishes that inode, and the directory barrier and phase setter
+preserve its bytes. The live reader observes that inode through the close.
+After power loss the reader instead takes its bytes from one surviving map
+and the corresponding inode contents. Successful open still relies on
+truthful enumeration and reads. [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 

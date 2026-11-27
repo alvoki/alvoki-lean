@@ -119,7 +119,7 @@ theorem RawSyncCalls.groupedWalPayloadsFromPublication (valid : state.Valid)
   change (observe entry).visible ((dir).file (.walSegment state.writer.wal.active.first)) = some keeper at named
   have priorBinding : (observe entry).visible keeperPath = some keeper := by
     simpa only [firstExact] using named
-  obtain ⟨keeperStored, stageStored, keeperName, _, reachedNames⟩ :=
+  obtain ⟨keeperStored, stageStored, keeperName, _, _, reachedNames⟩ :=
     calls.groupedStorageFromPublication cache view appender stager inodes observe inode buffered
       priorBinding (effects.keeperLive keeper priorBinding) wrote remembered synced
       (effects.appendFile keeper priorBinding) (effects.stageFile keeper) effects.fileBarriers

@@ -429,9 +429,11 @@ theorem RawSyncCalls.groupedStorageFromPublication {heap image : Type} (calls : 
       (WAL.Boundary.encode count.toUInt64) ∧
     (observe reached).visible (directory.file (.walSegment first)) = some keeper ∧
     (inodes reached).visible keeper = priorBytes ++ bytes ∧
+    (∀ inode, (observe reached).visible (directory.file .stagedWalBoundary) = some inode →
+      (inodes reached).visible inode = WAL.Boundary.encode count.toUInt64) ∧
     ∀ names ∈ (observe reached).crashBindings, ∃ prior ∈ (observe staged).crashBindings,
       names (directory.file (.walSegment first)) = prior (directory.file (.walSegment first)) := by
-  obtain ⟨_, _, keeperNamed, keeperIdentity, active, remembered, appendBytes, keptByStage, stagedBytes⟩ :=
+  obtain ⟨_, markerHandle, keeperNamed, keeperIdentity, active, remembered, appendBytes, keptByStage, stagedBytes⟩ :=
     stagedPublicationTargets cache view appender stager inodes observe inode buffered priorBinding priorVisible
       wrote stagedMarker appendEffects stageEffects
   obtain ⟨consumed, effects⟩ := barrierEffects keeperNamed keeperIdentity active remembered
@@ -449,7 +451,24 @@ theorem RawSyncCalls.groupedStorageFromPublication {heap image : Type} (calls : 
   obtain ⟨named, liveBytes, survivors⟩ := calls.groupedKeeperVisible cache view keeperRoute markerRoute grouped inodes runs observe
     effects.keeperEffect effects.markerEffect ⟨effects.consumeKeeper.1, consumedKeeps⟩
   rw [keeperInode] at named liveBytes
-  exact ⟨keeperStored, markerStored, named, liveBytes.trans (keptByStage.trans appendBytes), survivors⟩
+  obtain ⟨_, markerReturned⟩ := calls.groupedFileReturns cache keeperRoute markerRoute grouped
+  obtain ⟨markerNamed, markerSynced, namesAtSync, _⟩ := effects.markerEffect markerReturned
+  let markerInode := (view.descriptors consumed).inode (view.handle consumed markerHandle).2.1.description
+  have markerAtGroup : (observe reached).visible (directory.file .stagedWalBoundary) = some markerInode :=
+    (congrFun namesAtSync _).trans markerNamed
+  have syncedMarker :
+      (inodes reached).crashBytes markerInode = [(inodes reached).visible markerInode] := by
+    rw [markerSynced]
+    simp [markerInode, WalInodeImage.completeFileSync, WalInodeImage.reportFileSync]
+  have liveMarker (inode) (bound : (observe reached).visible (directory.file .stagedWalBoundary) = some inode) :
+      (inodes reached).visible inode = WAL.Boundary.encode count.toUInt64 := by
+    obtain ⟨recorded, reachedName, certified⟩ := markerStored
+    have same := Option.some.inj (reachedName.symm.trans bound)
+    have sampled := Option.some.inj (bound.symm.trans markerAtGroup)
+    subst recorded
+    subst inode
+    exact (List.cons.inj (syncedMarker.symm.trans certified)).1
+  exact ⟨keeperStored, markerStored, named, liveBytes.trans (keptByStage.trans appendBytes), liveMarker, survivors⟩
 
 /-- Local effects of one reached file fsync, including a reported
 failure. The actual return selects the heap. A successful call settles
@@ -724,36 +743,36 @@ theorem RawSyncCalls.publishedStorage {heap image : Type} (calls : RawSyncCalls 
     ⟨settled names allowed (.walSegment first), settled names allowed .walBoundary,
       (settled names allowed .stagedWalBoundary).trans scratchGone⟩⟩
 
-/-- Carry the live keeper through the publication tail and the actual
-ready phase store. These local frames concern the named inode's visible
-bytes, in addition to the separate durable publication guarantees. -/
-theorem RawSyncCalls.publishedKeeperVisible {heap : Type} (calls : RawSyncCalls heap)
+/-- Carry a named live inode through the publication tail and the
+actual ready phase store. A rename can move the inode to its final name. -/
+theorem RawSyncCalls.publishedFileVisible {heap : Type} (calls : RawSyncCalls heap)
     {directory : DiskDirectory} {files : DiskTable.OpenSyncFiles}
-    (cache : OpenSyncCacheRefs files directory.path) {first inode : Nat} {payload : ByteArray}
+    (cache : OpenSyncCacheRefs files directory.path) {inode : Nat} {payload : ByteArray}
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    (fromPath toPath : FilePath)
     (names : heap → FilePath → Option Nat) (visible : heap → Nat → ByteArray)
     {phase : IO.Ref (Phase Installed)} {next : Installed} {grouped renamed issued synced ready : heap}
     {root : IO.FS.Handle}
-    (bound : names grouped (directory.file (.walSegment first)) = some inode)
+    (bound : names grouped fromPath = some inode)
     (bytes : visible grouped inode = payload)
     (moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed)
     (loaded : calls.readDirectory cache.directory renamed = .ok (some root) issued)
     (returned : calls.fsync root issued = .ok () synced)
     (installed : set phase (.ready next) synced = .ok () ready)
     (renameKeeps : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed →
-      names renamed (directory.file (.walSegment first)) = names grouped (directory.file (.walSegment first)) ∧
+      names renamed toPath = names grouped fromPath ∧
       visible renamed inode = visible grouped inode)
     (loadKeeps : calls.readDirectory cache.directory renamed = .ok (some root) issued →
-      names issued (directory.file (.walSegment first)) = names renamed (directory.file (.walSegment first)) ∧
+      names issued toPath = names renamed toPath ∧
       visible issued inode = visible renamed inode)
     (syncKeeps : calls.fsync root issued = .ok () synced →
-      names synced (directory.file (.walSegment first)) = names issued (directory.file (.walSegment first)) ∧
+      names synced toPath = names issued toPath ∧
       visible synced inode = visible issued inode)
     (installKeeps : set phase (.ready next) synced = .ok () ready →
-      names ready (directory.file (.walSegment first)) = names synced (directory.file (.walSegment first)) ∧
+      names ready toPath = names synced toPath ∧
       visible ready inode = visible synced inode) :
-    names ready (directory.file (.walSegment first)) = some inode ∧ visible ready inode = payload := by
+    names ready toPath = some inode ∧ visible ready inode = payload := by
   obtain ⟨renameName, renameBytes⟩ := renameKeeps moved
   obtain ⟨loadName, loadBytes⟩ := loadKeeps loaded
   obtain ⟨syncName, syncBytes⟩ := syncKeeps returned

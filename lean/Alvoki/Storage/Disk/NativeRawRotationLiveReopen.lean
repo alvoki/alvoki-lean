@@ -40,8 +40,7 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     (prior : NativeReadyStorage old (storage current.reached))
     (keeperVisible : ∀ inode, names current.reached ((dir).file (.walSegment (old).writer.wal.active.first)) = some inode →
       visible current.reached inode = (old).writer.wal.active.bytes)
-    (markerVisible : ∀ inode, names current.reached ((dir).file .walBoundary) = some inode →
-      visible current.reached inode ∈ (storage current.reached).files.bytes inode)
+    (markerVisible : (old).ObservesLiveWalMarker (storage current.reached) (visible current.reached))
     (sealedVisible : ∀ segment ∈ (old).writer.wal.sealed,
       ∀ inode, names current.reached ((dir).file (.walSegment segment.first)) = some inode →
       visible current.reached inode ∈ (storage current.reached).files.bytes inode)
@@ -87,12 +86,11 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
       rw [sameImage]
       exact bytes inode atStart
   have pathPayload (name : String) (inScope : checkpointFreeWalChild limit name)
-      (apart : name ≠ renderWalSegmentName newStart) {inode : Nat} {payload : ByteArray}
-      (bound : names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ = some inode)
-      (bytes : visible current.reached inode = payload) :
-      (names released ⟨(dir).path.toString ++ "/" ++ name⟩).map (visible released) = some payload := by
+      (apart : name ≠ renderWalSegmentName newStart) :
+      let path : FilePath := ⟨(dir).path.toString ++ "/" ++ name⟩
+      (names released path).map (visible released) = (names current.reached path).map (visible current.reached) := by
     have carried := present name inScope apart
-    rw [carried.1, bound, Option.map_some, carried.2 inode bound, bytes]
+    exact (congrArg (Option.map (visible released)) carried.1).trans (Option.map_congr carried.2)
   have successorAtEnd : newStart = limit := valid.retained.rotationAtEnd
   have keeperFirst : writer.wal.active.first = newStart :=
     valid.retained.layout.activeEnd.trans successorAtEnd.symm
@@ -133,12 +131,8 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     exact (present "MANIFEST" (.inl (by simp)) (fixedName _ (by simp))).1.trans absent
   have lockBound : names released ((dir).file .lock) = some ((old).census.inode (old).owner.description) :=
     (present "LOCK" (.inl (by simp)) (fixedName _ (by simp))).1.trans prior.lockBound
-  have marker : (names released ((dir).file .walBoundary)).map (visible released) = writer.target.pair.walBoundary := by
-    have payload : writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode (old).writer.history).size.toUInt64) :=
-      (congrArg DirectoryPublication.Bindings.walBoundary valid.retained.resumed.ready.selected).symm.trans
-        (congrArg Publication.Image.active valid.retained.resumed.markerImage)
-    obtain ⟨inode, bound, bytes⟩ := prior.marker.samplesAtBinding (names current.reached) (visible current.reached) rfl markerVisible
-    exact (pathPayload "WAL.commit" (.inl (by simp)) (fixedName _ (by simp)) bound bytes).trans payload.symm
+  have marker : (names released ((dir).file .walBoundary)).map (visible released) = writer.target.pair.walBoundary :=
+    (pathPayload "WAL.commit" (.inl (by simp)) (fixedName _ (by simp))).trans markerVisible
   have pair : (images released).directory.active = writer.target.pair := by
     rw [pairAt, manifestAbsent, Option.map_none, marker]
     exact congrArg (fun manifest => DirectoryPublication.Bindings.mk manifest writer.target.pair.walBoundary) noManifest.symm
@@ -150,10 +144,12 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
   have segmentPayload (segment : WalSegment) (below : segment.first < newStart) {inode : Nat}
       (bound : names current.reached ((dir).file (.walSegment segment.first)) = some inode)
       (bytes : visible current.reached inode = segment.bytes) :
-      (names released ((dir).file (.walSegment segment.first))).map (visible released) = some segment.bytes :=
-    pathPayload (renderWalSegmentName segment.first)
+      (names released ((dir).file (.walSegment segment.first))).map (visible released) = some segment.bytes := by
+    have priorBytes : (names current.reached ((dir).file (.walSegment segment.first))).map (visible current.reached) =
+        some segment.bytes := by rw [bound, Option.map_some, bytes]
+    exact (pathPayload (renderWalSegmentName segment.first)
       (.inr ⟨segment.first, Nat.le_trans (Nat.le_of_lt below) (Nat.le_of_eq successorAtEnd), rfl⟩)
-      (segmentName _ (Nat.ne_of_lt below)) bound bytes
+      (segmentName _ (Nat.ne_of_lt below))).trans priorBytes
   have oldKeep : (names released ((dir).file (.walSegment (old).writer.wal.active.first))).map (visible released) =
       some (old).writer.wal.active.bytes := by
     obtain ⟨inode, bound, _⟩ := prior.keeper

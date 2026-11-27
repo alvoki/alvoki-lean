@@ -91,6 +91,14 @@ theorem CheckpointSurvivingFiles.Frames.stored {footprint : FilePath → Prop}
   obtain ⟨name, bytes⟩ := frame path selected
   exact ⟨inode, name.trans bound, (bytes inode bound).trans durable⟩
 
+/-- An exclusive create installs the new inode. A crash can also keep
+the path's earlier live or durable binding. -/
+structure ExclusiveCreateNameEffect (path : FilePath) (inode : Nat)
+    (before after : CheckpointStorageObservation) : Prop where
+  named : after.files.names path = some inode
+  survivors : ∀ names ∈ after.crashNames, names path = some inode ∨
+    ∃ prior, (prior = before.files.names ∨ prior ∈ before.crashNames) ∧ names path = prior path
+
 /-- A regular-file fsync changes crash bytes at one inode. The
 observation keeps both the visible names and the joint crash maps. -/
 structure RegularFileSyncEffect (inode : Nat) (choices : List ByteArray)

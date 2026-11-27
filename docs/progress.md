@@ -105,14 +105,22 @@ the original batch from the visible marker and WAL segments. A power loss
 instead samples one surviving directory map. Both paths use the same reader.
 [Fresh write through live reopen](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
-The live proof now starts from the literal exclusive-open handle. It uses
-local effects on the named child and the existing WAL files through close.
-The reboot proof follows the cached directory inode to the failed syscall.
+At acknowledgement, the staged inode's file sync, publication rename,
+directory sync and phase store establish the visible marker bytes.
+The live reader carries those bytes through close. For power loss, the
+settled WAL interval rules out a stale successor inode. From the exact
+failed directory fsync, one surviving map determines the keeper and the
+ordinary reader's lookup on the table returned by a successful open.
+The reader uses the observed marker, keeper and seals in both cases.
+[Publication](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
+[Sample to open](../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
 
-**Next obligation.** Derive the live marker bytes at the first write's return
-from its marker publication and the intervening frames. For reboot, compose
-that write's settled name interval with exclusive creation, the sampled
-directory map and the reset used by the next open. Further mixed calls,
-interruptions and maintenance remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
+**Next obligation.** Connect the fresh first write's returned position,
+settled name interval and literal exclusive-create receipt to the reboot
+continuation in one theorem. Derive its successor-at-sync input from that
+receipt, then use the same selected map to record the lookup in the
+first batch's client ledger. The filesystem's survival and byte-sampling
+laws remain explicit. Further mixed calls, interruptions and maintenance
+remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).
