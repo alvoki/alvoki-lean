@@ -105,13 +105,13 @@ lean_exe «alvoki-disk-checks» where
   root := `Alvoki.Checks.DiskTableChecks
 
 lean_exe «alvoki-disk-replay» where
-  root := `DiskReplayBench
+  root := `Alvoki.Bench.Disk.DiskReplayBench
 
 lean_exe «alvoki-disk-write» where
-  root := `DiskWriteBench
+  root := `Alvoki.Bench.Disk.DiskWriteBench
 
 lean_exe «alvoki-disk-checkpoint» where
-  root := `DiskCheckpointBench
+  root := `Alvoki.Bench.Disk.DiskCheckpointBench
 
 lean_exe «alvoki-wide-accessors» where
   root := `WideAccessorBench
@@ -119,10 +119,10 @@ lean_exe «alvoki-wide-accessors» where
   moreLeancArgs := #["-include", "runtime-experiment/wide-accessors/accessors.h"]
 
 lean_exe «alvoki-disk-workload» where
-  root := `DiskWorkloadBench
+  root := `Alvoki.Bench.Disk.DiskWorkloadBench
 
 lean_exe «alvoki-disk-crash» where
-  root := `DiskCrashBench
+  root := `Alvoki.Bench.Disk.DiskCrashBench
 
 lean_exe «alvoki-disk-batch» where
-  root := `DiskBatchBench
+  root := `Alvoki.Bench.Disk.DiskBatchBench

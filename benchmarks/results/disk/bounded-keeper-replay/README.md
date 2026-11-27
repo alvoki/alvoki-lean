@@ -2,7 +2,7 @@
 
 The baseline `5297220` reads the whole keeper. Candidate `6154dc8` requests only the marker-selected keeper bytes. The bounded runtime is integrated through `4bde9c4` and the matching benchmark probe through `159dee0`. Both measured binaries use that probe and the pinned stock Lean release toolchain. [Environment](environment.txt) · [Raw final resource samples](resources-cpu1.csv)
 
-Both arms reopen 2,048 ascending frames with no checkpoint on CPU 1. The segment layouts contain the exact same frames and absolute marker. Each keeper's uncommitted tail is zero-filled. The numbers below are medians of three runs per side. Linux process peak RSS is sampled from `VmHWM` immediately after open, before the row checker. A separate fresh copy runs under `strace` to count bytes returned by WAL segment read syscalls. This measures kernel-to-process bytes, including runtime read-ahead. [Probe](../../../../lean/DiskReplayBench.lean) · [Driver](../../../disk_replay_resources.py)
+Both arms reopen 2,048 ascending frames with no checkpoint on CPU 1. The segment layouts contain the exact same frames and absolute marker. Each keeper's uncommitted tail is zero-filled. The numbers below are medians of three runs per side. Linux process peak RSS is sampled from `VmHWM` immediately after open, before the row checker. A separate fresh copy runs under `strace` to count bytes returned by WAL segment read syscalls. This measures kernel-to-process bytes, including runtime read-ahead. [Probe](../../../../lean/Alvoki/Bench/Disk/DiskReplayBench.lean) · [Driver](../../../disk_replay_resources.py)
 
 | Segments | Keeper tail | Before WAL read bytes | After WAL read bytes | Before peak RSS, KiB | After peak RSS, KiB |
 |---:|---:|---:|---:|---:|---:|
@@ -38,7 +38,7 @@ The small aligned comparison and both larger comparisons have intervals spanning
 
 ## Reproduce
 
-Build each revision with the pinned release toolchain, applying the same [benchmark probe](../../../../lean/DiskReplayBench.lean) to both. Build `alvoki-disk-replay` for the resource run and `alvoki-disk-checkpoint` for the timed matrix.
+Build each revision with the pinned release toolchain, applying the same [benchmark probe](../../../../lean/Alvoki/Bench/Disk/DiskReplayBench.lean) to both. Build `alvoki-disk-replay` for the resource run and `alvoki-disk-checkpoint` for the timed matrix.
 
 ```sh
 python3 benchmarks/disk_replay_resources.py \

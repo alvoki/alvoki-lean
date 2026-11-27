@@ -116,7 +116,7 @@ Use `--segments 1 8 32` to compare segment layouts with the same frame stream. T
 
 ### WAL reopen memory and bytes read
 
-Build the native `alvoki-disk-replay` executable with the resource probe in each segmented checkout. The Python driver measures Linux process peak RSS immediately after one open and uses a second open under `strace` to sum bytes returned by reads of WAL segment paths. Each open starts from a fresh copy of the same marked fixture and validates the recovered rows. Read counts include userspace buffering and describe bytes returned by the kernel to the process. Use the timed replay command separately for latency. [Resource driver](../benchmarks/disk_replay_resources.py) · [Native probe](../lean/DiskReplayBench.lean)
+Build the native `alvoki-disk-replay` executable with the resource probe in each segmented checkout. The Python driver measures Linux process peak RSS immediately after one open and uses a second open under `strace` to sum bytes returned by reads of WAL segment paths. Each open starts from a fresh copy of the same marked fixture and validates the recovered rows. Read counts include userspace buffering and describe bytes returned by the kernel to the process. Use the timed replay command separately for latency. [Resource driver](../benchmarks/disk_replay_resources.py) · [Native probe](../lean/Alvoki/Bench/Disk/DiskReplayBench.lean)
 
 ```sh
 python3 benchmarks/disk_replay_resources.py \
