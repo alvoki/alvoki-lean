@@ -93,8 +93,8 @@ theorem table_descriptor_rejected (report : stat initial = .ok metadata after)
   simp [withTableDescriptor, Bind.bind, EStateM.bind, report, invalid]
   rfl
 
-/-- The successful stat permits entry to the scoped open. A reported open
-error returns before the descriptor action is reached. -/
+/-- The successful stat permits entry to the scoped open. Propagate the
+scope's error, whether acquisition or the descriptor action reported it. -/
 theorem table_descriptor_open_error (report : stat initial = .ok metadata checked)
     (valid : isTableFile metadata = true)
     (openError : withRead use checked = .error error after) :
