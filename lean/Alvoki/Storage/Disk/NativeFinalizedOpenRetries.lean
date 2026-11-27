@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeRawFinalizedOpenError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRawFinalizedOpenError
 import Alvoki.Storage.Disk.NativeRawOpenReturn
 
 namespace Alvoki.Storage.DiskSession
