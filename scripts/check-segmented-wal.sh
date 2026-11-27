@@ -111,6 +111,13 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.readControl_canonical
 #check_axioms Native.acquireRoot_selects
 #check_axioms Native.openChild_dispatch
+#check_axioms Native.openChild_cell
+#check_axioms Child.Recoverable.nativeCloseAfterOpen
+#check_axioms Native.acquireStore_bind
+#check_axioms Native.openWithStore_reached
+#check_axioms Model.nativeAcquireBinding_ok
+#check_axioms Model.nativeOpenBinding_refines
+#check_axioms Model.nativeOpenBinding_healthy
 #check_axioms Native.scan_ready
 #check_axioms Native.close_ready
 #check_axioms Native.release_reached

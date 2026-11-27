@@ -165,6 +165,37 @@ theorem openRootDirectory_usesCanonicalPath (dir root : FilePath) (held : descri
     openRootDirectoryWith resolve openFile dir = .ok (root, held) := by
   simp [openRootDirectoryWith, Bind.bind, Pure.pure, Except.bind, Except.pure, resolved, opened]
 
+/-- A successful acquisition passes the held directory and lock descriptions
+and their common canonical path to allocation. A failed lock never allocates. -/
+theorem acquireStore_bind [Monad m] [LawfulMonad m]
+    (resolve : FilePath → m FilePath) (openDirectory : FilePath → IO.FS.Mode → m directory)
+    (lockRoot : FilePath → m lock) (allocate : FilePath → directory → lock → m store)
+    (dir : FilePath) :
+    acquireStoreWith resolve openDirectory lockRoot allocate dir = (do
+      let root ← resolve dir
+      let directory ← openDirectory root .read
+      let lock ← lockRoot root
+      allocate root directory lock) := by
+  simp [acquireStoreWith, openRootDirectoryWith, bind_assoc]
+
+/-- Installation and failure cleanup receive the same acquired store. -/
+theorem openWithStore_reached (acquire : EStateM abort state (Except String store))
+    (load : store → ExceptT String (EStateM abort state) phase)
+    (newRef : phase → ExceptT String (EStateM abort state) cell)
+    (newMutex : ExceptT String (EStateM abort state) mutex)
+    (release : store → ExceptT String (EStateM abort state) Unit) (before : state) :
+    (openWithStore (error := String) (ExceptT.mk acquire) load newRef newMutex release).run before =
+      match acquire before with
+      | .ok (.ok owned) reached =>
+        (installPhaseWith (error := String) (load owned) newRef newMutex (release owned)).run reached
+      | .ok (.error error) reached => .ok (.error error) reached
+      | .error token reached => .error token reached := by
+  simp only [openWithStore, ExceptT.run, ExceptT.mk, Bind.bind, ExceptT.bind,
+    EStateM.bind, ExceptT.bindCont]
+  cases acquire before with
+  | error => rfl
+  | ok value _ => cases value <;> rfl
+
 /-- Interpret cleanup against the same reached state as installation, even
 when phase installation failed after the root protocol changed the disk. -/
 theorem installPhase_reached (load : EStateM abort state (Except String phase))
@@ -229,8 +260,67 @@ theorem openChild_dispatch [Monad m] [LawfulMonad m] [MonadExceptOf String m]
   have boundaryNames : ["policy", "segment", "commit.0", "commit.1"].all
       (#["policy", "segment", "commit.0", "commit.1"] : Array String).contains = true := by simp
   cases p <;>
-    simp only [openChildWith, policyStamp, log, marked, logNames, boundaryNames, beq_self_eq_true,
+    simp only [openChildWith, validateChildWith, policyStamp, log, marked, logNames, boundaryNames, beq_self_eq_true,
       ↓reduceIte, Bool.false_eq_true, Bool.and_self, pure_bind]
+
+/-- The shared child schedule, interpreted with an explicit active reference.
+Inspection reads preserve the cell. A reported scan error retains the exact
+new child for the containing store's cleanup. -/
+theorem openChild_cell (root : FilePath) (policy : Policy) (id : Nat)
+    (close : child → Except String Unit)
+    (inspect : FilePath → Except String (Array String))
+    (size : FilePath → Except String Nat) (policyText : FilePath → Except String String)
+    (openChild : FilePath → Except String child) (scan : child → Except String (List Bytes))
+    (held : Option (Nat × child)) :
+    let lift : {α : Type} → Except String α →
+        ExceptT String (StateM (Option (Nat × child))) α :=
+      fun {_} result cell => (result, cell)
+    let take : ExceptT String (StateM (Option (Nat × child))) (Option (Nat × child)) :=
+      fun cell => (.ok cell, none)
+    let store : Nat → child → ExceptT String (StateM (Option (Nat × child))) Unit :=
+      fun index handle _ => (.ok (), some (index, handle))
+    let dir := segmentPath root id
+    (openChildWith (closeChildWith take (fun c => lift (close c)))
+      (fun p => lift (inspect p)) (fun p => lift (size p)) (fun p => lift (policyText p))
+      (fun p => lift (openChild p)) store (fun c => lift (scan c)) root policy id).run held =
+      match closeChildWith (m := Except String) (.ok held) close with
+      | .error err => (.error err, none)
+      | .ok () =>
+        match validateChildWith inspect size policyText dir policy id with
+        | .error err => (.error err, none)
+        | .ok () =>
+          match openChild dir with
+          | .error err => (.error err, none)
+          | .ok child => (scan child, some (id, child)) := by
+  have validate (cell : Option (Nat × child)) :
+      (validateChildWith (m := ExceptT String (StateM (Option (Nat × child))))
+        (fun path state => (inspect path, state))
+        (fun path state => (size path, state))
+        (fun path state => (policyText path, state)) (segmentPath root id) policy id).run cell =
+      (validateChildWith inspect size policyText (segmentPath root id) policy id, cell) := by
+    simp only [validateChildWith, ExceptT.run, Bind.bind, ExceptT.bind,
+      ExceptT.bindCont, ExceptT.mk, StateT.bind, Except.bind]
+    cases listed : inspect (segmentPath root id) <;>
+      cases sized : size (segmentPath root id / "policy") <;>
+      cases text : policyText (segmentPath root id / "policy") <;>
+      simp_all [Pure.pure, StateT.pure, ExceptT.pure] <;>
+      repeat' first | rfl | (split <;> try simp_all [StateT.bind, StateT.pure, Bind.bind, Pure.pure, ExceptT.bindCont, ExceptT.mk])
+  simp only [ExceptT.run] at validate
+  simp only [openChildWith, closeChildWith, ExceptT.run, Bind.bind, ExceptT.bind,
+    ExceptT.bindCont, ExceptT.mk, StateT.bind, Except.bind]
+  cases held with
+  | none =>
+    simp [Bind.bind, Pure.pure, StateT.bind, StateT.pure, ExceptT.bindCont,
+      ExceptT.pure, ExceptT.mk, validate]
+    cases validated : validateChildWith inspect size policyText (segmentPath root id) policy id <;>
+      cases opened : openChild (segmentPath root id) <;> simp_all <;> rfl
+  | some pair =>
+    cases pair with
+    | mk index old =>
+      cases closed : close old <;>
+        simp [closed, Bind.bind, Pure.pure, StateT.bind, StateT.pure, ExceptT.bindCont, validate]
+      all_goals cases validated : validateChildWith inspect size policyText (segmentPath root id) policy id <;>
+        cases opened : openChild (segmentPath root id) <;> simp_all <;> rfl
 
 end WalRecoverySlice.Segmented.Native
 
@@ -836,6 +926,99 @@ theorem nativeInstallModel_healthy (owned : store) (root : FilePath) (r : RootRe
   have proved := nativeInstallModel_refines owned root r reports s prior
   rw [result] at proved
   exact ⟨session, after, result, proved.2.1, proved.2.2.2⟩
+
+/-- Directory and lock identities are separate open descriptions under the
+same resolved root. Their binding is supplied by the Linux primitives. -/
+structure RootBinding (directory lock : Type) where
+  root : FilePath
+  directoryHandle : directory
+  lockHandle : lock
+
+/-- Model the acquisition primitives by their results. Reference allocation
+is BaseIO and the installed value carries the exact acquired binding. -/
+def nativeAcquireBinding
+    (resolve : FilePath → Except String FilePath)
+    (openDirectory : FilePath → IO.FS.Mode → Except String directory)
+    (lockRoot : FilePath → Except String lock) (dir : FilePath) :
+    Except String (RootBinding directory lock) :=
+  Native.acquireStoreWith resolve openDirectory lockRoot
+    (fun root directoryHandle lockHandle => .ok ⟨root, directoryHandle, lockHandle⟩) dir
+
+theorem nativeAcquireBinding_ok
+    (resolve : FilePath → Except String FilePath)
+    (openDirectory : FilePath → IO.FS.Mode → Except String directory)
+    (lockRoot : FilePath → Except String lock) (dir root : FilePath)
+    (resolved : resolve dir = .ok root)
+    (opened : openDirectory root .read = .ok directoryHandle)
+    (locked : lockRoot root = .ok lockHandle) :
+    nativeAcquireBinding resolve openDirectory lockRoot dir =
+      .ok ⟨root, directoryHandle, lockHandle⟩ := by
+  unfold nativeAcquireBinding
+  rw [Native.acquireStore_bind]
+  simp [Bind.bind, Except.bind, resolved, opened, locked]
+
+private def nativeOpenBinding (binding : Except String (RootBinding directory lock))
+    (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports) :
+    M (Native.Phase (RootBinding directory lock) × Unit) :=
+  Native.openWithStore (error := String) (fun s => .ok binding s)
+    (fun owned => Native.reopenPhaseWith (nativeReopenOps owned.root r reports) owned)
+    pure (pure ()) (fun _ => pure ())
+
+private theorem nativeOpenBinding_run (binding : Except String (RootBinding directory lock))
+    (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports) (s : State) :
+    (nativeOpenBinding binding r reports).run s =
+      match binding with
+      | .ok owned => (nativeInstallModel owned (nativeReopenOps owned.root r reports)).run s
+      | .error err => .ok (.error err) s := by
+  unfold nativeOpenBinding
+  cases binding <;> rfl
+
+/-- An acquire failure leaves the previous disk recoverable. After acquiring
+the root, the same binding is retained in the ready phase and scan. -/
+theorem nativeOpenBinding_refines (binding : Except String (RootBinding directory lock))
+    (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
+    (prior : Recoverable known request s.disk) :
+    match (nativeOpenBinding binding r reports).run s with
+    | .ok (.ok (.ready owner session, ())) after =>
+      binding = .ok owner ∧ Installed session after.disk ∧
+      Contract.Step (.offline known request) (.opened session.view) (.online session.view) ∧
+      Native.scanWith (m := Except String) (.ready owner session) = .ok session.view
+    | .ok (.ok _) _ => False
+    | .ok (.error _) after | .error _ after => Recoverable known request after.disk := by
+  rw [nativeOpenBinding_run]
+  cases binding with
+  | error => exact prior
+  | ok owned =>
+    dsimp only
+    have installed := nativeInstallModel_refines owned owned.root r reports s prior
+    cases ran : (nativeInstallModel owned (nativeReopenOps owned.root r reports)).run s with
+    | error => rw [ran] at installed; exact installed
+    | ok result after =>
+      rw [ran] at installed
+      cases result with
+      | error => exact installed
+      | ok value =>
+        obtain ⟨phase, mutexValue⟩ := value
+        cases mutexValue
+        cases phase with
+        | ready owner session =>
+          exact ⟨congrArg Except.ok installed.1.symm, installed.2⟩
+        | poisoned | closed => exact installed
+
+/-- Healthy acquisition and primitive reports produce the installed session
+through the shared public open schedule. -/
+theorem nativeOpenBinding_healthy (owned : RootBinding directory lock)
+    (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
+    (prior : Recoverable known request s.disk) (rootOK : HealthyRoot r)
+    (childrenOK : HealthyChildren reports)
+    (representable : ∀ c, s.disk.liveControl = some c →
+      c.capacity ≤ 255 ∧ c.active ≤ ControlCodec.wordMax ∧ c.discarded ≤ ControlCodec.wordMax) :
+    ∃ session after, (nativeOpenBinding (.ok owned) r reports).run s =
+        .ok (.ok (.ready owned session, ())) after ∧
+      Installed session after.disk ∧
+      Native.scanWith (m := Except String) (.ready owned session) = .ok session.view := by
+  rw [nativeOpenBinding_run]
+  exact nativeInstallModel_healthy owned owned.root r reports s prior rootOK childrenOK representable
 
 /-- The same continuation applies to every publication cut that reports an
 error. The interpreted native reopen runs on each reached disk. -/

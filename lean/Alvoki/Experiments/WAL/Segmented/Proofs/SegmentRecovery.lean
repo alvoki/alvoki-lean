@@ -93,6 +93,20 @@ theorem Recoverable.nativeOpen (dir : System.FilePath) (reports : SingleFile.Ope
       obtain ⟨_, _, _, _, _, held, stamp, names, chosen, cursor, valid, settled, installed⟩ := result
       exact ⟨held, stamp, names, chosen, ⟨⟨valid, settled⟩, cursor⟩, SingleFile.scan_opened ready after installed⟩
 
+/-- The child produced by native open can be released at its exact reached
+image. Reported unlock failure still drops this description's ownership. -/
+theorem Recoverable.nativeCloseAfterOpen (dir : System.FilePath)
+    (openReports closeReports : SingleFile.OpenReports) (start : SingleFile.OpenImage)
+    (free : start.held = false) (prior : Recoverable policy known pending start.image)
+    (returned : SingleFile.openExistingModel dir policy openReports start = .ok (.ok ready) after) :
+    let closed := SingleFile.postState (SingleFile.closeModel policy closeReports (SingleFile.storedPhase ready) after)
+    closed.closed = true ∧ closed.held = false ∧ closed.image = after.image := by
+  have result := SingleFile.openExisting_refines dir policy openReports start free prior.dirty prior.markers
+  rw [returned] at result
+  obtain ⟨lock, _, _, _, _, _, _, _, _, _, _, _, installed⟩ := result.2.2
+  have closed := SingleFile.close_opened policy closeReports ready lock after installed
+  exact ⟨closed.1, closed.2.1, closed.2.2.1⟩
+
 /-- Compose the public open producer with append on its exact stored
 writer and marker bindings. The single-file contract lifts directly to
 the child recovery or installation required by the segmented schedule. -/

@@ -154,19 +154,28 @@ canonical bindings, and an absent metadata result means the canonical name
 is absent. Child inspection uses complete relative basenames and singly
 linked regular files. Unlink on a retired child can affect those inodes
 and its directory; rmdir controls the root binding independently.
-The root phase theorem gives the installed view or retryability from the
-exact reached disk. The install theorem interprets reference and mutex
-creation by retaining the phase value and erasing resource identity.
-The close schedules show that the phase and child reference are cleared
-before release, then root unlock follows child close even on a reported
-error. The child dispatch proof models successful path and policy checks and
-uses the same returned child value for installation and scan. Its disk
-interpreter erases reference and close effects. The remaining lifecycle proof
-must track actual child reference ownership, root acquisition and cleanup
-through every outcome. `nativeInstallModel_healthy` now proves progress and
-the matching scan under healthy single-file and root reports and a
-representable CONTROL binding. Collection accepts arbitrary successfully
-inspected members, including nonempty retired directories.
+The public install schedule acquires one store and passes it to both
+phase installation and failure cleanup. The acquisition proof follows the
+same resolved root through directory open, lock lookup and store allocation.
+Its primitive premises are canonical path resolution, descriptor-to-inode
+binding and lock acquisition on that description. The binding interpreter
+retains the acquired descriptor identities in the ready phase. A reported
+acquisition error leaves the disk recoverable.
+
+The child cell proof follows the actual dispatch. Validation and child-open
+errors leave the cell empty after the previous child is taken. If the scan
+fails after installation, cleanup can take the newly opened child from the
+cell. A returned single-file child has its existing append authority, and
+closing that exact child clears its phase and drops ownership without
+changing its reached file image. Root unlock follows child close even when
+the latter reports an error.
+
+`nativeOpenBinding_healthy` proves progress and the matching scan for the
+interpreted acquisition, root and child reports and a representable CONTROL
+binding. The native bootstrap and publication producers still need to derive
+representability. The remaining lifecycle proof must carry the real child
+reference and custody through the entire disk interpretation, including
+release of the acquired root and healthy progress with those resources.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be

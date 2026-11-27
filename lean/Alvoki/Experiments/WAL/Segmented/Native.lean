@@ -119,6 +119,18 @@ private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   let child ← SingleFile.create dir p
   s.active.set (some (id, child))
 
+@[inline] def validateChildWith [Monad m] [MonadExceptOf String m]
+    (inspect : FilePath → m (Array String)) (policySize : FilePath → m Nat)
+    (readPolicy : FilePath → m String) (dir : FilePath) (p : Policy) (id : Nat) :
+    m Unit := do
+  let names ← inspect dir
+  let required := if p == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
+  unless required.all names.contains do throw s!"incomplete segment {id}"
+  let expected := policyStamp p
+  unless (← policySize (dir / "policy")) == expected.utf8ByteSize &&
+      (← readPolicy (dir / "policy")) == expected do
+    throw s!"segment policy mismatch at {id}"
+
 /-- A selected child is opened at its computed path, installed in the
 active cell, and scanned through the same returned handle. -/
 @[inline] def openChildWith [Monad m] [MonadExceptOf String m]
@@ -129,13 +141,7 @@ active cell, and scanned through the same returned handle. -/
     m (List Bytes) := do
   closePrevious
   let dir := segmentPath root id
-  let names ← inspect dir
-  let required := if p == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
-  unless required.all names.contains do throw s!"incomplete segment {id}"
-  let expected := policyStamp p
-  unless (← policySize (dir / "policy")) == expected.utf8ByteSize &&
-      (← readPolicy (dir / "policy")) == expected do
-    throw s!"segment policy mismatch at {id}"
+  validateChildWith inspect policySize readPolicy dir p id
   let child ← openChild dir
   install id child
   scanChild child
@@ -246,21 +252,36 @@ structure Handle where private mk ::
     release
     throw err
 
+/-- Both descriptors and the store use the single resolved root path. -/
+@[inline] def acquireStoreWith [Monad m]
+    (resolve : FilePath → m FilePath) (openDirectory : FilePath → IO.FS.Mode → m directory)
+    (lockRoot : FilePath → m lock) (allocate : FilePath → directory → lock → m store)
+    (dir : FilePath) : m store := do
+  let (root, directory) ← openRootDirectoryWith resolve openDirectory dir
+  let lock ← lockRoot root
+  allocate root directory lock
+
+private def acquireStore (dir : FilePath) : IO Store :=
+  acquireStoreWith IO.FS.realPath IO.FS.Handle.mk acquireRoot (fun root directory lock => do
+    let active ← IO.mkRef none
+    let controlWriter ← IO.mkRef none
+    return {root, directory, lock, active, controlWriter}) dir
+
+@[inline] def openWithStore [Monad m] [MonadExceptOf error m]
+    (acquire : m store) (load : store → m phase) (newRef : phase → m cell)
+    (newMutex : m mutex) (release : store → m Unit) : m (cell × mutex) := do
+  let owned ← acquire
+  installPhaseWith (error := error) (load owned) newRef newMutex (release owned)
+
 private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
-  let (root, directory) ← openRootDirectoryWith IO.FS.realPath IO.FS.Handle.mk dir
-  let lock ← acquireRoot root
-  let active ← IO.mkRef none
-  let controlWriter ← IO.mkRef none
-  let store : Store := {root, directory, lock, active, controlWriter}
-  let callbacks := store.callbacks
-  let load := match fresh with
+  let load (store : Store) := match fresh with
     | some (policy, cap) => do
-      unless (← entries root).all (fun e => e.fileName == "lock") do
+      unless (← entries store.root).all (fun e => e.fileName == "lock") do
         throw <| IO.userError "segmented WAL directory is not empty"
-      pure (.ready store (← checked (Segmented.create callbacks policy cap)))
-    | none => checked (reopenPhaseWith callbacks store)
-  let (state, mutex) ← installPhaseWith (error := IO.Error) load
-    (fun phase => IO.mkRef phase) (liftM Std.BaseMutex.new) store.release
+      pure (.ready store (← checked (Segmented.create store.callbacks policy cap)))
+    | none => checked (reopenPhaseWith store.callbacks store)
+  let (state, mutex) ← openWithStore (error := IO.Error) (acquireStore dir) load
+    (fun phase => IO.mkRef phase) (liftM Std.BaseMutex.new) Store.release
   return ⟨state, mutex⟩
 
 def create (dir : FilePath) (policy : Policy) (capacity : Nat) : IO Handle :=
