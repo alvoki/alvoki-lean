@@ -118,11 +118,11 @@ state are outside this experiment.
 
 ## Native refinement follow-up
 
-The single-file recovery worker supplies the existing child
-`Recoverable` and `Installed` facts from descriptor-level effects.
-The next producer must connect acquisition and cleanup to that worker,
-then bind the returned child to the root session that `openExisting` and
-`scan` expose to L0. [Single-file premise audit](../Proofs/README.md#native-recovery-worker)
+The public single-file recovery schedule supplies the child
+`Recoverable` and `Installed` facts and the cached scan result from local
+primitive effects. Native segmented recovery still needs to bind that
+child to the root session that `openExisting` and `scan` expose to L0.
+[Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
 For CONTROL, consider reusing DurableBlob's write, sync, rename and
 directory-barrier semantics with the existing control codec and the

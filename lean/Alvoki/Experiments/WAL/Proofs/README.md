@@ -26,32 +26,43 @@ states those assumptions and what remains outside the theorem. Run
 `bash scripts/check-wal-recovery-slice.sh` from the repository root for the
 slice's kernel and axiom checks, simulations and Linux fixtures.
 
-## Native recovery worker
+## Public native recovery
 
-`SingleFile.install` calls the shared `recoverWith` worker after opening the
-segment and the policy's marker files. Recovery reads and repairs the
-segment through one read/write description and syncs that same description.
-The append stream retains its own data barrier. Explicit-length
-`ftruncate` replaces the extra prefix read and cursor-based truncate.
+Linux IO and the local model run the same `openExistingWith` schedule.
+[`SingleFile.openLocations`](NativeOpen.lean) checks the path and mode of
+each lock, policy, data, marker, and directory open issued by the shared
+dispatcher. The local model interprets each role at that reached binding. The policy barrier uses the description that
+supplied the policy bytes. The data barrier uses the read/write description
+that was read and, if necessary, truncated. Explicit-length `ftruncate`
+removes the previous prefix read. The pre-opened append stream keeps its
+own barriers.
 
-[`SingleFile.recover_eq`](NativeRecovery.lean) connects the worker's
-descriptor-level interpretation to the existing recovery model. It checks
-the start-of-file reads, the marker pair selected by slot, the repair length,
-and the sync of the repaired data description through the shared code.
-[`Child.Recoverable.nativeRecovery`](../Segmented/Proofs/SegmentRecovery.lean)
-uses that result to preserve the retry invariant at the reached image and
-supply the installed cursor and history on success. This composition is
-generic over the admitted input state, policy and primitive reports.
+[`SingleFile.openExisting_refines`](NativeOpen.lean) composes acquisition,
+scheduled recovery, policy and directory barriers, and installation. It
+returns the selected history and canonical cursor with both namespace
+barriers settled. An ordinary failure releases the lock and preserves the
+retry invariant at the reached image, including if recovery already
+changed that image. A process stop drops the lock without changing the
+reached child bytes. The shared ready-phase constructor stores that exact
+cursor and history. `scanWith` returns its history and `closeWith` clears
+the phase before releasing the lock, including on unlock error.
+[`Child.Recoverable.nativeOpen`](../Segmented/Proofs/SegmentRecovery.lean)
+derives the current child contracts and scan result from the complete open
+model, with acquisition and cleanup included.
 
-| Boundary | Premise owner |
+| Boundary | External primitive premises |
 | --- | --- |
-| Read from start | The runtime rewinds and returns the whole file as exact bytes, or raises a read error. The read leaves the projected file image alone. |
-| Truncate at a length | The descriptor refers to the data file. The native wrapper issues `ftruncate` for the selected prefix length. The filesystem supplies whether an error precedes or follows the file change. The supported lengths fit Linux x86-64 `off_t`. |
-| Sync | The runtime issues fsync on the supplied description. The filesystem supplies whether the sync effect happened. The existing recovery schedule orders both marker barriers and the data repair. |
-| Acquisition and lifetime | The worker assumes the already held data and marker descriptions come from the locked directory. The proof connecting native acquisition, post-recovery policy and directory barriers, cleanup, and the actual returned handle remains open. |
-| Background persistence | The worker proof uses `Persistence.Effects`. Coupling independent writeback in a native run to the existing scheduled recovery theorem remains open. |
+| Directory and file descriptions | The owner supplies an existing admitted directory and policy, stable names and distinct regular inodes, except that the two segment opens reach the same inode. The directory's parent binding is durable. Open resolves the requested binding or errors. Open may create the dedicated lock file. C stream construction and disabling buffering preserve the bound file description. |
+| Lock and handle lifetime | Lock acquisition is exclusive for cooperating owners. The lock remains held across the body until explicit unlock or the last drop of its private description, including a failed unlock or process exit. The runtime releases local references on failure and serializes shared phase reads and writes under the mutex. Ref and mutex allocation and ordinary process-resource handling follow the Lean runtime semantics. |
+| Reads, repair and barriers | Reads from the start return the exact visible bytes or an error. Truncate uses the requested nonnegative prefix length on the supplied read/write description. On Linux x86-64 the reachable lengths fit signed `off_t`. Sync binds to the supplied description and settles the relevant bytes or directory entries. A truncate or barrier can report an error before or after its effect. |
+| Background persistence | The existing scheduled model admits independent whole-file writeback before each reached worker primitive. Writebacks during acquisition and after the worker commute with the metadata-only steps and are represented at those boundaries. The established byte-level fault and crash assumptions still apply. |
 
-The single-file check kernel-checks and audits the worker proof and runs
-the native recovery and partial-write fixtures. The segmented check
-audits the consumer composition. The fixtures exercise Linux error and
-recovery paths. The refinement is relative to the primitive effects above.
+The focused check kernel-checks the worker and public proofs, audits their
+dependencies and runs the native fixtures. The added fixture exercises
+truncation to zero, append on the pre-opened append description, and two
+subsequent successful reopens, for both policies. The fixtures sample
+behavior of Linux and its runtime. The proof establishes the contract
+relative to the primitive assumptions in the table.
+
+Native append, bootstrap, segmented root recovery, and CONTROL publication
+retain their separate refinement obligations.

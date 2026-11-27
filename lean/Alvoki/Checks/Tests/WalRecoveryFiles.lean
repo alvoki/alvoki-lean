@@ -87,6 +87,24 @@ private def handleRegressions (dir : FilePath) (policy : Policy) : IO Unit := do
   unless (← SingleFile.scan h3) == [[3]] do throw <| IO.userError "reopened history mismatch"
   SingleFile.close h3
 
+private def truncateToZero (dir : FilePath) (policy : Policy) : IO Unit := do
+  let empty ← SingleFile.create dir policy
+  SingleFile.close empty
+  let path := dir / "segment"
+  IO.FS.writeBinFile path (encodeBytes ((frame 1 [9]).take 3))
+  let repaired ← SingleFile.openExisting dir
+  unless (← SingleFile.scan repaired).isEmpty && (← IO.FS.readBinFile path).isEmpty do
+    throw <| IO.userError "expected recovery to truncate the segment to zero"
+  SingleFile.append repaired [7]
+  unless (← IO.FS.readBinFile path) == encodeBytes (frame 1 [7]) do
+    throw <| IO.userError "pre-opened append descriptor did not write at the repaired end"
+  SingleFile.close repaired
+  for _ in [:2] do
+    let reopened ← SingleFile.openExisting dir
+    unless (← SingleFile.scan reopened) == [[7]] do
+      throw <| IO.userError "repeated reopen changed the repaired history"
+    SingleFile.close reopened
+
 private def refuseNonempty (dir : FilePath) : IO Unit := do
   IO.FS.writeBinFile (dir / "segment") ⟨#[17, 18]⟩
   let result ← (SingleFile.create dir .boundary).toBaseIO
@@ -146,6 +164,7 @@ def main (args : List String) : IO Unit := do
   for policy in [WalRecoverySlice.Policy.logOnly, .boundary] do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.fixture dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.handleRegressions dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
   IO.FS.withTempDir WalRecoveryFiles.refuseNonempty
   IO.println "WAL recovery file fixtures passed"

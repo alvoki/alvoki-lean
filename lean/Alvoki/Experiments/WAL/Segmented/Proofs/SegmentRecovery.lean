@@ -1,5 +1,5 @@
 import Alvoki.Experiments.WAL.Proofs.DirtyAppend
-import Alvoki.Experiments.WAL.Proofs.NativeRecovery
+import Alvoki.Experiments.WAL.Proofs.NativeOpen
 import Alvoki.Experiments.WAL.Proofs.Client
 import Alvoki.Experiments.WAL.Proofs.ReopenWriteback
 
@@ -65,6 +65,34 @@ theorem Recoverable.nativeRecovery (prior : Recoverable policy known pending ima
     | logOnly => exact Or.inr (prior.markers rfl)
   exact ⟨allowed, ⟨⟨ready, clean physical⟩, cursor⟩⟩
 
+/-- The public single-file acquisition, recovery and scan supply the child
+contract without assuming a successful native open callback. -/
+theorem Recoverable.nativeOpen (dir : System.FilePath) (reports : SingleFile.OpenReports)
+    (start : SingleFile.OpenImage) (free : start.held = false)
+    (prior : Recoverable policy known pending start.image) :
+    let result := SingleFile.openExistingModel dir policy reports start
+    Recoverable policy known pending (SingleFile.postState result).image ∧
+    match result with
+    | .ok (.ok ready) after =>
+      after.held = true ∧ after.policyDurable = true ∧ after.namesDurable = true ∧
+      WalRecoverySlice.Contract.Permitted known pending ready.recovered.batches ∧
+      Installed policy after.image ready.recovered.cursor ready.recovered.batches ∧
+      (SingleFile.scanWith (ready.phase ()) : SingleFile.OpenM _).run after =
+        .ok (.ok ready.recovered.batches) after
+    | .ok (.error _) after | .error _ after => after.held = false := by
+  have facts := SingleFile.openExisting_refines dir policy reports start free prior.dirty prior.markers
+  refine ⟨⟨facts.1, facts.2.1⟩, ?_⟩
+  have result := facts.2.2
+  cases ran : SingleFile.openExistingModel dir policy reports start with
+  | error => rw [ran] at result; exact result
+  | ok value after =>
+    rw [ran] at result
+    cases value with
+    | error => exact result
+    | ok ready =>
+      obtain ⟨_, _, _, _, _, held, stamp, names, chosen, cursor, valid, settled⟩ := result
+      exact ⟨held, stamp, names, chosen, ⟨⟨valid, settled⟩, cursor⟩, SingleFile.scan_opened ready after⟩
+
 end Child
 
 private theorem selectedUnchanged {image : Image}
@@ -105,20 +133,6 @@ theorem reopensSettledSegment {policy : Policy} {image : Image} {history : List 
     simpa only [both, trimmed] using repaired.symm
   refine ⟨?_, fun d got => (returned d got).1⟩
   simpa only [first, both, trimmed, dataSettled, or_self] using cuts
-
-private theorem writebacks_keep {P : Image → Prop}
-    (step : ∀ image file, P image → P (WalFile.settle file image)) (files : List WalFile)
-    {before : Image} (entry : P before) : P (settleFiles files before) := by
-  induction files generalizing before with
-  | nil => exact entry
-  | cons file rest ih => exact ih (step before file entry)
-
-private theorem writeback_result (files : List WalFile) (r : Persistence.Result α) :
-    reached (r.writeback files) = settleFiles files (reached r) ∧
-    acknowledged (r.writeback files) = acknowledged r := by
-  cases r with
-  | error => exact ⟨rfl, rfl⟩
-  | ok val _ => cases val <;> exact ⟨rfl, rfl⟩
 
 /-- Writebacks change only durable bytes. Every successful scheduling of the
 same reopen therefore returns the result selected from the initial live bytes. -/
@@ -163,38 +177,6 @@ theorem reopensSettledSegmentScheduled {policy image history}
   rw [h, (writeback_result ..).1, (writeback_result ..).2, stable, settleFiles_clean last image clean]
   exact ⟨rfl, response⟩
 
-theorem reopensDirtySegmentScheduled {policy known pending image}
-    (dirty : Dirty policy known pending image) (effects : Effects) (schedule : WritebackSchedule) :
-    let result := (reopen (scheduledOps (ops effects) schedule) policy).run image
-    Dirty policy known pending (reached result) ∧ (image.MarkersSettled → (reached result).MarkersSettled) ∧
-      ∀ decoded, acknowledged result = some decoded →
-        WalRecoverySlice.Contract.Permitted known pending decoded.batches ∧ decoded.cursor = historyCursor decoded.batches ∧
-        Ready policy (reached result) decoded.batches ∧ (∀ b ∈ decoded.batches, b.length ≤ 32) ∧ decoded.batches.length ≤ 255 ∧
-        (policy = .boundary ∨ image.MarkersSettled → (reached result).powerLoss = reached result) := by
-  dsimp only
-  obtain ⟨first, last, h⟩ := reopen_writeback_normalizes effects schedule policy image
-  have keepDirty (files : List WalFile) {i : Image} (p : Dirty policy known pending i) :=
-    writebacks_keep (P := Dirty policy known pending) (fun i f p => p.writeback (f.writeback i)) files p
-  have keepMarkers (files : List WalFile) {i : Image} (p : i.MarkersSettled) :=
-    writebacks_keep (P := Image.MarkersSettled) (fun i f p => (f.writeback i).keepsMarkersSettled p) files p
-  obtain ⟨retry, markers, success⟩ := (keepDirty first dirty).reopen effects
-  rw [h, (writeback_result ..).1, (writeback_result ..).2]
-  refine ⟨keepDirty last retry, fun m => keepMarkers last (markers (keepMarkers first m)), ?_⟩
-  intro d ok
-  obtain ⟨perm, cursor, ready, bounded, fits, clean⟩ := success d ok
-  refine ⟨perm, cursor, ?_, bounded, fits, ?_⟩
-  · by_cases boundary : policy = .boundary
-    · rwa [settleFiles_clean _ _ (clean (.inl boundary))]
-    · refine ⟨?_, fun b => (boundary b).elim⟩
-      apply writebacks_keep (P := fun i => AtEnd i _ _) _ last ready.1
-      intro i f atEnd
-      rcases atEnd with ⟨data, endPos⟩
-      cases f
-      · exact ⟨by simp [WalFile.settle, data], endPos⟩
-      · exact ⟨data, endPos⟩
-      · exact ⟨data, endPos⟩
-  · intro physical
-    have same := clean (physical.imp_right (keepMarkers first))
-    rwa [settleFiles_clean _ _ same]
+abbrev reopensDirtySegmentScheduled := @Persistence.Dirty.reopenScheduled
 
 end WalRecoverySlice.Segmented
