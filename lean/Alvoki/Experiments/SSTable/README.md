@@ -1,5 +1,9 @@
 # Immutable SSTable
 
+ALVSST05 replaces the earlier experimental SSTable format. Existing
+ALVSST03 files require rebuilding from their source data. Backward
+compatibility is outside this experimental milestone.
+
 `ALVSST05` uses one index and reader for fixed or variable key and value
 widths. The writer validates declared widths and strictly increasing byte
 keys. The reader compares the independent expected table ID with the
@@ -126,14 +130,19 @@ failed-sync cleanup certifies durability of a directory entry. A reported
 sync failure may follow a completed effect. The proof preserves the primary
 error and runs cleanup from the reached state.
 
-Failed acquisition remains a separate runtime obligation. The pinned Lean
-runtime can leak a descriptor when `open` succeeds and `fdopen` fails before
-returning a handle. Verify the acquisition fault with a runtime carrying the
-fix before accepting native descriptor custody. Even with the fix, failed
-exclusive creation can leave a new unpublished path. Cleanup may unlink
-only a name the writer acquired. An arbitrary acquisition error can also
-mean an existing name was rejected and must be preserved.
-[Lean handle-acquisition fix](https://github.com/leanprover/lean4/pull/16010)
+Failed acquisition remains an availability risk on pinned Lean 4.36.
+If `open` succeeds and `fdopen` fails before returning a handle, the
+runtime may leak a raw descriptor. Fault injection on Lean 4.37.0-rc1
+confirmed that the merged fix closes the raw descriptor. Upgrade when
+a stable Lean release includes the fix.
+[Lean handle-acquisition fix](https://github.com/leanprover/lean4/pull/16520)
+
+Both runtimes can leave a new unpublished name after failed exclusive
+creation. Under the namespace ownership and publication contracts this
+orphan is safe for data. Cleanup requires evidence that the acquisition
+created and still owns the name. A general acquisition failure can also
+mean an existing name was rejected and must be preserved. The open
+resource-cleanup guarantee does not block this datasafety milestone.
 
 The [read bridge](../../../native/sstable.c) checks the descriptor with
 `fstat` and uses bounded `pread` on that descriptor. Successful operations
