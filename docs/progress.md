@@ -121,12 +121,15 @@ sync. With either permitted successor binding, a lookup through the
 table returned by the next successful aligned open extends that batch's
 client ledger. [Fresh WAL recovery](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
-**Next obligation.** The rotation proof still takes two facts across the
-entire failed call. Previously protected files must retain their bindings
-and bytes, and other WAL offsets must keep their name presence. Derive
-both from the reached callbacks. Continue from the same boot sample
-through a rejected open or a subsequent write using the corresponding
-lock and cache reset. The filesystem's survival and byte-sampling laws
+The rotation now derives preservation of existing files and other bounded
+WAL names from the individual filesystem callbacks. A failed open can be
+retried any finite number of times when each attempt preserves the sampled
+WAL files. The successful retry reads those files on its own entry heap.
+
+**Next obligation.** Establish the writable keeper, lock and cache state of
+that returned session so its next acknowledged write extends the same ledger.
+An attempt that changes files during repair needs a local transition proof.
+The filesystem's survival and byte-sampling laws
 remain explicit. Further mixed calls, interruptions and maintenance
 remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 

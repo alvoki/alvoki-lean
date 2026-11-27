@@ -47,24 +47,38 @@ structure RebootDirectoryBindings (state : NativeReadyState) (names : FilePath �
   directory : names state.session.directory.path = some (state.census.inode state.directorySlot.description)
   lock : names (state.session.directory.file .lock) = some (state.census.inode state.owner.description)
 
-theorem NativeReadyProtectedStorage.frame {state : NativeReadyState} {first last : CheckpointSurvivingFiles}
-    (initial : NativeReadyProtectedStorage state first) (frame : first.Frames state.writeFramePath last) :
+/-- Protected regular files need their names and byte choices preserved.
+The held directory's own binding needs no byte observation. -/
+theorem NativeReadyProtectedStorage.frameChildren
+    {state : NativeReadyState} {first last : CheckpointSurvivingFiles}
+    (initial : NativeReadyProtectedStorage state first)
+    (directoryBound : last.names state.session.directory.path =
+      some (state.census.inode state.directorySlot.description))
+    (frame : first.Frames (fun path => state.writeFramePath path ∧
+      ∃ file, path = state.session.directory.file file) last) :
     NativeReadyProtectedStorage state last := by
-  refine ⟨(frame _ (.inl rfl)).1.trans initial.directoryBound,
-    (frame _ (.inr (.inl rfl))).1.trans initial.lockBound, ?_, ?_, ?_⟩
+  refine ⟨directoryBound, (frame _ ⟨.inr (.inl rfl), .lock, rfl⟩).1.trans initial.lockBound, ?_, ?_, ?_⟩
   · have manifest := initial.manifest
     cases selected : state.writer.target.pair.manifest with
     | none =>
       rw [selected] at manifest
-      exact (frame _ (.inr (.inr (.inl rfl)))).1.trans manifest
+      exact (frame _ ⟨.inr (.inr (.inl rfl)), .manifest, rfl⟩).1.trans manifest
     | some bytes =>
       rw [selected] at manifest
-      exact frame.stored (.inr (.inr (.inl rfl))) manifest
+      exact frame.stored ⟨.inr (.inr (.inl rfl)), .manifest, rfl⟩ manifest
   · intro segment member
-    exact frame.stored (.inr (.inr (.inr (.inl ⟨segment, member, rfl⟩)))) (initial.sealedFiles segment member)
+    exact frame.stored ⟨.inr (.inr (.inr (.inl ⟨segment, member, rfl⟩))), .walSegment segment.first, rfl⟩
+      (initial.sealedFiles segment member)
   · intro bytes metadata manifest decoded index within payload bound
-    exact frame.stored (.inr (.inr (.inr (.inr ⟨bytes, metadata, index, manifest, decoded, within, rfl⟩))))
+    exact frame.stored ⟨.inr (.inr (.inr (.inr ⟨bytes, metadata, index, manifest, decoded, within, rfl⟩))),
+      .run metadata.header.generation index, rfl⟩
       (initial.runs bytes metadata manifest decoded index within payload bound)
+
+theorem NativeReadyProtectedStorage.frame {state : NativeReadyState} {first last : CheckpointSurvivingFiles}
+    (initial : NativeReadyProtectedStorage state first) (frame : first.Frames state.writeFramePath last) :
+    NativeReadyProtectedStorage state last :=
+  initial.frameChildren ((frame _ (.inl rfl)).1.trans initial.directoryBound)
+    (fun path kept => frame path kept.1)
 
 /-- An inode kept in the chosen map supplies its singleton durable payload. -/
 theorem CheckpointSurvivingFiles.Stored.samplesAtBinding {files : CheckpointSurvivingFiles}

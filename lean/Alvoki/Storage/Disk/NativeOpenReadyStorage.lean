@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeCheckpointSourceCrash
 import Alvoki.Storage.Disk.NativeOpenReferences
+import Alvoki.Storage.Disk.NativeWalPublicationTail
 
 namespace Alvoki.Storage.DiskSession
 
@@ -87,6 +88,35 @@ theorem NativeReadyState.crashPath_rootOrChild {state : NativeReadyState} {path 
     · exact .inr ⟨.manifest, rfl⟩
     · exact .inr ⟨.walSegment segment.first, rfl⟩
     · exact .inr ⟨.run metadata.header.generation index, rfl⟩
+
+/-- A directory fsync preserves the already durable ready files whether
+or not the call settles its children. The directory's own name is a
+parent entry and uses its independently observed binding. -/
+theorem WalRootSyncEffect.preservesReadyStorage
+    {state : NativeReadyState} {effective : Bool} {issued failed : CheckpointStorageObservation}
+    (effect : WalRootSyncEffect state.session.directory effective issued failed)
+    (ready : NativeReadyStorage state issued)
+    (rootLive : failed.files.names state.session.directory.path =
+      issued.files.names state.session.directory.path)
+    (rootSurvives : ∀ names ∈ failed.crashNames,
+      names state.session.directory.path = failed.files.names state.session.directory.path) :
+    NativeReadyStorage state failed := by
+  have liveChildren : issued.files.Frames
+      (fun path => ∃ file, path = state.session.directory.file file) failed.files := by
+    rintro _ ⟨file, rfl⟩
+    exact ⟨effect.visible file, fun inode named =>
+      effect.bytes _ (.inl rfl) file inode ((effect.visible file).trans named)⟩
+  refine ⟨ready.toNativeReadyProtectedStorage.frameChildren (rootLive.trans ready.directoryBound)
+    (fun path kept => liveChildren path kept.2), liveChildren.stored ⟨.walBoundary, rfl⟩ ready.marker,
+    liveChildren.stored ⟨.walSegment _, rfl⟩ ready.keeper, ?_⟩
+  intro names chosen path protectedPath
+  rcases NativeReadyState.crashPath_rootOrChild protectedPath with rfl | ⟨file, rfl⟩
+  · exact rootSurvives names chosen
+  · cases applied : effective with
+    | true => exact effect.settled applied names chosen file
+    | false =>
+      obtain ⟨prior, available, same⟩ := effect.unchanged applied names chosen
+      exact (same file).trans ((ready.settled prior available _ protectedPath).trans (effect.visible file).symm)
 
 /-- A directory fsync settles its children. Its own name is an entry in
 the parent, whose independent settlement must survive the call. -/

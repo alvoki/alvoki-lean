@@ -158,7 +158,7 @@ private theorem readSealedSegmentReports (reports : OpenPathReadReports) (direct
     rw [tail]
     rfl
 
-private theorem layoutFirstAtOrBeforeEnd {wal : WalSegmentImage} {history : List WAL.Write}
+theorem _root_.Alvoki.Storage.WalSegmentImage.ReadLayout.firstAtOrBeforeEnd {wal : WalSegmentImage} {history : List WAL.Write}
     (layout : wal.ReadLayout history) {segment : WalSegment} (member : segment ∈ wal.segments) :
     segment.first ≤ history.length := by
   rw [← layout.activeEnd]
@@ -186,7 +186,7 @@ theorem _root_.Alvoki.Storage.WalSegmentImage.ReadLayout.selectedThroughEnd
       split at selected
       · exact (List.mem_filter.mp selected).1
       · exact List.mem_append_right _ selected
-    exact decide_eq_true (atEnd ▸ layoutFirstAtOrBeforeEnd layout present)
+    exact decide_eq_true (atEnd ▸ layout.firstAtOrBeforeEnd present)
   unfold selectWalSegmentReadsThrough
   rw [selected]
   change some (((wal.readDescriptors watermark).map WalSegment.first).takeWhile _,

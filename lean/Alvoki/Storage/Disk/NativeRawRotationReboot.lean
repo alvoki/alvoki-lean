@@ -33,6 +33,12 @@ theorem SegmentedWriterState.RetainedReady.successorOutsideWal {directory : Disk
   · obtain rfl := List.mem_singleton.mp active
     exact Nat.ne_of_lt rotates.nonempty (atEnd.trans sameEnd.symm)
 
+/-- The old recovery files and bounded WAL names that the exclusive
+successor cannot replace. Absent offsets belong to the same footprint. -/
+def NativeReadyState.rotationProtectedScope (state : NativeReadyState) (first through : Nat) (path : FilePath) : Prop :=
+  state.crashPath path ∨ ∃ start, first ≤ start ∧ start ≤ through ∧
+    start ≠ state.writer.rotationInstalled.activeFirst ∧ path = state.session.directory.file (.walSegment start)
+
 section ExclusiveSuccessor
 
 variable {heap image : Type} {directory : DiskDirectory} {writer : SegmentedWriterState}
@@ -69,6 +75,51 @@ structure OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync.SuccessorEffec
   rootLoad : ∀ {rootHandle}, raw.readDirectory cache.directory synced = .ok (some rootHandle) rootIssued →
     (storage synced).Frames (· = successorPath) (storage rootIssued)
 
+/-- Each reached callback preserves the old files and names in scope.
+The newly created inode is distinct from any inode already named there. -/
+structure OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync.PreservesFiles
+    (storage : heap → CheckpointStorageObservation) (scope : FilePath → Prop)
+    (beforePoison rootIssued : heap) : Prop where
+  poison : (storage beforePoison).Frames scope (storage entry)
+  probe : (storage entry).Frames scope (storage filePrefix.afterRead)
+  create : (storage filePrefix.afterRead).Frames scope (storage receipt.opened)
+  fresh : ∀ path, scope path → (storage filePrefix.afterRead).files.names path ≠ some createdInode
+  remember : (storage receipt.opened).Frames scope (storage filePrefix.beforeSync)
+  load : (storage filePrefix.beforeSync).Frames scope (storage receipt.loaded)
+  consume : (storage receipt.loaded).Frames scope (storage receipt.issued)
+  rootLoad : ∀ {handle}, raw.readDirectory cache.directory synced = .ok (some handle) rootIssued →
+    (storage synced).Frames scope (storage rootIssued)
+
+private theorem exclusiveFileSyncEffect
+    {storage : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {beforePoison rootIssued : heap} (effects : receipt.SuccessorEffects view storage visible beforePoison rootIssued) :
+    (storage receipt.issued).files.names successorPath = some createdInode ∧
+    RegularFileSyncEffect createdInode [ByteArray.empty] (storage receipt.issued) (storage synced) := by
+  obtain ⟨remember, load, consume⟩ := effects.beforeFileSync
+  have retained := remember.1.trans (load.1.trans consume.1)
+  have nameAtSync := (retained.visible successorPath rfl).1.trans effects.create.named
+  have emptyAtSync : visible receipt.issued createdInode = ByteArray.empty :=
+    consume.2.trans (load.2.trans (remember.2.trans effects.empty))
+  have sameInode := effects.target.inode
+  have observed := effects.sync effects.target.live (sameInode.symm ▸ nameAtSync)
+  rw [sameInode, emptyAtSync] at observed
+  exact ⟨nameAtSync, observed⟩
+
+/-- Reuse the effect on the actual successor descriptor to frame every
+old inode and name through the file sync and the reached root load. -/
+theorem OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync.preservesFilesAtRootIssue
+    {storage : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {scope : FilePath → Prop} {beforePoison rootIssued : heap} {rootHandle : IO.FS.Handle}
+    (loadedRoot : raw.readDirectory cache.directory synced = .ok (some rootHandle) rootIssued)
+    (effects : receipt.SuccessorEffects view storage visible beforePoison rootIssued)
+    (frames : receipt.PreservesFiles view storage scope beforePoison rootIssued) :
+    (storage beforePoison).Frames scope (storage rootIssued) := by
+  have fromCreate := frames.create.trans (frames.remember.trans (frames.load.trans frames.consume))
+  have synced := (exclusiveFileSyncEffect receipt view effects).2.frames (footprint := scope) (by
+    intro path inside inode named same
+    exact frames.fresh path inside ((fromCreate.visible path inside).1.symm.trans (same ▸ named)))
+  exact frames.poison.trans (frames.probe.trans (fromCreate.trans (synced.trans (frames.rootLoad loadedRoot))))
+
 /-- The settled WAL catalog excludes the successor through the probe.
 Follow the inode created at that name through file fsync to the issued
 root barrier. -/
@@ -101,18 +152,11 @@ theorem OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync.observesSuccesso
     · exact .inl (same.trans (fromLive ▸ missing _ beforeCreate.1))
     · exact .inl (same.trans (missing _ (beforeCreate.2 prior fromCrash)))
   have retained := remember.1.trans (load.1.trans consume.1)
-  have nameAtSync := (retained.visible successorPath rfl).1.trans created.named
-  have emptyAtSync : visible receipt.issued inode = ByteArray.empty :=
-    consume.2.trans (load.2.trans (remember.2.trans effects.empty))
-  have sameInode : (view.descriptors receipt.issued).inode
-      (view.handle receipt.issued receipt.handle).2.1.description = inode :=
-    effects.target.inode
-  have observed := effects.sync effects.target.live (sameInode.symm ▸ nameAtSync)
-  rw [sameInode, emptyAtSync] at observed
+  obtain ⟨nameAtSync, observed⟩ := exclusiveFileSyncEffect receipt view effects
   have fileSynced : (storage synced).files.names successorPath = some inode :=
     (congrFun observed.names _).trans nameAtSync
   have bytesSynced : (storage synced).files.bytes inode = [ByteArray.empty] := by
-    simpa using observed.bytes inode
+    simpa [inode] using observed.bytes inode
   have rootKeeps := effects.rootLoad loadedRoot
   refine ⟨(rootKeeps.visible successorPath rfl).1.trans fileSynced, ?_,
     ((rootKeeps.visible successorPath rfl).2 inode fileSynced).trans bytesSynced⟩
@@ -250,6 +294,10 @@ structure OpenRotationCallbacks.SuccessorFilePrefix.RootErrorEffects {heap image
     frame filePrefix.beforeSync synced
   cached : view.directory synced cache.directory = some barrier.handle
   named : (storage barrier.issued).files.names directory.path = (storage synced).files.names directory.path
+  rootLive : (storage barrier.failed).files.names directory.path = (storage barrier.issued).files.names directory.path
+  rootSurvivors : ∀ names ∈ (storage barrier.failed).crashNames, ∃ prior,
+    (prior = (storage barrier.issued).files.names ∨ prior ∈ (storage barrier.issued).crashNames) ∧
+    names directory.path = prior directory.path
   sync : (view.handle barrier.issued barrier.handle).2.1 ∈ (view.descriptors barrier.issued).slots →
     (storage barrier.issued).files.names directory.path =
       some ((view.descriptors barrier.issued).inode (view.handle barrier.issued barrier.handle).2.1.description) →
@@ -277,15 +325,10 @@ local notation "picked" => state.withRotationSample valid (names rebooted)
 /-- The directory sample chooses the new keeper before opening. The
 literal reopening shares the ordinary WAL reader and retains the earlier
 history whether the sampled namespace lost or kept the empty successor. -/
-theorem RawMarkedOpenInterpreter.replaysRotationSample
+theorem NativeReadyState.visibleWalAtRotationSample
     (chosen : names rebooted ∈ (storage failed).crashNames)
     (sampled : ∀ path, checkpointSurvivorPath directory (picked).writer (picked).writer.target.pair.manifest path →
       ∀ inode, names rebooted path = some inode → visible rebooted inode ∈ (storage failed).files.bytes inode)
-    (pairAt : (view.files rebooted).image.directory.active =
-      ⟨(names rebooted ((directory).file .manifest)).map (visible rebooted),
-        (names rebooted ((directory).file .walBoundary)).map (visible rebooted)⟩)
-    (keeperAt : (view.files rebooted).image.keeper.active =
-      (names rebooted ((directory).file (.walSegment (picked).writer.wal.active.first))).map (visible rebooted))
     (old : NativeReadyStorage state (storage failed))
     (ready : (picked).writer.RetainedReady directory state.session.descriptor)
     {inode : Nat}
@@ -293,9 +336,7 @@ theorem RawMarkedOpenInterpreter.replaysRotationSample
       names rebooted ((directory).file (.walSegment successor)) = some inode ∧ (storage failed).files.bytes inode = [ByteArray.empty])
     (window : (picked).writer.wal.NamespaceWindow directory 0 (picked).writer.target.range.through (names rebooted))
     (noManifest : state.writer.target.pair.manifest = none) :
-    source.ReplaysWalBeforeCheckpointAtOpen view directory (picked).writer.wal.active.first
-      storage visible rebooted namespaceView root state.writer.history := by
-  have history := state.rotationWriterAtSample_history valid (names rebooted)
+    (picked).writer.VisibleWalFiles directory (names rebooted) (visible rebooted) := by
   have pairEq := state.rotationWriterAtSample_pair valid (names rebooted)
   have oldName (path : FilePath) (inside : state.crashPath path) :
       names rebooted path = (storage failed).files.names path :=
@@ -314,7 +355,7 @@ theorem RawMarkedOpenInterpreter.replaysRotationSample
         simp only [NativeReadyState.rotationWriterAtSample, found, Option.isSome_some, ↓reduceIte]
       exact ⟨old.protectedAfterRotation valid rotated rfl rfl rfl,
         fun _ keep => NativeReadyState.rotationProtectedPaths valid rotated rfl keep⟩
-  obtain ⟨protectedFiles, manifest⟩ := frame.1.samplesRebootFiles (names rebooted) (visible rebooted)
+  obtain ⟨protectedFiles, _⟩ := frame.1.samplesRebootFiles (names rebooted) (visible rebooted)
     (fun path inside => oldName path (frame.2 path inside)) sampled
   let markerPath := (directory).file .walBoundary
   have marker : state.writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode state.writer.history).size.toUInt64) :=
@@ -326,9 +367,6 @@ theorem RawMarkedOpenInterpreter.replaysRotationSample
       (sampled markerPath (.inr (.inl (.inl rfl))))
   have marked : (names rebooted markerPath).map (visible rebooted) = (picked).writer.target.pair.walBoundary := by
     rw [markerNamed, Option.map_some, markerBytes, pairEq, marker]
-  have pair : (picked).writer.target.pair =
-      ⟨(names rebooted ((directory).file .manifest)).map (visible rebooted), (names rebooted markerPath).map (visible rebooted)⟩ := by
-    rw [manifest, marked]
   have trimmed : (picked).writer.target.trimmed = (picked).writer.wal.active.bytes := by
     rw [ready.resumed.contents, ready.active, ready.layout.activeBytes]
   let keeperPath := (directory).file (.walSegment (picked).writer.wal.active.first)
@@ -367,13 +405,7 @@ theorem RawMarkedOpenInterpreter.replaysRotationSample
       (names rebooted ((directory).file (.walSegment segment.first))).map (visible rebooted) = some segment.bytes := by
     obtain ⟨inode, bound, bytes⟩ := protectedFiles.sealedFiles segment member
     exact Option.map_eq_some_iff.mpr ⟨inode, bound, List.singleton_inj.mp bytes⟩
-  rw [← history]
-  exact @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
-    (source := source) (view := view) (namespaceView := namespaceView) (root := root)
-    (storage := storage) («visible» := visible) (entry := rebooted)
-    (ready := ready) (lockBound := lock) (missing := absent) (absent := manifestAbsent)
-    (marker := marked) (pair := pairAt.trans pair.symm) (keeper := keeperAt.trans payload)
-    (window := ready.resumed.through ▸ window) (seals := seals) (active := trimmed ▸ payload)
+  exact ⟨⟨_, lock⟩, manifestAbsent, marked, ready.resumed.through ▸ window, seals, trimmed ▸ payload⟩
 
 end SampledReader
 
@@ -400,13 +432,12 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
       ⟨cache.directory, cache.active, cache.pending, cache.references,
         (congrArg DiskDirectory.path current.directory).symm ▸ cache.atRoot⟩ (storage current.reached)
       (visible current.reached))
-    (files : (storage current.reached).Frames current.current.ready.state.crashPath (storage barrier.failed))
+    (fileFrames : file.PreservesFiles view storage
+      (current.current.ready.state.rotationProtectedScope 0 current.current.ready.state.writer.target.range.through)
+      current.reached barrier.issued)
     (window : current.current.ready.state.writer.wal.SettledNamespaceWindow
       current.current.ready.state.session.directory 0 current.current.ready.state.writer.target.range.through
       (storage current.reached))
-    (namesFrame : RotationWalNameFrame current.current.ready.state.session.directory 0
-      current.current.ready.state.writer.target.range.through
-      current.current.ready.state.writer.rotationInstalled.activeFirst (storage current.reached) (storage barrier.failed))
     (chosen : (storage rebooted).files.names ∈ (storage barrier.failed).crashNames) :
     let state := current.current.ready.state
     let directory := state.session.directory
@@ -422,17 +453,10 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     selected.wal.NamespaceWindow directory 0 selected.target.range.through names ∧
     (names path = none ∨ names path = some inode ∧ (storage barrier.failed).files.bytes inode = [ByteArray.empty]) ∧
     (effective = true → names path = some inode) ∧
-    ∀ {stream : Type} (source : RawMarkedOpenInterpreter heap stream) namespaceView namespaceRoot,
-      (∀ selectedPath, checkpointSurvivorPath directory selected selected.target.pair.manifest selectedPath →
+    ((∀ selectedPath, checkpointSurvivorPath directory selected selected.target.pair.manifest selectedPath →
         ∀ object, names selectedPath = some object → visible rebooted object ∈ (storage barrier.failed).files.bytes object) →
-      (view.files rebooted).image.directory.active =
-        ⟨(names (directory.file .manifest)).map (visible rebooted),
-          (names (directory.file .walBoundary)).map (visible rebooted)⟩ →
-      (view.files rebooted).image.keeper.active =
-        (names (directory.file (.walSegment selected.wal.active.first))).map (visible rebooted) →
       state.writer.target.pair.manifest = none →
-      source.ReplaysWalBeforeCheckpointAtOpen view directory selected.wal.active.first
-        storage visible rebooted namespaceView namespaceRoot state.writer.history := by
+      selected.VisibleWalFiles directory names (visible rebooted)) := by
   intro state directory names path selected inode
   let valid := current.current.ready.readPrefix.refines.1
   let frame := RotationRootFrame view cache.directory storage opened.directory.path
@@ -451,7 +475,6 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
   obtain ⟨schedule, _, returned, _⟩ :=
     current.rotationReturnsDirectoryError calls raw cache guard nonempty poisonedAt filePrefix
       barrier.route barrier.loaded barrier.returned
-  have old := initial.physical.frame files
   have ready : selected.RetainedReady directory state.session.descriptor :=
     state.rotationWriterAtSample_retained valid nonempty names
   have history : selected.history = state.writer.history := state.rotationWriterAtSample_history valid names
@@ -469,6 +492,7 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     current.directory ▸ slice _ (Nat.zero_le _) successorBound
   have successor := file.observesSuccessorAtRootIssue view storage visible beforeRotation nonempty
     successorWindow barrier.loaded fileEffects
+  have atIssue := file.preservesFilesAtRootIssue view barrier.loaded fileEffects fileFrames
   have effectAtDirectory : WalRootSyncEffect directory effective (storage barrier.issued) (storage barrier.failed) :=
     Eq.mpr (congrArg (fun dir => WalRootSyncEffect dir effective (storage barrier.issued) (storage barrier.failed))
       current.directory) effect
@@ -477,17 +501,43 @@ theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}
     Eq.mpr (congrArg (fun dir => RotationSuccessorAtSync dir state.writer.rotationInstalled.activeFirst inode
       (storage barrier.issued)) current.directory) successor
   obtain ⟨survives, settled⟩ := effectAtDirectory.selectsRotationSuccessor successorAtDirectory chosen
+  have oldAtIssue := initial.physical.frame (atIssue.weaken fun _ held => Or.inl held)
+  have sameDirectory : directory = opened.directory := current.directory
+  have rootLive : (storage barrier.failed).files.names directory.path = (storage barrier.issued).files.names directory.path := by
+    rw [sameDirectory]
+    exact rootEffects.rootLive
+  have rootSurvives (sample : FilePath → Option Nat) (chosen : sample ∈ (storage barrier.failed).crashNames) :
+      sample directory.path = (storage barrier.failed).files.names directory.path := by
+    obtain ⟨earlier, possible, sameName⟩ := rootEffects.rootSurvivors sample chosen
+    have fromEarlier : sample directory.path = earlier directory.path := by
+      rw [sameDirectory]
+      exact sameName
+    have fromReady : earlier directory.path = (storage barrier.issued).files.names directory.path := by
+      rcases possible with live | predicted
+      · rw [live]
+      · exact oldAtIssue.settled earlier predicted directory.path
+          (NativeReadyState.crashPath_iff_write.mpr (.inr (.inr (.inl rfl))))
+    exact fromEarlier.trans (fromReady.trans rootLive.symm)
+  have old := effectAtDirectory.preservesReadyStorage oldAtIssue rootLive rootSurvives
+  have namesFrame : RotationWalNameFrame directory 0 state.writer.target.range.through
+      state.writer.rotationInstalled.activeFirst (storage current.reached) (storage barrier.failed) := by
+    intro start lower upper other
+    have carried : WalNamePresenceFrame directory start start (storage current.reached) (storage barrier.issued) :=
+      WalNamePresenceFrame.ofStorageFrame atIssue fun observed fromStart toStart => by
+        have same : observed = start := Nat.le_antisymm toStart fromStart
+        subst observed
+        exact .inr ⟨start, lower, upper, other, rfl⟩
+    exact carried.trans (WalNamePresenceFrame.ofRootSync effectAtDirectory)
   have catalog : selected.wal.NamespaceWindow directory 0 selected.target.range.through names := by
     rw [cutoff]
     exact state.rotationWriterAtSample_namespace valid nonempty (fun start low high _ => slice start low high)
       namesFrame chosen
   refine ⟨schedule, returned, old, ready, history, state.rotationWriterAtSample_pair valid names,
     catalog, survives, settled, ?_⟩
-  intro stream source namespaceView namespaceRoot sampled pairAt keeperAt noManifest
-  exact @RawMarkedOpenInterpreter.replaysRotationSample
-    (source := source) (view := view) (storage := storage) («visible» := visible) (failed := barrier.failed)
-    (rebooted := rebooted) (namespaceView := namespaceView) (root := namespaceRoot)
-    (valid := valid) (chosen := chosen) (sampled := sampled) (pairAt := pairAt) (keeperAt := keeperAt)
+  intro sampled noManifest
+  exact @NativeReadyState.visibleWalAtRotationSample
+    (storage := storage) («visible» := visible) (failed := barrier.failed) (rebooted := rebooted)
+    (valid := valid) (chosen := chosen) (sampled := sampled)
     (old := old) (ready := ready) (choice := survives) (window := catalog) (noManifest := noManifest)
 
 end Alvoki.Storage.DiskSession

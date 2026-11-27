@@ -2766,7 +2766,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.samplesFailedRotationDirectory
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
-#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.replaysRotationSample
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.visibleWalAtRotationSample
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.VisibleWalFiles.afterFailedCalls
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEntry.readyRebootLayout
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.visibleReopenLayout
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.protectedAfterRotation
@@ -4117,6 +4118,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CheckpointStorageObservation.Frames.settledFrom
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_iff_write
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.frame
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyProtectedStorage.frameChildren
+#check_axioms Alvoki.Storage.DiskSession.WalRootSyncEffect.preservesReadyStorage
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.frame
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.writeAuthorityAt
 #check_axioms Alvoki.Storage.DiskSession.commitBytesAt_frames

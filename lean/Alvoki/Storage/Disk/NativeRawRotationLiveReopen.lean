@@ -133,11 +133,6 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     (present "LOCK" (.inl (by simp)) (fixedName _ (by simp))).1.trans prior.lockBound
   have marker : (names released ((dir).file .walBoundary)).map (visible released) = writer.target.pair.walBoundary :=
     (pathPayload "WAL.commit" (.inl (by simp)) (fixedName _ (by simp))).trans markerVisible
-  have pair : (images released).directory.active = writer.target.pair := by
-    rw [pairAt, manifestAbsent, Option.map_none, marker]
-    exact congrArg (fun manifest => DirectoryPublication.Bindings.mk manifest writer.target.pair.walBoundary) noManifest.symm
-  have newKeeper : (images released).keeper.active = some writer.target.trimmed := by
-    rw [keeperAt, freshName, Option.map_some, freshBytes] <;> rfl
   have rotating := valid.retained.rotationInput nonempty
   have activeEnd : (old).writer.wal.active.last = newStart :=
     valid.retained.layout.activeEnd.trans successorAtEnd.symm
@@ -175,8 +170,9 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
   have replay := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
     (source := source) (namespaceView := observed.view) (root := root)
     (view := openView) (storage := storage) («visible» := visible) (entry := released)
-    (ready := ready) (lockBound := lockBound) (missing := noManifest) (absent := manifestAbsent)
-    (marker := marker) (pair := pair) (keeper := newKeeper) (window := newCatalog) (seals := seals) (active := active)
+    (ready := ready) (missing := noManifest)
+    (files := ⟨⟨_, lockBound⟩, manifestAbsent, marker, newCatalog, seals, active⟩)
+    (pairAt := pairAt) (keeperAt := keeperFirst.symm ▸ keeperAt)
   obtain ⟨_, history, pending⟩ := current.current.ready.readPrefix.refines
   have finalReplay := @Eq.mp _ _ (congrArg
     (fun writes => source.ReplaysWalBeforeCheckpointAtOpen openView dir writer.wal.active.first

@@ -291,9 +291,13 @@ rename publishes that inode, and the directory barrier and phase setter
 preserve its bytes. The live reader observes that inode through the close.
 After power loss the fresh proof derives the successor inode from the
 exclusive-create handle. With one sampled map and its inode bytes, the
-lookup extends the original batch's client ledger. It still assumes
-preservation of old files and off-successor names across the failed call. Successful open still relies on
-truthful enumeration and reads. [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
+lookup extends the original batch's client ledger. The exclusive-create and file-sync callback frames preserve the old
+files up to the directory-sync call. Its local namespace law preserves
+the other WAL names. The sampled map establishes `VisibleWalFiles`, which
+the shared reader consumes. A finite sequence of rejected opens preserves
+this invariant when each reached attempt preserves the bounded name
+bindings and visible bytes. Successful open still relies on truthful
+enumeration and reads. [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 

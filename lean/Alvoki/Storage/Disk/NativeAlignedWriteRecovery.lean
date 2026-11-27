@@ -1906,24 +1906,90 @@ theorem RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
   rw [← assembled] at uses
   exact uses.lookupLatestAfterWalReplay cells stored full ptrEq compare key
 
+/-- The named live files needed to read a checkpoint-free retained WAL.
+The window includes missing offsets between segments. -/
+structure SegmentedWriterState.VisibleWalFiles (writer : SegmentedWriterState) (directory : DiskDirectory)
+    (bindings : FilePath → Option Nat) (contents : Nat → ByteArray) : Prop where
+  lock : ∃ inode, bindings (directory.file .lock) = some inode
+  manifest : bindings (directory.file .manifest) = none
+  marker : (bindings (directory.file .walBoundary)).map contents = writer.target.pair.walBoundary
+  catalog : writer.wal.NamespaceWindow directory 0 writer.history.length bindings
+  seals : ∀ segment ∈ writer.wal.sealed,
+    (bindings (directory.file (.walSegment segment.first))).map contents = some segment.bytes
+  active : (bindings (directory.file (.walSegment writer.wal.active.first))).map contents = some writer.wal.active.bytes
+
+/-- Preserve the three administrative files and the canonical WAL names
+through the recorded cutoff across a read-only attempt. -/
+abbrev VisibleWalFrame (directory : DiskDirectory) (through : Nat)
+    (bindings : heap → FilePath → Option Nat) (contents : heap → Nat → ByteArray) (before after : heap) : Prop :=
+  FileObservationFrame bindings contents
+    (fun path => ∃ name, checkpointFreeWalChild through name ∧ path = ⟨directory.path.toString ++ "/" ++ name⟩)
+    before after
+
+theorem SegmentedWriterState.VisibleWalFiles.frame
+    {directory : DiskDirectory} {writer : SegmentedWriterState}
+    {bindings : heap → FilePath → Option Nat} {contents : heap → Nat → ByteArray} {before after : heap}
+    (files : writer.VisibleWalFiles directory (bindings before) (contents before))
+    (layout : writer.wal.ReadLayout writer.history)
+    (kept : VisibleWalFrame directory writer.history.length bindings contents before after) :
+    writer.VisibleWalFiles directory (bindings after) (contents after) := by
+  have segment (start : Nat) (bounded : start ≤ writer.history.length) :=
+    kept (directory.file (.walSegment start)) ⟨_, .inr ⟨start, bounded, rfl⟩, DiskDirectory.walSegment_path ..⟩
+  have payload {path : FilePath} (framed : bindings after path = bindings before path ∧
+      ∀ inode, bindings before path = some inode → contents after inode = contents before inode) :
+      (bindings after path).map (contents after) = (bindings before path).map (contents before) :=
+    (congrArg (Option.map (contents after)) framed.1).trans (Option.map_congr framed.2)
+  obtain ⟨lock, bound⟩ := files.lock
+  refine ⟨⟨lock, (kept _ ⟨"LOCK", .inl (by simp), rfl⟩).1.trans bound⟩,
+    (kept _ ⟨"MANIFEST", .inl (by simp), rfl⟩).1.trans files.manifest,
+    (payload (kept _ ⟨"WAL.commit", .inl (by simp), rfl⟩)).trans files.marker, ?_, ?_, ?_⟩
+  · exact files.catalog.frame fun start _ high => congrArg Option.isSome (segment start high).1
+  · intro segmentData hmem
+    exact (payload (segment _ (layout.firstAtOrBeforeEnd (List.mem_append_left _ hmem)))).trans (files.seals segmentData hmem)
+  · exact (payload (segment _ (layout.firstAtOrBeforeEnd (List.mem_append_right _ (List.mem_singleton_self _))))).trans files.active
+
+/-- The frame law is required only for failed calls in this prefix. An
+attempt that modified a selected file requires a repair transition. -/
+def RawMarkedOpenInterpreter.FailedCalls.PreserveWalFiles
+    {directory : DiskDirectory} {source : RawMarkedOpenInterpreter heap stream}
+    {first last : heap} {errors : List (FilePath × IO.Error)} (_ : source.FailedCalls first errors last)
+    (through : Nat) (bindings : heap → FilePath → Option Nat) (contents : heap → Nat → ByteArray) : Prop :=
+  ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+    source.FailedCalls first prior before → List.IsPrefix (prior ++ [(input, cause)]) errors →
+    source.openTable input before = .error cause after → VisibleWalFrame directory through bindings contents before after
+
+theorem SegmentedWriterState.VisibleWalFiles.afterFailedCalls
+    {writer : SegmentedWriterState} {directory : DiskDirectory}
+    {bindings : heap → FilePath → Option Nat} {contents : heap → Nat → ByteArray}
+    {source : RawMarkedOpenInterpreter heap stream} {first last : heap} {errors : List (FilePath × IO.Error)}
+    (files : writer.VisibleWalFiles directory (bindings first) (contents first)) (layout : writer.wal.ReadLayout writer.history)
+    (attempts : source.FailedCalls first errors last)
+    (effects : attempts.PreserveWalFiles (directory := directory) writer.history.length bindings contents) :
+    writer.VisibleWalFiles directory (bindings last) (contents last) := by
+  apply files.frame layout
+  exact attempts.framesAfter .empty _ (fun _ _ _ => ⟨rfl, fun _ _ => rfl⟩)
+    (fun first last => FileObservationFrame.trans first last)
+    (fun prior inside returned => effects prior (by simpa only [List.nil_append] using inside) returned)
+
 /-- Live close and reboot both expose a retained WAL through the same
 named files. Only the active pair and keeper of the opener's image matter. -/
 theorem RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
-    {directory : DiskDirectory} {entry : heap} {writer : SegmentedWriterState} {descriptor lockInode : Nat}
-    (ready : writer.RetainedReady directory descriptor)
-    (lockBound : names entry (directory.file .lock) = some lockInode)
-    (missing : writer.target.pair.manifest = none)
-    (absent : names entry (directory.file .manifest) = none)
-    (marker : (names entry (directory.file .walBoundary)).map (visible entry) = writer.target.pair.walBoundary)
-    (pair : (view.files entry).image.directory.active = writer.target.pair)
-    (keeper : (view.files entry).image.keeper.active = some writer.target.trimmed)
-    (window : writer.wal.NamespaceWindow directory 0 writer.history.length (names entry))
-    (seals : ∀ segment ∈ writer.wal.sealed,
-      (names entry (directory.file (.walSegment segment.first))).map (visible entry) = some segment.bytes)
-    (active : (names entry (directory.file (.walSegment writer.wal.active.first))).map (visible entry) =
-      some writer.wal.active.bytes) :
+    {directory : DiskDirectory} {entry : heap} {writer : SegmentedWriterState} {descriptor : Nat}
+    (ready : writer.RetainedReady directory descriptor) (missing : writer.target.pair.manifest = none)
+    (files : writer.VisibleWalFiles directory (names entry) (visible entry))
+    (pairAt : (view.files entry).image.directory.active =
+      ⟨(names entry (directory.file .manifest)).map (visible entry),
+        (names entry (directory.file .walBoundary)).map (visible entry)⟩)
+    (keeperAt : (view.files entry).image.keeper.active =
+      (names entry (directory.file (.walSegment writer.wal.active.first))).map (visible entry)) :
     source.ReplaysWalBeforeCheckpointAtOpen view directory writer.wal.active.first
       storage visible entry namespaceView root writer.history := by
+  obtain ⟨⟨_, lockBound⟩, absent, marker, window, seals, active⟩ := files
+  have pair : (view.files entry).image.directory.active = writer.target.pair := by
+    rw [pairAt, absent, Option.map_none, marker]
+    exact congrArg (fun manifest => DirectoryPublication.Bindings.mk manifest writer.target.pair.walBoundary) missing.symm
+  have keeper : (view.files entry).image.keeper.active = some writer.target.trimmed := by
+    rw [keeperAt, active, ready.resumed.contents, ready.active, ready.layout.activeBytes]
   obtain ⟨layout, target, atKeeper, tail, descriptors, offsets⟩ := ready.visibleReopenLayout pair keeper
   have modeled := layout.modeledWindow _ offsets
   have wal : layout.VisibleWal directory (names entry) (visible entry) := by

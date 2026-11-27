@@ -988,9 +988,8 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
         (barrier : rotation.FailedRootBarrier syncer usedCache afterFileSync)
         (_fileEffects : file.SuccessorEffects clientView storage visible next.reached barrier.issued)
         (_rootEffects : filePrefix.RootErrorEffects barrier clientView storage effective next.reached)
-        (_keeps : (storage next.reached).Frames state.crashPath (storage barrier.failed))
-        (_namesFrame : RotationWalNameFrame dir 0 state.writer.target.range.through state.writer.rotationInstalled.activeFirst
-          (storage next.reached) (storage barrier.failed)),
+        (_fileFrames : file.PreservesFiles clientView storage (state.rotationProtectedScope 0 state.writer.target.range.through)
+          next.reached barrier.issued),
         let valid := next.current.ready.readPrefix.refines.1
         let selected := state.withRotationSample valid (names rebooted)
         let path := dir.file (.walSegment state.writer.rotationInstalled.activeFirst)
@@ -999,16 +998,19 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
           (_chosen : names rebooted ∈ (storage barrier.failed).crashNames)
           (_sampled : ∀ path, checkpointSurvivorPath dir selected.writer selected.writer.target.pair.manifest path →
             ∀ object, names rebooted path = some object → visible rebooted object ∈ (storage barrier.failed).files.bytes object)
-          (_pairAt : (OpenCloseHeapView.files clientView rebooted).image.directory.active =
-            ⟨(names rebooted (dir.file .manifest)).map (visible rebooted),
-              (names rebooted (dir.file .walBoundary)).map (visible rebooted)⟩)
-          (_keeperAt : (OpenCloseHeapView.files clientView rebooted).image.keeper.active =
-            (names rebooted (dir.file (.walSegment selected.writer.wal.active.first))).map (visible rebooted)),
+          {errors : List (FilePath × IO.Error)} {retryAt : heap}
+          (attempts : source.FailedCalls rebooted errors retryAt)
+          (_effects : attempts.PreserveWalFiles (directory := dir) selected.writer.history.length names visible)
+          (_pairAt : (OpenCloseHeapView.files clientView retryAt).image.directory.active =
+            ⟨(names retryAt (dir.file .manifest)).map (visible retryAt),
+              (names retryAt (dir.file .walBoundary)).map (visible retryAt)⟩)
+          (_keeperAt : (OpenCloseHeapView.files clientView retryAt).image.keeper.active =
+            (names retryAt (dir.file (.walSegment selected.writer.wal.active.first))).map (visible retryAt)),
           rotation.run opened.handle guard.lookup usedCache.active next.reached =
             .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {barrier.cause}") barrier.failed ∧
           (names rebooted path = none ∨ names rebooted path = some inode) ∧
           (effective = true → names rebooted path = some inode) ∧
-          source.ReadsClientHistoryAtOpen clientView dir storage visible rebooted namespaceView root
+          source.ReadsClientHistoryAtOpen clientView dir storage visible retryAt namespaceView root
             [.acknowledgedBatch batch] [] batch := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
     _, batchHistory, ledger, physical, _, ⟨noManifest, noSeals, history, cutoff⟩, carries⟩ :=
@@ -1017,21 +1019,25 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
       modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
   refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, exactHeap, ledger, ?_⟩
   intro firstNames restore poisoned afterFileSync rebooted effective guard poisonedAt filePrefix file barrier
-    fileEffects rootEffects keeps namesFrame valid selected path createdInode namespaceView root chosen sampled pairAt keeperAt
+    fileEffects rootEffects fileFrames valid selected path createdInode namespaceView root chosen sampled errors retryAt attempts effects pairAt keeperAt
   have positive : 0 < next.current.ready.state.writer.history.length := by
     rw [history, (prepareBatch_spec prepared).1]
     exact List.length_pos_iff.mpr nonempty
   have nonemptyWal := valid.retained.activeBeforeCutoffOfFirstBatch noManifest noSeals positive
   have window := (carries request.rows.length covered firstNames restore).2
   rw [← cutoff] at window
-  obtain ⟨_, returned, _, _, _, _, _, choice, settled, openedFromSample⟩ := next.samplesFailedRotationDirectory
+  obtain ⟨_, returned, _, ready, sameHistory, pair, _, choice, settled, sampledFiles⟩ := next.samplesFailedRotationDirectory
     rotation syncer clientView _ guard storage visible poisonedAt filePrefix file barrier fileEffects rootEffects
-    nonemptyWal physical keeps window namesFrame chosen
-  let first := selected.writer.wal.active.first
-  have sameHistory := congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen clientView
-    next.current.ready.state.session.directory first storage visible rebooted namespaceView root writes) history
-  have replay := @Eq.mp _ _ sameHistory
-    (@openedFromSample stream source namespaceView root sampled pairAt keeperAt noManifest)
+    nonemptyWal physical fileFrames window chosen
+  have filesAtRetry := (sampledFiles sampled noManifest).afterFailedCalls ready.layout attempts effects
+  have missing := (congrArg DirectoryPublication.Bindings.manifest pair).trans noManifest
+  have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
+    (source := source) (view := clientView) («storage» := storage) («visible» := visible) (entry := retryAt)
+    (namespaceView := namespaceView) (root := root) (ready := ready) (missing := missing)
+    (files := filesAtRetry) (pairAt := pairAt) (keeperAt := keeperAt)
+  have replay := @Eq.mp _ _ (congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen clientView
+    next.current.ready.state.session.directory selected.writer.wal.active.first storage visible retryAt namespaceView root writes)
+    (sameHistory.trans history)) (@openedRetry)
   obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger ledger
   have pending : PendingClientReplay [.acknowledgedBatch batch] [] batch := by
     rw [← submitted, ← noReads, ← batchHistory]
