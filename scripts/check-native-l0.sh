@@ -34,14 +34,15 @@ compile "$l0/NativeTests" native
 cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,sstable}.c \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
 "$out/native-l0"
-compile "$l0/NativeBridge" proof
+compile "$l0/NativeSchedule" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeBridge; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeBridge NativeSchedule; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.NativeBridge
+import Alvoki.Experiments.L0.NativeSchedule
 import Alvoki.Experiments.L0.Lifecycle
 open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms keyCodec_roundtrips
@@ -53,6 +54,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms manifest_publish
 #check_axioms CallbackEvidence.laws
 #check_axioms ObservedRun.refines
+#check_axioms native_schedules
 #check_axioms Lifecycle.Phase.online_owns_wal
 #check_axioms Lifecycle.Phase.publish_owns_wal
 #check_axioms Lifecycle.Phase.beginUpdate_hides_session

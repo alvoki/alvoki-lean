@@ -79,7 +79,9 @@ private def publishSession (phase : IO.Ref (Phase Wal)) (session : Session) : IO
   let some next := (← phase.get).publish session | throw (IO.userError "L0 cannot publish a session")
   phase.set next
 
-private def components (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
+/-- The callbacks used by the Linux wrapper. Callers should use `withOpen`;
+this entry point exposes the callback boundary for the proof. -/
+def callbackComponents (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
   let blob := DurableBlob.native (root / "manifest")
   {
     append batch := liftM do
@@ -118,7 +120,7 @@ def withOpen (path : FilePath) (use : Handle → IO α) : IO α := do
   IO.FS.withFile lockPath .append fun lock => do
     unless ← lock.tryLock do throw (IO.userError "L0 already open")
     let phase ← IO.mkRef (.opening : Phase Wal)
-    let ops := components root phase
+    let ops := callbackComponents root phase
     let result ← (do
       let recovered ← checked (recover ops)
       publishSession phase recovered

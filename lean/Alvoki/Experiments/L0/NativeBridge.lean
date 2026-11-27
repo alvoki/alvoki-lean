@@ -103,7 +103,7 @@ theorem CreatedFile.effect {id : UInt64} (made : CreatedFile before after id row
 are obtained by eliminating component traces. Table creation carries the
 namespace durability and isolation conditions; a read carries the exact
 built image served by its descriptor. State indices identify the reached
-phase, not a global assumption about all possible IO states. -/
+phase. Relating the reported callbacks to native IO remains a premise. -/
 structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → Selected)
     (fileBytes : σ → UInt64 → Option ByteArray) : Prop where
   scan : ∀ s, Observation selected s (selected s).view (ops.scan s)

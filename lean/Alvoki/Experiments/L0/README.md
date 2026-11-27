@@ -109,8 +109,12 @@ big-endian key and tagged mutation codecs. The bridge derives
 `ComponentLaws` and feeds `Execution.Run.refines` through
 `ObservedRun.refines`.
 
-The theorem is conditional on native callbacks being represented by those
-receipts. The remaining premises are at the IO boundary:
+[NativeSchedule](NativeSchedule.lean) proves that correspondence for each
+complete L0 schedule follows from correspondence for the individual
+callbacks in the record constructed by `Native.withOpen` and the runtime
+rules for bind, success and error. This connects the actual callback record
+to the reported schedule without assuming the LSM operations themselves
+refine. The remaining premises are at the IO boundary:
 
 - The WAL and blob primitives realize their modeled file effects, including
   the effects that may precede an error. Successful reads/reopens report
