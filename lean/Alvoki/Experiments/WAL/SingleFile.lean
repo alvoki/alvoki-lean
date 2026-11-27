@@ -26,6 +26,45 @@ private def writeAndSync (file : FilePath) (bytes : ByteArray) : IO Unit := do
   h.flush
   syncHandle h
 
+@[extern "alvoki_wal_truncate_at"]
+private opaque truncateAt (h : @& IO.FS.Handle) (count : @& Nat) : IO Unit
+
+/-- Recovery uses a read/write description for reading, truncating and syncing
+the segment. The separate append stream owns the append barriers. -/
+structure RecoveryIO (m : Type → Type) (handle : Type) where
+  readFromStart : handle → m Bytes
+  truncateAt : handle → Nat → m Unit
+  sync : handle → m Unit
+
+private def markerHandle [Monad m] [MonadExceptOf String m]
+    (markers : Option (handle × handle)) (slot : Nat) : m handle := do
+  let some (a, b) := markers | throw "marker unavailable"
+  return if slot == 0 then a else b
+
+@[inline] def recoveryOps [Monad m] [MonadExceptOf String m]
+    (io : RecoveryIO m handle) (data : handle) (markers : Option (handle × handle))
+    (ops : Ops m) : Ops m :=
+  { ops with
+    readData := io.readFromStart data
+    readMarker := fun slot => do io.readFromStart (← markerHandle markers slot)
+    syncMarker := fun slot => do io.sync (← markerHandle markers slot)
+    truncate := io.truncateAt data
+    syncData := io.sync data }
+
+@[inline] def recoverWith [Monad m] [MonadExceptOf String m]
+    (io : RecoveryIO m handle) (data : handle) (markers : Option (handle × handle))
+    (ops : Ops m) (policy : Policy) : m Decoded :=
+  reopen (recoveryOps io data markers ops) policy
+
+private def readFromStart (h : IO.FS.Handle) : IO Bytes := do
+  h.rewind
+  return (← h.readBinToEnd).data.toList
+
+private def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
+  readFromStart h := readFromStart h
+  truncateAt h n := truncateAt h n
+  sync h := syncHandle h
+
 private def fileOps (writer reader : IO.FS.Handle) (markers : Option (IO.FS.Handle × IO.FS.Handle)) : Ops FileM where
   append xs := do
     writer.write (encodeBytes xs)
@@ -40,19 +79,9 @@ private def fileOps (writer reader : IO.FS.Handle) (markers : Option (IO.FS.Hand
   syncMarker slot := do
     let some (a, b) := markers | throw "marker unavailable"
     syncHandle (if slot == 0 then a else b)
-  readData := do
-    reader.rewind
-    return (← reader.readBinToEnd).data.toList
-  readMarker slot := do
-    let some (a, b) := markers | throw "marker unavailable"
-    let h := if slot == 0 then a else b
-    h.rewind
-    return (← h.readBinToEnd).data.toList
-  truncate n := do
-    reader.rewind
-    let prefixBytes ← reader.read n.toUSize
-    unless prefixBytes.size == n do throw "short prefix read"
-    reader.truncate
+  readData := readFromStart reader
+  readMarker slot := do readFromStart (← markerHandle markers slot)
+  truncate n := truncateAt reader n
 
 private def checked (action : FileM α) : IO α := do
   match ← action.run with
@@ -92,7 +121,7 @@ private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle := do
     pure (some (a, b))
     else pure none
   let ops := fileOps writer reader markers
-  let recovered ← checked (reopen ops policy)
+  let recovered ← checked (recoverWith nativeRecovery reader markers ops policy)
   -- A creator may have exited before making the visible names durable.
   IO.FS.withFile (dir / "policy") .read syncHandle
   IO.FS.withFile dir .read syncHandle

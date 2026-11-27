@@ -116,6 +116,23 @@ syncs to the modeled effects, filesystem durability, exclusive ownership and the
 compiler/runtime remain assumptions. Segment recycling and checkpoints of application
 state are outside this experiment.
 
+## Native refinement follow-up
+
+The single-file recovery worker supplies the existing child
+`Recoverable` and `Installed` facts from descriptor-level effects.
+The next producer must connect acquisition and cleanup to that worker,
+then bind the returned child to the root session that `openExisting` and
+`scan` expose to L0. [Single-file premise audit](../Proofs/README.md#native-recovery-worker)
+
+For CONTROL, consider reusing DurableBlob's write, sync, rename and
+directory-barrier semantics with the existing control codec and the
+original writer used by PR #5. Check that the CONTROL projection of
+the WAL disk model admits DurableBlob's publication outcomes and that
+the root barrier also settles the successor's directory entry.
+Keep segment creation, prefix release and collection under the
+existing WAL invariants. Coordinate the adapter change with the L0
+branch when taking up that work.
+
 ## Roadmap
 
 **Minimal LSM integration.** Record the absolute WAL position covered by a durable

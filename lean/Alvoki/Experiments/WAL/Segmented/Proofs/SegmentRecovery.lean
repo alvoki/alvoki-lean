@@ -1,4 +1,5 @@
 import Alvoki.Experiments.WAL.Proofs.DirtyAppend
+import Alvoki.Experiments.WAL.Proofs.NativeRecovery
 import Alvoki.Experiments.WAL.Proofs.Client
 import Alvoki.Experiments.WAL.Proofs.ReopenWriteback
 
@@ -44,6 +45,25 @@ theorem Recoverable.settle {policy history pending image} (r : Recoverable polic
 
 theorem Settled.writeback {policy image history} (s : Settled policy image history) (file : WalFile) :
     file.settle image = image := file.settle_clean image s.clean
+
+/-- The descriptor-level single-file worker produces the state needed by
+the segmented child contract at its actual return or failure. -/
+theorem Recoverable.nativeRecovery (prior : Recoverable policy known pending image) (effects : Effects) :
+    let result := (SingleFile.recover effects policy).run image
+    Recoverable policy known pending (reached result) ∧
+      ∀ decoded, acknowledged result = some decoded →
+        WalRecoverySlice.Contract.Permitted known pending decoded.batches ∧
+        Installed policy (reached result) decoded.cursor decoded.batches := by
+  intro result
+  obtain ⟨retry, markers, returned⟩ := SingleFile.recover_refines effects prior.dirty
+  refine ⟨⟨retry, fun log => markers (prior.markers log)⟩, ?_⟩
+  intro decoded success
+  obtain ⟨allowed, cursor, ready, _, _, clean⟩ := returned decoded success
+  have physical : policy = .boundary ∨ image.MarkersSettled := by
+    cases policy with
+    | boundary => exact Or.inl rfl
+    | logOnly => exact Or.inr (prior.markers rfl)
+  exact ⟨allowed, ⟨⟨ready, clean physical⟩, cursor⟩⟩
 
 end Child
 
