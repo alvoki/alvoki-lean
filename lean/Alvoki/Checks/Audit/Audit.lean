@@ -1,4 +1,4 @@
-import Proofs
+import Alvoki.Kernel.BlockContracts
 
 #print axioms Alvoki.lowerBound_partition
 #print axioms Alvoki.point_complete

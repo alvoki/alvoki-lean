@@ -1,5 +1,5 @@
 import Alvoki.Storage.Table.CompactionReadContract
-import OptProofs
+import Alvoki.Kernel.PackedSearchContracts
 
 namespace Alvoki.Compaction
 open Alvoki.Opt

@@ -22,7 +22,7 @@ Start at `PackedTable.lookup`. The table resolves the snapshot handle to a pin a
 
 ## Which evidence belongs with the code?
 
-The private constructor of `CheckedRun` requires evidence that parsing its bytes succeeds. `openBytes` obtains that evidence from the parser call. Similarly, `rangeHistory` returns a `Sequential.History`, whose constructor requires ordered rows. The runtime imports `OptProofs` for the ordering evidence used by range history construction. Filtering the checked history to the half-open interval preserves that ordering. These contracts explain why the next operation can use the result. [Checked run](CompactionRead.lean) · [History contract](CompactionReadContract.lean)
+The private constructor of `CheckedRun` requires evidence that parsing its bytes succeeds. `openBytes` obtains that evidence from the parser call. Similarly, `rangeHistory` returns a `Sequential.History`, whose constructor requires ordered rows. The runtime imports `Alvoki.Kernel.PackedSearchContracts` for the ordering evidence used by range history construction. Filtering the checked history to the half-open interval preserves that ordering. These contracts explain why the next operation can use the result. [Checked run](CompactionRead.lean) · [History contract](CompactionReadContract.lean)
 
 For compaction and retention, import the run or table refinement when you need its guarantees. Code calling the operations can import the corresponding table implementation. [Run compaction proof](../Proofs/Table/CheckedRunCompaction.lean) · [Table compaction proof](../Proofs/Table/PackedTableCompaction.lean)
 

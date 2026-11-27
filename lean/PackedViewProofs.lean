@@ -1,4 +1,4 @@
-import OptProofs
+import Alvoki.Kernel.PackedSearchContracts
 
 namespace Alvoki.Opt
 

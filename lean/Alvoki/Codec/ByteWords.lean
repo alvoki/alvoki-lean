@@ -1,4 +1,4 @@
-import Proofs
+import Alvoki.Kernel.BlockContracts
 
 namespace Alvoki.ByteWords
 

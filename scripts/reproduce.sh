@@ -8,6 +8,6 @@ export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 export LC_ALL=C
 
 (cd rust && time cargo build --release)
-(cd lean && time lake build && time lake build Proofs && time lake env lean Alvoki/Checks/Audit/Audit.lean && time lake env leanchecker Proofs)
+(cd lean && time lake build && time lake build Proofs && time lake env lean Alvoki/Checks/Audit/Audit.lean && time lake env leanchecker Alvoki.Kernel.BlockContracts)
 time "$toolchains/verus-x86-linux/verus" verus/search.rs
 python3 benchmarks/run.py "$@"

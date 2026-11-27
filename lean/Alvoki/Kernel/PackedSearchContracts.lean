@@ -1,5 +1,5 @@
 import PackedView
-import Proofs
+import Alvoki.Kernel.BlockContracts
 
 namespace Alvoki.Opt
 

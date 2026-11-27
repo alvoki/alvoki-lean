@@ -17,11 +17,13 @@ target readDirCheckedO pkg : FilePath := do
 
 lean_lib Block
 
-lean_lib Proofs
+lean_lib Proofs where
+  roots := #[`Alvoki.Kernel.BlockContracts]
 
 lean_lib Optimizations
 
-lean_lib OptProofs
+lean_lib OptProofs where
+  roots := #[`Alvoki.Kernel.PackedSearchContracts]
 
 lean_lib Packed
 
