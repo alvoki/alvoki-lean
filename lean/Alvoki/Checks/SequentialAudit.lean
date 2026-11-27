@@ -406,6 +406,7 @@ import Alvoki.Storage.Disk.NativeOpenedWalPlanning
 import Alvoki.Storage.Disk.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeRawRotationDirectoryError
 import Alvoki.Storage.Disk.NativeRawRotationReboot
+import Alvoki.Storage.Disk.NativeRawRotationLiveReopen
 import Alvoki.Storage.Disk.NativeRawRotationErrorClose
 import Alvoki.Storage.Disk.NativeRotationWriteEntry
 import Alvoki.Storage.Disk.NativeRotationReadyStorage
@@ -2760,6 +2761,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationCallbacks.SuccessorFilePrefix.reachesExclusiveSync
 #check_axioms Alvoki.Storage.DiskSession.RotationRawSuccessor.observesSyncedSuccessor
 #check_axioms Alvoki.Storage.DiskSession.RotationRawSuccessor.observesSuccessorAtRootIssue
+#check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.samplesFailedRotationDirectory
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.replaysRotationSample
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEntry.readyRebootLayout

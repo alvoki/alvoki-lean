@@ -98,17 +98,18 @@ the final directory fsync returns an error, the same file prefix leads to
 the exact diagnostic and poisoned return heap under local callback effects.
 [Rotation boundaries](proofs/native-storage.md#refinement-boundaries)
 
-After a returned directory-sync error, explicit close uses the original lock.
-The observed cache clears preserve the live empty successor and determine
-which descriptor slots remain. On power loss a single sampled directory map
-chooses the former or the empty active segment. Under the local filesystem
-and reset effects, either sampled keeper feeds the same checkpoint-free
-reader and recovers the earlier history. [Close](../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
-· [Reboot and replay](../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
+After an exclusive create, the file sync uses the handle that the rotation
+stored in the pending cache. If the subsequent directory sync fails, explicit
+close preserves the live empty successor. The released heap's names and inode
+bytes supply the WAL catalog, marker and lock for a successful literal open.
+On power loss, one sampled map can instead select the previous keeper. The
+same checkpoint-free reader serves both paths. [Rotation boundaries](proofs/native-storage.md#refinement-boundaries)
 
-**Next obligation.** Derive the live WAL catalog for the next admission
-from the close heap. Connect the fresh rotation's callback prefix to the
-issued root's physical observation on the same execution. The remaining
-mixed calls, interruptions and maintenance are in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
+**Next obligation.** Join the fresh first write, its failed rotation and the
+next session on one source execution. The close proof still takes a projection
+of the failed heap onto the rotation model. Derive that projection from the
+same primitive receipts that produced the error, including the descriptor
+inventory and the visible prior WAL files. Further mixed calls, interruptions
+and maintenance remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).

@@ -253,20 +253,23 @@ entry and the WAL name interval on the same heap and cache.
 [Name interval](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalWindow.lean#L69) ·
 [Returned handle and replay](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean#L17)
 
-A returned directory-sync error leaves the original handle poisoned. On explicit
-close the new empty segment stays visible. Under power loss, one surviving
-directory map can omit it if the sync had no effect. The old active segment
-then stays active. If the map names the new inode, the old segment becomes
-the final seal. Both layouts encode the same history. The shared reader now
-installs the keeper offset from the selected layout. For a checkpoint-free
-writer the failed-barrier proof supplies the bounded WAL names from one
-surviving map. Given the local reset observation for that map, the old
-protected bytes and the synced successor supply the visible WAL and marker
-for the literal reader. The final file-to-inode projection, directory-sync
-effect and sampled reset remain filesystem assumptions.
-[Failed rotation to literal replay](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean) ·
-[Failed directory sync](https://github.com/alvoki/alvoki-lean/blob/7844a3f6e3f72231e0b9ae51b6ce0e44be440fcd/lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean#L38) ·
-[Selected layout to returned session](https://github.com/alvoki/alvoki-lean/blob/3896ad88fb1a3d514219202e817fb4a43bf61484/lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean#L1851)
+A failed directory sync leaves the original handle poisoned. On the
+exclusive-create path, the cache passes the newly opened file handle to
+file fsync. Its successful return makes that inode's empty contents durable
+under the file-sync law. Publishing its name is a separate directory effect.
+
+| Next event | What determines the keeper before the first checkpoint? |
+|---|---|
+| Explicit close and successful open | Close releases the lock and preserves the visible empty successor. The close heap supplies the visible marker, WAL bytes and names, including the gaps between segments. Older descriptor aliases may remain. |
+| Power loss and successful open | One surviving directory map selects either the old active segment or the empty successor. If the successor survives, the old segment is the last seal. Both choices encode the same history. |
+
+Both paths use the same literal reader on the files visible at admission.
+The file-to-inode projection, directory enumeration and primitive storage
+effects are filesystem premises. The reboot path also consumes a reset
+observation for its chosen map. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean) ·
+[Sampled reboot](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean) ·
+[Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
+[Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
 **Where the chain closes.** On the covered aligned checkpoint path, the opener
 derives the repair and installation from the same successful call. Given the
