@@ -1,5 +1,5 @@
 import Alvoki.Experiments.WAL.SingleFile
-import Alvoki.Experiments.WAL.Segmented.Protocol
+import Alvoki.Experiments.WAL.Segmented.ControlCodec
 
 /-! Native adapter for the segmented WAL experiment. The caller owns a durable
 parent directory on one filesystem. Its canonical path stays in place while the
@@ -61,28 +61,6 @@ private def acquireRoot (root : FilePath) : IO IO.FS.Handle := do
   unless ← lock.tryLock do throw <| IO.userError "segmented WAL already open"
   return lock
 
-private def wordMax : Nat := 18446744073709551615
-
-private def encodeControl (c : Control) : ByteArray :=
-  let mode := if c.policy == .logOnly then "log" else "boundary"
-  let body := s!"swal1 {mode} {c.capacity} {c.active} {c.discarded}".toUTF8
-  body ++ ⟨(checksumBytes body.data.toList).toArray⟩
-
-private def parseControl (bytes : ByteArray) : IO Control := do
-  let bad := IO.userError "invalid segmented WAL control"
-  let some body := String.fromUTF8? (bytes.extract 0 (bytes.size - 8)) | throw bad
-  let ["swal1", mode, cap, last, base] := body.splitOn " " | throw bad
-  let policy ← match mode with
-    | "log" => pure Policy.logOnly
-    | "boundary" => pure Policy.boundary
-    | _ => throw bad
-  let some capacity := cap.toNat? | throw bad
-  let some active := last.toNat? | throw bad
-  let some discarded := base.toNat? | throw bad
-  let c := { policy, capacity, active, discarded : Control }
-  unless active ≤ wordMax && discarded ≤ wordMax && bytes == encodeControl c do throw bad
-  return c
-
 private structure Store where
   root : FilePath
   lock : IO.FS.Handle
@@ -134,12 +112,12 @@ private def Store.callbacks (s : Store) : Ops FileM where
   prepareSegment p id := s.prepare p id
   syncRoot := syncHandle s.directory
   stageControl c := do
-    unless c.active ≤ wordMax && c.discarded ≤ wordMax do throw "segmented WAL position exhausted"
+    unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do throw "segmented WAL position exhausted"
     let stage := s.root / "CONTROL.next"
     removeRegular stage
     liftM <| IO.FS.withFile stage .writeNew fun h => do
       disableBuffering h
-      h.write (encodeControl c)
+      h.write (ControlCodec.encode c)
       h.flush
   syncControl := liftM <| IO.FS.withFile (s.root / "CONTROL.next") .read syncHandle
   renameControl := IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")
@@ -149,7 +127,9 @@ private def Store.callbacks (s : Store) : Ops FileM where
     regular file md
     -- The version, policy, capacity, two UInt64 decimal fields and digest fit in 80 bytes.
     if md.byteSize > 80 then throw "oversized segmented WAL control"
-    parseControl (← IO.FS.readBinFile file)
+    let some c := ControlCodec.decode (← IO.FS.readBinFile file)
+      | throw <| IO.userError "invalid segmented WAL control"
+    return c
   openSegment p id := s.openChild p id
   appendSegment _ id batch := do
     let some (installed, child) ← s.active.get | throw "no active segment"
