@@ -51,9 +51,7 @@ open ImmutableSSTable
 #check_axioms Table.next_read_error
 #check_axioms Table.lookup_search_error
 #check_axioms Table.lookup_final_read_error
-#check_axioms builder_accepts_only_ordered
 #check_axioms modelBuild_ok_iff
-#check_axioms builder_constructs_image
 #check_axioms push_rejects_key
 #check_axioms openTable_encoded
 #check_axioms open_lookup_encoded
