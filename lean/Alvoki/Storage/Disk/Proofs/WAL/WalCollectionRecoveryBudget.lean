@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.ReachableWalSeals
-import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
 
 namespace Alvoki.Storage.DiskSession
 

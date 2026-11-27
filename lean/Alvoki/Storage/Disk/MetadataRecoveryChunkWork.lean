@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.HeldMetadataReadObservations
-import Alvoki.Storage.Disk.SelectedRecoveryChunkWork
+import Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork
 
 namespace Alvoki.Storage
 

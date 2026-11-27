@@ -182,7 +182,7 @@ requires a fresh admitted attempt with healthy primitive reports. Separate theor
 selected read calls and decoder or replay work. The maintenance budget bounds bytes at names under
 explicit extent, inventory and successful maintenance assumptions. Extending healthy completion to
 every reachable supported case, allocator and descriptor bounds, and eventual storage release are
-separate obligations. [Conditional recovery](../../lean/Alvoki/Storage/Disk/CachedRecoveryProgress.lean) · [Selected read work](../../lean/Alvoki/Storage/Disk/SelectedRecoveryChunkWork.lean) · [Named maintenance budget](../../lean/Alvoki/Storage/Disk/NamedMaintenanceBudget.lean)
+separate obligations. [Conditional recovery](../../lean/Alvoki/Storage/Disk/CachedRecoveryProgress.lean) · [Selected read work](../../lean/Alvoki/Storage/Disk/Proofs/WAL/SelectedRecoveryChunkWork.lean) · [Named maintenance budget](../../lean/Alvoki/Storage/Disk/NamedMaintenanceBudget.lean)
 
 ## Refinement boundaries
 

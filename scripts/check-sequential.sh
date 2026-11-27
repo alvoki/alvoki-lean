@@ -686,8 +686,8 @@ lake env leanchecker Alvoki.Storage.Disk.CachedOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.CachedWalExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.RecoveryRequestCount
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedOpenWork
-lake env leanchecker Alvoki.Storage.Disk.SelectedRecoveryChunkWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork
 lake env leanchecker Alvoki.Storage.Disk.CheckpointHeldOpenWork
 lake env leanchecker Alvoki.Storage.Disk.MetadataRecoveryChunkWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedRecoveryWork
@@ -711,7 +711,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionNames
 lake env leanchecker Alvoki.Storage.Disk.WalSealedSpans
 lake env leanchecker Alvoki.Storage.Disk.ReachableWalSeals
-lake env leanchecker Alvoki.Storage.Disk.WalCollectionRecoveryBudget
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalCollectionRecoveryBudget
 lake env leanchecker Alvoki.Storage.Disk.SelectedRecoveryPayload
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedRetryReads

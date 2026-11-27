@@ -620,8 +620,8 @@ import Alvoki.Storage.Disk.RunRetentionCheckpoint
 import Alvoki.Storage.Disk.RunRetentionCollection
 import Alvoki.Storage.Disk.NamedMaintenanceBudget
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
-import Alvoki.Storage.Disk.WalSegmentCachedOpenWork
-import Alvoki.Storage.Disk.SelectedRecoveryChunkWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
+import Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork
 import Alvoki.Storage.Disk.MetadataRecoveryChunkWork
 import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
 import Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
@@ -644,7 +644,7 @@ import Alvoki.Storage.Disk.Proofs.WAL.MaintainedDirectoryWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
 import Alvoki.Storage.Disk.WalSegmentCollectionNames
 import Alvoki.Storage.Disk.ReachableWalSeals
-import Alvoki.Storage.Disk.WalCollectionRecoveryBudget
+import Alvoki.Storage.Disk.Proofs.WAL.WalCollectionRecoveryBudget
 import Alvoki.Storage.Disk.WalCollectionPreflight
 import Alvoki.Storage.Disk.WalCollectionFirstUnlink
 import Alvoki.Storage.Disk.WalCollectionFirstEffect
