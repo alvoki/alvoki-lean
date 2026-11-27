@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.MarkedSessionTrace
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedSessionTrace
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionPowerLoss
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionRetry
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLiveReopen

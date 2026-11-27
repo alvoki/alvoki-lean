@@ -1,7 +1,7 @@
-import Alvoki.Storage.Disk.MarkedCheckpointReady
+import Alvoki.Storage.Disk.Proofs.Checkpoint.MarkedCheckpointReady
 import Alvoki.Storage.Disk.Proofs.Recovery.MarkedOpenControl
-import Alvoki.Storage.Disk.VersionedCheckpointLineage
-import Alvoki.Storage.Disk.RecoveredPinRefinement
+import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointLineage
+import Alvoki.Storage.Disk.Proofs.Read.RecoveredPinRefinement
 
 namespace Alvoki.WAL.Boundary
 open Storage Manifest

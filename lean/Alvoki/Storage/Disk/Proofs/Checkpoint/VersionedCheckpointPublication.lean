@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.VersionedCheckpointLineage
+import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointLineage
 
 namespace Alvoki.Storage.CheckpointPublication
 open Manifest

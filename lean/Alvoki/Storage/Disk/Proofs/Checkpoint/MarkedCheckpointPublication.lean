@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.DiskRecoveryModel
+import Alvoki.Storage.Disk.Proofs.Recovery.DiskRecoveryModel
 import Alvoki.Storage.Disk.WalWritePublicationModel
-import Alvoki.Storage.Disk.WalReplayProvenance
+import Alvoki.Storage.Disk.Proofs.WAL.WalReplayProvenance
 
 namespace Alvoki.Storage.CheckpointPublication
 open Alvoki.WAL.Boundary

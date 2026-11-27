@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.MarkedDatabaseState
-import Alvoki.Storage.Disk.MarkedCheckpointReady
+import Alvoki.Storage.Disk.Proofs.Checkpoint.MarkedCheckpointReady
 import Alvoki.Storage.Disk.Proofs.Recovery.MarkedCheckpointReopenReady
 
 namespace Alvoki.WAL.Boundary

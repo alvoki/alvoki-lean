@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.RetainedWalReplay
-import Alvoki.Storage.Disk.CheckpointHistory
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointHistory
 
 namespace Alvoki.Storage
 

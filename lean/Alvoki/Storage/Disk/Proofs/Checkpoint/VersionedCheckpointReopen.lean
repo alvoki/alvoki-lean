@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointRetry
 import Alvoki.Storage.Disk.Proofs.Session.VersionedMarkedRecovery
-import Alvoki.Storage.Disk.MarkedReopenStability
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedReopenStability
 import Alvoki.Storage.Disk.Proofs.Recovery.LockedMarkedRead
 import Alvoki.Storage.Disk.LockedOpenFileReads
 import Alvoki.Storage.Disk.Proofs.Recovery.LockedVersionedCheckpointRead

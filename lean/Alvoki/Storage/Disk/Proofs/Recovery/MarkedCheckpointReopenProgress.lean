@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.MarkedCheckpointPublication
-import Alvoki.Storage.Disk.MarkedReopenStability
+import Alvoki.Storage.Disk.Proofs.Checkpoint.MarkedCheckpointPublication
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedReopenStability
 
 namespace Alvoki.Storage.CheckpointPublication
 

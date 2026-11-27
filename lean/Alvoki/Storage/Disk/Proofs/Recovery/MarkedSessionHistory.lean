@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.CheckpointHistory
-import Alvoki.Storage.Disk.MarkedSessionTrace
-import Alvoki.Storage.Disk.RecoveredPinRefinement
+import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointHistory
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedSessionTrace
+import Alvoki.Storage.Disk.Proofs.Read.RecoveredPinRefinement
 
 namespace Alvoki.WAL.Boundary
 open Storage

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.MarkedSessionTrace
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedSessionTrace
 
 namespace Alvoki.WAL.Boundary
 open Storage

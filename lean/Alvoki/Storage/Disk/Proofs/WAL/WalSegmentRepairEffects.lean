@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.RetainedWalBoundary
+import Alvoki.Storage.Disk.Proofs.WAL.RetainedWalBoundary
 import Alvoki.Storage.Disk.WalSegmentCollection
 import Alvoki.Storage.Disk.WalSegmentRepairIO
 

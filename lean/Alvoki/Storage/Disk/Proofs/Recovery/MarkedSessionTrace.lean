@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.MarkedAdapterRefinement
-import Alvoki.Storage.Disk.MarkedReopenStability
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedAdapterRefinement
+import Alvoki.Storage.Disk.Proofs.Recovery.MarkedReopenStability
 
 namespace Alvoki.WAL.Boundary
 open Storage

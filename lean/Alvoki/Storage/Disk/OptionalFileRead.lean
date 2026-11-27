@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.DiskRecoveryModel
+import Alvoki.Storage.Disk.Proofs.Recovery.DiskRecoveryModel
 
 namespace Alvoki.Storage
 open System

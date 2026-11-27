@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentBoundedOpenReports
-import Alvoki.Storage.Disk.WalSegmentPathIdentity
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentPathIdentity
 
 namespace Alvoki.Storage.DiskSession
 

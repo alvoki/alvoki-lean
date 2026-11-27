@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.DiskRecoveryModel
+import Alvoki.Storage.Disk.Proofs.Recovery.DiskRecoveryModel
 import Alvoki.Storage.Disk.Proofs.Write.MarkedWriteTrace
 
 namespace Alvoki.WAL.Boundary

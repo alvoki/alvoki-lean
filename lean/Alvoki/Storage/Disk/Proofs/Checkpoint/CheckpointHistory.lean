@@ -1,7 +1,7 @@
-import Alvoki.Storage.Disk.MarkedCheckpointPublication
+import Alvoki.Storage.Disk.Proofs.Checkpoint.MarkedCheckpointPublication
 import Alvoki.Storage.Disk.Proofs.Write.MarkedWriteTrace
-import Alvoki.Storage.Disk.WalReplayAgreement
-import Alvoki.Storage.Disk.WalReplayProvenance
+import Alvoki.Storage.Disk.Proofs.WAL.WalReplayAgreement
+import Alvoki.Storage.Disk.Proofs.WAL.WalReplayProvenance
 
 namespace Alvoki.Storage
 open Sequential
