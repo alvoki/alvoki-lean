@@ -1,8 +1,7 @@
 # Experimental segmented WAL
 
-This isolated experiment adds fixed-capacity segment rotation and prefix release to the
-existing [single-file WAL](../README.md). It does not change the production DiskTable
-format or API. The caller supplies an empty, durably named root directory on one
+This component adds fixed-capacity segment rotation and prefix release to the
+[single-file WAL](../README.md). The caller supplies an empty, durably named root directory on one
 filesystem and owns it exclusively for the lifetime of the handle.
 
 `Native.create dir policy capacity` creates a WAL with 1–255 batches per segment.
@@ -160,6 +159,6 @@ a batch, or widen the format.
   example independent directory writeback. Check that the trace is admitted and
   that the same client guarantee follows under the stated assumptions.
 - Compare group commit and buffering against the existing path with reproducible
-  throughput and acknowledgement-latency benchmarks. Record batch sizes,
+  throughput and acknowledgement-latency measurements. Record batch sizes,
   concurrency, sync policy and storage setup. Every acknowledged batch must still
   survive recovery until released.

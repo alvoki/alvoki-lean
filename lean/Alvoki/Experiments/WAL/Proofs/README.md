@@ -71,3 +71,15 @@ relative to the primitive assumptions in the table.
 
 Native append, bootstrap, segmented root recovery, and CONTROL publication
 retain their separate refinement obligations.
+
+The Unit payload in the recovery interpreter erases the append closures.
+The shared phase constructor keeps the lock, cursor and history, and scan
+and close ignore the append payload. Native installation supplies
+`fileOps` with the actual writer, reader and marker pair from those same
+opens. The append proof must retain these roles and their ownership. The
+writer is an unbuffered append description of the repaired data inode,
+and each boundary marker description belongs to its own numbered slot.
+Writes and their barriers must use the same description. The held lock
+and stable bindings exclude competing changes. The runtime must retain
+those descriptions until phase replacement or last drop, and preserve
+the shared reference under the mutex.
