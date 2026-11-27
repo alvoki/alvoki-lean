@@ -20,7 +20,7 @@ compile() {
 }
 compile Alvoki/Codec/Block
 table=Alvoki/Experiments/SSTable
-for module in Contract Search Core Builder Native FixedFormat FixedReader FixedBuilder FixedNative FixedBench; do
+for module in Contract Search Core Builder Native FixedFormat FixedReader FixedBuilder FixedNative FixedPolicies FixedBench; do
   compile "$table/$module"
 done
 cc -O2 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \

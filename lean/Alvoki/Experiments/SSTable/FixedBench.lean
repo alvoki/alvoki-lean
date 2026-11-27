@@ -1,4 +1,5 @@
 import Alvoki.Experiments.SSTable.FixedNative
+import Alvoki.Experiments.SSTable.FixedPolicies
 
 open ImmutableSSTable
 
@@ -29,10 +30,10 @@ private def makeQueries (rows queries : Nat) : Array Query := Id.run do
     result := result.push ⟨key (2 * index + miss), if miss == 0 then (index + 1).toUInt64 else 0⟩
   return result
 
-private def lookup (table : Table (EIO String)) (queries : Array Query) : EIO String UInt64 := do
+private def lookup (find : ByteArray → EIO String (Option ByteArray)) (queries : Array Query) : EIO String UInt64 := do
   let mut checksum := 0
   for query in queries do
-    let found ← table.lookup query.bytes
+    let found ← find query.bytes
     let value := found.elim 0 (fun bytes => Alvoki.word bytes 0)
     checksum := mix checksum value
   return checksum
@@ -44,11 +45,11 @@ private def scan (table : Table (EIO String)) : EIO String UInt64 := do
     checksum := mix checksum (Alvoki.word entry.value 0)
   return checksum
 
-private def scanBlocks (source : Source (EIO String)) (layout : Fixed.Layout) (count : Nat) :
-    EIO String UInt64 := do
+private def scanBlocks (source : Source (EIO String)) (layout : Fixed.Layout) (count : Nat)
+    (validation : Fixed.Validation) : EIO String UInt64 := do
   let mut checksum := 0
   for block in [:(count + layout.rowsPerBlock - 1) / layout.rowsPerBlock] do
-    let payload ← Fixed.readBlock source layout count block
+    let payload ← Fixed.readBlockWithValidation source validation layout count block
     let remaining := count - block * layout.rowsPerBlock
     for index in [:min layout.rowsPerBlock remaining] do
       let entry := Fixed.readRow layout payload index
@@ -68,12 +69,13 @@ private def countReads (source : Source (EIO String)) (reads : IO.Ref (Nat × Na
     source.readAt offset count
 
 private def sample (rows trial : Nat) (format operation : String) (items bytes time : Nat)
-    (reads : Option (Nat × Nat)) (checksum : UInt64) : IO Unit := do
+    (reads : Option (Nat × Nat)) (validations : Option Nat) (checksum : UInt64) : IO Unit := do
   let readColumns := reads.elim "," (fun (calls, requested) => s!"{calls},{requested}")
-  IO.println s!"{rows},{trial},{format},{operation},{items},{bytes},{time},{readColumns},{checksum}"
+  let validationColumn := validations.elim "" toString
+  IO.println s!"{rows},{trial},{format},{operation},{items},{bytes},{time},{readColumns},{validationColumn},{checksum}"
 
 private def measureRead (rows trial : Nat) (format operation : String) (items bytes : Nat)
-    (reads : IO.Ref (Nat × Nat)) (timed measured : EIO String UInt64) (expected : UInt64) :
+    (reads : IO.Ref (Nat × Nat)) (timed measured : EIO String UInt64) (expected : UInt64) (validations : Nat → Nat) :
     IO Unit := do
   let warm ← ok timed
   unless warm == expected do throw (IO.userError s!"{format} {operation} warm-up checksum")
@@ -82,10 +84,11 @@ private def measureRead (rows trial : Nat) (format operation : String) (items by
   reads.set (0, 0)
   let counted ← ok measured
   unless counted == expected do throw (IO.userError s!"{format} {operation} counted checksum")
-  sample rows trial format operation items bytes uptime (some (← reads.get)) value
+  let counts ← reads.get
+  sample rows trial format operation items bytes uptime (some counts) (some (validations counts.1)) value
 
 private def runSample (dir : System.FilePath) (rows trial : Nat) (queries : Array Query)
-    (scanSum lookupSum : UInt64) (blockRows : Option Nat) : IO Unit := do
+    (scanSum : UInt64) (blockRows : Option Nat) : IO Unit := do
   let format := blockRows.elim "variable" (fun count => s!"fixed-{count}")
   let path := dir / s!"{format}-{trial}"
   let nextIndex ← IO.mkRef 0
@@ -101,37 +104,68 @@ private def runSample (dir : System.FilePath) (rows trial : Nat) (queries : Arra
   let handle ← IO.FS.Handle.mk path .read
   let source := handleSource handle
   let bytes ← ok source.size
-  sample rows trial format "build" rows bytes buildTime none 0
+  sample rows trial format "build" rows bytes buildTime none none 0
 
   let reads ← IO.mkRef (0, 0)
   let instrumented := countReads source reads
-  let openFor := if blockRows.isSome then Fixed.openTable else openTable
-  let table ← ok (openFor source)
-  let countTable ← ok (openFor instrumented)
-  unless table.rowCount == rows && countTable.rowCount == rows do
-    throw (IO.userError "benchmark open count")
-  measureRead rows trial format "lookup-mixed" queries.size bytes reads
-    (lookup table queries) (lookup countTable queries) lookupSum
-  measureRead rows trial format "scan-next" rows bytes reads
-    (scan table) (scan countTable) scanSum
-
-  if blockRows == some 128 then
+  let workloads := #[
+    ("mixed", queries),
+    ("hit", queries.filter (fun query => query.expected != 0)),
+    ("miss", queries.filter (fun query => query.expected == 0))]
+  let measureLookups (label : String) (timed measured : ByteArray → EIO String (Option ByteArray))
+      (validations : Nat → Nat) : IO Unit := do
+    for (workload, selected) in workloads do
+      unless selected.isEmpty do
+        let expected := selected.foldl (fun hash query => mix hash query.expected) 0
+        measureRead rows trial format (s!"{label}-{workload}") selected.size bytes reads
+          (lookup timed selected) (lookup measured selected) expected validations
+  match blockRows with
+  | none =>
+    let table ← ok (openTable source)
+    let countTable ← ok (openTable instrumented)
+    unless table.rowCount == rows && countTable.rowCount == rows do
+      throw (IO.userError "benchmark open count")
+    measureLookups "lookup-row-lazy" table.lookup countTable.lookup (· / 2)
+    measureRead rows trial format "scan-next-lazy" rows bytes reads
+      (scan table) (scan countTable) scanSum (· / 2)
+  | some _ =>
     let (layout, count) ← ok (Fixed.openLayout source)
-    measureRead rows trial format "scan-block" rows bytes reads
-      (scanBlocks source layout count) (scanBlocks instrumented layout count) scanSum
+    unless count == rows do throw (IO.userError "benchmark open count")
+    for (label, policy) in [("lazy", Fixed.Validation.lazy), ("eager", .eager), ("skip", .skip)] do
+      let checkOpen (input : Source (EIO String)) : EIO String UInt64 := do
+        let (openedLayout, openedCount) ← Fixed.openWithValidation input policy
+        unless openedLayout = layout ∧ openedCount = count do throw "benchmark footer changed"
+        return openedCount.toUInt64
+      measureRead rows trial format (s!"open-{label}") 1 bytes reads
+        (checkOpen source) (checkOpen instrumented) count.toUInt64
+        (if policy = .eager then (· - 1) else fun _ => 0)
+      if policy != .eager then
+        let validations := if policy = .skip then fun _ => 0 else id
+        let rowTable (input : Source (EIO String)) := Table.ofReader count fun index => do
+          let payload ← Fixed.readBlockWithValidation input policy layout count (index / layout.rowsPerBlock)
+          return Fixed.readRow layout payload (index % layout.rowsPerBlock)
+        let table := rowTable source
+        let countTable := rowTable instrumented
+        measureLookups (s!"lookup-row-{label}") table.lookup countTable.lookup validations
+        measureLookups (s!"lookup-reuse-{label}")
+          (Fixed.lookupWithReuse source policy layout count)
+          (Fixed.lookupWithReuse instrumented policy layout count) validations
+        measureRead rows trial format (s!"scan-next-{label}") rows bytes reads
+          (scan table) (scan countTable) scanSum validations
+        measureRead rows trial format (s!"scan-block-{label}") rows bytes reads
+          (scanBlocks source layout count policy) (scanBlocks instrumented layout count policy) scanSum validations
   IO.FS.removeFile path
 
 def run (rows queryCount trials : Nat) : IO Unit := IO.FS.withTempDir fun dir => do
   let queries := makeQueries rows queryCount
-  let lookupSum := queries.foldl (fun hash query => mix hash query.expected) 0
   let mut scanSum := 0
   for index in [:rows] do
     scanSum := mix scanSum (index + 1).toUInt64
-  IO.println "rows,trial,format,operation,items,file_bytes,elapsed_ns,read_calls,requested_bytes,checksum"
-  let formats := #[none, some 1, some 128]
+  IO.println "rows,trial,format,operation,items,file_bytes,elapsed_ns,read_calls,requested_bytes,data_checksum_validations,checksum"
+  let formats := #[none, some 1, some 63, some 255, some 1023]
   for trial in [:trials] do
     for index in [:formats.size] do
-      runSample dir rows trial queries scanSum lookupSum formats[(trial + index) % formats.size]!
+      runSample dir rows trial queries scanSum formats[(trial + index) % formats.size]!
 
 end ImmutableSSTable.FixedBench
 

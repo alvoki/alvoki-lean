@@ -26,7 +26,7 @@ compile() {
 }
 compile Alvoki/Codec/Block native
 compile Alvoki/Codec/WordChecksum native
-for module in Contract Search Core Builder Native FixedFormat FixedBuilder FixedReader FixedNative; do
+for module in Contract Search Core Builder Native FixedFormat FixedBuilder FixedReader FixedNative FixedPolicies; do
   compile "$table/$module" native
 done
 compile "$table/Representation"

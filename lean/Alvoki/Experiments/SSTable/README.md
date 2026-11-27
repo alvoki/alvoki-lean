@@ -123,6 +123,12 @@ points leave ALVSST03 as the existing variable-width path. The
 path with one and 128 rows per block, including a scan that consumes one
 verified block at a time.
 
+The [policy experiment](FixedPolicies.lean) compares validation on block
+load, eager verification at open, and explicitly skipping data checksums.
+Footer and read-length checks apply in every policy. The experimental lookup
+can hold one already-loaded block until the lookup finishes. The fixed
+reader's existing proof applies to its default path.
+
 ## Roadmap
 
 A minimal LSM can build sorted, unique byte rows, publish the completed file

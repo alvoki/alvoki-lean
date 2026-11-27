@@ -1,4 +1,5 @@
 import Alvoki.Experiments.SSTable.FixedNative
+import Alvoki.Experiments.SSTable.FixedPolicies
 
 open ImmutableSSTable
 
@@ -151,12 +152,33 @@ private def checkRequiredRead : IO Unit := do
   | .ok none 10 => pure ()
   | _ => throw (IO.userError "fixed logical EOF issued a read")
 
+private def checkValidationPolicies (dir : System.FilePath) : IO Unit := do
+  let path := dir / "policies"
+  discard <| build path layout ((List.range 129).map row)
+  let image ← IO.FS.readBinFile path
+  let lastChecksum := layout.blockSize + layout.rowWidth
+  IO.FS.writeBinFile path (image.set! lastChecksum (image[lastChecksum]! ^^^ 1))
+  let handle ← IO.FS.Handle.mk path .read
+  let source := handleSource handle
+  let (opened, count) ← ok (Fixed.openWithValidation source .lazy)
+  check ((← ok (Fixed.lookupWithReuse source .lazy opened count (row 0).key)) ==
+    some (row 0).value) "lazy lookup checked an unrelated block"
+  expectError (Fixed.openWithValidation source .eager) "eager open missed a corrupted block"
+  expectError (Fixed.lookupWithReuse source .lazy opened count (row 128).key)
+    "lazy lookup accepted a bad checksum"
+  check ((← ok (Fixed.lookupWithReuse source .skip opened count (row 128).key)) ==
+    some (row 128).value) "skip should still decode an intact payload"
+  let truncated := Source.memory (m := EIO String) (image.extract 0 layout.blockSize)
+  expectError (Fixed.readBlockWithValidation truncated .skip opened count 1)
+    "skip accepted a short block"
+
 def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkGolden dir
   checkExtent dir
   checkRelocation dir
   checkBuildFailures dir
   checkRequiredRead
+  checkValidationPolicies dir
   IO.println "immutable fixed SSTable native fixtures passed"
 
 end ImmutableSSTable.FixedNativeTests

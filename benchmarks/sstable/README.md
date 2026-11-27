@@ -3,7 +3,7 @@
 Run from the repository root with the pinned Lean toolchain and a C compiler.
 
 ```sh
-taskset -c 0 bash benchmarks/sstable/run-fixed.sh 8193 512 5 > fixed-trials.csv
+taskset -c 0 bash benchmarks/sstable/run-fixed.sh 8193 512 5 > policy-trials.csv
 ```
 
 Choose a CPU in the current process affinity mask. The arguments give the row
@@ -20,7 +20,7 @@ counts through the same reader. The block scan uses the verified block payload
 once before reading the next block. The other scans call the common row-cursor
 API once per row.
 
-## Recorded run
+## Initial run
 
 Five trials on Linux 6.18.57 x86-64, KVM AMD EPYC 9V45, pinned to CPU 0, with Lean
 4.36.0 and GCC 14.2.0. Temporary files were on overlayfs. Timings are warm-cache
@@ -38,3 +38,32 @@ scan, the 128-row layout uses 65 requests and reads 131,608 bytes. With
 `next` it uses 8,193 requests and reads 16,842,776 bytes. Group size trades
 point-read cost for smaller files and faster scans when the caller consumes
 each block once.
+
+## Validation and lookup reuse
+
+The current runner compares one-row groups with full blocks of 1,016, 4,088
+and 16,376 bytes (63, 255 and 1,023 rows). It measures hits and misses
+separately as well as the mixed workload, and reports data checksum checks
+in the untimed counting pass. On successful fixed-width reads this count
+is one per block read with validation enabled, excluding the footer.
+An eager open verifies all blocks and discards them. Later reads still
+verify their newly loaded bytes. Skip retains footer and exact-length checks.
+
+Five warm-cache trials with the same platform and workload as above.
+The table shows the mixed lookup medians.
+[Raw CSV](policy-trials.csv)
+
+| Format | Row lookup, lazy | Reuse lookup, lazy | Reuse lookup, skip | Eager open |
+| --- | ---: | ---: | ---: | ---: |
+| Fixed, 1 row | 6.19 µs | 6.48 µs | 5.02 µs | 2.68 ms |
+| Fixed, 63 rows | 19.31 µs | 11.67 µs | 3.72 µs | 165 µs |
+| Fixed, 255 rows | 60.76 µs | 25.16 µs | 3.08 µs | 130 µs |
+| Fixed, 1,023 rows | 220.41 µs | 56.35 µs | 3.39 µs | 123 µs |
+
+The existing variable-width path took 8.28 µs per mixed lookup. Lazy open
+for the fixed layouts read one 56-byte footer and took 0.76–0.99 µs.
+With 255 rows per block, lookup reuse reduced data checksum checks from
+14 to 5.7 per mixed query. The skip results estimate the cost of data checksum validation on the
+same read schedule. These results describe
+the pinned warm-cache workload. The one-block scan verified batches of
+63–1,023 rows at 55–60 ns per row.
