@@ -14,6 +14,7 @@ flowchart LR
     R -->|publish generation| P[Manifest]
     P -->|selects checkpoint| R
     R -->|loaded on open| RAM[Runs in memory]
+    RAM -->|checkpoint| R
     WAL -->|replay after open| M
     RAM --> Q[Snapshot reads]
     M --> Q
