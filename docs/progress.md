@@ -68,9 +68,14 @@ separation from the keeper from the same exclusive-create and cache prefix.
 The handle snapshot and descriptor census need agree only on the created
 slot’s inode at acquisition.
 
-**Next source boundary.** Connect the second sampled reboot to the exact public
-marked opener. The final-directory-error report also still identifies the
-staged inode by a separate observation.
+When the initial WAL window covers the selected cutoff, the second reboot
+feeds the same public marked opener. The successful return supplies its exact
+table and ready storage. The client ledger adds the original uncertain batch
+once and retains the reads from before that write.
+
+**Next source boundary.** Use the returned handle in the mixed execution for
+subsequent writes and reads. The final-directory-error proof still needs to
+derive the staged inode from the reached create and cache operations.
 [Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·

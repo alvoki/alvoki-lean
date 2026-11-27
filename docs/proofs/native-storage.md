@@ -964,8 +964,11 @@ map retains the bounded WAL inventory and omits every name removed by the pass. 
 durability depends on the file-fsync effect. A later final-directory error follows
 a successful keeper rename and admits the corresponding directory crash choices.
 The retry fold retains the selected target and unchanged file footprint while the next reader
-plan uses the last returned keeper and later names. The kernel argument tracks reported
-Linux effects and distinguishes a returned error from whether its syscall took effect.
+plan uses the last returned keeper and later names. When the initial WAL window covers the
+selected cutoff, the staged-file error proof supplies the second reboot's exact selected entry
+to the next public open. Its returned table and ready storage retain the original ledger with
+one uncertain submission. A separate failed-call block follows each reboot. The kernel argument
+tracks reported Linux effects and distinguishes a returned error from whether its syscall took effect.
 
 One held marked interpreter now fixes primitive callbacks before admission and passes the actual
 new cache references to the worker. A successful worker result or a finalized worker error

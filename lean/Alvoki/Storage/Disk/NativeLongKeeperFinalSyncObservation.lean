@@ -9,6 +9,7 @@ import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.NativeMarkedFirstUnlinkError
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 import Alvoki.Storage.Disk.NativeWalPublicationTail
+import Alvoki.Storage.Disk.NativeLateWriteRecovery
 
 namespace Alvoki.Storage.DiskSession
 
@@ -1343,7 +1344,20 @@ theorem MarkedWalExtentReports.extendsStageSyncError
             (∀ n ∈ layout.boundedPlan.newer, retryNames rebooted ((dir).file (.walSegment n)) = none) ∧
             RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
             TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
-            (boot.DurableReset → selectedWal rebooted)) := by
+            (boot.DurableReset → selectedWal rebooted) ∧
+            (target.range.through ≤ through → boot.DurableReset →
+              ∀ {opened : NativeOpenedHandle heap} (last : NativeOpenedPosition opened)
+                (sameState : state = last.current.ready.state)
+                {request : WriteRequest} {batch : List WAL.Write} {table : PackedTable}
+                (handoff : last.current.SelectedWriteReboot view storage visible firstOffset
+                  request batch table target failedBefore first)
+                {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer} {writeCause : IO.Error}
+                (_reportedWrite : (NativeReturnedCall.write request (.error (.commitUnknown writeCause))).Reaches
+                  writes issuer (last.pins.map NativeOpenedPin.raw) last.reached failedBefore)
+                {origin : NativeExecutionPosition} {events : List NativeExecutionEvent}
+                (_ledger : origin.LedgerSuffix events last.current),
+                NativeExecutionPosition.SelectedWriteReboot.OpenContinuation last view storage visible
+                  firstOffset request batch target rebooted source origin events writeCause)) := by
   intro inode
   have compose {a b c : heap} (left : scratchFrame a b) (right : scratchFrame b c) : scratchFrame a c :=
     ⟨left.1.trans right.1, fun start => (right.2.1 start).trans (left.2.1 start), left.2.2.trans right.2.2⟩
@@ -1467,13 +1481,19 @@ theorem MarkedWalExtentReports.extendsStageSyncError
   have retained := ((effects.preserves firstValid).2.2.2 firstSelected).2.2.1
   obtain ⟨namedOnBoot, acceptedOnBoot, next, vacant, empty⟩ :=
     boot.selectsSettledKeeper sameFirst manifest retained oldChoice oldBytes immutable
-  refine ⟨old, oldAtStart, namedOnBoot, acceptedOnBoot, ?_, next, vacant, empty, ?_⟩
+  have rebootWindow : catalog rebooted := atPrune.2.1.frame (fun n low high =>
+    congrArg Option.isSome (fromPrune _ boot.chosen _ (.inr (.inr ⟨n, .inl ⟨low, high⟩, rfl⟩))))
+  refine ⟨old, oldAtStart, namedOnBoot, acceptedOnBoot, ?_, next, vacant, empty,
+    fun reset => boot.startsRecoveryObservations reset next rebootWindow, ?_⟩
   · intro n member
     exact (fromPrune _ boot.chosen _ (.inr (.inr ⟨n, .inr member, rfl⟩))).trans
       ((rootSync.visible (.walSegment n)).trans ((loadNames n member).trans (removed n member)))
-  · intro reset
-    exact boot.startsRecoveryObservations reset next (atPrune.2.1.frame (fun n low high =>
-      congrArg Option.isSome (fromPrune _ boot.chosen _ (.inr (.inr ⟨n, .inl ⟨low, high⟩, rfl⟩)))))
+  · intro covered reset opened last sameState request batch table handoff writes issuer writeCause
+      reportedWrite origin events ledger
+    have recovery := boot.startsRecoveryObservations reset next (rebootWindow.restrict (Nat.le_refl _) covered)
+    intro returns afterCalls attempts
+    exact handoff.opensReadyAfterRetryReboot reportedWrite ledger prior returned sameState boot next vacant recovery
+      (returns := returns) (reached := afterCalls) (attempts := attempts)
 
 end FailedPruneBlock
 
