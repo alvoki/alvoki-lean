@@ -169,13 +169,23 @@ same returned WAL handle on scan and append. Close after an uncertain
 operation preserves the pending request via the existing offline stop step.
 If a component opened successfully and a later L0 callback failed, record
 the successful component open followed by stop. A scan failure after a
-successful WAL open follows this rule too. L0 needs isolation frames between component namespaces, including on
-cleanup. `publishSelected` derives the manifest part of the L0 state
-update and takes only the unrelated WAL and table frames plus the active
-image projection. `reopenSelected` derives the returned typed version and
-its settled binding. These theorems operate on primitive reports.
-Constructing those reports at the actual L0 callback boundary and
-establishing filesystem-wide namespace isolation remain open.
+successful WAL open follows this rule too. The integrated callback interpretation executes the typed manifest
+schedule over DurableBlob's Linux primitive reports. `CallbackEvidence.laws`
+derives its manifest fields from that execution. Reopen preserves the live
+binding on either outcome, including a sync error after the barrier.
+Publication success installs the proposal. A returned error can retain
+the old live binding or expose the proposal. The reached image is kept
+on both paths, including its survivors for later recovery. Power loss
+selects from those survivors at the DurableBlob boundary. Connecting that
+selection to the state from which the next integrated L0 attempt starts
+remains part of the native refinement.
+
+The interpretation needs the active image projection, installation of the
+reached image and frames for the WAL and table namespaces. The reports
+describe reached primitive outcomes, including whether a failed sync took
+effect. Relating the actual Linux IO and filesystem state to those reports
+and namespace frames remains the runtime boundary. The native segmented
+WAL and SSTable producer handoffs are separate obligations.
 
 ## Process interruption checks
 

@@ -108,8 +108,8 @@ theorem TableCreationEvidence.effect {create : Rows → StorageM σ UInt64} (e :
   exact createTableAt_bindings selected e.names e.prepared e.occupied e.build e.syncDirectory
     e.absent e.probe e.buildEffect e.syncEffect rows s
 
-/-- Local evidence for reached callbacks. WAL and manifest mutation effects
-are obtained by eliminating component traces. Table creation carries the
+/-- Local evidence for reached callbacks. Manifest effects are derived from the shared schedule and primitive
+reports. WAL effects are obtained from component traces. Table creation carries the
 namespace durability and isolation conditions; a read carries the exact
 built image served by its descriptor. State indices identify the reached
 phase. Relating the reported callbacks to native IO remains a premise. -/
@@ -121,9 +121,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
   reopenWal : ∀ s, match ops.reopenWal s with
     | .ok view after => WalOpenReceipt (selected s).view view ∧ selected after = selected s
     | .error _ after => selected after = selected s
-  reopenManifest : ∀ s, match ops.manifest.reopen s with
-    | .ok version after => version = (selected s).version ∧ selected after = selected s
-    | .error _ after => selected after = selected s
+  manifest : Nonempty (ManifestComposition.Interpretation ops.manifest selected)
   append : ∀ s batch, match ops.append batch s with
     | .ok _ after => WalReceipt (selected s).view (selected after).view batch ∧
         (selected after).version = (selected s).version ∧ (selected after).tables = (selected s).tables
@@ -132,13 +130,6 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (.ready (selected s).version) (.online (selected after).view) (.ready (selected after).version) ∧
           (selected after).tables = (selected s).tables)
   create : Nonempty (TableCreationEvidence ops.tables.create selected)
-  publish : ∀ s proposal, proposal.Valid → match ops.manifest.publish proposal s with
-    | .ok _ after => (selected after).version = proposal ∧
-        (selected after).view = (selected s).view ∧ (selected after).tables = (selected s).tables
-    | .error _ after => selected after = selected s ∨
-        (RecoveryChoices.Retry (.online (selected s).view)
-          (.offline (selected s).version (some proposal)) (.online (selected after).view)
-          (.ready (selected after).version) ∧ (selected after).tables = (selected s).tables)
   check : ∀ s id, match ops.tables.check id s with
     | .ok _ after => (∃ rows, (selected s).tables id = some rows ∧ TableOpen (fileBytes s id) rows) ∧
         selected after = selected s
@@ -168,7 +159,9 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
       rw [ran] at read
       exact ⟨read.1.effect, read.2⟩
     | error error after => simpa [ran] using read
-  reopenManifest := evidence.reopenManifest
+  reopenManifest s := by
+    obtain ⟨manifest⟩ := evidence.manifest
+    exact manifest.reopenEffect s
   append s batch := by
     have receipt := evidence.append s batch
     cases ran : ops.append batch s with
@@ -187,18 +180,8 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected fileByte
     have made := creation.effect rows s
     cases ran : ops.tables.create rows s <;> simpa [ran, Selected.TableFrame] using made
   publish s proposal valid := by
-    have receipt := evidence.publish s proposal valid
-    cases ran : ops.manifest.publish proposal s with
-    | ok value after =>
-      rw [ran] at receipt
-      exact selected_eq receipt.2.1 receipt.1 receipt.2.2
-    | error error after =>
-      rw [ran] at receipt
-      rcases receipt with same | ⟨retry, tables⟩
-      · exact Or.inl same
-      · obtain ⟨view, old | new⟩ := retry.afterPublish
-        · exact Or.inl (selected_eq view old tables)
-        · exact Or.inr (selected_eq view new tables)
+    obtain ⟨manifest⟩ := evidence.manifest
+    exact manifest.publishEffect s proposal valid
   check s id := by
     have read := evidence.check s id
     cases ran : ops.tables.check id s with

@@ -59,12 +59,16 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms wal_append
 #check_axioms wal_scan
 #check_axioms wal_open
+#check_axioms DurableBlob.LinuxEffects.reopenBinding
+#check_axioms DurableBlob.LinuxEffects.publishActive
 #check_axioms ManifestComposition.reopen
 #check_axioms ManifestComposition.publish
 #check_axioms ManifestComposition.healthyInitialOpenPublish
 #check_axioms ManifestComposition.reopenSelected
 #check_axioms ManifestComposition.publishSelected
 #check_axioms ManifestComposition.retryAfterPublication
+#check_axioms ManifestComposition.Interpretation.reopenEffect
+#check_axioms ManifestComposition.Interpretation.publishEffect
 #check_axioms CallbackEvidence.laws
 #check_axioms Execution.Run.refines
 #check_axioms Execution.Run.recoverOk

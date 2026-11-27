@@ -285,6 +285,35 @@ theorem publishUncertainAdmits (directory : FilePath) (reports : Reports)
     rw [result] at effect
     exact ⟨.uncertain, effect⟩
 
+/-- Reopen never changes the live binding. A successful reply settles it. -/
+theorem reopenBinding (directory : FilePath) (reports : Reports) (before : Image) :
+    match (backend directory reports).reopen before with
+    | .ok bytes after => bytes = before.active ∧ after.Stable bytes
+    | .error _ after => after.active = before.active := by
+  rw [reopen_eq]
+  cases r : reports.readActive <;> cases o : reports.openDirectory <;>
+    cases d : reports.syncDirectory <;>
+      simp [o, d, Reports.directoryEffect, Files.backend, model, perform,
+        Image.Stable, Image.barrier, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
+
+/-- The live binding can only move to the proposal. The offline
+survivor guarantee additionally requires the ready precondition. -/
+theorem publishActive (directory : FilePath) (reports : Reports) (before : Image)
+    (proposed : ByteArray) :
+    match (backend directory reports).publish proposed before with
+    | .ok _ after => after.Stable proposed
+    | .error _ after => Permitted before.active (some proposed) after.active := by
+  rw [publish_eq]
+  let report := reports.publication
+  change match (model report true).backend.publish proposed before with
+    | .ok _ after => after.Stable proposed
+    | .error _ after => Permitted before.active (some proposed) after.active
+  cases w : report .writeStaged <;> cases s : report .syncStaged <;>
+    cases r : report .renameStaged <;> cases d : report .syncDirectory <;>
+    simp [Files.backend, model, perform, w, s, r, d, Image.recordWrite, Image.syncWriter,
+      Image.replace, Image.barrier, Bind.bind, Pure.pure, EStateM.bind,
+      Image.Stable, Permitted]
+
 theorem reopenFailedAdmits (directory : FilePath) (reports : Reports)
     (admitted : before.Admits old pending)
     (returned : (backend directory reports).reopen before = .error err after) :
