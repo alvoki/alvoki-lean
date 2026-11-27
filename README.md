@@ -1,10 +1,21 @@
 # Alvoki
 
-Alvoki is an experimental embedded key-value storage engine written in Lean 4. The project explores how to build a fast native engine whose storage guarantees can be checked by Lean. The central goal is that after a crash, reopening the database returns the right table from the files that survived, with every acknowledged write accounted for.
+Alvoki is an experimental embedded LSM-style key-value storage engine written in Lean 4. The project explores how to build a fast native engine whose storage guarantees can be checked by Lean. The central goal is that after a crash, reopening the database returns the right table from the files that survived, with every acknowledged write accounted for.
 
 ## What you can use today
 
-The Linux `DiskTable` API stores unsigned 64-bit keys and values. It supports puts and deletes, point lookups, ordered range reads, and snapshots of retained history. It uses a segmented write-ahead log for durability and immutable sorted runs for checkpoints. WAL rotation, compaction, and collection of obsolete runs and covered WAL segments are explicit maintenance operations.
+The Linux `DiskTable` API stores unsigned 64-bit keys and values. It supports puts and deletes, point lookups, ordered range reads, and snapshots of retained history. It uses a segmented write-ahead log for durability and immutable sorted runs for checkpoints. Active run bytes and the memtable reside in RAM; checkpointing, WAL rotation, compaction, and collection are explicit maintenance operations.
+
+```mermaid
+flowchart LR
+    W[Writes] --> WAL[Segmented WAL]
+    W --> M[In-memory memtable]
+    M -->|checkpoint| R[Immutable runs on disk]
+    R -->|loaded on open| RAM[Runs in memory]
+    WAL -->|replay after open| M
+    RAM --> Q[Snapshot reads]
+    M --> Q
+```
 
 Alvoki is pre-release. The current API is sequential, expects a dedicated directory controlled by the engine, and is tested on Linux x86-64. On-disk formats may change during development.
 
