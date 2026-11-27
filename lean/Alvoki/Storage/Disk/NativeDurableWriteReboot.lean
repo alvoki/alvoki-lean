@@ -230,8 +230,45 @@ theorem RawWriteRebootEntry.selectsRetryAfterRepair
   rw [keeperName, Option.map_some]
   exact accepts _ bytes
 
-/-- An exact keeper payload in the sampled namespace supplies the
-canonical layout for the retained writer, with any observed later files. -/
+/-- The retained writer and its visible marker and keeper determine the
+logical layout, including the offsets the next directory scan selects. -/
+theorem SegmentedWriterState.RetainedReady.visibleReopenLayout
+    {writer : SegmentedWriterState} {directory : DiskDirectory} {descriptor : Nat} {image : FileImage}
+    (ready : writer.RetainedReady directory descriptor)
+    (pair : image.directory.active = writer.target.pair)
+    (keeperBytes : image.keeper.active = some writer.target.trimmed) :
+    ∃ layout : CanonicalKeeperLayout image writer.history,
+      layout.target = writer.target ∧ layout.keeper = writer.wal.active ∧
+      layout.tail = ByteArray.empty ∧
+      layout.sealed ++ [layout.keeper] = writer.wal.readDescriptors layout.range.watermark ∧
+      selectWalSegmentReads (writer.wal.segments.map WalSegment.first) layout.range.watermark =
+        some (layout.first, (layout.sealed ++ [layout.keeper]).map WalSegment.first) := by
+  obtain ⟨original, originalTarget, atKeeper, descriptors, offsets, _⟩ := ready.powerLossLayout
+  let layout : CanonicalKeeperLayout image writer.history := {
+    range := original.range
+    decoded := by
+      rw [pair, ← originalTarget]
+      exact original.decoded
+    through := original.through
+    first := original.first
+    sealed := original.sealed
+    keeper := original.keeper
+    chain := original.chain
+    covers := original.covers
+    tail := .empty
+    visible := by
+      rw [ByteArray.append_empty]
+      exact keeperBytes.trans (congrArg (fun target : Target => some target.trimmed) originalTarget.symm)
+  }
+  have sameTarget : layout.target = writer.target :=
+    (Target.eq_of_fields (pair.trans (congrArg Target.pair originalTarget).symm)
+      rfl rfl rfl : layout.target = original.target).trans originalTarget
+  refine ⟨layout, sameTarget, atKeeper, rfl, descriptors, ?_⟩
+  rw [descriptors]
+  exact offsets
+
+/-- A reboot entry also establishes the crash alternatives required by
+the repair contract at the sampled keeper. -/
 theorem RawOpenRetryTrace.SelectedEntry.readyRebootLayout
     (selected : RawOpenRetryTrace.SelectedEntry view state state.writer.target names visible rebooted)
     (ready : state.writer.RetainedReady state.session.directory state.session.descriptor)
@@ -247,32 +284,11 @@ theorem RawOpenRetryTrace.SelectedEntry.readyRebootLayout
   have active := selected.keeper
   unfold RawOpenRetryTrace.KeeperAt at active
   rw [ready.active] at active
-  have activeBytes := active.trans payload
-  obtain ⟨original, originalTarget, atKeeper, descriptors, offsets, _⟩ := ready.powerLossLayout
-  let layout : CanonicalKeeperLayout (view.files rebooted).image state.writer.history := {
-    range := original.range
-    decoded := by
-      rw [selected.valid.selected, ← originalTarget]
-      exact original.decoded
-    through := original.through
-    first := original.first
-    sealed := original.sealed
-    keeper := original.keeper
-    chain := original.chain
-    covers := original.covers
-    tail := .empty
-    visible := by
-      rw [ByteArray.append_empty]
-      exact activeBytes.trans (congrArg (fun target : Target => some target.trimmed) originalTarget.symm)
-  }
-  have sameTarget : layout.target = state.writer.target :=
-    (Target.eq_of_fields (selected.valid.selected.trans (congrArg Target.pair originalTarget).symm)
-      rfl rfl rfl : layout.target = original.target).trans originalTarget
+  obtain ⟨layout, sameTarget, atKeeper, tail, descriptors, offsets⟩ :=
+    ready.visibleReopenLayout selected.valid.selected (active.trans payload)
   have chosen : (view.files rebooted).image.Valid layout.target := sameTarget.symm ▸ selected.valid
-  have prepared := layout.prepared chosen.keeper.hasCrashImage chosen.keeper.crashValid chosen.later
-  refine ⟨layout, sameTarget, atKeeper, rfl, descriptors, ?_, prepared⟩
-  rw [descriptors]
-  exact offsets
+  exact ⟨layout, sameTarget, atKeeper, tail, descriptors, offsets,
+    layout.prepared chosen.keeper.hasCrashImage chosen.keeper.crashValid chosen.later⟩
 
 /-- A settled writer has no uncertain batch to select. One sampled
 reboot map carries its unchanged target and exact keeper into the next

@@ -1743,39 +1743,39 @@ abbrev RawMarkedOpenInterpreter.AfterWalOpen
     {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
     (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (entry : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (through : Nat) (post : DiskTable → heap → Prop) : Prop :=
   let names := fun h => (storage h).files.names
   let samples := fun h => CheckpointSurvivingFiles.mk (names h) (fun inode => [visible h inode])
   ∀ {input : FilePath} {returnedAt : heap} {table : DiskTable}
-    (_admission : source.ObservedAdmissionEffects view directory (fun _ => False) input rebooted storage visible)
+    (_admission : source.ObservedAdmissionEffects view directory (fun _ => False) input entry storage visible)
     (_reads : ∀ held : HeldOpenCache heap, LiteralOpenAuthority view directory held held.ready →
       source.AlignedReadEffects view directory held.pendingRef names visible namespaceView root
         (managedPath directory) (fun _ _ => True))
     (_child : ∀ start ≤ through,
       (namespaceView.child root (renderWalSegmentName start)).map namespaceView.modelObject =
-        names rebooted (directory.file (.walSegment start)))
+        names entry (directory.file (.walSegment start)))
     (_laterAbsent : ∀ {before entries listed}, source.directoryCalls.run directory.path before = .ok entries listed →
-      (samples rebooted).Frames (managedPath directory) (samples listed) →
+      (samples entry).Frames (managedPath directory) (samples listed) →
       MarkedWalExtentReports.TruthfulAbsenceOn (through < ·) source.fileCalls directory
         namespaceView root (entries.toList.map (·.fileName)) listed)
     (_initializesPhase : ∀ {value before ref after}, source.allocatePhase (.ready value) before = .ok ref after →
       view.phase after ref = some (.ready value))
     (_tokenKeepsPhase : ∀ {before token after}, source.allocateToken () before = .ok token after →
       ∀ ref, view.phase after ref = view.phase before ref)
-    (_returned : source.openTable input rebooted = .ok table returnedAt),
+    (_returned : source.openTable input entry = .ok table returnedAt),
     post table returnedAt
 
 /-- Local effects needed to interpret a successful checkpoint-free open
-from a chosen reboot heap. The returned table and initialized phase
+from the reached entry. The returned table and initialized phase
 implement the given history. -/
 abbrev RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen
     {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
     (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory) (keeperFirst : Nat)
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (entry : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (history : List WAL.Write) : Prop :=
-  source.AfterWalOpen view directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
+  source.AfterWalOpen view directory storage visible entry namespaceView root history.length fun table returnedAt =>
     ∃ (logical : PackedTable) (count : UInt64) (held : HeldOpenCache heap)
       (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit) (repaired afterPhase : heap),
       recoverSelected .empty (WAL.encode history) = .ok logical ∧
@@ -1801,9 +1801,9 @@ abbrev RawMarkedOpenInterpreter.ReadsClientHistoryAtOpen
     {heap stream : Type} (source : RawMarkedOpenInterpreter heap stream)
     (view : OpenCloseHeapView heap FileImage) (directory : DiskDirectory)
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (rebooted : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (entry : heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
     (log : List DatabaseSubmissions) (reads : List RecordedSnapshotRead) (history : List WAL.Write) : Prop :=
-  source.AfterWalOpen view directory storage visible rebooted namespaceView root history.length fun table returnedAt =>
+  source.AfterWalOpen view directory storage visible entry namespaceView root history.length fun table returnedAt =>
     ∃ (installed : Installed) (phase : IO.Ref (Phase Installed)) (token : IO.Ref Unit),
       view.phase returnedAt phase = some (.ready installed) ∧
       (∃ lock files, table.UsesOpenReferences directory lock files phase token) ∧
@@ -1840,43 +1840,41 @@ variable {heap stream : Type} {view : OpenCloseHeapView heap FileImage}
   {acknowledged rebooted : heap}
   {namespaceView : DirectoryReadNamespace} {root : DeviceInode}
 
-local notation "directory" => state.session.directory
 local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage h))
 local notation "samples" => fun h => CheckpointSurvivingFiles.mk (names h) (fun inode => [visible h inode])
 
-/-- The literal reader depends on the selected files and replay, whether
-the writer acknowledged its last batch or a crash selected an uncertain one.
-Installation uses the keeper offset in that layout, including when rotation
-changes which segment the directory exposes after reboot. -/
-theorem RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
-    {target : Target} {history : List WAL.Write}
-    (selected : RawOpenRetryTrace.SelectedEntry view state target names visible rebooted)
-    (layout : CanonicalKeeperLayout (view.files rebooted).image history)
-    (noManifest : state.writer.target.pair.manifest = none)
+/-- A successful literal open uses the live selected files at its entry.
+The visible layout determines which keeper is installed. -/
+theorem RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
+    {directory : DiskDirectory} {entry : heap} {history : List WAL.Write} {lockInode : Nat}
+    (layout : CanonicalKeeperLayout (view.files entry).image history)
+    (lockBound : names entry (directory.file .lock) = some lockInode)
+    (missing : layout.target.pair.manifest = none)
+    (manifestAbsent : names entry (directory.file .manifest) = none)
+    (markerBytes : (names entry (directory.file .walBoundary)).map (visible entry) = layout.target.pair.walBoundary)
     (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
       layout.range.watermark < start)
-    (accepted : state.writer.published.AcceptsVersioned history.length.toUInt64
-      (WAL.Boundary.CheckpointRepresentsPrefix history) (view.files rebooted).image.directory.active.manifest)
     (ordered : WAL.OrdinalsFrom 1 history)
-    (wal : layout.VisibleWal directory (names rebooted) (visible rebooted)) :
+    (wal : layout.VisibleWal directory (names entry) (visible entry)) :
     source.ReplaysWalBeforeCheckpointAtOpen view directory layout.keeper.first
-      storage visible rebooted namespaceView root history := by
+      storage visible entry namespaceView root history := by
   intro input returnedAt table admission effects child laterAbsent initializesPhase tokenKeepsPhase returned
-  have missing : layout.target.pair.manifest = none :=
-    (congrArg DirectoryPublication.Bindings.manifest selected.valid.selected).trans (selected.manifest.trans noManifest)
-  have noCheckpoint : SelectedIntegrityCheckpoint state.writer.published.durable layout.target.pair.manifest none :=
+  let published : CheckpointPublication.Image := ⟨.settled none, fun _ _ => none⟩
+  have noCheckpoint : SelectedIntegrityCheckpoint published.durable layout.target.pair.manifest none :=
     missing.symm ▸ .absent
-  have manifest : (samples rebooted).StoresManifest directory layout.target.pair.manifest := by
+  have accepted : published.AcceptsVersioned history.length.toUInt64
+      (WAL.Boundary.CheckpointRepresentsPrefix history) layout.target.pair.manifest := by
+    rw [missing]
+    trivial
+  have manifest : (samples entry).StoresManifest directory layout.target.pair.manifest := by
     rw [missing, CheckpointSurvivingFiles.StoresManifest]
-    have old := selected.protectedFiles.manifest
-    rwa [noManifest] at old
-  have marker (marker : ByteArray) (present : (view.files rebooted).image.directory.active.walBoundary = some marker) :
-      (samples rebooted).Stored ((directory).file .walBoundary) marker := by
-    have atTarget := (congrArg DirectoryPublication.Bindings.walBoundary selected.valid.selected).symm.trans present
-    obtain ⟨inode, named, payload⟩ := Option.map_eq_some_iff.mp (selected.marker.trans atTarget)
+    exact manifestAbsent
+  have marker (marker : ByteArray) (present : layout.target.pair.walBoundary = some marker) :
+      (samples entry).Stored (directory.file .walBoundary) marker := by
+    obtain ⟨inode, named, payload⟩ := Option.map_eq_some_iff.mp (markerBytes.trans present)
     exact ⟨inode, named, congrArg List.singleton payload⟩
   obtain ⟨held, frame, authority, _, _, _, _, worker⟩ :=
-    source.reachesAlignedCache admission selected.protectedFiles.lockBound returned
+    source.reachesAlignedCache admission lockBound returned
   have literal := (source.readsLiteralMarkedOpen directory layout noCheckpoint held.lock held.directoryRef held.activeRef
     held.pendingRef held.ready names visible
     namespaceView root (managedPath directory) (fun _ => trivial) (fun _ _ => trivial)
@@ -1908,6 +1906,31 @@ theorem RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
   rw [← assembled] at uses
   exact uses.lookupLatestAfterWalReplay cells stored full ptrEq compare key
 
+local notation "directory" => state.session.directory
+
+/-- Read the visible files chosen by an exact retry entry. -/
+theorem RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
+    {target : Target} {history : List WAL.Write}
+    (selected : RawOpenRetryTrace.SelectedEntry view state target names visible rebooted)
+    (layout : CanonicalKeeperLayout (view.files rebooted).image history)
+    (noManifest : state.writer.target.pair.manifest = none)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (wal : layout.VisibleWal directory (names rebooted) (visible rebooted)) :
+    source.ReplaysWalBeforeCheckpointAtOpen view directory layout.keeper.first
+      storage visible rebooted namespaceView root history := by
+  have missing : layout.target.pair.manifest = none :=
+    (congrArg DirectoryPublication.Bindings.manifest selected.valid.selected).trans (selected.manifest.trans noManifest)
+  have manifestAbsent := selected.protectedFiles.manifest
+  rw [noManifest] at manifestAbsent
+  have marker := selected.marker.trans (congrArg DirectoryPublication.Bindings.walBoundary selected.valid.selected).symm
+  exact @RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
+    (source := source) (namespaceView := namespaceView) (root := root)
+    (layout := layout) (lockBound := selected.protectedFiles.lockBound) (missing := missing)
+    (manifestAbsent := manifestAbsent) (markerBytes := marker) (following := following)
+    (ordered := ordered) (wal := wal)
+
 /-- Before the first checkpoint, the sampled files determine the history
 installed in the phase of the table returned by a successful public open. -/
 theorem RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen
@@ -1923,15 +1946,13 @@ theorem RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen
   have through := congrArg (fun t : Target => t.range.through) target
   have window := recovery.1.restrict (Nat.zero_le layout.first) (Nat.le_of_eq through)
   have wal := selected.visibleReadyWal layout target descriptors offsets window
-  have accepted := valid.retained.resumed.accepted
-  rw [← selected.valid.selected] at accepted
   have sameFirst := congrArg WalSegment.first sameKeeper
   rw [← sameFirst]
   exact @RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
     (source := source) (namespaceView := namespaceView) (root := root)
     (selected := selected) (layout := layout)
     (noManifest := noManifest) (following := (layout.modeledWindow _ offsets).2)
-    (accepted := accepted) (ordered := valid.retained.resumed.ordered) (wal := wal)
+    (ordered := valid.retained.resumed.ordered) (wal := wal)
 
 /-- An uncertain write uses the same literal reopen and latest read as
 an acknowledged write. Its sampled marker fixes the old or whole-batch
@@ -1955,7 +1976,7 @@ theorem NativeReadPosition.SelectedWritePlan.replaysWalBeforeCheckpointAtOpen
     (source := source) (namespaceView := namespaceView) (root := root)
     (selected := selected) (layout := plan.layout)
     (noManifest := noManifest) (following := plan.modeledWindow.2)
-    (accepted := plan.accepted) (ordered := plan.ordered)
+    (ordered := plan.ordered)
     (wal := plan.visibleWal names visible covers recovery.1 selected.protectedFiles recovery.2.1)
 
 end WalOnly

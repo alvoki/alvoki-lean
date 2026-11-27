@@ -1,9 +1,9 @@
 import Alvoki.Storage.Disk.NativeOpenRotation
-import Alvoki.Storage.Disk.NativeRawSync
+import Alvoki.Storage.Disk.NativeWalStage
 
 namespace Alvoki.Storage.DiskSession
 
-open System
+open System SyncHandleRouting
 
 section FilePrefix
 
@@ -29,6 +29,71 @@ theorem OpenRotationCallbacks.SuccessorFilePrefix.returnsDirectoryError
     have fileSynced := selected.2 ▸ filePrefix.sync
     simp only [WalSegmentRotation.observeSuccessorWith, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
       filePrefix.read, observed, selected.1, ↓reduceIte, fileSynced, failed]
+
+/-- The exclusive-created handle is remembered and consumed by the
+first file barrier. These receipts stop before any root directory sync. -/
+structure OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync
+    (filePrefix : calls.SuccessorFilePrefix directory first entry synced)
+    (create : RawWalStageCalls heap) (raw : RawSyncCalls heap)
+    {files : DiskTable.OpenSyncFiles} (cache : OpenSyncCacheRefs files directory.path) where
+  handle : IO.FS.Handle
+  opened : heap
+  entries : List (FilePath × IO.FS.Handle)
+  loaded : heap
+  issued : heap
+  openNew : create.create (directory.file (.walSegment first)) filePrefix.afterRead = .ok handle opened
+  remember : create.remember cache.pending (pushPending (directory.file (.walSegment first)) handle)
+    opened = .ok () filePrefix.beforeSync
+  load : raw.readPending cache.pending filePrefix.beforeSync = .ok entries loaded
+  consume : raw.setPending cache.pending (entries.filter (fun item => item.1 != directory.file (.walSegment first)))
+    loaded = .ok () issued
+  sync : raw.fsync handle issued = .ok () synced
+
+/-- The reached absent branch uses exclusive creation. Invert the
+existing two callbacks and derive that the pending hit selects the very
+handle the create returned, even with older pending entries. -/
+theorem OpenRotationCallbacks.SuccessorFilePrefix.reachesExclusiveSync
+    (filePrefix : calls.SuccessorFilePrefix directory first entry synced)
+    (create : RawWalStageCalls heap) (raw : RawSyncCalls heap)
+    {files : DiskTable.OpenSyncFiles} (cache : OpenSyncCacheRefs files directory.path)
+    {image : Type} (view : OpenCloseHeapView heap image)
+    (absent : filePrefix.observed = none)
+    (creation : let path := directory.file (.walSegment first)
+      calls.create path filePrefix.afterRead = (do
+        let handle ← create.create path
+        create.remember cache.pending (pushPending path handle)) filePrefix.afterRead)
+    (fileSync : let path := directory.file (.walSegment first)
+      calls.sync path filePrefix.beforeSync = raw.group directory.path cache.directory cache.active cache.pending
+        #[path] filePrefix.beforeSync)
+    (stored : let path := directory.file (.walSegment first)
+      ∀ {handle opened}, create.create path filePrefix.afterRead = .ok handle opened →
+        create.remember cache.pending (pushPending path handle) opened = .ok () filePrefix.beforeSync →
+        view.pending filePrefix.beforeSync cache.pending = pushPending path handle (view.pending opened cache.pending))
+    (readPending : ∀ {entries loaded}, raw.readPending cache.pending filePrefix.beforeSync = .ok entries loaded →
+      entries = view.pending filePrefix.beforeSync cache.pending) :
+    Nonempty (filePrefix.ExclusiveSync create raw cache) := by
+  let path := directory.file (.walSegment first)
+  have created := filePrefix.successor
+  rw [absent] at created
+  change calls.create path filePrefix.afterRead = _ at created
+  rw [creation] at created
+  change (create.create path >>= fun handle =>
+    create.remember cache.pending (pushPending path handle)) filePrefix.afterRead = _ at created
+  cases exclusive : create.create path filePrefix.afterRead with
+  | error cause stopped =>
+    simp [Bind.bind, EStateM.bind, exclusive] at created
+  | ok handle opened =>
+    have remembered : create.remember cache.pending (pushPending path handle) opened = .ok () filePrefix.beforeSync := by
+      simpa only [Bind.bind, EStateM.bind, exclusive] using created
+    have selected {entries loaded} (read : raw.readPending cache.pending filePrefix.beforeSync = .ok entries loaded) :
+        entries.find? (fun item => item.1 == path) = some (path, handle) := by
+      rw [readPending read, stored exclusive remembered]
+      simp [pushPending, path]
+    have grouped : raw.group directory.path cache.directory cache.active cache.pending #[path] filePrefix.beforeSync =
+        .ok () synced := fileSync.symm.trans filePrefix.sync
+    obtain ⟨entries, loaded, issued, read, _, consume, fsync⟩ :=
+      raw.pendingGroupReturned (file_ne_directory directory (.walSegment first)) (fun read => selected read) grouped
+    exact ⟨⟨handle, opened, entries, loaded, issued, exclusive, remembered, read, consume, fsync⟩⟩
 
 end FilePrefix
 

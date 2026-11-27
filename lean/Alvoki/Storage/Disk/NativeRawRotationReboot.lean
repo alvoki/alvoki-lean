@@ -16,6 +16,35 @@ structure RotationSuccessorAtSync (directory : DiskDirectory) (start inode : Nat
     names (directory.file (.walSegment start)) = none ∨ names (directory.file (.walSegment start)) = some inode
   durable : storage.files.bytes inode = [ByteArray.empty]
 
+private theorem RotationRawSuccessor.observesSuccessorBinding {directory : DiskDirectory} {writer : SegmentedWriterState}
+    {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
+    {parent : RotationCreateParent directory writer lookup inventory} (created : RotationRawSuccessor parent)
+    {storage : CheckpointStorageObservation} {visible : Nat → ByteArray}
+    (observed : created.files.ObservesWalChild parent.root directory
+      writer.rotationInstalled.activeFirst storage visible) :
+    let path := directory.file (.walSegment writer.rotationInstalled.activeFirst)
+    let inode := inventory.inode created.raw.description
+    storage.files.names path = some inode ∧
+    (∀ names ∈ storage.crashNames, names path = none ∨ names path = some inode) := by
+  intro path inode
+  let name := renderWalSegmentName writer.rotationInstalled.activeFirst
+  have named : created.files.view.child parent.root name = some created.child.child := by
+    have bound := created.child.binds
+    rw [created.child.atRoot, created.child.atName] at bound
+    exact bound
+  have bound : storage.files.names (directory.file (.walSegment writer.rotationInstalled.activeFirst)) =
+      some (inventory.inode created.raw.description) := by
+    have exactChild := observed.live.trans (congrArg (Option.map created.files.view.modelObject) named)
+    simpa only [Option.map_some, created.inode] using exactChild
+  refine ⟨bound, ?_⟩
+  intro names chosen
+  obtain ⟨option, allowed, exactChild⟩ := List.mem_map.mp (observed.survivors names chosen)
+  rcases created.successorSurvivors option allowed with rfl | rfl
+  · exact .inl exactChild.symm
+  · change some (created.files.view.modelObject created.child.child) = _ at exactChild
+    rw [created.inode] at exactChild
+    exact .inr exactChild.symm
+
 /-- The successful file sync of the exclusive-created inode supplies the
 empty bytes and possible names observed at the issued root barrier. -/
 theorem RotationRawSuccessor.observesSyncedSuccessor {directory : DiskDirectory} {writer : SegmentedWriterState}
@@ -26,23 +55,78 @@ theorem RotationRawSuccessor.observesSyncedSuccessor {directory : DiskDirectory}
       writer.rotationInstalled.activeFirst storage visible) :
     RotationSuccessorAtSync directory writer.rotationInstalled.activeFirst (inventory.inode created.raw.description)
       storage := by
-  let name := renderWalSegmentName writer.rotationInstalled.activeFirst
-  have named : created.files.view.child parent.root name = some created.child.child := by
-    have bound := created.child.binds
-    rw [created.child.atRoot, created.child.atName] at bound
-    exact bound
-  have bound : storage.files.names (directory.file (.walSegment writer.rotationInstalled.activeFirst)) =
-      some (inventory.inode created.raw.description) := by
-    have exactChild := observed.live.trans (congrArg (Option.map created.files.view.modelObject) named)
-    simpa only [Option.map_some, created.inode] using exactChild
-  refine ⟨bound, ?_, (observed.bytes _ bound).1.trans created.syncedBytes⟩
+  obtain ⟨bound, possible⟩ := (created.afterSync true).observesSuccessorBinding observed
+  exact ⟨bound, possible, (observed.bytes _ bound).1.trans created.syncedBytes⟩
+
+section ExclusiveSuccessor
+
+variable {heap image : Type} {directory : DiskDirectory} {writer : SegmentedWriterState}
+  {lookup : FilePath → Except IO.Error IO.FS.Metadata} {inventory : DescriptorInventory}
+  {parent : RotationCreateParent directory writer lookup inventory} {calls : OpenRotationCallbacks heap}
+  {stager : RawWalStageCalls heap} {raw : RawSyncCalls heap} {files : DiskTable.OpenSyncFiles}
+  {cache : OpenSyncCacheRefs files directory.path} {entry synced : heap}
+  {filePrefix : calls.SuccessorFilePrefix directory writer.rotationInstalled.activeFirst entry synced}
+
+local notation "successorPath" => directory.file (DiskFile.walSegment writer.rotationInstalled.activeFirst)
+
+/-- Start from the physical projection only at exclusive open, and
+follow the actual remembered descriptor through the successful file
+fsync to the issued root. Only the file fsync establishes durability. -/
+theorem RotationRawSuccessor.observesSuccessorAtRootIssue (created : RotationRawSuccessor parent)
+    (receipt : filePrefix.ExclusiveSync stager raw cache)
+    (view : OpenCloseHeapView heap image)
+    (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    {rootHandle : IO.FS.Handle} {issued : heap}
+    (loadedRoot : raw.readDirectory cache.directory synced = .ok (some rootHandle) issued)
+    (atOpen : created.files.ObservesWalChild parent.root directory
+      writer.rotationInstalled.activeFirst (storage receipt.opened) (visible receipt.opened))
+    (openedInode : (view.handle receipt.opened receipt.handle).1.inode
+      (view.handle receipt.opened receipt.handle).2.1.description = inventory.inode created.raw.description)
+    (target : RawFsyncTarget view receipt.opened receipt.issued receipt.handle)
+    (beforeFileSync :
+      let inode := inventory.inode created.raw.description
+      let frame before after := (storage before).Frames (· = successorPath) (storage after) ∧
+        visible after inode = visible before inode
+      frame receipt.opened filePrefix.beforeSync ∧ frame filePrefix.beforeSync receipt.loaded ∧
+        frame receipt.loaded receipt.issued)
+    (fileEffect : raw.fsync receipt.handle receipt.issued = .ok () synced →
+      (view.handle receipt.issued receipt.handle).2.1 ∈ (view.descriptors receipt.issued).slots →
+      let inode := (view.descriptors receipt.issued).inode (view.handle receipt.issued receipt.handle).2.1.description
+      (storage receipt.issued).files.names successorPath = some inode →
+      RegularFileSyncEffect inode [visible receipt.issued inode] (storage receipt.issued) (storage synced))
+    (rootFrame : raw.readDirectory cache.directory synced = .ok (some rootHandle) issued →
+      (storage synced).Frames (· = successorPath) (storage issued)) :
+    RotationSuccessorAtSync directory writer.rotationInstalled.activeFirst (inventory.inode created.raw.description)
+      (storage issued) := by
+  let inode := inventory.inode created.raw.description
+  obtain ⟨remember, load, consume⟩ := beforeFileSync
+  obtain ⟨openedName, openedChoices⟩ := created.observesSuccessorBinding atOpen
+  have openedEmpty : visible receipt.opened inode = ByteArray.empty :=
+    (atOpen.bytes inode openedName).2.trans created.empty
+  have retained := remember.1.trans (load.1.trans consume.1)
+  have nameAtSync := (retained.visible successorPath rfl).1.trans openedName
+  have emptyAtSync : visible receipt.issued inode = ByteArray.empty :=
+    consume.2.trans (load.2.trans (remember.2.trans openedEmpty))
+  have sameInode : (view.descriptors receipt.issued).inode
+      (view.handle receipt.issued receipt.handle).2.1.description = inode :=
+    target.inode.trans openedInode
+  have observed := fileEffect receipt.sync target.live (sameInode.symm ▸ nameAtSync)
+  rw [sameInode, emptyAtSync] at observed
+  have fileSynced : (storage synced).files.names successorPath = some inode :=
+    (congrFun observed.names _).trans nameAtSync
+  have bytesSynced : (storage synced).files.bytes inode = [ByteArray.empty] := by
+    simpa using observed.bytes inode
+  have rootKeeps := rootFrame loadedRoot
+  refine ⟨(rootKeeps.visible successorPath rfl).1.trans fileSynced, ?_,
+    ((rootKeeps.visible successorPath rfl).2 inode fileSynced).trans bytesSynced⟩
   intro names chosen
-  obtain ⟨option, allowed, exactChild⟩ := List.mem_map.mp (observed.survivors names chosen)
-  rcases created.successorSurvivors option allowed with rfl | rfl
-  · exact .inl exactChild.symm
-  · change some (created.files.view.modelObject created.child.child) = _ at exactChild
-    rw [created.inode] at exactChild
-    exact .inr exactChild.symm
+  obtain ⟨fsynced, beforeRoot, sameRoot⟩ := rootKeeps.survivors names chosen
+  have atFile : fsynced ∈ (storage receipt.issued).crashNames := observed.crashNames ▸ beforeRoot
+  obtain ⟨prior, atBirth, sameFile⟩ := retained.survivors fsynced atFile
+  have sameName := (sameRoot successorPath rfl).trans (sameFile successorPath rfl)
+  exact sameName.symm ▸ openedChoices prior atBirth
+
+end ExclusiveSuccessor
 
 /-- Project the successor from the same surviving directory map as the
 rest of the rotation. An effective barrier forces the live binding. -/
@@ -293,15 +377,13 @@ theorem RawWriteRebootEntry.replaysRotationSample
   have through : layout.range.through = (picked).writer.target.range.through :=
     congrArg (fun target : Target => target.range.through) target
   have wal := selected.visibleReadyWal layout target descriptors offsets (window.restrict (Nat.zero_le _) (Nat.le_of_eq through))
-  have accepted := ready.resumed.accepted
-  rw [← selected.valid.selected] at accepted
   have absent : (picked).writer.target.pair.manifest = none := (congrArg DirectoryPublication.Bindings.manifest pairEq).trans noManifest
   have sameFirst := congrArg WalSegment.first sameKeeper
   rw [← sameFirst, ← history]
   exact @RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
     (source := source) (namespaceView := namespaceView) (root := root) (selected := selected) (layout := layout)
     (noManifest := absent) (following := (layout.modeledWindow _ offsets).2)
-    (accepted := accepted) (ordered := ready.resumed.ordered) (wal := wal)
+    (ordered := ready.resumed.ordered) (wal := wal)
 
 end SampledReader
 
