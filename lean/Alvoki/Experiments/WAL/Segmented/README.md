@@ -121,6 +121,9 @@ The public single-file recovery schedule supplies the child
 `Recoverable` and `Installed` facts and the cached scan result from local
 primitive effects. Native segmented recovery still needs to bind that
 child to the root session that `openExisting` and `scan` expose to L0.
+The single-file append producer composes with that child recovery result
+on its stored writer and marker descriptions. Native rotation and CONTROL
+publication remain segmented responsibilities.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
 For CONTROL, consider reusing DurableBlob's write, sync, rename and

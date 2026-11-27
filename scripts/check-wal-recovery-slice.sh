@@ -22,7 +22,7 @@ lean -o "$scratch/$wal/Contract.olean" "$wal/Contract.lean"
 leanchecker Alvoki.Experiments.WAL.Contract
 lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 leanchecker Alvoki.Experiments.WAL.Writeback
-for proof in AppendWriteback Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution ReopenWriteback ScheduledExecution Policy NativeRecovery NativeOpen; do
+for proof in AppendWriteback Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution ReopenWriteback ScheduledExecution Policy NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Proofs.$proof"
 done
@@ -37,7 +37,7 @@ import Alvoki.Experiments.WAL.Proofs.Policy
 import Alvoki.Experiments.WAL.Proofs.TornAppend
 import Alvoki.Experiments.WAL.Proofs.ScheduledExecution
 import Alvoki.Experiments.WAL.Proofs.ReopenWriteback
-import Alvoki.Experiments.WAL.Proofs.NativeOpen
+import Alvoki.Experiments.WAL.Proofs.NativeAppend
 open WalRecoverySlice
 #check_axioms scan_damaged_encodeFrames
 #check_axioms Persistence.reopen_published_scan_error
@@ -65,6 +65,15 @@ open WalRecoverySlice
 #check_axioms SingleFile.storedPhase_eq
 #check_axioms SingleFile.scan_opened
 #check_axioms SingleFile.close_opened
+#check_axioms SingleFile.appendWorker_eq
+#check_axioms SingleFile.openedAppendPhase
+#check_axioms SingleFile.append_refines
+#check_axioms SingleFile.AppendGuarantee.lostReply
+#check_axioms SingleFile.append_rejected
+#check_axioms SingleFile.append_closed
+#check_axioms SingleFile.append_poisoned
+#check_axioms SingleFile.close_poisoned
+#check_axioms Persistence.appendPrimitive_refines
 #check_axioms Persistence.appendBatch_effects
 #check_axioms decodeMarker_bad_check
 #check_axioms scan_encodeFrames
