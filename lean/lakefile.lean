@@ -77,17 +77,17 @@ lean_lib Alvoki.Checks.Audit.AxiomPolicy
 
 @[default_target]
 lean_exe alvoki where
-  root := `Main
+  root := `Alvoki.Bench.Block.Main
 
 lean_exe «alvoki-opt» where
-  root := `OptMain
+  root := `Alvoki.Bench.Packed.OptMain
 
 lean_exe «alvoki-packed» where
-  root := `PackedMain
+  root := `Alvoki.Bench.Packed.PackedMain
   moreLinkArgs := #[".lake/alvoki-packed.o"]
 
 lean_exe «alvoki-native» where
-  root := `NativeMain
+  root := `Alvoki.Bench.Packed.NativeMain
 
 lean_exe «alvoki-merge-phases» where
   root := `Alvoki.Bench.Merge.MergePhasesMain
