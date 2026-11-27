@@ -12,6 +12,9 @@ private opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
 @[extern "alvoki_wal_unbuffered"]
 private opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
 
+@[extern "alvoki_read_dir_checked"]
+private opaque readDirChecked (path : @& FilePath) : IO (Array IO.FS.DirEntry)
+
 private def openStream (file : FilePath) (mode : IO.FS.Mode) : IO IO.FS.Handle := do
   let h ← IO.FS.Handle.mk file mode
   disableBuffering h
@@ -258,7 +261,7 @@ an interrupted initialization is not automatically retried. -/
 def create (dir : FilePath) (policy : Policy) : IO Handle := do
   let lock ← acquire dir
   try
-    let entries ← dir.readDir
+    let entries ← readDirChecked dir
     if entries.any (fun entry => entry.fileName != "lock") then
       throw <| IO.userError "WAL directory is not empty"
     writeAndSync (dir / "policy") (if policy == .boundary then "v3 boundary" else "v3 log").toUTF8
