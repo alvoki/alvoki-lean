@@ -49,13 +49,16 @@ private def openScratch : IO IO.FS.Handle := do
 @[extern "alvoki_fsync"]
 private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 
+@[extern "alvoki_open_fresh_output"]
+private opaque openFreshOutput (path : @& System.FilePath) : IO IO.FS.Handle
+
 /-- Build at a fresh path with exclusive name ownership. After flushing the
 complete image, call `syncOutput` on the original write handle, before reporting
 success. The callback must leave the bytes and name unchanged and must not
 retain the handle. -/
 def buildFileWithSync (path : System.FilePath) (nextRow : IO (Option Entry))
     (syncOutput : IO.FS.Handle → IO Unit) : IO Nat := do
-  let handle ← IO.FS.Handle.mk path .writeNew
+  let handle ← openFreshOutput path
   try
     let scratch ← openScratch
     let count ← buildStream {

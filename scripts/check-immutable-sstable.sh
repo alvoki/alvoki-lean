@@ -71,6 +71,8 @@ open ImmutableSSTable
 #check_axioms seekBetween_probes
 LEAN
 lean --run "$table/Tests.lean"
+c++ -O2 -fPIC -I"$prefix/include" -c native/open_fresh.cpp -o "$out/open_fresh.o"
 cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
+  "$out/open_fresh.o" native/sstable_open_fixture.c -Wl,--wrap=fdopen \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-sstable"
 "$out/test-sstable"

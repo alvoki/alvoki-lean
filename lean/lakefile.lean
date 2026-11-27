@@ -21,6 +21,12 @@ target sstableO pkg : FilePath := do
   buildO (pkg.buildDir / "native" / "sstable.o") source #["-I", leanInclude.toString]
     #["-O2", "-fPIC", "-Wall", "-Wextra"] "cc"
 
+target openFreshO pkg : FilePath := do
+  let source ← inputTextFile (pkg.dir / "native" / "open_fresh.cpp")
+  let leanInclude ← getLeanIncludeDir
+  buildO (pkg.buildDir / "native" / "open_fresh.o") source #["-I", leanInclude.toString]
+    #["-O2", "-fPIC", "-Wall", "-Wextra"] "c++"
+
 lean_lib ComponentPrimitives where
   roots := #[`Alvoki.Codec.Block, `Alvoki.Codec.WordChecksum, `Alvoki.Codec.ByteWords,
     `Alvoki.Kernel.BlockContracts]
@@ -29,7 +35,7 @@ lean_lib ComponentPrimitives where
 lean_lib Components where
   globs := #[`Alvoki.Experiments.DurableBlob.+, `Alvoki.Experiments.Manifest.+,
     `Alvoki.Experiments.SSTable.+, `Alvoki.Experiments.WAL.+]
-  moreLinkObjs := #[fsyncO, readDirCheckedO, sstableO]
+  moreLinkObjs := #[fsyncO, readDirCheckedO, sstableO, openFreshO]
 
 lean_lib Alvoki.Checks.Audit.AxiomPolicy
 

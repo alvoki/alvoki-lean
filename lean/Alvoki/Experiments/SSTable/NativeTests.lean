@@ -130,6 +130,27 @@ private def checkStreamedIndex (dir : System.FilePath) : IO Unit := do
     check ((← ok (table.next i)) == some (row i, i + 1)) "large index offset"
     check ((← ok (table.lookup (row i).key)) == some (row i).value) "large index lookup"
 
+@[extern "alvoki_test_fail_output_fdopen"]
+private opaque failOutputFdopen (_ : Unit) : IO Unit
+
+@[extern "alvoki_test_failed_output_fd_closed"]
+private opaque failedOutputFdClosed (_ : Unit) : IO Bool
+
+private def checkOutputAcquisition (dir : System.FilePath) : IO Unit := do
+  let path := dir / "fresh"
+  for _ in [:32] do
+    failOutputFdopen ()
+    let result ← (buildFileSynced path (pure none)).toBaseIO
+    unless result matches .error (.resourceExhausted _ _ _) do
+      throw (IO.userError "expected the injected fdopen error")
+    check (← failedOutputFdClosed ()) "failed fdopen leaked its raw descriptor"
+    check (!(← path.pathExists)) "failed fdopen left its exclusive output name"
+  check ((← buildFileSynced path (pure none)) == 0) "retry after failed fdopen"
+  let image ← IO.FS.readBinFile path
+  let collision ← (buildFileSynced path (pure none)).toBaseIO
+  check (!collision.isOk) "exclusive open accepted an existing output"
+  check ((← IO.FS.readBinFile path) == image) "exclusive open changed an existing output"
+
 private def checkSync (dir : System.FilePath) : IO Unit := do
   let path := dir / "sync"
   let primary := IO.userError "injected table sync error"
@@ -154,6 +175,7 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkBuildFailures dir
   checkStreamedIndex dir
   checkSync dir
+  checkOutputAcquisition dir
   IO.println "immutable SSTable native fixtures passed"
 
 end ImmutableSSTable.NativeTests
