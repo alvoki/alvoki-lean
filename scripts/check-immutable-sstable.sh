@@ -32,7 +32,7 @@ done
 compile "$table/Representation"
 compile Alvoki/Kernel/BlockContracts
 compile Alvoki/Codec/ByteWords
-for proof in Search Format Builder Reader ReadErrors; do
+for proof in Search Format Builder Reader ReadErrors Typed; do
   compile "$table/Proofs/$proof"
 done
 compile Alvoki/Checks/Audit/AxiomPolicy
@@ -41,10 +41,14 @@ import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.SSTable.Proofs.Builder
 import Alvoki.Experiments.SSTable.Proofs.Reader
 import Alvoki.Experiments.SSTable.Proofs.ReadErrors
+import Alvoki.Experiments.SSTable.Proofs.Typed
 open ImmutableSSTable
 #check_axioms open_built_table
+#check_axioms TypedTable.represents_of_bytes
 #check_axioms decodeEntry_rejects_checksum
 #check_axioms RequiredProbeError.propagates
+#check_axioms Table.readEntry_index_error
+#check_axioms Table.readEntry_index_decode_error
 #check_axioms Table.readEntry_source_error
 #check_axioms Table.readEntry_decode_error
 #check_axioms Table.seek_read_error
@@ -54,19 +58,19 @@ open ImmutableSSTable
 #check_axioms modelBuild_ok_iff
 #check_axioms push_rejects_key
 #check_axioms openTable_encoded
-#check_axioms open_lookup_encoded
-#check_axioms decodeHeader_encodeHeader
+#check_axioms decodeFooter_encodeFooter
 #check_axioms decodeEntry_encodeEntry
 #check_axioms Table.readEntry_encoded
 #check_axioms Table.next_encoded
 #check_axioms Table.lookup_encoded
 #check_axioms Table.seek_encoded
-#check_axioms fileSize_bound
-#check_axioms rowSpan
+#check_axioms encodeImage_size
+#check_axioms decodeImage_offsets
+#check_axioms encodeImage_extract_row
 #check_axioms seekBetween_correct
 #check_axioms seekBetween_probes
 LEAN
 lean --run "$table/Tests.lean"
-cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c \
+cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-sstable"
 "$out/test-sstable"
