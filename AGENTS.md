@@ -16,6 +16,8 @@ When separating implementation from proofs, start at a public operation and foll
 
 For a storage operation, describe the caller-visible invariant at its entry point. Use a short module guide when a reader needs to cross from the operation to its contract, tests and proofs. Link to the document that owns a guarantee or open obligation so a change has one place to update.
 
+Keep documentation progressively navigable: introduce the concept and link to focused technical details. Keep overview documents roughly stable in size, avoid duplicating explanations, and use diagrams when they clarify a relationship or sequence. Keep historical progress primarily in Git rather than accumulating a running narrative in current guides.
+
 ## Agent work and review
 
 - Aim to keep five subagents working in parallel on independent roadmap tasks. While a shared boundary is changing, give it one owner. Split work by independent producers or consumers once their interface is stable. Prioritize the end-to-end crash refinement in the proof roadmap.

@@ -43,7 +43,7 @@ A write appends and flushes one checksummed frame to the installed active segmen
 
 ### Checkpoint
 
-`checkpoint` flushes pending rows and chooses a fresh generation. It checks any existing run target before writing it, syncs each run and the directory, then writes, syncs and publishes the strict v2 manifest. Older runs and covered sealed segments remain available for separate collection. [Checkpoint crash model](../lean/Alvoki/Storage/Proofs/Publication/CheckpointPublicationModel.lean) · [Retained publication](../lean/Alvoki/Storage/Disk/Proofs/Write/SegmentedWriterTrace.lean)
+`checkpoint` flushes pending rows and chooses a fresh generation. It rewrites the complete current run set under that generation, checks any existing run target before writing it, syncs each run and the directory, then writes, syncs and publishes the strict v2 manifest. Older runs and covered sealed segments remain available for separate collection. [Checkpoint crash model](../lean/Alvoki/Storage/Proofs/Publication/CheckpointPublicationModel.lean) · [Retained publication](../lean/Alvoki/Storage/Disk/Proofs/Write/SegmentedWriterTrace.lean)
 
 ### In-memory compaction and retention
 

@@ -11,6 +11,8 @@ flowchart LR
     W[Writes] --> WAL[Segmented WAL]
     W --> M[In-memory memtable]
     M -->|checkpoint| R[Immutable runs on disk]
+    R -->|publish generation| P[Manifest]
+    P -->|selects checkpoint| R
     R -->|loaded on open| RAM[Runs in memory]
     WAL -->|replay after open| M
     RAM --> Q[Snapshot reads]
@@ -35,6 +37,32 @@ bash scripts/check-sequential.sh
 ```
 
 The getting-started guide shows how to write a value, close the database, reopen it, and read the value in a Lean program. It also covers the packed storage checks, native fault fixtures, and reproducible benchmarks. [Getting started](docs/getting-started.md)
+
+## Use the API
+
+This Lean program opens an existing dedicated directory, writes a value and reads
+it through a snapshot. Pass the directory as its only argument.
+
+```lean
+import Alvoki.Storage.Disk.DiskTable
+open Alvoki.Storage
+
+def main (args : List String) : IO Unit := do
+  let [path] := args | throw (IO.userError "expected database directory")
+  let db ← DiskTable.open path
+  try
+    let _ ← db.write 7 (some 42)
+    let snapshot ← db.acquire
+    try
+      IO.println s!"{← db.lookup snapshot.handle 7}"
+    finally
+      db.release snapshot.handle
+  finally
+    db.close
+```
+
+For a runnable Lake project and an example that closes and reopens the database,
+see [getting started](docs/getting-started.md#write-close-and-reopen-a-database).
 
 ## Explore the project
 
