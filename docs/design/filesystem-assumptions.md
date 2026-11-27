@@ -17,6 +17,15 @@ The component models and Linux adapters separate code facts from filesystem and 
 
 ## Lean runtime resource pitfall
 
-In the pinned Lean 4.36 Linux runtime, a raw `open` followed by a failed `fdopen` can leave both a descriptor and a newly created staging name behind. When an adapter uses that construction path, an error result alone does not prove resource cleanup; model the reached namespace and handle state, and test repeated failures. Handle construction, explicit `flush`, and close errors should be tied to the exact runtime path rather than assumed to be infallible.
+Lean 4.36 on Linux can leak a raw descriptor when `fdopen` fails after
+`Handle.mk` acquires it. [Lean #16520](https://github.com/leanprover/lean4/pull/16520)
+closes that descriptor. Fault injection confirmed the fix on Lean 4.37.0-rc1.
+Upgrade the toolchain once a stable Lean release includes the fix and rerun
+the repository checks.
+
+An exclusive open can still leave a newly created name after `fdopen` fails.
+Name cleanup requires evidence that this call created and still owns that
+name. Model the reached namespace when handle construction fails before
+the caller's cleanup starts.
 
 These are premises for component refinement, not claims proved by Lean or by a process-kill test. Map each one to the exact native call and returned handle in the [DurableBlob](../../lean/Alvoki/Experiments/DurableBlob/README.md) and [segmented WAL](../../lean/Alvoki/Experiments/WAL/Segmented/README.md) guides. The WAL-specific [counterexamples](wal-recovery.md) show why the assumptions must remain separate from model correctness.
