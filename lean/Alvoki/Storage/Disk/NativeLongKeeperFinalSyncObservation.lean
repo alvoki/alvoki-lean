@@ -1325,8 +1325,8 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper)
     (readerFrames : source.fileCalls.ScopeFrames retryFrame)
     (listingFrames : source.directoryCalls.ScopeFrames dir retryFrame)
+    (keeperFiles : source.fileCalls.ScopeFrames (fun before after => liveImage after = liveImage before))
     {publicError : IO.Error} {effective : Bool}
-    (startFiles : (view.files afterKeeper).image = (view.files entry).image)
     (measured : reads.wal.keeper.calls.metadata.byteSize.toNat = authorization.keeper.metadata.byteSize.toNat)
     (workerStopped : source.workerObservingRepairRename seed.directoryRef seed.activeRef seed.pendingRef dir raw.lock
       (RawMarkedOpenInterpreter.makeCache dir seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending =
@@ -1504,6 +1504,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have observedLong : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat := by
     rw [measured]
     exact pruning.longer
+  have startFiles := listing.imageAfterLongKeeper selected seals keeperFiles _ observedLong keeperRead
   have keeperFrame := source.fileCalls.longKeeperReadFrames readerFrames
     (fun h => NativeReadyState.SelectedRetryFrame.refl state (storage h) (visible h))
     (fun first last => first.trans last) _ _ observedLong keeperRead
@@ -1749,9 +1750,9 @@ theorem MarkedWalExtentReports.extendsLongRenameError
       reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper)
     (readerFrames : source.fileCalls.ScopeFrames retryFrame)
     (listingFrames : source.directoryCalls.ScopeFrames dir retryFrame)
+    (keeperFiles : source.fileCalls.ScopeFrames (fun before after => liveImage after = liveImage before))
     (keeperFrame : retryFrame beforeKeeper afterKeeper)
     {authorized pruned recorded synced : heap} {cause : IO.Error} {effective : Bool} {old : Nat}
-    (startFiles : (view.files afterKeeper).image = (view.files entry).image)
     (longer : layout.boundedPlan.keeperSize < reads.wal.keeper.calls.metadata.byteSize.toNat)
     (authorize : groupSync #[(dir).path] afterKeeper = .ok () authorized)
     (prune : ((layout.boundedPlan.newer.map Step.unlink ++ [Step.syncPruned]).forM
@@ -1925,6 +1926,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     change layout.boundedPlan.keeperBytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat
     rw [size]
     exact longer
+  have startFiles := listing.imageAfterLongKeeper selected seals keeperFiles _ observedLong keeperRead
   have emptyPending := listing.invariantAfterLongKeeper selected seals (fun h => view.pending h seed.pendingRef = [])
     (fun _ cache => cache.pendingCell.trans seed.pendingSet) readPendingFrames _ observedLong keeperRead
   have live := protects liveEffects emptyPending

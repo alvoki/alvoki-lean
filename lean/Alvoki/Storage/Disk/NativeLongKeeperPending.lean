@@ -62,6 +62,30 @@ theorem MarkedDirectoryReadReport.invariantAfterLongKeeper
     (fun first last => last ∘ first) remember _ longer read
   exact keeperRead (establish afterSeals ((start.trans listed).trans sealedReads))
 
+/-- The admitted file image passes through the cache allocations, the
+marked reads and the final keeper release to the entry of long repair. -/
+theorem MarkedDirectoryReadReport.imageAfterLongKeeper
+    (listing : MarkedDirectoryReadReport prepared directoryCalls slotOf)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    {beforeKeeper afterKeeper : heap}
+    (seals : MarkedSealReadChain seed fileCalls chronology.seals listing.reached beforeKeeper)
+    (files : fileCalls.ScopeFrames (fun before after => (view.files after).image = (view.files before).image))
+    (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
+    (longer : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat)
+    (read : fileCalls.readKeeperWithRelease remember (directory.file (.walSegment layout.keeper.first))
+      layout.keeper.bytes.size reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper =
+        .ok layout.keeper.bytes afterKeeper) :
+    (view.files afterKeeper).image = retry.image := by
+  have allocated : view.files seed.afterPending = admission.held :=
+    seed.pendingFiles.trans (seed.activeFiles.trans (seed.directoryFiles.trans seed.openedFiles))
+  have initial : (view.files seed.afterPending).image = retry.image := calc
+    _ = admission.held.image := congrArg LockedFileState.image allocated
+    _ = retry.image := rfl
+  exact listing.invariantAfterLongKeeper selected seals (fun atHeap => (view.files atHeap).image = retry.image)
+    (fun _ frame => (congrArg LockedFileState.image frame.files).trans initial)
+    (files.map (fun kept prior => kept.trans prior)) remember longer read
+
 end FromAllocation
 
 section Clearing

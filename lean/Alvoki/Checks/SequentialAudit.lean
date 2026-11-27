@@ -4363,6 +4363,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.prunedAndSyncedReplacement
 #check_axioms Alvoki.Storage.DiskSession.MarkedTemporaryReadCalls.longKeeperReadFrames
 #check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.invariantAfterLongKeeper
+#check_axioms Alvoki.Storage.DiskSession.MarkedDirectoryReadReport.imageAfterLongKeeper
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.clearsOnlyStagedKeeper
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
 #check_axioms Alvoki.Storage.DiskSession.filesAndFrameOfReturnedWalUnlinks

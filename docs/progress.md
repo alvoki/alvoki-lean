@@ -52,12 +52,16 @@ its live and durable bytes. This same staged inode feeds live retry and reboot.
 The returned prune, staged write and fsync, rename and cache load determine the
 logical image at the issued directory fsync. Its error may occur before or after
 the directory update takes effect. The proof tracks lock ownership separately through cleanup.
+The cache allocations and reached marked reads carry the entry image through
+the keeper's release into both repair-error proofs.
 [Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Carry the entry’s logical image through the measured
-marked reads to the returned keeper. Both repair-error proofs currently take
-that equality as input. The staging inode still needs an explicit identity
-observation at the staged-file fsync.
+**Next source boundary.** Connect an error from the staged `WAL.next` fsync
+to the public open's cleanup and the next retry. The local proof already
+describes the scratch effect before rename, including durability despite an
+error. The staging inode still needs an explicit identity observation at the
+staged-file fsync.
+[Staged-file sync error](../lean/Alvoki/Storage/Disk/NativeLongKeeperStageSyncError.lean)
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)
