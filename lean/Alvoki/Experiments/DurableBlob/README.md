@@ -9,9 +9,9 @@ another successful reopen returns that same value, even after power loss.
 A failed reopen returns no value and may be retried. The caller serializes
 operations and observes this session discipline. [Client contract](Contract.lean)
 
-[Protocol](Protocol.lean) uses the shared four-step replacement schedule:
-write the private staging file, sync its bytes, rename it over the active
-name, and sync the parent directory. Reopen reads the active file and syncs
+[Protocol](Protocol.lean) writes the private staging file, syncs
+its bytes through the same write handle, renames it over the active name,
+and syncs the parent directory. Reopen reads the active file and syncs
 the directory before returning. A process exit after rename can leave the
 new file visible before the name is durable. Returning the read alone would
 allow a second crash to reverse a successful reopen.
@@ -38,3 +38,13 @@ power loss. `Run.healthy_open` shows that any reachable offline image can
 reopen when its read and barrier succeed. A response lost after a completed
 publication leaves a durable new value, even though the caller must recover
 to learn the outcome. [Proofs](Proofs.lean)
+
+The focused manifest check also runs a model regression that exposes the new
+binding before the directory barrier, reopens successfully, then simulates
+power loss and reopens again.
+
+A future segmented WAL change could reuse this protocol for `CONTROL`.
+First establish that WAL preparation makes any newly referenced segment
+durable, that recovery settles the selected control before collecting files,
+and that the WAL's directory ownership and initialization satisfy the blob
+premises. The WAL retains its control codec and segment-lifetime rules.

@@ -23,9 +23,20 @@ def main : IO Unit := IO.FS.withTempDir fun dir => do
   manifest.publish proposal
   check (decide ((← manifest.reopen) = proposal)) "manifest round trip"
   check (← fails (manifest.publish ⟨[7, 7], 0⟩)) "duplicate IDs must be rejected"
+  let failedSync := (DurableBlob.nativeFiles dir fun _ =>
+    throw (IO.userError "injected staged sync failure")).backend
+  check (← fails (failedSync.publish (encode Version.empty))) "staged sync failure must escape"
+  check (decide ((← manifest.reopen) = proposal)) "staged sync failure must leave active version"
+  check ((← IO.FS.readBinFile (dir / "BLOB.next")) == encode Version.empty)
+    "failed stage must still have its private name"
   IO.FS.writeBinFile (dir / "BLOB.next") (encode Version.empty)
   check (decide ((← manifest.reopen) = proposal)) "unpublished staging file must be ignored"
   manifest.publish Version.empty
   check (decide ((← manifest.reopen) = Version.empty)) "replacement after stale staging file"
+  let complete := encode proposal
+  for offset in [8, 16, complete.size - 8] do
+    let damaged := complete.set! offset (complete[offset]! ^^^ 1)
+    blob.publish damaged
+    check (← fails manifest.reopen) s!"checksum must reject mutation at {offset}"
   blob.publish (ByteArray.mk #[65])
   check (← fails manifest.reopen) "malformed manifest must fail"

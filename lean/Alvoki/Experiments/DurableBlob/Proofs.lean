@@ -1,7 +1,6 @@
 import Alvoki.Experiments.DurableBlob.Protocol
 
 namespace DurableBlob
-open Alvoki.Storage
 
 /-- Only the active name and bytes it can select after power loss are observable.
 The staging field represents exact synced bytes; an unsynced stage cannot be renamed. -/
@@ -15,6 +14,12 @@ def Image.settled (bytes : ByteArray) : Image := ⟨bytes, [bytes], none, none�
 
 def Image.barrier (image : Image) : Image :=
   { image with survivors := [image.active] }
+
+private inductive Operation where
+  | writeStaged
+  | syncStaged
+  | renameStaged
+  | syncDirectory
 
 inductive Report where
   | ok
@@ -30,11 +35,11 @@ private def perform (report : Report) (effect : Image → Image) : EStateM Unit 
   | .beforeEffect => .error () image
   | .afterEffect => .error () (effect image)
 
-private def model (report : Publication.Step → Report) (readOK : Bool) :
-    Files (EStateM Unit Image) where
+private def model (report : Operation → Report) (readOK : Bool) :
+    Files (EStateM Unit Image) Unit where
   writeStaged bytes := perform (report .writeStaged)
     fun image => {image with written := some bytes, synced := none}
-  syncStaged := perform (report .syncStaged)
+  syncStaged _ := perform (report .syncStaged)
     fun image => {image with synced := image.written}
   renameStaged := perform (report .renameStaged) fun image =>
     match image.synced with
@@ -54,7 +59,7 @@ private theorem stable_admits {image : Image} (h : image.Stable known) : image.A
   obtain ⟨active, survivors⟩ := h
   simp [Image.Admits, active, survivors, Permitted]
 
-private theorem publish_outcome (report : Publication.Step → Report) (image : Image)
+private theorem publish_outcome (report : Operation → Report) (image : Image)
     (stable : image.Stable old) (proposed : ByteArray) :
     match (model report true).backend.publish proposed image with
     | .ok _ after => after.Stable proposed
@@ -62,12 +67,11 @@ private theorem publish_outcome (report : Publication.Step → Report) (image : 
   obtain ⟨active, survivors⟩ := stable
   cases rw : report .writeStaged <;> cases rs : report .syncStaged <;>
     cases rr : report .renameStaged <;> cases rd : report .syncDirectory <;>
-    simp [Files.backend, Publication.run, Publication.steps, Files.perform, model, perform,
-      rw, rs, rr, rd, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure, List.forM_cons, List.forM_nil,
-      Image.barrier, Image.Stable, Image.Admits,
+    simp [Files.backend, model, perform,
+      rw, rs, rr, rd, Bind.bind, Pure.pure, EStateM.bind, Image.barrier, Image.Stable, Image.Admits,
       active, survivors, Permitted]
 
-private theorem reopen_outcome (report : Publication.Step → Report) (readOK : Bool)
+private theorem reopen_outcome (report : Operation → Report) (readOK : Bool)
     (image : Image) (admitted : image.Admits old pending) :
     match (model report readOK).backend.reopen image with
     | .ok value after => Permitted old pending value ∧ after.Stable value
@@ -159,5 +163,23 @@ theorem Run.refines {initial : ByteArray} (run : Run initial events online image
 theorem Run.healthy_open {initial : ByteArray} (run : Run initial events false image) :
     Run initial (events ++ [.opened image.active]) true image.barrier :=
   .opened (report := fun _ => .ok) (readOK := true) run rfl
+
+/-- Process exit can expose a renamed but unsettled file. Recovery settles
+that binding, so a subsequent power loss cannot restore the previous one. -/
+private def recoveryRegression : Bool := Id.run do
+  let old := ByteArray.mk #[1]
+  let proposed := ByteArray.mk #[2]
+  let publish := (model (fun
+    | .syncDirectory => .beforeEffect
+    | _ => .ok) true).backend.publish proposed
+  let .error _ interrupted := publish (.settled old) | return false
+  unless interrupted.active == proposed && interrupted.survivors.any (· == old) do return false
+  let reopen := (model (fun _ => .ok) true).backend.reopen
+  let .ok selected recovered := reopen interrupted | return false
+  let [survivor] := recovered.survivors | return false
+  let .ok reopened _ := reopen (.settled survivor) | return false
+  return selected == proposed && reopened == selected
+
+#guard recoveryRegression
 
 end DurableBlob

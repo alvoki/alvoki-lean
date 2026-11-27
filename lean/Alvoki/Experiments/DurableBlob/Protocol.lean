@@ -1,26 +1,22 @@
 import Alvoki.Experiments.DurableBlob.Contract
-import Alvoki.Storage.Publication.DiskPublication
 
 namespace DurableBlob
-open Alvoki.Storage
 
 /-- The staging operations refer to one private file in the active file's
 directory. Reading is exact or fails. The caller owns both names. -/
-structure Files (m : Type → Type) where
-  writeStaged : ByteArray → m Unit
-  syncStaged : m Unit
+structure Files (m : Type → Type) (stage : Type) where
+  writeStaged : ByteArray → m stage
+  syncStaged : stage → m Unit
   renameStaged : m Unit
   syncDirectory : m Unit
   readActive : m ByteArray
 
-def Files.perform (files : Files m) (bytes : ByteArray) : Publication.Step → m Unit
-  | .writeStaged => files.writeStaged bytes
-  | .syncStaged => files.syncStaged
-  | .renameStaged => files.renameStaged
-  | .syncDirectory => files.syncDirectory
-
-def Files.backend [Monad m] (files : Files m) : Backend m ByteArray where
-  publish bytes := Publication.run (files.perform bytes)
+def Files.backend [Monad m] (files : Files m stage) : Backend m ByteArray where
+  publish bytes := do
+    let staged ← files.writeStaged bytes
+    files.syncStaged staged
+    files.renameStaged
+    files.syncDirectory
   reopen := do
     let bytes ← files.readActive
     files.syncDirectory

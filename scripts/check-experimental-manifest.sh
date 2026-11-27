@@ -24,15 +24,15 @@ compile() {
 }
 blob=Alvoki/Experiments/DurableBlob
 manifest=Alvoki/Experiments/Manifest
-compile Alvoki/Storage/Publication/DiskPublication native
 compile Alvoki/Codec/Block native
-compile Alvoki/Codec/WordChecksum
+compile Alvoki/Codec/WordChecksum native
 compile Alvoki/Kernel/BlockContracts
 compile Alvoki/Codec/ByteWords
 for module in Contract Protocol Native; do
   compile "$blob/$module" native
 done
 compile "$blob/Proofs"
+compile "$blob/Trace"
 compile "$manifest/Basic" native
 compile "$manifest/Proofs"
 compile "$manifest/NativeTests" native
@@ -46,7 +46,8 @@ import Alvoki.Experiments.Manifest.Proofs
 #check_axioms L0Manifest.decode_encode
 #check_axioms L0Manifest.publish_valid
 #check_axioms L0Manifest.reopen_encoded
-#check_axioms L0Manifest.recover_version
+#check_axioms L0Manifest.trace_refines
+#check_axioms L0Manifest.decode_rejects_checksum
 LEAN
 cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" native/fsync.c \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-manifest"

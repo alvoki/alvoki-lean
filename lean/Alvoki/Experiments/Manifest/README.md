@@ -9,12 +9,19 @@ that version. [Typed API](Basic.lean)
 Use `backend IO.userError (DurableBlob.native directory)` with the Linux
 adapter, or supply another backend with the [durable blob contract](../DurableBlob/README.md).
 A publish with duplicate IDs fails before calling the backend. Reopen
-propagates backend errors and rejects structurally invalid data. Publication
-and reopen otherwise inherit whole-version selection and durable recovery.
-The codec round trip and `recover_version` preserve the exact order and
-position of either permitted version. The format is a magic word, the
-position, then the IDs, all unsigned little-endian 64-bit words. Structurally
-valid corruption is outside the crash model. [Manifest proofs](Proofs.lean)
+propagates backend errors and rejects invalid data. `trace_refines` gives
+the complete generic `DurableBlob.Allows` contract over `Version` for
+sessions that submit valid proposals. Each reopened version is the exact
+decoding of the bytes selected and durably settled by the backend.
+[Manifest proofs](Proofs.lean)
+
+The format uses unsigned little-endian 64-bit words: the `ALVMNF02` tag,
+the absolute position, the ordered IDs, and an FNV-1a checksum over all
+preceding bytes. The exact aligned extent determines the number of IDs.
+The decoder rejects checksum mismatches, invalid tags or extent alignment,
+and duplicate IDs. A checksum collision or a replacement with a matching
+checksum can pass validation. Post-sync corruption remains outside the
+crash model. [Codec](Basic.lean)
 
 ## Using it from an LSM
 
