@@ -101,9 +101,8 @@ def openChild (effects : Effects) (clock id : Nat) (policy : Policy) : Persisten
 
 def Effects.appendRun (effects : Effects) (clock id : Nat) (policy : Policy) (cursor : Cursor)
     (payload : Bytes) : Persistence.M Cursor :=
-  let plain := match effects.tornAppend clock id policy cursor payload with
-    | none => Persistence.ops (effects.appendSegment clock id)
-    | some cut => cut.val.ops
+  let cut := (effects.tornAppend clock id policy cursor payload).map Subtype.val
+  let plain := Persistence.appendPrimitives (effects.appendSegment clock id) cut
   appendBatch (Persistence.scheduledOps plain (effects.appendWritebacks clock id)) policy cursor payload
 
 structure State where

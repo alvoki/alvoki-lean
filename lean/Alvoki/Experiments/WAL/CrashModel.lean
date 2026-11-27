@@ -198,6 +198,12 @@ def TornAppend.ops (cut : TornAppend) : Ops M :=
     writeMarker := .full .old none, markerSync := fun _ => .after none }
   { callbacks with append := fun requested s => cut.abort.result (cut.after s requested) }
 
+/-- Primitive effects used by append, with a torn first write when reported. -/
+def appendPrimitives (effects : Effects) (cut : Option TornAppend) : Ops M :=
+  match cut with
+  | none => ops effects
+  | some residue => residue.ops
+
 abbrev Result (α : Type) := EStateM.Result Unit Image (Except String α)
 
 def reached {α : Type} : Result α → Image
