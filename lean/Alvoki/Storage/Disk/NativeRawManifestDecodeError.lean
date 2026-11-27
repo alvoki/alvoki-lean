@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeManifestDecodeError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeMarkedTableOpen
 import Alvoki.Storage.Disk.NativeRawOpenAdmission
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.FailedCheckpointDigestCensus
-import Alvoki.Storage.Disk.NativeOpenListingError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenListingError
 import Alvoki.Storage.Disk.Proofs.Recovery.MetadataRecoveryChunkWork
 
 namespace Alvoki.Storage.DiskSession

@@ -290,9 +290,9 @@ lake env leanchecker Alvoki.Storage.Disk.NativeCacheOpenRejection
 lake env leanchecker Alvoki.Storage.Disk.NativeRawDirectoryCacheRejection
 lake env leanchecker Alvoki.Storage.Disk.NativeContendedOpen
 lake env leanchecker Alvoki.Storage.Disk.NativeRawContendedOpen
-lake env leanchecker Alvoki.Storage.Disk.NativeManifestDecodeError
-lake env leanchecker Alvoki.Storage.Disk.NativeOpenListingError
-lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenLineage
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeManifestDecodeError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenListingError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenLineage
 lake env leanchecker Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 lake env leanchecker Alvoki.Storage.Disk.NativeReadyUncertainWrite
 lake env leanchecker Alvoki.Storage.Disk.NativeUncertainExecution

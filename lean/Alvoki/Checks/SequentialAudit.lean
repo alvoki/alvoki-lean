@@ -376,9 +376,9 @@ import Alvoki.Storage.Disk.NativeCacheOpenRejection
 import Alvoki.Storage.Disk.NativeRawDirectoryCacheRejection
 import Alvoki.Storage.Disk.NativeContendedOpen
 import Alvoki.Storage.Disk.NativeRawContendedOpen
-import Alvoki.Storage.Disk.NativeManifestDecodeError
-import Alvoki.Storage.Disk.NativeOpenListingError
-import Alvoki.Storage.Disk.NativeRejectedOpenLineage
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeManifestDecodeError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenListingError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeReadyUncertainWrite
 import Alvoki.Storage.Disk.NativeUncertainExecution

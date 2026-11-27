@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeOpenListingError
-import Alvoki.Storage.Disk.NativeManifestDecodeError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeOpenListingError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeManifestDecodeError
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyClose
 

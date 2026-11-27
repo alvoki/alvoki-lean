@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedRecoveryWork
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedListingWork
-import Alvoki.Storage.Disk.NativeRejectedOpenLineage
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenLineage
 
 namespace Alvoki.Storage.DiskSession
 

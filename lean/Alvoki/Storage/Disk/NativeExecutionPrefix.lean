@@ -17,7 +17,7 @@ import Alvoki.Storage.Disk.NativePendingStagedMarkerSync
 import Alvoki.Storage.Disk.NativeObsoleteRunUnlinkCut
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
 import Alvoki.Storage.Disk.NativeCoveredWalDirectoryStop
-import Alvoki.Storage.Disk.NativeRejectedOpenLineage
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenLineage
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryError
 import Alvoki.Storage.Disk.NativeCheckpointRunFileError
 import Alvoki.Storage.Disk.NativeCheckpointRunDataError
