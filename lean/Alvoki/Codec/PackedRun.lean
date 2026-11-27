@@ -1,4 +1,4 @@
-import MergeModel
+import Alvoki.Packed.MergeModel
 
 namespace Alvoki.Packed
 open Alvoki.Opt
