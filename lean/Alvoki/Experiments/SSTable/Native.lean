@@ -8,14 +8,30 @@ private opaque handleSize (handle : @& IO.FS.Handle) : IO Nat
 @[extern "alvoki_sstable_pread"]
 private opaque pread (handle : @& IO.FS.Handle) (offset : UInt64) (count : USize) : IO ByteArray
 
-/-- Retaining the source retains the same open file across rename/unlink. Callers
-    keep its contents immutable for the lifetime of any table opened on it. -/
-def handleSource (handle : IO.FS.Handle) : Source (EIO String) where
-  size := (handleSize handle).toEIO toString
+/-- The read adapter acquires a file once and uses its description for both
+    its extent and all subsequent positional reads. -/
+structure ReadPrimitives (m : Type → Type) (handle : Type) where
+  openFile : System.FilePath → IO.FS.Mode → m handle
+  size : handle → m Nat
+  pread : handle → UInt64 → USize → m ByteArray
+
+@[inline] def ReadPrimitives.source [Monad m] [MonadExceptOf String m]
+    (ops : ReadPrimitives m handle) (held : handle) : Source m where
+  size := ops.size held
   readAt offset count := do
     if count > maxRowSize || offset + count > maxFileSize then
       throw "SSTable read outside positional I/O bounds"
-    (pread handle offset.toUInt64 count.toUSize).toEIO toString
+    ops.pread held offset.toUInt64 count.toUSize
+
+@[inline] def nativeReadPrimitives : ReadPrimitives (EIO String) IO.FS.Handle where
+  openFile path mode := (IO.FS.Handle.mk path mode).toEIO toString
+  size held := (handleSize held).toEIO toString
+  pread held offset count := (pread held offset count).toEIO toString
+
+/-- Retaining the source retains the same open file across rename/unlink. Callers
+    keep its contents immutable for the lifetime of any table opened on it. -/
+def handleSource (handle : IO.FS.Handle) : Source (EIO String) :=
+  nativeReadPrimitives.source handle
 
 @[extern "alvoki_fsync"]
 private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit

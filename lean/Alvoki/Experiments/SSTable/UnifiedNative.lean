@@ -5,10 +5,14 @@ import Alvoki.Experiments.SSTable.Native
 
 namespace ImmutableSSTable.Unified
 
+@[inline] def openCheckedWith [Monad m] [MonadExceptOf String m] (ops : ReadPrimitives m handle)
+    (crc : Checksum) (path : System.FilePath) (expectedId : UInt64) : m (Table m) := do
+  let held ← ops.openFile path .read
+  openTableChecked (ops.source held) crc expectedId
+
 def openNativeChecked (path : System.FilePath) (expectedId : UInt64) :
-    EIO String (Table (EIO String)) := do
-  let handle ← (IO.FS.Handle.mk path .read).toEIO toString
-  openTableChecked (handleSource handle) nativeCRC32C expectedId
+    EIO String (Table (EIO String)) :=
+  openCheckedWith nativeReadPrimitives nativeCRC32C path expectedId
 
 /-- Use the original flushed descriptor for the caller's sync operation. -/
 def buildFileWithSync (path : System.FilePath) (layout : Layout)
