@@ -1,5 +1,5 @@
 import MergePhases
-import ScopedBytesProofs
+import Alvoki.Proofs.Bytes.ScopedBytesProofs
 
 namespace Alvoki.ScopedBytes
 

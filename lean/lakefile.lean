@@ -43,9 +43,11 @@ lean_lib MergePhases
 
 lean_lib ScopedBytes
 
-lean_lib ScopedBytesProofs
+lean_lib ScopedBytesProofs where
+  roots := #[`Alvoki.Proofs.Bytes.ScopedBytesProofs]
 
-lean_lib ReplayProofs
+lean_lib ReplayProofs where
+  roots := #[`Alvoki.Proofs.Merge.ReplayProofs]
 
 lean_lib FusedMerge
 

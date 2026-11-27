@@ -8,7 +8,7 @@ export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 (
   cd lean
   lake build alvoki-merge-phases ScopedBytesProofs ReplayProofs
-  lake env leanchecker ScopedBytesProofs
-  lake env leanchecker ReplayProofs
+  lake env leanchecker Alvoki.Proofs.Bytes.ScopedBytesProofs
+  lake env leanchecker Alvoki.Proofs.Merge.ReplayProofs
 )
 python3 benchmarks/stock_builder.py "$@"
