@@ -1,6 +1,6 @@
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Proofs.Packed.RunMergeProofs
-import CodecVariants
+import Alvoki.Experiments.Packed.CodecVariants
 import Alvoki.Storage.Proofs.Table.Compaction
 
 #check_axioms Alvoki.Packed.parseRun_iff

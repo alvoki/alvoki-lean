@@ -1,5 +1,5 @@
 import Alvoki.Compaction.Codec
-import CodecVariants
+import Alvoki.Experiments.Packed.CodecVariants
 
 open Alvoki Alvoki.Compaction
 

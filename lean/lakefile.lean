@@ -92,7 +92,8 @@ lean_lib CompactionProofs where
 lean_lib RunMergeProofs where
   roots := #[`Alvoki.Proofs.Packed.RunMergeProofs]
 
-lean_lib CodecVariants
+lean_lib CodecVariants where
+  roots := #[`Alvoki.Experiments.Packed.CodecVariants]
 
 lean_lib Alvoki.Storage where
   globs := #[`Alvoki.Storage.+]
