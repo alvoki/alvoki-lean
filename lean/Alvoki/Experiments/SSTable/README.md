@@ -47,6 +47,25 @@ cap. An individual row can exceed the target if the resulting packet and
 its index key fit. The synced writer flushes and syncs the original
 descriptor. Directory sync and publication are the caller's responsibility.
 
+## Capacity and memory
+
+The 16 MiB limit is an encoded packet limit, including the checksum.
+Data and leaf targets control ordinary packing. A single row or reference
+may exceed its target up to the hard limit. The root is always one packet.
+Root entries cost 40 bytes plus their fence-key length. An append that
+would make the root exceed the cap fails the build. The maximum number of
+leaves therefore depends on their fence-key lengths.
+
+A writer retains pending data rows, leaf references, root references and
+the current input row. Encoding also allocates packet bytes and, for variable
+widths, a local offset array. An open table retains decoded root references
+and the descriptor. During an in-flight operation it can also retain a
+decoded leaf, a data packet and temporary checksum and decoding buffers.
+Account for array capacity, object overhead and temporary copies when sizing
+a process heap. The encoded limits do not establish an exact heap bound.
+The caller budgets its supplier, concurrent operations and number of live
+tables separately.
+
 ## Verification and status
 
 Run `bash scripts/check-immutable-sstable.sh` with the pinned Lean toolchain,
