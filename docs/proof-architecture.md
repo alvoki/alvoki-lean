@@ -27,19 +27,26 @@ DurableBlob passes the writer returned by staging directly to file sync.
 Hidden mutable state can require an extra proof that the later consumer
 retrieves the same resource. [DurableBlob protocol](../lean/Alvoki/Experiments/DurableBlob/Protocol.lean)
 
-Where applicable, check retry after a rejected operation and
-after an uncertain outcome. When cleanup starts after handle construction, check whether
-acquisition can fail after obtaining a descriptor or creating a name, and
-who owns cleanup in that case. A premise stays open until its producer
-establishes it. Audit premises alongside transitive axioms and apply the
+Where applicable, check retry after a rejected operation and after an
+uncertain outcome. On a reported error, run cleanup from the state reached
+and handle only resources actually acquired and still owned. Preserve the
+primary error where the contract calls for it, even if cleanup fails. When
+cleanup starts after handle construction, check whether acquisition can fail
+after obtaining a descriptor or creating a name, and who owns cleanup in
+that case. A process interruption can prevent cleanup from running. Check
+recovery from the state reached at interruption.
+
+A premise stays open until its producer establishes it. Audit premises
+alongside transitive axioms and apply the
 [joint candidate acceptance check](../AGENTS.md#agent-work-and-review).
 
 ## Reusing proofs
 
 Pass established facts directly to the next proof. The SSTable reader uses
-the writer's proved `Image`. In L0 (PR #5), `flushPublicationChoices`
-establishes the invariants for both manifest choices over the same catalog
-and WAL. The publication branches use the corresponding fact directly.
+the writer's proved `Image`. In the open L0 PR #5, `flushPublicationChoices`
+establishes invariants for both manifest choices over the same catalog and
+WAL. The publication branches consume those facts in the flush proof under
+the component contracts. Native end-to-end composition remains open.
 [SSTable composition](../lean/Alvoki/Experiments/SSTable/Proofs/UnifiedNativeEndToEnd.lean)
 · [L0 flush proof](https://github.com/alvoki/alvoki-lean/blob/5bb259a0838c0b02025615ebce452c2582e7648c/lean/Alvoki/Experiments/L0/Refinement.lean#L242-L306)
 
