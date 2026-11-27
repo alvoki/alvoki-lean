@@ -44,12 +44,18 @@ actual client ledger, cache and unchanged manifest at the rotation entry.
 The same sampled-WAL proof then carries that ledger to the returned table.
 [Mixed rotation and retry](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
 
-The stopped append interpreter identifies the active-cache read, the selected
-handle and the heap reached by the issued write. Its result leaves the
-number of bytes written open. [Append interpreter](../lean/Alvoki/Storage/Disk/NativeWalAppend.lean)
+**An interrupted append.** The public write dispatcher and the exit proof
+use the same stopped append helper. It identifies the active-cache read,
+the selected handle and the heap reached by the issued write. Given a
+live descriptor bound to the keeper, a filesystem effect preserving its
+old byte prefix and the protected files is enough for a reboot to select
+the old target. The interrupted request contributes no acknowledged rows.
+Before the first checkpoint, the sampled plan also feeds the literal WAL
+reader under its reset, enumeration and read assumptions.
+[Write interruption](../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
 
-**Next obligation.** Connect that issued write to the prior marker and the
-keeper bytes sampled on reboot. For layouts with extra files,
+**Next obligation.** Connect the checkpoint-backed reader to this same
+append sample when the actual keeper can contain a partial batch. For layouts with extra files,
 derive the next retry entry from a modifying failed repair, including an
 effective directory barrier that reports failure.
 

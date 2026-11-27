@@ -920,7 +920,17 @@ the error heap. Local effect laws preserve the canonical marker and protected na
 and bytes. The keeper may grow, and each admitted durable byte choice still extends its
 previous committed prefix. Sampling one observed reboot derives the old history, an exact
 failed-call sequence and the successful table with the uncertain submission retained as zero
-writes. A stop inside the issued write gives no client response. In the native
+writes. The stopped public write now uses that same selection rule. Its
+cache read and append-handle selection locate the issued write. The local
+filesystem assumptions bind its live descriptor to the keeper, protect
+the other files and preserve the committed byte prefix at that inode.
+A reboot samples that prefix with a possibly empty tail. Replay stops
+at the previous marker and the ledger records a submission without a
+response. For a database without a manifest the sampled plan feeds the
+literal WAL reader.
+[Public write stop](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
+
+In the native
 process-exit test the keeper can still be aligned, or contain a partial
 batch beyond the marker. The same reopen preserves the aligned inode or
 replaces the longer keeper with its committed prefix. Power loss additionally

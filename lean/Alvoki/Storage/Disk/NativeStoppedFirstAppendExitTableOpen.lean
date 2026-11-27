@@ -1,5 +1,6 @@
 import Alvoki.Storage.Disk.NativeOpenedFirstAppendReport
 import Alvoki.Storage.Disk.NativeFirstAppendExitReopen
+import Alvoki.Storage.Disk.NativeWalAppend
 
 namespace Alvoki.Storage.DiskSession
 
@@ -17,23 +18,24 @@ structure RawStoppedFirstAppendExitEffects (current : NativeOpenedPosition opene
     (exit : NativeFirstAppendExit stop) (view : OpenCloseHeapView heap FileImage) where
   poisoned : heap
   setter : opened.set opened.phase .poisoned current.reached = .ok () poisoned
-  beforeAppend : heap
-  writeHandle : IO.FS.Handle
   activeRef : IO.Ref (Option (FilePath × IO.FS.Handle))
   pendingRef : IO.Ref (List (FilePath × IO.FS.Handle))
   directoryRef : IO.Ref (Option IO.FS.Handle)
   references : opened.files.UsesCacheReferences activeRef pendingRef directoryRef
   poisonedCache : view.cacheAt poisoned directoryRef activeRef pendingRef = current.current.ready.state.cache
-  rawOpenAppend : FilePath → EStateM IO.Error heap IO.FS.Handle
-  selected : selectAppendHandle (view.active poisoned activeRef) rawOpenAppend prepared.keeperPath poisoned =
+  appender : RawWalAppendCalls heap
+  loadedActive : appender.getActive activeRef poisoned = .ok (view.active poisoned activeRef) poisoned
+  beforeAppend : heap
+  writeHandle : IO.FS.Handle
+  selected : selectAppendHandle (view.active poisoned activeRef) appender.openAppend prepared.keeperPath poisoned =
     .ok writeHandle beforeAppend
   sameHandle : view.handle beforeAppend writeHandle = stop.handle
   inputCensus : view.descriptors beforeAppend = stop.selectedCensus
   inputFiles : view.files beforeAppend = current.current.ready.state.files
   beforePhase : view.phase beforeAppend opened.phase = some .poisoned
-  append : IO.FS.Handle → ByteArray → EStateM (FilePath × ByteArray) heap (Except IO.Error Unit)
+  writeUntilStop : IO.FS.Handle → ByteArray → EStateM (FilePath × ByteArray) heap (Except IO.Error Unit)
   cut : heap
-  issued : append writeHandle (WAL.encodeBatch prepared.batch) beforeAppend = .error stop.logical.appendCall cut
+  issued : writeUntilStop writeHandle (WAL.encodeBatch prepared.batch) beforeAppend = .error stop.logical.appendCall cut
   cutCensus : view.descriptors cut = stop.cutFiles.1
   cutFiles : view.files cut = ⟨stop.files, current.current.ready.state.files.owners⟩
   cutPhase : view.phase cut opened.phase = some .poisoned
@@ -51,49 +53,18 @@ structure RawStoppedFirstAppendExitEffects (current : NativeOpenedPosition opene
   dropFiles : view.files released = (view.descriptors afterExit).dropLockState current.current.ready.state.session.descriptor
     exit.later current.current.ready.state.session.directory (view.files afterExit)
 
-private abbrev StoppedAppendHeap (heap : Type) :=
-  ExceptT IO.Error (EStateM (FilePath × ByteArray) heap)
-
-private def liftAppendCallback (call : EStateM IO.Error heap α) : StoppedAppendHeap heap α :=
-  fun before => match call before with
-    | .ok value reached => .ok (.ok value) reached
-    | .error cause reached => .ok (.error cause) reached
-
-/-- The append stops before any flush or cache update on the raw heap. -/
-def RawStoppedFirstAppendExitEffects.StopsAppend
+/-- Interpret `OpenSyncFiles.appendCacheSchedule` on the opener's active
+reference. The outer stop records the issued write's cut heap. -/
+abbrev RawStoppedFirstAppendExitEffects.StopsAppend
     (seen : RawStoppedFirstAppendExitEffects current stop exit view) : Prop :=
-  ∀ (update : Option (FilePath × IO.FS.Handle) → StoppedAppendHeap heap Unit)
-    (flush : IO.FS.Handle → StoppedAppendHeap heap Unit),
-    appendWithActive (fun before => .ok (.ok (view.active before seen.activeRef)) before) update
-      (fun path => liftAppendCallback (seen.rawOpenAppend path)) seen.append flush
-      prepared.keeperPath (WAL.encodeBatch prepared.batch) seen.poisoned = .error stop.logical.appendCall seen.cut
+  seen.appender.runUntilWrite seen.activeRef seen.writeUntilStop
+    prepared.keeperPath (WAL.encodeBatch prepared.batch) seen.poisoned = .error stop.logical.appendCall seen.cut
 
-/-- The raw append helper also stops on that same selected handle.
-The cache setter and flush cannot run after the outer stop. -/
+/-- The reported active-cell read and selected handle determine the
+stop in the shared append interpreter. -/
 theorem RawStoppedFirstAppendExitEffects.stopsAppend
-    (seen : RawStoppedFirstAppendExitEffects current stop exit view)
-    (update : Option (FilePath × IO.FS.Handle) → StoppedAppendHeap heap Unit)
-    (flush : IO.FS.Handle → StoppedAppendHeap heap Unit) :
-    appendWithActive (fun before => .ok (.ok (view.active before seen.activeRef)) before) update
-      (fun path => liftAppendCallback (seen.rawOpenAppend path)) seen.append flush
-      prepared.keeperPath (WAL.encodeBatch prepared.batch) seen.poisoned = .error stop.logical.appendCall seen.cut := by
-  have selected : selectAppendHandle (m := StoppedAppendHeap heap) (view.active seen.poisoned seen.activeRef)
-      (fun path => liftAppendCallback (seen.rawOpenAppend path)) prepared.keeperPath seen.poisoned =
-      .ok (.ok seen.writeHandle) seen.beforeAppend := by
-    have reported := seen.selected
-    cases seenActive : view.active seen.poisoned seen.activeRef with
-    | none =>
-      simp only [selectAppendHandle, seenActive] at reported
-      simp [selectAppendHandle, liftAppendCallback, reported]
-    | some entry =>
-      obtain ⟨name, file⟩ := entry
-      cases same : prepared.keeperPath == name <;>
-        simp [selectAppendHandle, seenActive, same, liftAppendCallback, Pure.pure, EStateM.pure,
-          ExceptT.pure, ExceptT.mk] at reported ⊢
-      · rw [reported]
-      · simp [reported.1, reported.2]
-  simp [appendWithActive, selected, seen.issued, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk,
-    EStateM.bind, MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch]
+    (seen : RawStoppedFirstAppendExitEffects current stop exit view) : seen.StopsAppend :=
+  seen.appender.stopsAtWrite seen.loadedActive seen.selected seen.issued
 
 /-- Exit alone leaves the lock held while an alias remains in the
 reported census. The eventual vacant heap retains the live file image. -/
@@ -232,9 +203,6 @@ structure NativeStoppedFirstAppendExitTableOpen.Returned
       (sync : Array FilePath → FirstAppendInterrupted Unit) (rename : FilePath → FilePath → FirstAppendInterrupted Unit),
       seen.stop.onOpenPhase opened flush stage sync rename (current.reached, state.cache, state.census, seen.prepared.initial) =
         .error seen.stop.logical.appendCall (seen.rawExit.poisoned, state.cache, seen.stop.cutFiles)
-  selected : selectAppendHandle (view.active seen.rawExit.poisoned seen.rawExit.activeRef)
-    seen.rawExit.rawOpenAppend seen.prepared.keeperPath seen.rawExit.poisoned =
-    .ok seen.rawExit.writeHandle seen.rawExit.beforeAppend
   rawStopped : seen.rawExit.StopsAppend
   nativeExit : let process := seen.stop.handle.2.1.reference.process
     seen.rawExit.exitProcess process seen.rawExit.cut = .error process seen.rawExit.afterExit
@@ -299,7 +267,7 @@ theorem NativeStoppedFirstAppendExitTableOpen.reaches
   obtain ⟨handle, start, reached, rawTable, lock, files, contents, get, set, compare, token,
     reachedHeap, pins, sameFiles, sameCensus, sameCache⟩ :=
     installed.startsAtCheckpointReopen history next worker.symm nextReturned cache owner slot seen.phaseEffects seen.ptrEq
-  refine ⟨handle, start, source, pending, issued, samePoisoned ▸ stopped, seen.rawExit.selected, seen.rawExit.stopsAppend,
+  refine ⟨handle, start, source, pending, issued, samePoisoned ▸ stopped, seen.rawExit.stopsAppend,
     seen.rawExit.departed, seen.rawExit.releases, measured, ?_, ?_, ?_,
     ⟨cacheOpen, makeCache, cacheAction, cacheSource, ?_⟩, ⟨next, recovered, worker.symm, reached⟩, ?_,
     lock, files.symm ▸ installed.cacheReferences, files.symm ▸ installed.cacheDirectory, contents, get, set, compare,

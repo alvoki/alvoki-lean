@@ -4121,8 +4121,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.selectsDurableReachedWrite
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.SelectedWriteReboot.sampledPlan
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.stopsAtRootFsync
-#check_axioms Alvoki.Storage.DiskSession.WriteRequest.stopsAtRootFsync
+#check_axioms Alvoki.Storage.DiskSession.WriteRequest.stopsDuringPublication
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAtRootFsync
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsDuringWalAppend
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.SelectedWriteReboot.interruptedPlan
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage

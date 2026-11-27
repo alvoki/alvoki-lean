@@ -1,20 +1,23 @@
 import Alvoki.Storage.Disk.NativeOpenWrite
 import Alvoki.Storage.Disk.NativeLateWriteRecovery
+import Alvoki.Storage.Disk.NativeEarlyWriteRecovery
 
 namespace Alvoki.Storage.DiskSession
 
 open System CheckpointPublication SyncHandleRouting WalSegmentCommit WalSegmentRepair
 open WAL.Boundary (WalInodeImage)
 
-private abbrev RootStopM (heap error : Type) := ExceptT error (EStateM IO.FS.Handle heap)
+private abbrev PublicationStopM (heap stop error : Type) := ExceptT error (EStateM stop heap)
+private abbrev RootStopM (heap error : Type) := PublicationStopM heap IO.FS.Handle error
 
-private def returned {heap error α : Type} (action : EStateM error heap α) : RootStopM heap error α :=
+private def asPublicationReturn {heap stop error α : Type}
+    (action : EStateM error heap α) : PublicationStopM heap stop error α :=
   fun before => match action before with
     | .ok value reached => .ok (.ok value) reached
     | .error cause reached => .ok (.error cause) reached
 
-private def classify {heap error α : Type} (kind : IO.Error → error)
-    (action : RootStopM heap IO.Error α) : RootStopM heap error α :=
+private def classify {heap stop error α : Type} (kind : IO.Error → error)
+    (action : PublicationStopM heap stop IO.Error α) : PublicationStopM heap stop error α :=
   fun before => match action.run before with
     | .ok result reached => .ok (result.mapError kind) reached
     | .error handle issued => .error handle issued
@@ -23,7 +26,7 @@ private abbrev RawSyncCalls.rootWithFsync {heap : Type} (calls : RawSyncCalls he
     (directory : DiskDirectory) {files : DiskTable.OpenSyncFiles}
     (cache : OpenSyncCacheRefs files directory.path)
     (fsync : IO.FS.Handle → EStateM IO.FS.Handle heap (Except IO.Error Unit)) : RootStopM heap IO.Error Unit :=
-  SyncPathGroup.run (fun path => calls.toRawSyncCacheCalls.syncPath returned fsync
+  SyncPathGroup.run (fun path => calls.toRawSyncCacheCalls.syncPath asPublicationReturn fsync
     directory.path path cache.directory cache.active cache.pending)
     #[directory.path]
 
@@ -38,11 +41,11 @@ noncomputable def RawSyncCalls.commitUntilRootFsync {heap : Type} (calls : RawSy
     (fsync : IO.FS.Handle → EStateM IO.FS.Handle heap (Except IO.Error Unit))
     (first count : Nat) (bytes : ByteArray) : EStateM IO.FS.Handle heap (Except IO.Error Unit) :=
   (commitBytesAt directory first bytes count
-    (fun path payload => returned (append.run cache.active path payload))
-    (fun path payload => returned (stage.run cache.pending path payload))
+    (fun path payload => asPublicationReturn (append.run cache.active path payload))
+    (fun path payload => asPublicationReturn (stage.run cache.pending path payload))
     (fun paths => if paths = #[directory.path] then calls.rootWithFsync directory cache fsync
-      else returned (calls.group directory.path cache.directory cache.active cache.pending paths))
-    (fun source target => returned (rename source target))).run
+      else asPublicationReturn (calls.group directory.path cache.directory cache.active cache.pending paths))
+    (fun source target => asPublicationReturn (rename source target))).run
 
 theorem RawSyncCalls.stopsAtRootFsync {heap : Type} (calls : RawSyncCalls heap)
     (directory : DiskDirectory) {files : DiskTable.OpenSyncFiles}
@@ -65,12 +68,12 @@ theorem RawSyncCalls.stopsAtRootFsync {heap : Type} (calls : RawSyncCalls heap)
     intro same
     have impossible : (2 : Nat) = 1 := congrArg Array.size same
     omega
-  let syncRoot := fun path => calls.toRawSyncCacheCalls.syncPath returned
+  let syncRoot := fun path => calls.toRawSyncCacheCalls.syncPath asPublicationReturn
     (m := RootStopM heap IO.Error) fsync
     directory.path path cache.directory cache.active cache.pending
   have chosen : syncRoot directory.path renamed = .error handle reached := by
     simp [syncRoot, RawSyncCacheCalls.syncPath, syncWithHandles, Bind.bind, ExceptT.bind,
-      ExceptT.bindCont, ExceptT.mk, EStateM.bind, returned, loaded, Pure.pure, ExceptT.pure, EStateM.pure, stopped]
+      ExceptT.bindCont, ExceptT.mk, EStateM.bind, asPublicationReturn, loaded, Pure.pure, ExceptT.pure, EStateM.pure, stopped]
   have rootIssued : calls.rootWithFsync directory cache fsync renamed = .error handle reached := by
     change (SyncPathGroup.run syncRoot #[directory.path]) renamed = _
     simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch,
@@ -79,11 +82,68 @@ theorem RawSyncCalls.stopsAtRootFsync {heap : Type} (calls : RawSyncCalls heap)
   unfold commitUntilRootFsync
   rw [commitBytesAt_fileEffects]
   simp only [WAL.Boundary.commit, ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind,
-    returned, wrote, remembered, groupByFiles, ↓reduceIte, synced, moved, rootIssued]
+    asPublicationReturn, wrote, remembered, groupByFiles, ↓reduceIte, synced, moved, rootIssued]
 
-/-- The same public dispatcher can observe an issued final fsync instead
-of waiting for its return. The phase, metadata and file prefix all use
-the one raw heap and the original handle's callbacks. -/
+/-- Interpret an unresolved publication callback through the public
+dispatcher on the same heap as the original phase and metadata callbacks. -/
+noncomputable def WriteRequest.runUntilPublicationStop {heap stop : Type}
+    (request : WriteRequest) (directory : DiskDirectory)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (publish : Installed → ByteArray → Nat → EStateM stop heap (Except IO.Error Unit))
+    (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit) :
+    EStateM stop heap (Except DiskWriteError UInt64) :=
+  let load : PublicationStopM heap stop DiskWriteError Installed := do
+    let stored ← classify .rejected (asPublicationReturn (get phase))
+    liftExcept ((stored.installed : Except IO.Error Installed).mapError DiskWriteError.rejected)
+  (request.runWithPublication load
+    (fun installed => classify .rejected (asPublicationReturn (checkActiveSegmentWith directory installed lookup)))
+    (fun next => classify .rejected (asPublicationReturn (set phase next)))
+    (fun installed bytes count => classify .commitUnknown (publish installed bytes count))).run
+
+/-- The reached guard and poison setter lead to the publication. Its
+outer stop exits the schedule before the ready setter and acknowledgement. -/
+theorem WriteRequest.stopsDuringPublication {heap stop : Type} (request : WriteRequest) (directory : DiskDirectory)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (publish : Installed → ByteArray → Nat → EStateM stop heap (Except IO.Error Unit))
+    (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    {installed : Installed} {batch : List WAL.Write} {table : PackedTable}
+    {entry guarded poisoned reached : heap} {tag : stop}
+    (nonempty : request.rows ≠ [])
+    (prepared : prepareBatch installed.table request.rows = some (batch, table))
+    (fits : installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    (loaded : get phase entry = .ok (.ready installed) entry)
+    (guard : checkActiveSegmentWith directory installed lookup entry = .ok () guarded)
+    (assigned : set phase .poisoned guarded = .ok () poisoned)
+    (commit : publish installed (WAL.encodeBatch batch) (installed.walBytes + WAL.frameSize * request.rows.length)
+      poisoned = .error tag reached) :
+    request.runUntilPublicationStop directory lookup publish phase get set entry = .error tag reached := by
+  cases request with
+  | single key value =>
+    rw [WriteRequest.rows, prepareBatch_singleton] at prepared
+    cases written : installed.table.write key value with
+    | none => simp [prepareWrite, written] at prepared
+    | some next =>
+      simp only [prepareWrite, written, Option.map_some, Option.some.injEq, Prod.mk.injEq] at prepared
+      obtain ⟨rfl, rfl⟩ := prepared
+      simp only [WriteRequest.rows, List.length_singleton, Nat.mul_one, WAL.encodeBatch_singleton] at fits commit
+      simp [runUntilPublicationStop, runWithPublication, withPreparedSingleWrite, prepareWrite, WriteRequest.requireWritePreparation,
+        publishPreparedWrite, publishPrepared, classify, asPublicationReturn, loaded, written, fits, guard, assigned, commit,
+        Phase.installed, liftExcept, Except.pure, Except.mapError, Bind.bind, ExceptT.bind, ExceptT.bindCont,
+        ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure]
+  | batch rows =>
+    simp only [WriteRequest.rows] at fits prepared commit
+    have present : rows.isEmpty = false := by
+      cases rows <;> simp_all [WriteRequest.rows]
+    simp [runUntilPublicationStop, runWithPublication, writeBatchSchedule, WriteRequest.requireWritePreparation, publishPreparedWrite,
+      publishPrepared, classify, asPublicationReturn, loaded, present, fits, prepared, guard, assigned, commit, Phase.installed,
+      liftExcept, Except.pure, Except.mapError, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
+      EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure]
+
+/-- The public dispatcher observing the original final directory fsync. -/
 noncomputable def WriteRequest.runUntilRootFsync {heap : Type} (request : WriteRequest) (directory : DiskDirectory)
     {files : DiskTable.OpenSyncFiles} (cache : OpenSyncCacheRefs files directory.path)
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
@@ -94,58 +154,9 @@ noncomputable def WriteRequest.runUntilRootFsync {heap : Type} (request : WriteR
     (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
     (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit) :
     EStateM IO.FS.Handle heap (Except DiskWriteError UInt64) :=
-  let load : RootStopM heap DiskWriteError Installed := do
-    let stored ← classify .rejected (returned (get phase))
-    liftExcept ((stored.installed : Except IO.Error Installed).mapError DiskWriteError.rejected)
-  (request.runWithPublication load
-    (fun installed => classify .rejected (returned (checkActiveSegmentWith directory installed lookup)))
-    (fun next => classify .rejected (returned (set phase next)))
-    (fun installed bytes count => classify .commitUnknown
-      (calls.commitUntilRootFsync directory cache append stage rename fsync installed.activeFirst count bytes))).run
-
-/-- The actual successful guard can advance the heap. Its reached poison
-setter leads to the commit, whose stop exits before the ready setter. -/
-theorem WriteRequest.stopsAtRootFsync {heap : Type} (request : WriteRequest) (directory : DiskDirectory)
-    {files : DiskTable.OpenSyncFiles} (cache : OpenSyncCacheRefs files directory.path)
-    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
-    (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap) (calls : RawSyncCalls heap)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    (fsync : IO.FS.Handle → EStateM IO.FS.Handle heap (Except IO.Error Unit))
-    (phase : IO.Ref (Phase Installed))
-    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
-    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
-    {installed : Installed} {batch : List WAL.Write} {table : PackedTable}
-    {entry guarded poisoned reached : heap} {handle : IO.FS.Handle}
-    (nonempty : request.rows ≠ [])
-    (prepared : prepareBatch installed.table request.rows = some (batch, table))
-    (fits : installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
-    (loaded : get phase entry = .ok (.ready installed) entry)
-    (guard : checkActiveSegmentWith directory installed lookup entry = .ok () guarded)
-    (assigned : set phase .poisoned guarded = .ok () poisoned)
-    (commit : calls.commitUntilRootFsync directory cache append stage rename fsync installed.activeFirst
-      (installed.walBytes + WAL.frameSize * request.rows.length) (WAL.encodeBatch batch) poisoned = .error handle reached) :
-    request.runUntilRootFsync directory cache lookup append stage calls rename fsync phase get set entry = .error handle reached := by
-  cases request with
-  | single key value =>
-    rw [WriteRequest.rows, prepareBatch_singleton] at prepared
-    cases written : installed.table.write key value with
-    | none => simp [prepareWrite, written] at prepared
-    | some next =>
-      simp only [prepareWrite, written, Option.map_some, Option.some.injEq, Prod.mk.injEq] at prepared
-      obtain ⟨rfl, rfl⟩ := prepared
-      simp only [WriteRequest.rows, List.length_singleton, Nat.mul_one, WAL.encodeBatch_singleton] at fits commit
-      simp [runUntilRootFsync, runWithPublication, withPreparedSingleWrite, prepareWrite, WriteRequest.requireWritePreparation,
-        publishPreparedWrite, publishPrepared, classify, returned, loaded, written, fits, guard, assigned, commit,
-        Phase.installed, liftExcept, Except.pure, Except.mapError, Bind.bind, ExceptT.bind, ExceptT.bindCont,
-        ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure]
-  | batch rows =>
-    simp only [WriteRequest.rows] at fits prepared commit
-    have present : rows.isEmpty = false := by
-      cases rows <;> simp_all [WriteRequest.rows]
-    simp [runUntilRootFsync, runWithPublication, writeBatchSchedule, WriteRequest.requireWritePreparation, publishPreparedWrite,
-      publishPrepared, classify, returned, loaded, present, fits, prepared, guard, assigned, commit, Phase.installed,
-      liftExcept, Except.pure, Except.mapError, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
-      EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure]
+  request.runUntilPublicationStop directory lookup
+    (fun installed bytes count => calls.commitUntilRootFsync directory cache append stage rename fsync
+      installed.activeFirst count bytes) phase get set
 
 /-- The selected history adds zero or all of one unanswered request to
 the incoming client prefix. Recovery adds one uncertain submission and
@@ -313,8 +324,10 @@ theorem NativeOpenedPosition.stopsAtRootFsync
   have loadedPhase := opened.phaseEffects.reads current.reached opened.phase _ stored
   have stopCommit :=
     calls.stopsAtRootFsync dir cache append stage rename stopped wrote remembered synced moved loaded noResponse
-  have stopWrite := request.stopsAtRootFsync dir cache lookup append stage calls rename stopped opened.phase
-    opened.get opened.set nonempty prepared fits loadedPhase checked assigned stopCommit
+  have stopWrite := request.stopsDuringPublication dir lookup
+    (fun installed bytes count => calls.commitUntilRootFsync dir cache append stage rename stopped
+      installed.activeFirst count bytes) opened.phase opened.get opened.set nonempty prepared fits
+    loadedPhase checked assigned stopCommit
   obtain ⟨payloads, grouped, keeper, oldMarker, newMarker⟩ :=
     calls.groupedWalPayloadsFromPublication cache view append stage inodes observe inode buffered
       (rows := request.rows) valid (old.frame preface) wrote remembered synced groupEffects
@@ -348,5 +361,145 @@ theorem NativeOpenedPosition.stopsAtRootFsync
   exact ⟨target, plan, retained, handoff, cutoff, @ledger, @opens⟩
 
 end PhysicalStop
+
+/-- The ordinary commit schedule, with the actual keeper write able to
+stop before it returns to the append helper. -/
+noncomputable def RawWalAppendCalls.commitUntilWrite {heap stop : Type} (appender : RawWalAppendCalls heap)
+    (directory : DiskDirectory) {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path)
+    (write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit))
+    (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (installed : Installed) (bytes : ByteArray) (count : Nat) : EStateM stop heap (Except IO.Error Unit) :=
+  (commitBytesAt directory installed.activeFirst bytes count
+    (fun path payload => appender.runUntilWrite cache.active write path payload)
+    (fun path payload => asPublicationReturn (stager.run cache.pending path payload))
+    (fun paths => asPublicationReturn (syncer.group directory.path cache.directory cache.active cache.pending paths))
+    (fun source target => asPublicationReturn (rename source target))).run
+
+section AppendStop
+
+variable {heap stop : Type} {opened : NativeOpenedHandle heap}
+  (current : NativeOpenedPosition opened)
+  (view : OpenCloseHeapView heap FileImage)
+  (cache : OpenSyncCacheRefs opened.files current.current.ready.state.session.directory.path)
+  (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+  (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+  (request : WriteRequest)
+
+local notation "state" => current.current.ready.state
+local notation "dir" => current.current.ready.state.session.directory
+local notation "installed" => current.current.ready.state.writer.installed
+local notation "keeperPath" =>
+  DiskDirectory.file dir (DiskFile.walSegment current.current.ready.state.writer.wal.active.first)
+local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage h))
+local notation "horizon" => current.current.history.length
+
+/-- One stopped keeper write goes through the original phase and cache.
+It never reaches marker staging. A joint crash sample selects the old
+history even if the named keeper acquired extra bytes. -/
+theorem NativeOpenedPosition.stopsDuringWalAppend
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit))
+    {batch : List WAL.Write} {table : PackedTable} {guarded poisoned cut : heap} {tag : stop}
+    (nonempty : request.rows ≠ [])
+    (prepared : prepareBatch (installed).table request.rows = some (batch, table))
+    (fits : (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    (checked : checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded)
+    (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
+    (stopped : appender.runUntilWrite cache.active write ((dir).file (.walSegment (installed).activeFirst))
+      (WAL.encodeBatch batch) poisoned = .error tag cut) :
+    opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
+    request.runUntilPublicationStop dir lookup
+      (appender.commitUntilWrite dir cache write stager syncer rename) opened.phase opened.get opened.set
+      current.reached = .error tag cut ∧
+    let keeps (before after : heap) := (storage before).Frames (state).crashPath (storage after) ∧
+      WalNamePresenceFrame dir 0 horizon (storage before) (storage after)
+    ∀ (_initial : NativeReadyStorage state (storage current.reached))
+      (_guardFrame : keeps current.reached guarded) (_poisonFrame : keeps guarded poisoned)
+      (_readFrame : ∀ {cached loaded}, appender.getActive cache.active poisoned = .ok cached loaded →
+        keeps poisoned loaded)
+      (_selects : ∀ {cached loaded handle issued}, appender.getActive cache.active poisoned = .ok cached loaded →
+        selectAppendHandle cached appender.openAppend ((dir).file (.walSegment (installed).activeFirst)) loaded =
+          .ok handle issued →
+        keeps loaded issued ∧ (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots ∧
+          names issued ((dir).file (.walSegment (installed).activeFirst)) =
+            some ((view.descriptors issued).inode (view.handle issued handle).2.1.description))
+      (_writeEffect : ∀ {handle issued}, write handle (WAL.encodeBatch batch) issued = .error tag cut →
+        (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
+        names issued keeperPath = some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
+        (state).BeforeMarkerWriteFrame ((view.descriptors issued).inode (view.handle issued handle).2.1.description)
+          (storage issued) (storage cut) ∧ WalNamePresenceFrame dir 0 horizon (storage issued) (storage cut)),
+      ∀ {rebooted : heap} (sample : RawWriteRebootEntry state view storage names visible cut rebooted),
+        BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first (state).writer.target ∧
+        RawOpenRetryTrace.SelectedEntry view state (state).writer.target names visible rebooted ∧
+        (sample.DurableReset → current.WalWindowAt storage 0 horizon →
+        ∃ plan : current.current.ready.SelectedWritePlan batch (state).writer.target (view.files rebooted).image,
+          current.current.SelectedWriteReboot view storage visible 0 request batch table (state).writer.target cut rebooted ∧
+          plan.history = current.current.history ∧
+          (∀ {origin : NativeExecutionPosition} {events : List NativeExecutionEvent},
+            origin.LedgerSuffix events current.current →
+              origin.InterruptedWriteLedger current.current events request batch [] plan.history) ∧
+          ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
+            (state).writer.target.pair.manifest = none →
+            opener.ReplaysWalBeforeCheckpointAtOpen view dir (state).writer.wal.active.first
+              storage visible rebooted namespaceView root plan.history) := by
+  have valid := current.current.ready.readPrefix.refines.1
+  have loaded := opened.phaseEffects.reads current.reached opened.phase _
+    (current.stored.trans (congrArg some valid.phase))
+  let publish := appender.commitUntilWrite dir cache write stager syncer rename
+  have commit : publish installed (WAL.encodeBatch batch) ((installed).walBytes + WAL.frameSize * request.rows.length)
+      poisoned = .error tag cut := by
+    simp only [publish, RawWalAppendCalls.commitUntilWrite, commitBytesAt_fileEffects, WAL.Boundary.commit,
+      ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind, stopped]
+  refine ⟨current.uses.writeSchedules,
+    request.stopsDuringPublication dir lookup publish opened.phase opened.get opened.set nonempty prepared fits loaded
+      checked assigned commit, ?_⟩
+  intro keeps initial guardFrame poisonFrame readFrame selects writeEffect rebooted sample
+  obtain ⟨_, _, handle, issued, read, selected, noResponse⟩ := appender.reachesStoppedWrite stopped
+  have compose {before middle after : heap} (first : keeps before middle) (last : keeps middle after) :
+      keeps before after := ⟨first.1.trans last.1, first.2.trans last.2⟩
+  obtain ⟨selectionFrame, live, bound⟩ := selects read selected
+  have sameFirst : (installed).activeFirst = (state).writer.wal.active.first :=
+    valid.retained.resumed.keeper.trans valid.retained.active
+  rw [sameFirst] at bound
+  have beforeWrite := compose (compose guardFrame poisonFrame) (compose (readFrame read) selectionFrame)
+  have atEntry : names current.reached keeperPath =
+      some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) :=
+    ((beforeWrite.1.visible _ (NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl)))).1).symm.trans bound
+  obtain ⟨effect, namesEffect⟩ := writeEffect noResponse live bound
+  have reached := (NativeReadyState.BeforeMarkerWriteFrame.ofFileFrame beforeWrite.1 atEntry).trans effect
+  obtain ⟨admitted, chosen, vacant, _⟩ :=
+    reached.selectsPriorAtReboot («storage» := storage) (entry := current.reached) (cut := cut)
+      valid batch initial atEntry sample
+  refine ⟨admitted, chosen, ?_⟩
+  intro reset window
+  have writerHistory := current.current.ready.readPrefix.refines.2.1
+  have cutoff : (state).writer.target.range.through = current.current.history.length :=
+    valid.retained.resumed.through.trans (congrArg List.length writerHistory)
+  have sampledWindow := sample.walNamespace (beforeWrite.2.trans namesEffect) window.2
+  have recovery := sample.startsRecoveryObservations reset chosen (cutoff.symm ▸ sampledWindow)
+  let handoff : current.current.SelectedWriteReboot view storage visible 0 request batch table
+      (state).writer.target cut rebooted :=
+    ⟨prepared, fits, fun _ _ => Nat.zero_le _, vacant, sample, admitted, chosen, recovery⟩
+  obtain ⟨plan, opens⟩ := handoff.sampledPlan
+  have sameLength : plan.history.length = current.current.history.length :=
+    plan.layout.through.symm.trans ((congrArg (fun target : Target => target.range.through) plan.targetEq).trans cutoff)
+  have oldHistory : plan.history = current.current.history := by
+    rcases plan.allowed with prior | complete
+    · exact prior
+    · have count := congrArg List.length complete
+      rw [List.length_append] at count
+      have empty : batch = [] := List.length_eq_zero_iff.mp (by omega)
+      simpa only [empty, List.append_nil] using complete
+  refine ⟨plan, handoff, oldHistory, ?_, @opens⟩
+  intro origin events prior
+  refine ⟨⟨table, prepared⟩, .inl rfl, ?_, ?_, ?_⟩
+  · simpa only [List.append_nil, ← prior.history] using oldHistory
+  · simpa only [← prior.submissions, ← prior.reads] using plan.pending
+  · simpa only [← prior.reads] using plan.bounded
+
+end AppendStop
 
 end Alvoki.Storage.DiskSession
