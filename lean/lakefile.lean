@@ -34,7 +34,8 @@ lean_lib PackedViewProofs
 
 lean_lib MergeModel
 
-lean_lib MergeProofs
+lean_lib MergeProofs where
+  roots := #[`Alvoki.Proofs.Merge.MergeProofs]
 
 lean_lib NativeTune where
   moreLeancArgs := #["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize", "-Rpass-analysis=loop-vectorize"]
