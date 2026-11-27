@@ -263,20 +263,29 @@ under the file-sync law. Publishing its name is a separate directory effect.
 | Explicit close and successful open | Close releases the lock and preserves the visible empty successor. The close heap supplies the visible marker, WAL bytes and names, including the gaps between segments. Older descriptor aliases may remain. |
 | Power loss and successful open | One surviving directory map selects either the old active segment or the empty successor. If the successor survives, the old segment is the last seal. Both choices encode the same history. |
 
-For the live path after the first write, the acknowledged batch supplies
-the protected files and exact WAL name interval. The rotation callbacks
-supply the poisoned phase, lock slot, descriptor drops and visible files.
-Close clears the cache it observes after unlock. The live reader therefore
-needs no comparison of crash maps. The modeled rotation failure still
-supplies the parent and created child and the expected drop sequence.
-[Fresh composition](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
-[Error and close](../../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
+For live reopen, the first write supplies the WAL catalog and the recovery
+range. With no manifest or seals, every frame in its nonempty history belongs
+to the active segment. The exclusive open binds the new empty child to the
+inode of its returned handle. The later callbacks preserve that binding,
+the older selected children and the lock through the reported error. Unlock
+and cache clears supply the release heap for the ordinary WAL reader.
+Only the lock slot must stay live until unlock. The close records the
+drops that actually occur. [Fresh write through lookup](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
+[Local error and close effects](../../lean/Alvoki/Storage/Disk/NativeRawRotationErrorClose.lean)
 
-Both paths use the same literal reader on the files visible at admission.
-The file-to-inode projection, directory enumeration and primitive storage
-effects are filesystem premises. The reboot path also consumes a reset
-observation for its chosen map. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean) ·
-[Sampled reboot](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean) ·
+For reboot, the original writer identifies the directory inode. The
+rotation preserves the root path and cached inode up to the failed fsync.
+The file-sync law settles the new inode's bytes. Under the separate
+directory-sync law, one crash map determines which name survives. The
+exclusive-create proof requires an absent or new binding in every allowed
+map just after create. An earlier unsynced unlink could otherwise leave an
+older inode at that name. [Exclusive-create callbacks](../../lean/Alvoki/Storage/Disk/NativeRawRotationDirectoryError.lean) ·
+[Sampled reboot](../../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
+
+Both continuations use the same reader. A successful open still relies on
+truthful directory enumeration and file observations. On the live path the
+write's durable marker must agree with the marker bytes seen by the reader.
+On reboot the reset must expose the chosen map.
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 

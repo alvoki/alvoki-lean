@@ -862,7 +862,8 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
           WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
             (storage preReady) (storage reached))
         {cause : IO.Error} {poisoned synced issued failed afterUnlock : heap} {root : IO.FS.Handle}
-        (failure : NativeRotationDirectoryFailure state (some cause))
+        (directoryObject : DeviceInode)
+        (guard : BatchActiveGuard opened.handle.directory state.writer.installed)
         (_poisonedAt : opened.handle.set opened.handle.phase .poisoned next.reached = .ok () poisoned)
         (filePrefix : rotation.SuccessorFilePrefix opened.handle.directory state.writer.rotationInstalled.activeFirst poisoned synced)
         (file : filePrefix.ExclusiveSync stager syncer usedCache)
@@ -871,7 +872,9 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
             #[opened.handle.directory.path] synced)
         (_loaded : syncer.readDirectory usedCache.directory synced = .ok (some root) issued)
         (_rootFailed : syncer.fsync root issued = .error cause failed)
-        (_rotationEffects : NativeRotationCloseEffects next failure usedCache closeView file issued failed)
+        (_rotationEffects : NativeRotationCloseEffects next usedCache closeView file directoryObject
+          (fun name => checkpointFreeWalChild state.writer.history.length name ∧
+            name ≠ renderWalSegmentName state.writer.rotationInstalled.activeFirst) issued failed)
         (drops : CloseCacheField → List LockReferenceDrop)
         (_unlocked : unlock opened.handle.lock failed = .ok () afterUnlock)
         (_unlockEffect : (closeView.files failed).owners.Owns dir state.session.descriptor →
@@ -890,17 +893,21 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
         let successor := state.writer.rotationInstalled.activeFirst
         ∀ (_atEntry : ∀ name, checkpointFreeWalChild state.writer.history.length name →
             names next.reached ⟨dir.path.toString ++ "/" ++ name⟩ =
-              (failure.parent.files.view.child failure.parent.root name).map failure.parent.files.view.modelObject)
+              ((closeView.files next.reached).image.view.child directoryObject name).map
+                (closeView.files next.reached).image.view.modelObject)
           (_atClose : ∀ name, checkpointFreeWalChild state.writer.history.length name →
             names released ⟨dir.path.toString ++ "/" ++ name⟩ =
-              (observed.view.child failure.parent.root name).map observed.view.modelObject)
-          (_rootPath : names released dir.path = (failure.reported.pathObject dir.path).map observed.view.modelObject)
+              (observed.view.child directoryObject name).map observed.view.modelObject)
+          (_keeperObserved : ∀ inode, names next.reached (dir.file (.walSegment state.writer.wal.active.first)) = some inode →
+            live next.reached inode = visible next.reached inode)
+          (_markerObserved : ∀ inode, names next.reached (dir.file .walBoundary) = some inode →
+            live next.reached inode ∈ (storage next.reached).files.bytes inode)
           (_pairAt : (modeledFiles released).directory.active =
             ⟨(names released (dir.file .manifest)).map (live released),
               (names released (dir.file .walBoundary)).map (live released)⟩)
           (_keeperAt : (modeledFiles released).keeper.active =
             (names released (dir.file (.walSegment successor))).map (live released)),
-          rotation.run opened.handle failure.lookup usedCache.active next.reached =
+          rotation.run opened.handle guard.lookup usedCache.active next.reached =
             .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {cause}") failed ∧
           opened.handle.table.close = closeSchedule opened.handle.phase.get (fun _ => opened.handle.lock.unlock)
             (usedCache.active.set none) (usedCache.pending.set []) (usedCache.directory.set none)
@@ -908,7 +915,7 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
           closeSchedule (opened.handle.get opened.handle.phase) (fun _ => unlock opened.handle.lock)
             (setCell usedCache.active none) (setCell usedCache.pending []) (setCell usedCache.directory none)
             (setCell opened.handle.phase .closed) failed = .ok () released ∧
-          source.ReadsClientHistoryAtOpen openView dir storage live released observed.view failure.parent.root
+          source.ReadsClientHistoryAtOpen openView dir storage live released observed.view directoryObject
             [.acknowledgedBatch batch] [] batch := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
     _, batchHistory, ledger, physical, ⟨noManifest, noSeals, history, _⟩, carries⟩ :=
@@ -916,19 +923,23 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
       liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
       modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
   refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, exactHeap, ledger, ?_⟩
-  intro firstNames restore cause poisoned synced issued failed afterUnlock root failure poisonedAt
+  intro firstNames restore cause poisoned synced issued failed afterUnlock root directoryObject guard poisonedAt
     filePrefix file rootRoute loaded rootFailed rotationEffects drops unlocked unlockEffect clears
-  intro released observed live openView successor atEntry atClose rootPath pairAt keeperAt
-  obtain ⟨returned, phase, censusAtFailure, owner, held, fileView, bytes⟩ := next.rotationErrorCloseProjection
-    rotation stager syncer _ closeView failure poisonedAt filePrefix file rootRoute loaded rootFailed rotationEffects
-  have liveAtFailure := And.intro fileView bytes
-  obtain ⟨close, rawClose, closed, _⟩ := next.closesAfterRotationDirectoryError rotation _ closeView unlock setCell
-    failure returned phase censusAtFailure liveAtFailure owner held drops unlocked unlockEffect clears
+  intro released observed live openView successor atEntry atClose keeperObserved markerObserved pairAt keeperAt
+  have positive : 0 < next.current.ready.state.writer.history.length := by
+    rw [history, (prepareBatch_spec prepared).1]
+    exact List.length_pos_iff.mpr nonempty
+  have nonemptyWal := next.current.ready.readPrefix.refines.1.retained.activeBeforeCutoffOfFirstBatch noManifest noSeals positive
+  obtain ⟨returned, phase, owner, held, liveLock, kept, child, created, _, empty⟩ := next.rotationErrorCloseProjection
+    rotation stager syncer _ closeView guard nonemptyWal poisonedAt filePrefix file rootRoute loaded rootFailed rotationEffects
+  obtain ⟨close, rawClose, closed⟩ := next.closesAfterRotationDirectoryError rotation _ closeView unlock setCell
+    guard returned phase owner held liveLock drops unlocked unlockEffect clears
   have catalog := (carries request.rows.length covered firstNames restore).2.1
   rw [← (prepareBatch_spec prepared).1, ← history] at catalog
-  obtain ⟨_, _, _, readsAfterOpen⟩ := closed.readsAfterRotationDirectoryError («storage» := storage) failure _ liveAtFailure
-    physical.physical.toNativeReadyProtectedStorage (by simp [noSeals]) catalog atEntry atClose rootPath
-    modeledFiles pairAt keeperAt noManifest source
+  obtain ⟨_, readsAfterOpen⟩ := closed.readsAfterRotationDirectoryError («storage» := storage) _ nonemptyWal
+    directoryObject child created empty kept physical.physical
+    (fun inode bound => (keeperObserved inode bound).trans (physical.keeper inode bound))
+    markerObserved (by simp [noSeals]) catalog atEntry atClose modeledFiles pairAt keeperAt noManifest source
   simp only [returned, Option.some.injEq, Prod.mk.injEq, true_and] at rawClose
   obtain ⟨_, submissions, reads, _⟩ := opened.refinesLedger ledger
   have submitted : next.current.submissions = [.acknowledgedBatch batch] := by

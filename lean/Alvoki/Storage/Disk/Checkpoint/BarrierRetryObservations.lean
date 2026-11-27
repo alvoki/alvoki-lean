@@ -1,3 +1,4 @@
+import Alvoki.Storage.Disk.FileObservationFrame
 import Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
 
 namespace Alvoki.Storage.DiskSession
@@ -13,18 +14,14 @@ structure CheckpointSurvivingFiles where
 objects. Other names and objects have no role in this handoff. -/
 def CheckpointSurvivingFiles.Frames (selectedPath : FilePath → Prop)
     (before after : CheckpointSurvivingFiles) : Prop :=
-  ∀ path, selectedPath path → after.names path = before.names path ∧
-    ∀ inode, before.names path = some inode → after.bytes inode = before.bytes inode
+  FileObservationFrame CheckpointSurvivingFiles.names CheckpointSurvivingFiles.bytes selectedPath before after
 
 private theorem CheckpointSurvivingFiles.Frames.rfl {selectedPath} {files : CheckpointSurvivingFiles} : files.Frames selectedPath files :=
   fun _ _ => ⟨Eq.refl _, fun _ _ => Eq.refl _⟩
 
 theorem CheckpointSurvivingFiles.Frames.trans {selectedPath} {first middle last : CheckpointSurvivingFiles}
-    (earlier : first.Frames selectedPath middle) (later : middle.Frames selectedPath last) : first.Frames selectedPath last := by
-  intro path selected
-  obtain ⟨same, bytes⟩ := earlier path selected
-  obtain ⟨reached, finalBytes⟩ := later path selected
-  exact ⟨reached.trans same, fun inode found => (finalBytes inode (same.trans found)).trans (bytes inode found)⟩
+    (earlier : first.Frames selectedPath middle) (later : middle.Frames selectedPath last) : first.Frames selectedPath last :=
+  FileObservationFrame.trans earlier later
 
 abbrev CheckpointAdmissionState := DescriptorInventory × LockedFileState FileImage × CheckpointSurvivingFiles
 

@@ -11,7 +11,7 @@ open WAL.Boundary (WalInodeImage)
 section
 
 variable {heap stream : Type} {opened : NativeOpenedHandle heap}
-  {current : NativeOpenedPosition opened} {cause : IO.Error} {failed released : heap}
+  {current : NativeOpenedPosition opened} {failed released : heap}
   {view : OpenCloseHeapView heap RotationCreateFiles}
   {storage : heap → CheckpointStorageObservation}
 
@@ -23,30 +23,35 @@ local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointSto
 local notation "visible" => fun h =>
   WalInodeImage.visible (RotationCreateFiles.inodes (LockedFileState.image (OpenCloseHeapView.files view h)))
 
-/-- Close preserves the visible successor even if the failed directory
-barrier left it absent from a crash map. The same rooted close observation
-supplies the WAL reads of a successful literal reopen. Only prior seals
-need to agree with the durable write entry on their visible bytes. -/
+/-- Live reopen uses the empty successor observed in the actual failed
+rotation and the framed, already acknowledged WAL. The directory barrier
+may have left a different set of crash alternatives. -/
 theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
-    (failure : NativeRotationDirectoryFailure old (some cause))
     (cache : OpenSyncCacheRefs opened.files opened.directory.path)
     {drops : CloseCacheField → List LockReferenceDrop}
     (closed : view.ClosedFrom opened.phase cache.active cache.pending cache.directory dir drops failed released)
-    (liveAtFailure : (view.files failed).image.view = failure.reported.after.view ∧
-      (view.files failed).image.inodes.visible = failure.reported.after.inodes.visible)
-    (prior : NativeReadyProtectedStorage old (storage current.reached).files)
+    (nonempty : (old).writer.installed.activeFirst < (old).writer.installed.walBytes / WAL.frameSize)
+    (root child : DeviceInode)
+    (created : (view.files failed).image.view.child root (renderWalSegmentName newStart) = some child)
+    (empty : visible failed ((view.files failed).image.view.modelObject child) = ByteArray.empty)
+    (kept : RotationCreateFiles.FramesLiveChildren root
+      (fun name => checkpointFreeWalChild limit name ∧ name ≠ renderWalSegmentName newStart)
+      (view.files current.reached).image (view.files failed).image)
+    (prior : NativeReadyStorage old (storage current.reached))
+    (keeperVisible : ∀ inode, names current.reached ((dir).file (.walSegment (old).writer.wal.active.first)) = some inode →
+      visible current.reached inode = (old).writer.wal.active.bytes)
+    (markerVisible : ∀ inode, names current.reached ((dir).file .walBoundary) = some inode →
+      visible current.reached inode ∈ (storage current.reached).files.bytes inode)
     (sealedVisible : ∀ segment ∈ (old).writer.wal.sealed,
       ∀ inode, names current.reached ((dir).file (.walSegment segment.first)) = some inode →
-      failure.parent.files.inodes.visible inode ∈ (storage current.reached).files.bytes inode)
+      visible current.reached inode ∈ (storage current.reached).files.bytes inode)
     (catalog : (old).writer.wal.NamespaceWindow dir 0 limit (names current.reached))
     (atEntry : ∀ name, checkpointFreeWalChild limit name →
       names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ =
-        (failure.parent.files.view.child failure.parent.root name).map failure.parent.files.view.modelObject)
+        ((view.files current.reached).image.view.child root name).map (view.files current.reached).image.view.modelObject)
     (atClose : ∀ name, checkpointFreeWalChild limit name →
       names released ⟨(dir).path.toString ++ "/" ++ name⟩ =
-        ((view.files released).image.view.child failure.parent.root name).map (view.files released).image.view.modelObject)
-    (rootPath : names released (dir).path =
-      (failure.reported.pathObject (dir).path).map (view.files released).image.view.modelObject)
+        ((view.files released).image.view.child root name).map (view.files released).image.view.modelObject)
     (images : heap → FileImage)
     (pairAt : (images released).directory.active =
       ⟨(names released ((dir).file .manifest)).map (visible released),
@@ -58,44 +63,58 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     let observed := (view.files released).image
     let openView := view.withFileProjection (fun h => ⟨images h, (view.files h).owners⟩)
     TryLockObserves (view.files released).owners dir (.ok true) ∧
-    names released (dir).path = some (observed.view.modelObject failure.parent.root) ∧
-    (∀ start ≤ current.current.history.length,
-      (observed.view.child failure.parent.root (renderWalSegmentName start)).map observed.view.modelObject =
-        names released ((dir).file (.walSegment start))) ∧
-    source.ReadsClientHistoryAtOpen openView dir storage visible released observed.view failure.parent.root
+    source.ReadsClientHistoryAtOpen openView dir storage visible released observed.view root
       current.current.submissions current.current.ready.reads current.current.history := by
   intro observed openView
   let valid := current.current.ready.readPrefix.refines.1
-  let writer := (failure.liveState valid).writer
-  have ready := failure.liveRetained valid
-  have observedView : observed.view = failure.reported.after.view :=
-    (congrArg (fun files : LockedFileState RotationCreateFiles => files.image.view) closed.2.2.1).trans liveAtFailure.1
-  have observedBytes : observed.inodes.visible = failure.reported.after.inodes.visible :=
-    (congrArg (fun files : LockedFileState RotationCreateFiles => files.image.inodes.visible) closed.2.2.1).trans liveAtFailure.2
-  have reachedView : (view.files released).image.view = failure.reported.after.view := observedView
-  obtain ⟨_, _, root, _, _, _, lockName, _, successor, _, _⟩ := failure.custody valid
+  let writer := (old).writer.rotated valid.retained.rotationTarget
+  have ready : writer.RetainedReady dir (old).session.descriptor :=
+    valid.retained.rotates nonempty ⟨rfl, rfl, rfl⟩
+  have sameImage : (view.files released).image = (view.files failed).image := by
+    rw [closed.2.2.1]
   have present (name : String) (inScope : checkpointFreeWalChild limit name)
       (apart : name ≠ renderWalSegmentName newStart) :
-      names released ⟨(dir).path.toString ++ "/" ++ name⟩ =
-        names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ := by
-    rw [atClose name inScope, atEntry name inScope, reachedView, failure.reported.view,
-      failure.created.names name apart, failure.created.objects]
+      let path : FilePath := ⟨(dir).path.toString ++ "/" ++ name⟩
+      names released path = names current.reached path ∧
+      ∀ inode, names current.reached path = some inode → visible released inode = visible current.reached inode := by
+    obtain ⟨binding, bytes⟩ := kept name ⟨inScope, apart⟩
+    refine ⟨?_, ?_⟩
+    · rw [atClose name inScope, sameImage]
+      exact binding.trans (atEntry name inScope).symm
+    · intro inode found
+      have atStart := (atEntry name inScope).symm.trans found
+      change (view.files released).image.inodes.visible inode = _
+      rw [sameImage]
+      exact bytes inode atStart
+  have pathPayload (name : String) (inScope : checkpointFreeWalChild limit name)
+      (apart : name ≠ renderWalSegmentName newStart) {inode : Nat} {payload : ByteArray}
+      (bound : names current.reached ⟨(dir).path.toString ++ "/" ++ name⟩ = some inode)
+      (bytes : visible current.reached inode = payload) :
+      (names released ⟨(dir).path.toString ++ "/" ++ name⟩).map (visible released) = some payload := by
+    have carried := present name inScope apart
+    rw [carried.1, bound, Option.map_some, carried.2 inode bound, bytes]
   have successorAtEnd : newStart = limit := valid.retained.rotationAtEnd
   have keeperFirst : writer.wal.active.first = newStart :=
     valid.retained.layout.activeEnd.trans successorAtEnd.symm
-  have child (start : Nat) (bound : start ≤ limit) :=
+  have childAtClose (start : Nat) (bound : start ≤ limit) :=
     atClose (renderWalSegmentName start) (.inr ⟨start, bound, rfl⟩)
   have freshName : names released ((dir).file (.walSegment newStart)) =
-      some (observed.view.modelObject failure.created.child.child) := by
-    change _ = some (observed.view.modelObject failure.created.child.child)
-    change failure.reported.after.view.child failure.parent.root (renderWalSegmentName newStart) =
-      some failure.created.child.child at successor
-    simpa only [DiskDirectory.walSegment_path, reachedView, observedView, successor, Option.map_some] using
-      child newStart (Nat.le_of_eq successorAtEnd)
-  have freshBytes : visible released (observed.view.modelObject failure.created.child.child) = ByteArray.empty := by
-    change observed.inodes.visible (observed.view.modelObject failure.created.child.child) = _
-    rw [observedBytes, observedView, failure.reported.bytes, failure.reported.view, failure.created.inode]
-    exact failure.created.empty
+      some (observed.view.modelObject child) := by
+    change _ = some ((view.files released).image.view.modelObject child)
+    rw [DiskDirectory.walSegment_path, childAtClose _ (Nat.le_of_eq successorAtEnd), sameImage, created, Option.map_some]
+  have freshBytes : visible released (observed.view.modelObject child) = ByteArray.empty := by
+    change (view.files released).image.inodes.visible ((view.files released).image.view.modelObject child) = _
+    rw [sameImage]
+    exact empty
+  have fixedName (name : String) (administrative : name ∈ ["LOCK", "MANIFEST", "WAL.commit"]) :
+      name ≠ renderWalSegmentName newStart := by
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at administrative
+    rcases administrative with rfl | rfl | rfl <;> intro same <;>
+      have pref := congrArg (fun name : String => name.toList.take 4) same <;>
+      simp [renderWalSegmentName, String.toList_append] at pref
+  have segmentName (start : Nat) (apart : start ≠ newStart) : renderWalSegmentName start ≠ renderWalSegmentName newStart := by
+    intro same
+    exact apart (by simpa only [parseWalSegmentName_render, Option.some.injEq] using congrArg parseWalSegmentName same)
   have newStarts : writer.wal.segments.map WalSegment.first =
       (old).writer.wal.segments.map WalSegment.first ++ [newStart] := by
     change ((old).writer.wal.segments ++ [(⟨(old).writer.wal.active.last, (old).writer.wal.active.last,
@@ -105,77 +124,47 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
     apply WalSegmentImage.namespaceWindowAfterRotation newStarts
     · simp only [freshName, Option.isSome_some]
     · intro start low bound apart
-      have distinct : renderWalSegmentName start ≠ renderWalSegmentName newStart := by
-        intro same
-        exact apart (by simpa only [parseWalSegmentName_render, Option.some.injEq] using congrArg parseWalSegmentName same)
-      rw [DiskDirectory.walSegment_path, present _ (.inr ⟨start, bound, rfl⟩) distinct, ← DiskDirectory.walSegment_path]
+      rw [DiskDirectory.walSegment_path,
+        (present _ (.inr ⟨start, bound, rfl⟩) (segmentName start apart)).1, ← DiskDirectory.walSegment_path]
       exact catalog start low bound
   have manifestAbsent : names released ((dir).file .manifest) = none := by
-    have kept := present "MANIFEST" (.inl (by simp))
-      (by
-        intro same
-        have namesEq := congrArg (fun name : String => name.toList.take 4) same
-        simp [renderWalSegmentName, String.toList_append] at namesEq)
-    have originally := prior.manifest
-    rw [noManifest] at originally
-    exact kept.trans originally
-  have lockBound : names released ((dir).file .lock) = some (observed.view.modelObject failure.parent.lock.child) := by
-    change names released ⟨(dir).path.toString ++ "/" ++ "LOCK"⟩ = _
-    simpa only [reachedView, observedView, lockName, Option.map_some] using atClose "LOCK" (.inl (by simp))
-  obtain ⟨objects, keeperName, markerName, _, _, keeperBytes, _, markerBytes, _⟩ :=
-    (RotationRawCreateEffect.afterOpen (failure.created.afterSync true)).keepsKeeperMarker
-  change failure.created.files.view.modelObject = failure.parent.files.view.modelObject at objects
-  change failure.created.files.view.child failure.parent.root (renderWalSegmentName (old).writer.installed.activeFirst) =
-    some failure.parent.keeper.child at keeperName
-  change failure.created.files.view.child failure.parent.root "WAL.commit" = some failure.parent.marker.child at markerName
-  change (failure.created.afterSync true).files.inodes.visible (failure.parent.files.view.modelObject failure.parent.keeper.child) =
-    (old).writer.wal.active.bytes at keeperBytes
-  change (old).writer.wal.directory.active.walBoundary = some
-    ((failure.created.afterSync true).files.inodes.visible (failure.parent.files.view.modelObject failure.parent.marker.child)) at markerBytes
+    have absent := prior.manifest
+    rw [noManifest] at absent
+    exact (present "MANIFEST" (.inl (by simp)) (fixedName _ (by simp))).1.trans absent
+  have lockBound : names released ((dir).file .lock) = some ((old).census.inode (old).owner.description) :=
+    (present "LOCK" (.inl (by simp)) (fixedName _ (by simp))).1.trans prior.lockBound
   have marker : (names released ((dir).file .walBoundary)).map (visible released) = writer.target.pair.walBoundary := by
-    change (names released ⟨(dir).path.toString ++ "/" ++ "WAL.commit"⟩).map (visible released) = _
-    rw [atClose "WAL.commit" (.inl (by simp))]
-    change ((observed.view.child failure.parent.root "WAL.commit").map observed.view.modelObject).map
-      observed.inodes.visible = (old).writer.target.pair.walBoundary
-    rw [observedBytes, observedView, failure.reported.view, markerName, failure.reported.bytes, objects]
-    simpa only [Option.map_some, valid.retained.walPair] using markerBytes.symm
+    have payload : writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode (old).writer.history).size.toUInt64) :=
+      (congrArg DirectoryPublication.Bindings.walBoundary valid.retained.resumed.ready.selected).symm.trans
+        (congrArg Publication.Image.active valid.retained.resumed.markerImage)
+    obtain ⟨inode, bound, bytes⟩ := prior.marker.samplesAtBinding (names current.reached) (visible current.reached) rfl markerVisible
+    exact (pathPayload "WAL.commit" (.inl (by simp)) (fixedName _ (by simp)) bound bytes).trans payload.symm
   have pair : (images released).directory.active = writer.target.pair := by
     rw [pairAt, manifestAbsent, Option.map_none, marker]
     exact congrArg (fun manifest => DirectoryPublication.Bindings.mk manifest writer.target.pair.walBoundary) noManifest.symm
   have newKeeper : (images released).keeper.active = some writer.target.trimmed := by
     rw [keeperAt, freshName, Option.map_some, freshBytes] <;> rfl
+  have rotating := valid.retained.rotationInput nonempty
+  have activeEnd : (old).writer.wal.active.last = newStart :=
+    valid.retained.layout.activeEnd.trans successorAtEnd.symm
+  have segmentPayload (segment : WalSegment) (below : segment.first < newStart) {inode : Nat}
+      (bound : names current.reached ((dir).file (.walSegment segment.first)) = some inode)
+      (bytes : visible current.reached inode = segment.bytes) :
+      (names released ((dir).file (.walSegment segment.first))).map (visible released) = some segment.bytes :=
+    pathPayload (renderWalSegmentName segment.first)
+      (.inr ⟨segment.first, Nat.le_trans (Nat.le_of_lt below) (Nat.le_of_eq successorAtEnd), rfl⟩)
+      (segmentName _ (Nat.ne_of_lt below)) bound bytes
   have oldKeep : (names released ((dir).file (.walSegment (old).writer.wal.active.first))).map (visible released) =
       some (old).writer.wal.active.bytes := by
-    have first := valid.retained.resumed.keeper.trans valid.retained.active
-    have bounded : (old).writer.wal.active.first ≤ limit :=
-      valid.retained.layout.activeEnd ▸ valid.retained.layout.forward _ (List.mem_append_right _ (by simp))
-    rw [DiskDirectory.walSegment_path, child _ bounded]
-    change ((observed.view.child failure.parent.root (renderWalSegmentName (old).writer.wal.active.first)).map
-      observed.view.modelObject).map observed.inodes.visible = _
-    rw [observedBytes, observedView, failure.reported.view, ← first, keeperName, failure.reported.bytes, objects]
-    simpa only [Option.map_some] using congrArg some keeperBytes
+    obtain ⟨inode, bound, _⟩ := prior.keeper
+    exact segmentPayload _ (activeEnd ▸ rotating.nonempty) bound (keeperVisible inode bound)
   have previousSeals (segment : WalSegment) (member : segment ∈ (old).writer.wal.sealed) :
       (names released ((dir).file (.walSegment segment.first))).map (visible released) = some segment.bytes := by
-    have rotating := valid.retained.rotationInput failure.parent.nonempty
-    have activeEnd : (old).writer.wal.active.last = newStart :=
-      valid.retained.layout.activeEnd.trans successorAtEnd.symm
     have below : segment.first < newStart := activeEnd ▸
       Nat.lt_trans (rotating.sealedBefore segment member) rotating.nonempty
-    have within := Nat.le_trans (Nat.le_of_lt below) (Nat.le_of_eq successorAtEnd)
-    have apart : renderWalSegmentName segment.first ≠ renderWalSegmentName newStart := by
-      intro same
-      exact (Nat.ne_of_lt below) (by simpa only [parseWalSegmentName_render, Option.some.injEq] using congrArg parseWalSegmentName same)
-    obtain ⟨inode, named, payload⟩ := (prior.sealedFiles segment member).samplesAtBinding
-      (names current.reached) failure.parent.files.inodes.visible rfl (sealedVisible segment member)
-    have binding := (atEntry _ (.inr ⟨segment.first, within, rfl⟩)).symm.trans named
-    obtain ⟨object, atParent, modeled⟩ := Option.map_eq_some_iff.mp binding
-    have distinct := modeled ▸ failure.created.freshObject _ _ atParent
-    have priorName : names current.reached ⟨(dir).path.toString ++ "/" ++ renderWalSegmentName segment.first⟩ = some inode := named
-    rw [DiskDirectory.walSegment_path, present _ (.inr ⟨segment.first, within, rfl⟩) apart, priorName, Option.map_some]
-    have contents := (failure.created.bytes inode distinct).1.trans payload
-    change some (observed.inodes.visible inode) = _
-    rw [observedBytes, failure.reported.bytes]
-    exact congrArg some contents
+    obtain ⟨inode, bound, bytes⟩ := (prior.sealedFiles segment member).samplesAtBinding
+      (names current.reached) (visible current.reached) rfl (sealedVisible segment member)
+    exact segmentPayload segment below bound bytes
   obtain ⟨layout, target, active, tail, descriptors, offsets⟩ := ready.visibleReopenLayout pair newKeeper
   have modeled := layout.modeledWindow _ offsets
   have onWal : layout.VisibleWal dir (names released) (visible released) := by
@@ -191,9 +180,9 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
   have noSelected := (congrArg (fun t : Target => t.pair.manifest) target).trans noManifest
   have selectedMarker := marker.trans (congrArg (fun t : Target => t.pair.walBoundary) target).symm
   have replay : source.ReplaysWalBeforeCheckpointAtOpen openView dir layout.keeper.first storage visible released
-      observed.view failure.parent.root (old).writer.history :=
+      observed.view root (old).writer.history :=
     @RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
-      (source := source) (namespaceView := observed.view) (root := failure.parent.root)
+      (source := source) (namespaceView := observed.view) (root := root)
       (view := openView) (directory := dir) (storage := storage) («visible» := visible) (entry := released)
       (history := (old).writer.history)
       (layout := layout) (lockBound := lockBound) (missing := noSelected) (manifestAbsent := manifestAbsent)
@@ -202,12 +191,12 @@ theorem OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
   obtain ⟨_, history, pending⟩ := current.current.ready.readPrefix.refines
   have finalReplay := @Eq.mp _ _ (congrArg
     (fun writes => source.ReplaysWalBeforeCheckpointAtOpen openView dir layout.keeper.first
-      storage visible released observed.view failure.parent.root writes) history) (@replay)
+      storage visible released observed.view root writes) history) (@replay)
   have retainedChild : ∀ start ≤ current.current.history.length,
-      (observed.view.child failure.parent.root (renderWalSegmentName start)).map observed.view.modelObject =
+      (observed.view.child root (renderWalSegmentName start)).map observed.view.modelObject =
         names released ((dir).file (.walSegment start)) :=
-    fun start bound => (child start (by simpa only [history] using bound)).symm
-  refine ⟨?_, rootPath.trans (congrArg (Option.map observed.view.modelObject) root), retainedChild, ?_⟩
+    fun start bound => (childAtClose start (by simpa only [history] using bound)).symm
+  refine ⟨?_, ?_⟩
   · rw [closed.2.2.1]
     simp [TryLockObserves, LockOwners.set]
   · intro input returnedAt table admission reads _ absent initializes keeps returned

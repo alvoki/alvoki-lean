@@ -24,6 +24,12 @@ def OpenCloseHeapView.withFileProjection (view : OpenCloseHeapView heap image)
     (files : heap → LockedFileState nextImage) : OpenCloseHeapView heap nextImage :=
   ⟨view.phase, view.active, view.pending, view.directory, view.handle, files, view.descriptors⟩
 
+/-- Inode of the open description recorded when this handle was captured. -/
+abbrev OpenCloseHeapView.capturedInode (view : OpenCloseHeapView heap image)
+    (reached : heap) (handle : IO.FS.Handle) : Nat :=
+  let captured := view.handle reached handle
+  captured.1.inode captured.2.1.description
+
 def OpenCloseHeapView.cacheAt (view : OpenCloseHeapView heap image) (reached : heap)
     (directory : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) : Cache CheckpointOpenHandle :=

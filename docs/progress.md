@@ -105,11 +105,14 @@ the original batch from the visible marker and WAL segments. A power loss
 instead samples one surviving directory map. Both paths use the same reader.
 [Fresh write through live reopen](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 
-**Next obligation.** Derive the modeled rotation failure itself from the same
-exclusive-create and directory-fsync execution. The live proof still takes the
-parent/child bindings and the descriptor-drop account at the boundary. For a
-power loss, identify the issued root handle with the held directory and apply
-its durability law to the same sampled map. Further mixed calls, interruptions
-and maintenance remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
+The live proof now starts from the literal exclusive-open handle. It uses
+local effects on the named child and the existing WAL files through close.
+The reboot proof follows the cached directory inode to the failed syscall.
+
+**Next obligation.** Derive the live marker bytes at the first write's return
+from its marker publication and the intervening frames. For reboot, compose
+that write's settled name interval with exclusive creation, the sampled
+directory map and the reset used by the next open. Further mixed calls,
+interruptions and maintenance remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).

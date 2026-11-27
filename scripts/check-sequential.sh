@@ -445,6 +445,7 @@ lake env leanchecker Alvoki.Storage.Disk.NativePrunedMarkedReady
 lake env leanchecker Alvoki.Storage.Disk.NativeClassifiedUncertainWrite
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PendingClientReplay
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalWalAtBarrier
+lake env leanchecker Alvoki.Storage.Disk.FileObservationFrame
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
 lake env leanchecker Alvoki.Storage.Disk.Checkpoint.PhysicalBarrierReopen
 lake env leanchecker Alvoki.Storage.Disk.BatchGroupedWriteError

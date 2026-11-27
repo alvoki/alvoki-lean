@@ -41,6 +41,26 @@ theorem RetainedReady.rotationAtEnd {directory : DiskDirectory} {descriptor : Na
   change before.installed.walBytes / frameSize = before.history.length
   rw [ready.resumed.bytes, WAL.encode_size, Nat.mul_comm, Nat.mul_div_cancel _ (by decide : 0 < frameSize)]
 
+/-- Before the first checkpoint or seal, all acknowledged frames belong to
+the active segment. A positive history therefore takes the rotation branch. -/
+theorem RetainedReady.activeBeforeCutoffOfFirstBatch {directory descriptor} {state : SegmentedWriterState}
+    (ready : state.RetainedReady directory descriptor)
+    (absent : state.target.pair.manifest = none) (unsealed : state.wal.sealed = [])
+    (positive : 0 < state.history.length) :
+    state.installed.activeFirst < state.installed.walBytes / frameSize := by
+  have selected : state.wal.Selects state.target.pair := ready.walPair ▸ List.mem_cons_self ..
+  obtain ⟨range, first, decoded, covers, _, chain⟩ := ready.valid _ selected
+  have watermark := (DirectoryPublication.Bindings.walRange_accounting decoded).1
+  rw [absent] at watermark
+  have zero : range.watermark = 0 := (Option.some.inj watermark).symm
+  rw [zero] at covers chain
+  have last : 0 < state.wal.active.last := ready.layout.activeEnd ▸ positive
+  simp [WalSegmentImage.afterWatermark, unsealed, last] at chain
+  have starts : state.wal.active.first = first := by cases chain; rfl
+  change state.installed.activeFirst < state.rotationInstalled.activeFirst
+  rw [ready.resumed.keeper, ready.active, starts, Nat.eq_zero_of_le_zero covers, ready.rotationAtEnd]
+  exact positive
+
 def RetainedReady.rotationTarget {directory : DiskDirectory} {descriptor : Nat} {before : SegmentedWriterState}
     (ready : before.RetainedReady directory descriptor) : Target :=
   ⟨before.target.pair, before.target.range, before.target.decoded, before.rotationInstalled.activeFirst,

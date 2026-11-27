@@ -2728,6 +2728,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyReadPrefix.reopensCollectionBarrierError
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.recoversCollectionBarrier
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.rotationAtEnd
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.activeBeforeCutoffOfFirstBatch
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.rotationTarget
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.RetainedReady.rotates
 #check_axioms Alvoki.Storage.DiskSession.runObservedRotationWithReset_empty
@@ -2761,7 +2762,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotationReturnsDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationCallbacks.SuccessorFilePrefix.reachesExclusiveSync
 #check_axioms Alvoki.Storage.DiskSession.RotationRawSuccessor.observesSyncedSuccessor
-#check_axioms Alvoki.Storage.DiskSession.RotationRawSuccessor.observesSuccessorAtRootIssue
+#check_axioms Alvoki.Storage.DiskSession.OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync.observesSuccessorAtRootIssue
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.samplesFailedRotationDirectory
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.replaysRotationSample
@@ -2770,6 +2771,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyStorage.protectedAfterRotation
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.rotationProtectedPaths
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.closesAfterRotationDirectoryError
+#check_axioms Alvoki.Storage.FileObservationFrame.trans
+#check_axioms Alvoki.Storage.DiskSession.RotationCreateFiles.FramesLiveChildren.trans
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotationErrorCloseProjection
 #check_axioms Alvoki.Storage.DiskSession.NativeCreatedRotationContinuation.writeStorageEntry
 #check_axioms Alvoki.Storage.DiskSession.NativeExistingRotationContinuation.writeStorageEntry
