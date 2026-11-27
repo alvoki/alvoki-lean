@@ -12,12 +12,14 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 ref=${ALVOKI_LINEAR_REF:-HEAD}
 git archive "$ref" lean | tar -x -C "$scratch"
+cp "$here/mark-output.patch" "$scratch/mark-output.patch"
 if [[ -f "$scratch/lean/Alvoki/Compaction/Core.lean" ]]; then
-  sed 's|lean/Compaction.lean|lean/Alvoki/Compaction/Core.lean|g' "$here/mark-output.patch" > "$scratch/mark-output.patch"
-  git -C "$scratch" apply "$scratch/mark-output.patch"
-else
-  git -C "$scratch" apply "$here/mark-output.patch"
+  sed -i 's|lean/Compaction.lean|lean/Alvoki/Compaction/Core.lean|g' "$scratch/mark-output.patch"
 fi
+if [[ -f "$scratch/lean/Alvoki/Experiments/Packed/NativeTune.lean" ]]; then
+  sed -i 's|lean/NativeTune.lean|lean/Alvoki/Experiments/Packed/NativeTune.lean|g' "$scratch/mark-output.patch"
+fi
+git -C "$scratch" apply "$scratch/mark-output.patch"
 
 printf 'Source %s\n' "$(git rev-parse "$ref")"
 uname -srmo
@@ -33,6 +35,9 @@ printf 'CPU affinity %s\n' "$(taskset -pc $$ | cut -d : -f 2-)"
     module_path=$module
     if [[ "$module" == Compaction && -f Alvoki/Compaction/Core.lean ]]; then
       module_path=Alvoki/Compaction/Core
+    fi
+    if [[ "$module" == NativeTune && -f Alvoki/Experiments/Packed/NativeTune.lean ]]; then
+      module_path=Alvoki/Experiments/Packed/NativeTune
     fi
     markers=$(rg -c '= lean_sarray_mark_linear\(' ".lake/build/ir/$module_path.c")
     printf 'Native destination markers in %s: %s\n' "$module" "$markers"

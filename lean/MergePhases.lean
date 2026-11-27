@@ -1,5 +1,5 @@
 import Alvoki.Experiments.Packed.Optimizations
-import NativeTune
+import Alvoki.Experiments.Packed.NativeTune
 import Alvoki.Kernel.ScopedBytes
 
 namespace Alvoki.MergePhases

@@ -47,6 +47,7 @@ lean_lib MergeProofs where
   roots := #[`Alvoki.Proofs.Merge.MergeProofs]
 
 lean_lib NativeTune where
+  roots := #[`Alvoki.Experiments.Packed.NativeTune]
   moreLeancArgs := #["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize", "-Rpass-analysis=loop-vectorize"]
 
 lean_lib MergePhases

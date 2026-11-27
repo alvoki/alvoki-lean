@@ -1,5 +1,5 @@
 import Alvoki.Experiments.Merge.FusedMerge
-import NativeTune
+import Alvoki.Experiments.Packed.NativeTune
 
 open Alvoki Alvoki.Opt Alvoki.Packed
 
