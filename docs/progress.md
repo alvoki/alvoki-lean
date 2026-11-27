@@ -18,11 +18,12 @@ the previous history under the descriptor and byte-prefix assumptions. A late
 publication error may instead retain the whole batch. A successful marked open
 reads the selected checkpoint files and bounded WAL and returns a table whose
 latest lookup agrees with that history. For an aligned keeper with no later
-WAL files, the reached admission, successful preparation, directory and keeper
-syncs, and phase and token allocations determine that exact public return.
-The selected recovery proof can use this equality to extend the ledger with
-subsequent supported writes and snapshots. Preparation and the local callback
-returns remain inputs.
+WAL files, the selected checkpoint, marker, listing and WAL read callbacks
+determine the actual prepared replay and measured keeper extent. With the
+reached admission, two syncs and phase and token allocations, this gives
+the exact public return. The selected recovery proof can use this equality
+for subsequent supported writes and snapshots. The successful marked probes
+and reached callback observations remain inputs.
 [Public append and continuation](../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) ·
 [Literal reader and repair](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
 [Aligned public open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)

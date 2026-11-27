@@ -4219,6 +4219,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.assembles
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsAlignedMarkedInterpreter
+#check_axioms Alvoki.Storage.DiskSession.MarkedWalExtentReports.returnsAlignedMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.worker_reachesMarkedInstallation
 #check_axioms Alvoki.Storage.DiskSession.reachedMarkedPreparation
 #check_axioms Alvoki.Storage.DiskSession.reachedMarkedReaders

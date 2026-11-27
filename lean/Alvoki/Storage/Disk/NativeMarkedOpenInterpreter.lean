@@ -686,6 +686,28 @@ theorem RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
     | ok _ afterDisposal | error _ afterDisposal =>
       cases unlocked : source.calls.unlock raw.lock afterDisposal <;> simp [unlocked]
 
+/-- The successful aligned return starts after preparation. Its remaining
+inputs follow the two syncs and allocations on their reached heaps. -/
+abbrev RawOpenAdmissionReport.ReturnsAlignedAfterPreparation
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (prepared : heap) (plan : Plan) (opened : Reopened) : Prop :=
+    ∀ {issued authorized loaded consumed repaired afterPhase reached : heap} {keeper : IO.FS.Handle} {entries : List (FilePath × IO.FS.Handle)}
+    (_loadRoot : source.keeperCallbacks.getDirectory seed.directoryRef prepared = .ok (some seed.handle) issued)
+    (_syncRoot : source.keeperCallbacks.sync seed.handle issued = .ok () authorized)
+    (_loadKeeper : source.keeperCallbacks.getPending seed.pendingRef authorized = .ok entries loaded)
+    (_selected : entries.find? (fun item => item.1 == directory.file (.walSegment plan.keeper)) =
+      some (directory.file (.walSegment plan.keeper), keeper))
+    (_consume : source.keeperCallbacks.setPending seed.pendingRef
+      (entries.filter (fun item => item.1 != directory.file (.walSegment plan.keeper))) loaded = .ok () consumed)
+    (_syncKeeper : source.keeperCallbacks.sync keeper consumed = .ok () repaired)
+    {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (_phaseAllocated : source.allocatePhase (.ready opened.installed) repaired = .ok phase afterPhase)
+    (_tokenAllocated : source.allocateToken () afterPhase = .ok token reached),
+    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
+    source.openTable input entry = .ok (RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token) reached
+
 /-- The observed aligned, empty-suffix repair and reference allocations
 determine the public success. Each callback starts at the preceding return
 heap, and the keeper fsync uses the handle selected from the pending cell. -/
@@ -693,7 +715,7 @@ theorem RawOpenAdmissionReport.returnsAlignedMarkedInterpreter
     (source : RawMarkedOpenInterpreter heap stream)
     (raw : RawOpenAdmissionReport admission view source.calls entry)
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    {checked marked prepared issued authorized loaded consumed repaired afterPhase reached : heap}
+    {checked marked prepared : heap}
     {metadata : IO.FS.Metadata} {plan : Plan} {opened : Reopened} {extent : Nat}
     (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
       seed.afterPending = .ok () checked)
@@ -701,22 +723,10 @@ theorem RawOpenAdmissionReport.returnsAlignedMarkedInterpreter
       .ok (some metadata) marked)
     (prepare : source.markedPreparation seed.pendingRef directory marked = .ok (plan, opened, extent) prepared)
     (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
-    (aligned : extent = plan.keeperSize) (noLater : plan.newer = [])
-    {keeper : IO.FS.Handle} {entries : List (FilePath × IO.FS.Handle)}
-    (loadRoot : source.keeperCallbacks.getDirectory seed.directoryRef prepared = .ok (some seed.handle) issued)
-    (syncRoot : source.keeperCallbacks.sync seed.handle issued = .ok () authorized)
-    (loadKeeper : source.keeperCallbacks.getPending seed.pendingRef authorized = .ok entries loaded)
-    (selected : entries.find? (fun item => item.1 == directory.file (.walSegment plan.keeper)) =
-      some (directory.file (.walSegment plan.keeper), keeper))
-    (consume : source.keeperCallbacks.setPending seed.pendingRef
-      (entries.filter (fun item => item.1 != directory.file (.walSegment plan.keeper))) loaded = .ok () consumed)
-    (syncKeeper : source.keeperCallbacks.sync keeper consumed = .ok () repaired)
-    {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
-    (phaseAllocated : source.allocatePhase (.ready opened.installed) repaired = .ok phase afterPhase)
-    (tokenAllocated : source.allocateToken () afterPhase = .ok token reached) :
-    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
-    source.openTable input entry = .ok (RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token) reached := by
-  intro cache
+    (aligned : extent = plan.keeperSize) (noLater : plan.newer = []) :
+    raw.ReturnsAlignedAfterPreparation source seed prepared plan opened := by
+  intro issued authorized loaded consumed repaired afterPhase reached keeper entries loadRoot syncRoot loadKeeper
+    selected consume syncKeeper phase token phaseAllocated tokenAllocated cache
   let calls := source.keeperCallbacks.withFileReads source.fileCalls
   let sync := calls.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
   have root := calls.syncsDirectory (dir := directory.path) (active := seed.activeRef) (pending := seed.pendingRef)
@@ -739,6 +749,58 @@ theorem RawOpenAdmissionReport.returnsAlignedMarkedInterpreter
       prepare, finished, Pure.pure, EStateM.pure]
   simp only [RawMarkedOpenInterpreter.worker, installReady, Bind.bind, EStateM.bind, recovered, phaseAllocated,
     tokenAllocated, Pure.pure, EStateM.pure]
+
+/-- The measured read sequence supplies the actual prepared replay and
+keeper extent. The aligned finisher and installer start at that same
+reader return, after the guards of this captured admission. -/
+theorem MarkedWalExtentReports.returnsAlignedMarkedInterpreter
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    {history : List WAL.Write} {layout : CanonicalKeeperLayout retry.image history}
+    {published : CheckpointPublication.Image}
+    {reads : CapturedMarkedReadReports admission layout published} {keeper : CapturedKeeperOpenReports reads}
+    {chronology : CapturedMarkedReadCensus reads keeper}
+    {prepared : NativeMarkedCheckpointReadHeap seed chronology source.fileCalls}
+    {slotOf : heap → stream → DescriptorSlot} {listing : MarkedDirectoryReadReport prepared source.directoryCalls slotOf}
+    (extents : MarkedWalExtentReports prepared listing) {beforeKeeper afterKeeper : heap}
+    (seals : MarkedSealReadChain seed source.fileCalls chronology.seals listing.reached beforeKeeper)
+    {checkpoint : Option (PackedTable × UInt64)}
+    (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
+    (valid : Prepared retry.image layout.target layout.plan)
+    (following : ∀ start ∈ ((layout.sealed ++ [layout.keeper]).map WalSegment.first).drop 1,
+      layout.range.watermark < start)
+    (accepted : published.AcceptsVersioned history.length.toUInt64 (WAL.Boundary.CheckpointRepresentsPrefix history)
+      retry.image.directory.active.manifest)
+    (ordered : WAL.OrdinalsFrom 1 history)
+    (aligned : layout.tail = .empty) (noLater : retry.image.later.visible = [])
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      seed.afterPending = .ok () seed.afterPending)
+    {metadata : IO.FS.Metadata}
+    (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) seed.afterPending =
+      .ok (some metadata) seed.afterPending)
+    (readKeeper : source.fileCalls.readKeeperWithRelease
+      (fun path file => source.keeperCallbacks.modifyPending seed.pendingRef (pushPending path file))
+      (directory.file (.walSegment layout.keeper.first)) layout.keeper.bytes.size
+      reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper) :
+    ∃ opened,
+      source.markedPreparation seed.pendingRef directory seed.afterPending =
+        .ok (layout.boundedPlan, opened, reads.wal.keeper.calls.metadata.byteSize.toNat) afterKeeper ∧
+      raw.ReturnsAlignedAfterPreparation source seed afterKeeper layout.boundedPlan opened := by
+  obtain ⟨opened, measured, _⟩ := extents.preparesMeasuredWal seals selected valid following accepted ordered _ readKeeper
+  have empty : layout.boundedPlan.newer = [] := noLater
+  have checked := layout.boundedPlan_valid (by simp [empty])
+  have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
+  have extent : reads.wal.keeper.calls.metadata.byteSize.toNat = layout.boundedPlan.keeperSize := by
+    calc
+      _ = layout.plan.keeperBytes.size := reads.wal.keeper.observesFile.extent
+      _ = layout.boundedPlan.keeperBytes.size := by
+        change (layout.keeper.bytes ++ layout.tail).size = layout.keeper.bytes.size
+        rw [aligned, ByteArray.append_empty]
+      _ = _ := size
+  have continues : raw.ReturnsAlignedAfterPreparation source seed afterKeeper layout.boundedPlan opened :=
+    raw.returnsAlignedMarkedInterpreter source seed flat marker measured checked size extent empty
+  exact ⟨opened, measured, @continues⟩
 
 /-- After the two marked guards, the literal worker hands the values and heap
 returned by its reader to repair. Errors from preparation, repair and
