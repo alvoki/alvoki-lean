@@ -1,7 +1,7 @@
 import Alvoki.Experiments.L0.Model
+import Alvoki.Experiments.L0.ComponentContract
 
 namespace ExperimentalL0.Model
-open WalRecoverySlice.Segmented
 
 def Image.tables (image : Image) : Catalog := fun id => image.catalog[id.toNat]?
 
@@ -33,21 +33,31 @@ theorem table_read_refines (image : Image) (id key : UInt64)
   simp [tableOps, Image.tables] at bound ⊢
   rw [bound]
 
-/-- The byte WAL changes by exactly the public append request or leaves its
-prior view available on an uncertain outcome. -/
-theorem append_choice (image : Image) (faults : Faults) (batch : Contract.Batch) :
-    match (components faults).append batch image with
-    | .ok _ after => (Contract.Request.append batch).apply image.view = some after.view
-    | .error _ after => after.view = image.view ∨
-        (Contract.Request.append batch).apply image.view = some after.view := by
-  cases h : faults.append <;> simp [components, h, effect, Image.append, Contract.Request.apply]
+def Image.selected (image : Image) : Selected :=
+  ⟨image.view, image.version, image.tables⟩
 
-/-- Only the manifest commit changes the selected version. Its failure has
-precisely the old-or-proposed choice allowed by the typed manifest contract. -/
-theorem publish_choice (image : Image) (faults : Faults) (proposal : L0Manifest.Version) :
-    match (components faults).manifest.publish proposal image with
-    | .ok _ after => after.version = proposal
-    | .error _ after => DurableBlob.Permitted image.version (some proposal) after.version := by
-  cases h : faults.publish <;> simp [components, h, effect, Image.select, DurableBlob.Permitted]
+theorem componentLaws (faults : Faults) : ComponentLaws (components faults) Image.selected where
+  scan _ := ⟨rfl, rfl⟩
+  reopenWal s := by cases h : faults.openWal <;> simp [components, h, Image.selected]
+  reopenManifest s := by cases h : faults.openManifest <;> simp [components, h, Image.selected]
+  append s batch := by
+    cases h : faults.append <;>
+      simp [components, h, effect, Image.append, Selected.append, Image.selected] <;> first | rfl | exact Or.inr rfl
+  create s rows _ := by
+    have bindings := table_create_refines s rows faults.create
+    by_cases space : s.catalog.length < UInt64.size
+    · cases h : faults.create <;>
+        simp [components, tableOps, h, space, effect, Image.store, Image.selected] at bindings ⊢ <;>
+        exact bindings
+    · simp [components, tableOps, space, Image.selected, Catalog.Preserves]
+  publish s version _ := by
+    cases h : faults.publish <;>
+      simp [components, h, effect, Image.select, Selected.publish, Image.selected] <;> first | rfl | exact Or.inr rfl
+  check s id := by
+    by_cases bound : id.toNat < s.catalog.length <;> simp [components, tableOps, bound]
+  lookup s id key rows bound := by
+    have read := table_read_refines s id key bound faults.create
+    simp only [components, read]
+    exact ⟨trivial, trivial⟩
 
 end ExperimentalL0.Model

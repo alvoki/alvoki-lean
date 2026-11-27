@@ -31,15 +31,38 @@ session after a mutating error, and reopens before proceeding.
 
 ## Verification boundary
 
-[Model](Model.lean) implements the callbacks used by the same operation
-schedule. Its byte WAL evolves according to the public append request and
-its typed manifest admits the old or proposed version on uncertain
-publication. The interpreter records the selection when a cut occurs.
-Subsequent recovery reads that selected image. Table creation appends one
-fresh binding and preserves every old binding, including when a failed
-create leaves an orphan. Scan and reads of existing tables succeed in this
-interpreter. Injected read failures are limited to manifest and WAL reopen.
-[Component proofs](ComponentProofs.lean)
+[ComponentContract](ComponentContract.lean) projects adapter state to a
+selected WAL view, typed manifest and immutable table bindings.
+The operation proofs consume only the callback outcomes and their frames.
+An append changes only the WAL, a publication changes only the manifest,
+and table creation returns a fresh ID and preserves older bindings.
+Read and reopen callbacks may change private state while preserving the
+selected image. [Component proofs](ComponentProofs.lean) discharge these
+laws for the concrete [interpreter](Model.lean). The LSM proofs use the
+freshness guarantee without making assumptions about ID allocation.
+
+[RecoveryChoices](RecoveryChoices.lean) works directly with public WAL and
+DurableBlob steps. A failed reopen preserves the possible values. A
+successful reopen narrows them to the returned value, even if the other
+component or a later table open then fails. Closing and retrying the
+already-opened component preserves that singleton. During recovery
+attempts the LSM issues no mutations, and the table catalog is framed.
+`Retry.afterAppend` and `Retry.afterPublish` isolate the one possibly
+uncertain component. `Retry.preservesDurability` carries the invariant
+from the initial choices to every pair still admissible after partial
+recovery. For a given trace, a pair selected by successful recovery can
+therefore stand for the earlier unresolved choices. The interpreter
+represents such a pair by selecting it at the cut. The concrete adapter
+must establish the phase discipline and the corresponding projection from
+its component traces, including closing any handles after a failed attempt.
+The argument uses the public steps and leaves physical crash modeling to
+the components.
+
+[ReadErrors](ReadErrors.lean) proves that the shared schedule propagates a
+required lookup or table-open error with its reached state. The lookup
+stops instead of returning an older value. Failed recovery returns no
+session. The default interpreter supplies healthy catalog reads; the
+regression injects errors through the same table callbacks.
 
 [Refinement](Refinement.lean) relates three views of the database:
 
