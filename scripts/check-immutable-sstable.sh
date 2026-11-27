@@ -53,7 +53,7 @@ open ImmutableSSTable
 #check_axioms Unified.buildFileWith_syncError
 #check_axioms Unified.buildFileWith_open_represents
 #check_axioms Unified.open_built_table
-#check_axioms Unified.openCheckedWith_built_table_at
+#check_axioms Unified.Image.openCheckedWith_represents_at
 #check_axioms ReadSnapshot.readsExactly
 #check_axioms Unified.openCheckedWith_acquire_error
 #check_axioms Unified.openCheckedWith_size_error

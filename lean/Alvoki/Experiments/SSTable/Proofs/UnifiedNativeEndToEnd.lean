@@ -36,13 +36,13 @@ theorem buildFileWith_open_represents [DecidableEq inode]
       openCheckedWith ((written.readSnapshot inodeAt).primitives acquire)
         crc readPath layout.tableId start = .ok table acquired ∧
       table.Represents before.rows := by
-  obtain ⟨_, countEq, image, output, identity, bound, _, durable, modeled⟩ :=
+  obtain ⟨_, countEq, image, output, identity, bound, _, durable, _⟩ :=
     buildFileWith_refines effects built
   have contents : (written.readSnapshot inodeAt).contents identity = some written.appended := by
     simp [NativeWriteState.readSnapshot, durable]
   have observed := (written.readSnapshot inodeAt).readsExactly acquire
     (selected output identity bound) contents image.extent
-  obtain ⟨_, table, checked, represents⟩ := openCheckedWith_built_table_at modeled opened observed
+  obtain ⟨table, checked, represents⟩ := image.openCheckedWith_represents_at opened observed
   exact ⟨countEq, table, checked, represents⟩
 
 end ImmutableSSTable.Unified

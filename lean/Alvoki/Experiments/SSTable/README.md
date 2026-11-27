@@ -148,10 +148,15 @@ expected catalog ID, durable directory binding and file lifetime. L0 publication
 and reopen must establish that the selected name resolves to the inode produced
 by the builder. The caller bounds live descriptors and root buffers across tables.
 
-As part of the future work on a common filesystem model, investigate whether
-durable immutable file creation and [DurableBlob](../DurableBlob/README.md)
-can share streaming file construction. Compare a streaming extension of
-DurableBlob with a smaller shared building block.
+A candidate shared file-construction contract is the exact concatenation of
+successful writes, flushed and synced on one held descriptor. SSTable would
+supply multiple chunks through its writer. [DurableBlob](../DurableBlob/README.md)
+would supply one whole value through its staging writer. DurableBlob opens a
+reusable staging name and models the staged whole value. SSTable acquires a
+fresh name and models incremental appends. Leave acquisition mode, cleanup,
+rename and directory persistence with each caller. Extract the shared
+descriptor contract once both proof consumers derive and use it, alongside
+the work on a common filesystem model.
 
 For the next performance iteration, measure whether a block iterator can
 reuse a validated leaf and data packet across successive rows. Compare scan

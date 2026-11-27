@@ -114,20 +114,18 @@ theorem openCheckedWith_built_table [Monad m] [LawfulMonad m] [MonadExceptOf Str
 
 /-- A successful acquisition may change the modeled state. The file operations
 in the healthy interpretation leave that acquired state unchanged. -/
-theorem openCheckedWith_built_table_at
+theorem Image.openCheckedWith_represents_at
     {ops : ReadPrimitives (EStateM String σ) handle} {held : handle} {path : System.FilePath}
-    {crc : Checksum} {layout : Layout} {rows : List Entry} {options : BuildOptions}
-    {count : Nat} {image : ByteArray} {before acquired : σ}
-    (built : modelBuild crc layout rows options = .ok (count, image))
+    {crc : Checksum} {layout : Layout} {rows : List Entry}
+    {image : ByteArray} {before acquired : σ}
+    (built : Image crc layout rows image)
     (opened : ops.openFile path .read before = .ok held acquired)
     (observed : ops.ReadsExactly held image) :
-    count = rows.length ∧
-      ∃ table, openCheckedWith ops crc path layout.tableId before = .ok table acquired ∧
-        table.Represents rows := by
-  obtain ⟨rowCount, imageFacts⟩ := modelBuild_ok built
-  obtain ⟨table, checked, represents⟩ := imageFacts.open_represents
-    (observed.source_serves imageFacts.extent)
-  exact ⟨rowCount, table, by simp [openCheckedWith, Bind.bind, EStateM.bind, opened, checked,
+    ∃ table, openCheckedWith ops crc path layout.tableId before = .ok table acquired ∧
+      table.Represents rows := by
+  obtain ⟨table, checked, represents⟩ := built.open_represents
+    (observed.source_serves built.extent)
+  exact ⟨table, by simp [openCheckedWith, Bind.bind, EStateM.bind, opened, checked,
     Pure.pure, EStateM.pure], represents⟩
 
 theorem openCheckedWith_acquire_error {ops : ReadPrimitives (EStateM String σ) handle}
