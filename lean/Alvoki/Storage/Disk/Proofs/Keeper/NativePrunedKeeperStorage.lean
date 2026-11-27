@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
-import Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
+import Alvoki.Storage.Disk.Proofs.Keeper.NativePrunedAlignedKeeperCache
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CheckpointRunChunkReports
-import Alvoki.Storage.Disk.KeeperReadCustody
+import Alvoki.Storage.Disk.Proofs.Keeper.KeeperReadCustody
 import Alvoki.Storage.Disk.WalSegmentCachedRetryReads
 
 namespace Alvoki.Storage.WalSegmentRepair

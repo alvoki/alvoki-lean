@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeMarkedCheckpointHeap
-import Alvoki.Storage.Disk.NativePrunedAlignedKeeperCache
-import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
+import Alvoki.Storage.Disk.Proofs.Keeper.NativePrunedAlignedKeeperCache
+import Alvoki.Storage.Disk.Proofs.Keeper.CapturedLongKeeperInstallation
 
 namespace Alvoki.Storage.DiskSession
 

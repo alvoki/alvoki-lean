@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperRepairPrefix
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 

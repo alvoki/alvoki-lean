@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
+import Alvoki.Storage.Disk.Proofs.Keeper.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.Proofs.Read.ClientSnapshotTransitions
 import Alvoki.Storage.Disk.ClientRunMaintenance
 import Alvoki.Storage.Disk.Proofs.Write.RetainedWriterReopen

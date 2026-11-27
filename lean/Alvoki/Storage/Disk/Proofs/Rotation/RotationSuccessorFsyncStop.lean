@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Rotation.RotationCreatePhysical
-import Alvoki.Storage.Disk.KeeperReadCustody
+import Alvoki.Storage.Disk.Proofs.Keeper.KeeperReadCustody
 
 namespace Alvoki.Storage.DiskSession
 

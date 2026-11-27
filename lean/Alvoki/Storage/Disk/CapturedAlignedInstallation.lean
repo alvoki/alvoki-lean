@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CapturedKeeperCustody
+import Alvoki.Storage.Disk.Proofs.Keeper.CapturedKeeperCustody
 import Alvoki.Storage.Disk.CapturedCheckpointReadCensus
 import Alvoki.Storage.Disk.Proofs.Recovery.HeldWalInstallation
 

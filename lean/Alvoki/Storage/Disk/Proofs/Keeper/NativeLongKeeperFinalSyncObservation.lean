@@ -1,8 +1,8 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointOpenChronology
-import Alvoki.Storage.Disk.NativeLongKeeperStageSyncError
-import Alvoki.Storage.Disk.NativeLongKeeperRenameError
-import Alvoki.Storage.Disk.NativeLongKeeperStorage
-import Alvoki.Storage.Disk.NativeLongKeeperPending
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperStageSyncError
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperRenameError
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperStorage
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperPending
 import Alvoki.Storage.Disk.Proofs.Write.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstUnlinkError

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperRepairPrefix
 import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
 import Alvoki.Storage.Disk.Proofs.Read.NativeOpenSnapshotControls

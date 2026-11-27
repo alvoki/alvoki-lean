@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
+import Alvoki.Storage.Disk.Proofs.Keeper.SegmentedKeeperDescriptor
 
 namespace Alvoki.Storage.WalSegmentRepair
 

@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
-import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperSettlementHeap
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperRepairPrefix
 
 namespace Alvoki.Storage.DiskSession
 

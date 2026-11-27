@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CapturedLongKeeperInstallation
+import Alvoki.Storage.Disk.Proofs.Keeper.CapturedLongKeeperInstallation
 import Alvoki.Storage.Disk.CapturedPrunedAlignedInstallation
 
 namespace Alvoki.Storage.DiskSession

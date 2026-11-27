@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeLongKeeperSuffixStageHeap
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperSuffixStageHeap
 
 namespace Alvoki.Storage.DiskSession
 

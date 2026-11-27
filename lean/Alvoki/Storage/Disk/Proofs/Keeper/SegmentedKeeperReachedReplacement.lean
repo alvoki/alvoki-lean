@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedKeeperSyncBeforeBarrier
+import Alvoki.Storage.Disk.Proofs.Keeper.SegmentedKeeperSyncBeforeBarrier
 
 namespace Alvoki.Storage.WalSegmentRepair
 

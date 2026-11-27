@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
-import Alvoki.Storage.Disk.NativeLongKeeperStorage
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperStorage
 
 namespace Alvoki.Storage.DiskSession
 

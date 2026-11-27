@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.SegmentedDelayedDirectorySync
-import Alvoki.Storage.Disk.SegmentedKeeperDescriptor
+import Alvoki.Storage.Disk.Proofs.Keeper.SegmentedKeeperDescriptor
 
 namespace Alvoki.Storage.SyncHandleRouting
 

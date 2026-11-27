@@ -10,7 +10,7 @@ import Alvoki.Storage.Disk.SegmentedCheckpointRecovery
 import Alvoki.Storage.Disk.SegmentedCheckpointPowerLoss
 import Alvoki.Storage.Disk.SegmentedCleanReopen
 import Alvoki.Storage.Disk.Proofs.Append.SegmentedDelayedAppendReopen
-import Alvoki.Storage.Disk.SegmentedDelayedKeeperPowerLoss
+import Alvoki.Storage.Disk.Proofs.Keeper.SegmentedDelayedKeeperPowerLoss
 import Alvoki.Storage.Disk.SegmentedMarkerPowerLoss
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
 import Alvoki.Storage.Disk.Proofs.Rotation.SegmentedRotationRecovery

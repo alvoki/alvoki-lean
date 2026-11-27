@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeAlignedMarkedWorker
-import Alvoki.Storage.Disk.NativeLongKeeperSettlementHeap
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperSettlementHeap
 import Alvoki.Storage.Disk.NativeWalPayloadReturn
 import Alvoki.Storage.Disk.Checkpoint.BarrierRetryObservations
 

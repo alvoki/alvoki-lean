@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
-import Alvoki.Storage.Disk.NativePrunedKeeperStorage
-import Alvoki.Storage.Disk.NativeMarkedKeeperLinks
+import Alvoki.Storage.Disk.Proofs.Keeper.NativePrunedKeeperStorage
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeMarkedKeeperLinks
 import Alvoki.Storage.Disk.NativeRetainedOpenStorage
 
 namespace Alvoki.Storage.DiskSession

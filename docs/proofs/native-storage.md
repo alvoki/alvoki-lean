@@ -368,7 +368,7 @@ bytes are the synced prefix, and the scratch name is absent in that same
 map. A returned error can occur on either side of the live rename effect.
 Atomic recovery of both names across power loss is a filesystem assumption.
 The native fault tests observe live syscall effects and process reopens.
-[Keeper rename contract and error proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperRenameError.lean)
+[Keeper rename contract and error proof](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperRenameError.lean)
 
 Availability of a healthy attempt and sufficient resources belong to progress claims. The current
 native assumptions and the recorded runtime limitations are in the roadmap. Fixture observations
@@ -506,8 +506,8 @@ identifies the successful removals and the name whose removal failed.
 The filesystem observation at that call determines whether the victim
 is still present. The other names and selected keeper retain their bindings.
 The same retry invariant handles a failure at the following directory sync.
-[`extendsFailedPruneBlock`](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) ·
-[Ordered unlink execution](../../lean/Alvoki/Storage/Disk/NativeAlignedKeeperCache.lean)
+[`extendsFailedPruneBlock`](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean) ·
+[Ordered unlink execution](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeAlignedKeeperCache.lean)
 
 An unlink error uses the same relation. The unlink loop carries it over each actual
 result, including the reached heap of the failed removal, then cleanup carries it to
@@ -516,7 +516,7 @@ fsync on the held directory settles the protected names. The first reboot select
 the failed-attempt and read frames carry both to authorization. The frame
 through the public error carries checkpoint durability to the next sample.
 `startsRecoveryAfterFailedPrune` composes those facts under the local file effects.
-[Prune scope](../../lean/Alvoki/Storage/Disk/Proofs/Recovery/NativeMarkedFirstUnlinkError.lean) · [Two-reboot theorem](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+[Prune scope](../../lean/Alvoki/Storage/Disk/Proofs/Recovery/NativeMarkedFirstUnlinkError.lean) · [Two-reboot theorem](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean)
 
 For an immediate successful open after that sample, the named directory observation
 supplies its root and canonical WAL bindings. The common open proof derives the
@@ -553,7 +553,7 @@ the returned writer. At phase and token allocation, only the named keeper needs 
 visible-byte frame. The durable managed-file frame is still required.
 The installation still uses reported healthy primitive callbacks. The fixed-source execution must derive those reports.
 [Recovery observations](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeDurableWriteReboot.lean) · [Reached raw open](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeSelectedWriteReopen.lean)
-· [Final fsync effects](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+· [Final fsync effects](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean)
 
 ## Why adding cases is expensive
 
@@ -661,7 +661,7 @@ binding and payload after replacement. The protected live and durable
 files and the root's binding in its parent survive separately. The same
 lemma accepts a WAL target selected after different operations, under
 the supplied writer's manifest and protected footprint.
-[Failed marked repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+[Failed marked repair](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean)
 
 After a successful replacement rename and a final sync error, the
 actual returned heap has the selected live keeper and no later WAL
@@ -696,7 +696,7 @@ The frame composes the effects of the callbacks that ran, including any
 reached error. The first write and flush after a collision follow the new
 description. The Linux proof still needs the namespace and inode
 effects of those callbacks to establish the selected physical footprint.
-[Staging proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperSuffixStageHeap.lean)
+[Staging proof](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperSuffixStageHeap.lean)
 
 Both staged-file fsync outcomes use the winning exclusive create, including
 a retry after removal of a stale name. It supplies an empty inode disjoint
@@ -722,7 +722,7 @@ bounded names for a successful sync, or the old keeper’s durable bytes and
 joint namespace on a failed sync.
 The latter footprint includes immutable children and every actually pruned
 name, including removals beyond the reader’s interval.
-[Staged keeper storage](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
+[Staged keeper storage](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperStorage.lean)
 
 The ordinary `commitUnknown` result supplies the actual prepared group and one reached
 publication outcome. The grouped failure producer follows both literal fsyncs and preserves
@@ -904,7 +904,7 @@ remain explicit, including the guarded staging-collision route.
 [Late publication recovery](../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeLateWriteRecovery.lean)
 · [Ready allocations](../../lean/Alvoki/Storage/Disk/NativeOpenReadyStorage.lean)
 · [Aligned returned writer](../../lean/Alvoki/Storage/Disk/NativeAlignedMarkedReady.lean)
-· [Long keeper repair](../../lean/Alvoki/Storage/Disk/NativeLongKeeperStorage.lean)
+· [Long keeper repair](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperStorage.lean)
 
 The scoped reboot law records agreement with the sampled bindings and singleton durable
 bytes for selected regular files. The root's name in the parent remains independently
@@ -933,7 +933,7 @@ ordered unlinks, directory and keeper fsyncs, and protected file frames. It deri
 absence of the removed suffix names in each crash map at that heap. Carrying absence
 through allocation also requires frames on those suffix paths. All repair branches
 share one transport of readiness through the actual reference allocations.
-[Pruned keeper repair](../../lean/Alvoki/Storage/Disk/NativePrunedKeeperStorage.lean)
+[Pruned keeper repair](../../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativePrunedKeeperStorage.lean)
 
 A returned append or marker-staging error uses the same prior-marker selector as a
 grouped file-sync error. Only the append and any reached staging callbacks contribute to

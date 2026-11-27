@@ -39,7 +39,7 @@ reports an error, its observed effect determines whether that name survives.
 Unvisited names keep their bindings. If the entire loop returns and the directory
 sync fails, the live suffix is already pruned. Another reboot selects a directory
 map admitted by the observed durability effects.
-[Failed repair and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+[Failed repair and retry](../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean)
 
 **Where a marked open failed.** Once the flat-WAL and marker probes select
 the marked branch, a worker error comes from preparation, repair or installation.
@@ -53,7 +53,7 @@ same measured preparation, staged-file sync and final directory error to cleanup
 and a subsequent sampled reboot. The rename observation is cleared before
 installation. Frames apply to the staging and rename heaps reached by that open.
 [Worker observation](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
-[Retry and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+[Retry and reboot](../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean)
 
 The marked open carries its allocated directory slot to the final fsync. The
 successful staging-file fsync makes the trimmed prefix durable on the fresh
@@ -64,7 +64,7 @@ logical image at the issued directory fsync. Its error may occur before or after
 the directory update takes effect. The proof tracks lock ownership separately through cleanup.
 The cache allocations and reached marked reads carry the entry image through
 the keeper's release into both repair-error proofs.
-[Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+[Final sync and retry](../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean)
 
 If the `WAL.next` fsync fails, the reached descriptor identifies scratch
 and is distinct from the canonical keeper. The completed prune barrier and
@@ -76,7 +76,7 @@ uncertain batch once. The common ready-call proof then extends that ledger
 with supported writes and snapshot responses on the returned handle, using
 the reached callback reports. The native write path uses one inode-byte
 projection for the initial write, recovery and subsequent calls.
-[Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) ·
+[Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/Proofs/Keeper/NativeLongKeeperFinalSyncObservation.lean) ·
 [Returned handle and ready calls](../lean/Alvoki/Storage/Disk/Proofs/Write/NativeLateWriteRecovery.lean)
 
 For a final directory-fsync error, the observed rename proves the measured

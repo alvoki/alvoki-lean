@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CapturedKeeperCustody
+import Alvoki.Storage.Disk.Proofs.Keeper.CapturedKeeperCustody
 
 namespace Alvoki.Storage.DiskSession
 

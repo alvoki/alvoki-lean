@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstBarrierWork
 import Alvoki.Storage.Disk.Proofs.Recovery.HeldLaterWalPrune
-import Alvoki.Storage.Disk.NativeAlignedKeeperCache
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeAlignedKeeperCache
 import Alvoki.Storage.Disk.Proofs.Write.NativeDurableWriteReboot
 import Alvoki.Storage.Disk.NativeOpenReadyStorage
 

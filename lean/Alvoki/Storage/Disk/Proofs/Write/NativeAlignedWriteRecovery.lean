@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeSourceLedger
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointOpenChronology
-import Alvoki.Storage.Disk.NativeLongKeeperStorage
+import Alvoki.Storage.Disk.Proofs.Keeper.NativeLongKeeperStorage
 
 namespace Alvoki.Storage.DiskSession
 
