@@ -713,7 +713,9 @@ retry observations supply the entry for the shared marked opener. Both error
 paths use the same local staging effects to preserve the selected retry files.
 The scratch-fsync, rename and final directory-fsync error paths reconstruct
 the registered scratch image from the flushed inode bytes and callback frames
-for the rest of the file image. Local frames carry
+for the rest of the file image. The pending lookup and filtered removal keep
+that image. A successful fsync on the selected scratch inode projects its
+singleton durable payload into the image used at rename. Local frames carry
 bounded names for a successful sync, or the old keeper’s durable bytes and
 joint namespace on a failed sync.
 The latter footprint includes immutable children and every actually pruned

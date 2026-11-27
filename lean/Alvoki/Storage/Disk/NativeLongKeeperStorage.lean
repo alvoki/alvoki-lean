@@ -241,7 +241,8 @@ structure LongKeeperStageCallbacks.StagingFileFrames
 
 /-- Project the successful stage callbacks onto the repair image. Only the
 scratch field may change; a flush exposes the attached inode's bytes and
-pending registration has no effect on those bytes or their durability. -/
+pending registration and lookup preserve its contents. A successful file
+fsync makes the scratch image durable when the same inode holds those bytes. -/
 structure LongKeeperStageCallbacks.StagingImageEffects
     (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
     (scratch : FilePath) (scope : FilePath → Prop) (view : OpenCloseHeapView heap image)
@@ -251,8 +252,18 @@ structure LongKeeperStageCallbacks.StagingImageEffects
       (fun a b => (files b).withScratch none = (files a).withScratch none) where
   flushImage : ∀ {before after file slot inode}, ScopedStagingFile scratch scope view observe file slot inode before →
     stage.flush file before = .ok () after → (files after).keeper.staged = some (visible after inode, false)
-  recordImage : ∀ {before after file}, calls.modifyPending pending (pushPending scratch file) before = .ok () after →
+  recordImage : ∀ {before after file}, view.pending before pending = [] →
+    calls.modifyPending pending (pushPending scratch file) before = .ok () after →
     (files after).keeper.staged = (files before).keeper.staged
+
+  loadImage : ∀ {before after file}, calls.getPending pending before = .ok [(scratch, file)] after →
+    files after = files before
+  clearImage : ∀ {before after file slot inode}, view.pending before pending = [(scratch, file)] →
+    ScopedStagingFile scratch scope view observe file slot inode before →
+    calls.setPending pending [] before = .ok () after → files after = files before
+  syncImage : ∀ {before after file slot inode bytes}, ScopedStagingFile scratch scope view observe file slot inode before →
+    calls.sync file before = .ok () after → (files before).keeper.staged = some (bytes, false) →
+    (observe after).files.bytes inode = [bytes] → files after = (files before).withScratch (some (bytes, true))
 
 /-- Reconstruct the registered image from the frame outside the scratch
 field and the literal fresh-inode payload established at flush. -/
@@ -571,16 +582,16 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       visible issued replacement = plan.keeperBytes.extract 0 plan.keeperSize ∧
       RegularFileSyncEffect replacement [visible issued replacement] (observe issued) (observe synced) ∧
       visible synced replacement = visible issued replacement ∧
-      (∀ {files : heap → FileImage},
-        stage.StagingImageEffects calls (state.session.directory.file .stagedWal) state.crashPath view observe
-          visible pending files →
-        files staged = (files pruned).withScratch (some (plan.keeperBytes.extract 0 plan.keeperSize, false))) ∧
       (∀ {first through}, stage.StagingWalNameFrames calls state first through view observe pending →
         WalNamePresenceFrame state.session.directory first through (observe pruned) (observe synced)) ∧
       (stage.ReplacementPrefixLiveEffects calls state view observe visible cached pending root remove →
         view.pending entry pending = [] →
         (replacementLiveFiles observe visible entry).Frames state.crashPath (replacementLiveFiles observe visible synced) ∧
-        state.SelectedRetryFrame (observe entry) (observe synced) (visible entry) (visible synced)) := by
+        state.SelectedRetryFrame (observe entry) (observe synced) (visible entry) (visible synced) ∧
+        (∀ {files : heap → FileImage},
+        stage.StagingImageEffects calls (state.session.directory.file .stagedWal) state.crashPath view observe
+          visible pending files →
+        files synced = (files pruned).withScratch (some (plan.keeperBytes.extract 0 plan.keeperSize, true)))) := by
   let dir := state.session.directory
   let path := dir.file .stagedWal
   let keeperPath := dir.file (.walSegment plan.keeper)
@@ -651,10 +662,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     keeperAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
     ⟨prunedNames, settled⟩, consumed, file, slot, replacement, ⟨opened, acquired, openedStage.1, openedStage.2.1⟩,
     stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
-    syncedVisible, ?_, ?_, ?_⟩
-  · intro files model
-    have unchanged := registeredFrames model.toStagingWriteFrames (fun _ => rfl) (fun earlier later => later.trans earlier)
-    exact registeredScratchImage unchanged (model.recordImage recorded) (model.flushImage writtenStage didFlush) flushedBytes
+    syncedVisible, ?_, ?_⟩
   · intro first through localFrames
     have reached := prefixFrames localFrames (fun h => .refl (observe h)) (fun earlier later => earlier.trans later)
     exact reached.trans (.ofFileSync fileSync)
@@ -702,8 +710,23 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
 
   have included (path : FilePath) (selected : state.selectedRetryPath path) : state.crashPath path :=
     NativeReadyState.crashPath_iff_write.mpr (selected.imp id Or.inr)
-  exact ⟨live, fun path selected => live path (included path selected),
-    fun path selected => durable path (included path selected), parentFrame⟩
+  refine ⟨live, ⟨fun path selected => live path (included path selected),
+    fun path selected => durable path (included path selected), parentFrame⟩, ?_⟩
+  intro files model
+  have unchanged := registeredFrames model.toStagingWriteFrames (fun _ => rfl) (fun earlier later => later.trans earlier)
+  have registered := registeredScratchImage unchanged (model.recordImage emptyAtFlush recorded)
+    (model.flushImage writtenStage didFlush) flushedBytes
+  have selected : entries = [(path, file)] := (readsPending got).trans onlyFresh
+  have loadedImage := model.loadImage (selected ▸ got)
+  have removed : calls.setPending pending [] loaded = .ok () consumed := by
+    simpa [selected, path] using cleared
+  have clearedImage := model.clearImage (loadPending.trans onlyFresh) loadedStage removed
+  have atIssue := clearedImage.trans (loadedImage.trans registered)
+  have durableBytes : (observe synced).files.bytes replacement = [plan.keeperBytes.extract 0 plan.keeperSize] := by
+    simpa [stageBytes] using fileSync.bytes replacement
+  rw [model.syncImage syncedStage stageSync (by rw [atIssue]; rfl) durableBytes, atIssue]
+  rfl
+
 
 /-- The actual successful long repair builds physical readiness. Its
 accepted unlink pass is framed locally; a fresh stage descriptor supplies

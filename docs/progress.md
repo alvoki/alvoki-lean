@@ -88,13 +88,16 @@ their retry frame from the returned authorization, unlinks and staging operation
 Exclusive creation supplies an empty scratch inode. The write and flush determine
 its visible bytes. Registration preserves the scratch field. The scratch-fsync,
 rename and final directory-fsync error proofs reconstruct the registered image
-from these bytes and callback frames for the rest of the image. Only the first
-also needs lock custody across staging. On reboot, one sampled namespace covers
+from these bytes and callback frames for the rest of the image. On the latter
+two paths, the pending cell still holds only that scratch handle when cleared.
+Removing its sole entry preserves the file image, and successful fsync of its inode makes that
+payload durable under the local file-sync projection. On reboot, one sampled namespace covers
 the keeper, immutable children, bounded WAL interval and every actually removed name.
 
-**Next source boundary.** The successful scratch-fsync prefix still takes the
-logical image after the grouped sync. Derive it from the reached pending lookup,
-filtered removal and successful fsync of the same attached inode.
+**Next source boundary.** The rename-error consumer still receives the returned
+authorization, prune, scratch write and grouped sync separately. Derive that
+prefix from a worker observation that identifies the failed rename, retaining
+both physical outcomes of the rename error.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

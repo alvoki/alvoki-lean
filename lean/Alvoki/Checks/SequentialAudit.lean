@@ -4365,7 +4365,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WalKeeperRenameEffect.walNames
 #check_axioms Alvoki.Storage.DiskSession.WalKeeperRenameEffect.keeperSurvivors
 #check_axioms Alvoki.Storage.DiskSession.failedLongKeeperRename
-#check_axioms Alvoki.Storage.DiskSession.longKeeperSyncPrefix
+#check_axioms Alvoki.Storage.DiskSession.longKeeperPrunePrefix
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.CachedRootEffects.framesRootSync
 #check_axioms Alvoki.Storage.DiskSession.registeredScratchImage
 #check_axioms Alvoki.Storage.DiskSession.LongKeeperStageCallbacks.StagingImageEffects
