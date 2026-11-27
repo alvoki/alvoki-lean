@@ -20,6 +20,25 @@ Code that used those model declarations through a `DiskTable` import must import
 or the relevant model module explicitly. The former `WalSegmentCollection` and
 `WalSegmentCollectionPlan` module paths remain as compatibility imports.
 
+## Write and durable marker
+
+`DiskTable.write` and `DiskTable.writeBatch` in [DiskTable.lean](../DiskTable.lean)
+prepare the next table and sequence numbers before entering WAL publication.
+The single-write path calls `commitWalWrite` and `WalSegmentCommit.commitAt`;
+the batch path prepares events with [WalBatch.lean](WalBatch.lean) and calls
+`commitBytesAt` in [WalSegmentCommit.lean](WalSegmentCommit.lean) for a
+nonempty batch. An empty batch returns the current sequence without WAL publication.
+
+The commit schedule appends encoded frames to the active segment, writes a
+staged absolute byte boundary, syncs the active segment and staged marker,
+renames the staged marker to `WAL.commit`, then syncs the directory.
+[WalBoundary.lean](WalBoundary.lean) encodes the marker and
+[WriteAheadLog.lean](WriteAheadLog.lean) encodes the frames. A single write or nonempty batch
+returns its acknowledgement only after publication succeeds; a reported
+publication failure may have an uncertain commit outcome. The durability
+argument depends on the filesystem effects described in the
+[native storage assumptions](../../../../../docs/proofs/native-storage.md).
+
 ## Discovery and selected reads
 
 `DiskTable.open` reaches the marked recovery path through `recoverSegmentedWal`
