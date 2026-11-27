@@ -10,7 +10,7 @@ import Alvoki.Storage.Disk.StagingFile
 import Alvoki.Storage.Disk.SyncHandleRouting
 import Alvoki.Storage.Disk.WalBatch
 import Alvoki.Storage.Disk.WalSegmentCommit
-import Alvoki.Storage.Disk.WalSegmentBootstrapIO
+import Alvoki.Storage.Disk.WAL.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WAL.CollectionPlan
 import Alvoki.Storage.Disk.WalSegmentRotationIO
 import Alvoki.Storage.Disk.WAL.WalSegmentCachedExtentOpen

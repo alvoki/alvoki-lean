@@ -648,7 +648,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Append.WalSegmentAppendLayout
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentFirstReplay
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentFirstOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotationReopen
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentBootstrapIO
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentBootstrapIO
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Bootstrap.WalSegmentBootstrapEffects
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentBoundedOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentBoundedOpen
