@@ -1,4 +1,4 @@
-import Alvoki.Checks.AxiomPolicy
+import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Storage.Disk.Proofs.WAL.WalBatchRecovery
 import Alvoki.Storage.Disk.Proofs.WAL.WalBatchMarkerPowerLoss
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedBatchPowerLoss

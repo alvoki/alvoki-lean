@@ -641,7 +641,7 @@ private def checkRunVersionRetention (dir : FilePath) : IO Unit := do
   finally reopened.close
 
 private def syncFixtureSource : String :=
-  include_str ".." / ".." / ".." / "scripts" / "disk-sync-fixture.c"
+  include_str ".." / ".." / ".." / ".." / "scripts" / "disk-sync-fixture.c"
 
 private initialize syncFixtureLibrary : IO.Ref (Option FilePath) ← IO.mkRef none
 

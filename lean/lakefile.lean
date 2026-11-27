@@ -73,7 +73,7 @@ lean_lib Alvoki.Storage where
   globs := #[`Alvoki.Storage.+]
   moreLinkObjs := #[fsyncO, readDirCheckedO]
 
-lean_lib Alvoki.Checks.AxiomPolicy
+lean_lib Alvoki.Checks.Audit.AxiomPolicy
 
 @[default_target]
 lean_exe alvoki where
@@ -102,7 +102,7 @@ lean_exe «alvoki-compaction-cursor» where
   root := `CompactionCursorMain
 
 lean_exe «alvoki-disk-checks» where
-  root := `Alvoki.Checks.DiskTableChecks
+  root := `Alvoki.Checks.Tests.DiskTableChecks
 
 lean_exe «alvoki-disk-replay» where
   root := `Alvoki.Bench.Disk.DiskReplayBench

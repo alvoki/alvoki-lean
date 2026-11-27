@@ -1,4 +1,4 @@
-import Alvoki.Checks.AxiomPolicy
+import Alvoki.Checks.Audit.AxiomPolicy
 import RunMergeProofs
 import CodecVariants
 import CompactionProofs

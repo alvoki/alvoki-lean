@@ -4,7 +4,7 @@ Alvoki is a sequential embedded key-value store. The Linux `DiskTable` adapter m
 
 ## Lean paths
 
-Storage sources live under `lean/Alvoki/Storage/`. The `Table` directory holds the in-memory table and its checked v3 run reader. The `Disk` directory holds the disk adapter, file formats, and recovery. Shared checkpoint and file replacement operations and models live in `Publication`. Proof audits and correctness fixtures live under `lean/Alvoki/Checks/`.
+Storage sources live under `lean/Alvoki/Storage/`. The `Table` directory holds the in-memory table and its checked v3 run reader. The `Disk` directory holds the disk adapter, file formats, and recovery. Shared checkpoint and file replacement operations and models live in `Publication`. Proof audits and dependency tools live under `lean/Alvoki/Checks/Audit/`; executable correctness fixtures live under `lean/Alvoki/Checks/Tests/`.
 
 Use qualified module names to import the table and disk APIs.
 
@@ -33,7 +33,7 @@ Use `writeWithOutcome` when the caller needs to distinguish a rejected submissio
 
 WAL, marker, and manifest replacements create their staging files exclusively. Retry can detach a stale regular staging name before creating a fresh file. A nonregular staging name causes the operation to fail. [Staging implementation](../lean/Alvoki/Storage/Disk/StagingFile.lean)
 
-Bootstrap, marked reopen and both collectors use a listing that reports a `readdir` error before planning file mutations. A successful listing reached the end of the directory under the stable owned-directory contract. This matters when a failed partial scan would otherwise omit a durable empty successor and cause reopen to select the previous keeper. [Checked listing](../lean/native/read_dir_checked.c) · [Fault tests](../lean/Alvoki/Checks/DiskTableChecks.lean)
+Bootstrap, marked reopen and both collectors use a listing that reports a `readdir` error before planning file mutations. A successful listing reached the end of the directory under the stable owned-directory contract. This matters when a failed partial scan would otherwise omit a durable empty successor and cause reopen to select the previous keeper. [Checked listing](../lean/native/read_dir_checked.c) · [Fault tests](../lean/Alvoki/Checks/Tests/DiskTableChecks.lean)
 
 The native append, run-file and staging writes explicitly call `IO.FS.Handle.flush` and propagate its error before continuing publication. Keep this flush when changing the adapter. Lean's `writeBinFile` and `writeFile` can lose buffered write errors when finalization performs the flush. Publication uses separate checked file and directory syncs to establish durability. [Linux write paths](../lean/Alvoki/Storage/Disk/DiskTable.lean) · [Lean issue #16685](https://github.com/leanprover/lean4/issues/16685)
 

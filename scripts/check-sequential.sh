@@ -8,12 +8,12 @@ export PATH="$ELAN_HOME/bin:$PATH"
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 cd lean
-lake build Alvoki.Checks.AxiomPolicy RunMergeProofs CodecVariants Alvoki.Storage
-lake env lean Alvoki/Checks/ProofRoadmapAudit.lean
-lake env lean Alvoki/Checks/SequentialAudit.lean
+lake build Alvoki.Checks.Audit.AxiomPolicy RunMergeProofs CodecVariants Alvoki.Storage
+lake env lean Alvoki/Checks/Audit/ProofRoadmapAudit.lean
+lake env lean Alvoki/Checks/Audit/SequentialAudit.lean
 
 # This standard declaration serves as a negative control outside the allowlist.
-printf 'import Alvoki.Checks.AxiomPolicy\nnoncomputable def unexpectedDependency := @sorryAx\n#check_axioms unexpectedDependency\n' > "$scratch/Reject.lean"
+printf 'import Alvoki.Checks.Audit.AxiomPolicy\nnoncomputable def unexpectedDependency := @sorryAx\n#check_axioms unexpectedDependency\n' > "$scratch/Reject.lean"
 if lake env lean "$scratch/Reject.lean" > "$scratch/rejection.log" 2>&1; then
   echo "Axiom policy accepted its negative control" >&2
   exit 1
@@ -814,11 +814,11 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.ReplacedWalDescriptor
 lake env leanchecker Alvoki.Storage.Publication.CheckpointPublication
 lake env leanchecker Alvoki.Storage.Proofs.Publication.CheckpointPublicationModel
 lake env leanchecker Alvoki.Storage.Publication.DirectoryPublicationModel
-lake env lean --run Alvoki/Checks/SequentialChecks.lean
-lake env lean --run Alvoki/Checks/PackedTableChecks.lean
-lake env lean --run Alvoki/Checks/ManifestIntegrityChecks.lean
-lake env lean --run Alvoki/Checks/VersionedCheckpointReadChecks.lean
-lake env lean --run Alvoki/Checks/WalSegmentMarkerReadChecks.lean
+lake env lean --run Alvoki/Checks/Tests/SequentialChecks.lean
+lake env lean --run Alvoki/Checks/Tests/PackedTableChecks.lean
+lake env lean --run Alvoki/Checks/Tests/ManifestIntegrityChecks.lean
+lake env lean --run Alvoki/Checks/Tests/VersionedCheckpointReadChecks.lean
+lake env lean --run Alvoki/Checks/Tests/WalSegmentMarkerReadChecks.lean
 lake exe alvoki-disk-checks
 python3 ../scripts/check-disk-process-death.py .lake/build/bin/alvoki-disk-checks
 lake build alvoki-disk-replay

@@ -443,7 +443,7 @@ After building the import with the pinned Lean toolchain, query the actual elabo
 ```sh
 cd lean
 lake build Alvoki.Storage.Disk.Proofs.Read.NativeOpenedSnapshotSessions
-lake env lean --run Alvoki/Checks/ProofDependencies.lean \
+lake env lean --run Alvoki/Checks/Audit/ProofDependencies.lean \
   Alvoki.Storage.Disk.Proofs.Read.NativeOpenedSnapshotSessions \
   Alvoki.Storage.DiskSession.NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest \
   Alvoki.Storage.DiskSession.NativeExecutionTrace.keyValueRefinement
@@ -458,7 +458,7 @@ chain follows the snapshot theorem through `NativeOpenedEarlyCheckpointReport.re
 A missing body is labeled in the output.
 Follow declarations from the claim sections for further queries. The probe reports references in the
 compiled Lean environment. Executable path coverage and premise provenance are reviewed against the
-source and contract above. [Dependency probe](../../lean/Alvoki/Checks/ProofDependencies.lean)
+source and contract above. [Dependency probe](../../lean/Alvoki/Checks/Audit/ProofDependencies.lean)
 
 The architecture review also probed the fresh-open theorem, the opened-session induction and
 `NativeExecutionTrace.keyValueRefinement`. The first two declaration types reference

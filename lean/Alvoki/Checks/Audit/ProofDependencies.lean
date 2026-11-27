@@ -22,7 +22,7 @@ private def dependencyRow (env : Environment) (info : ConstantInfo) : IO Json :=
 
 def main (args : List String) : IO Unit := do
   let moduleName :: declaration :: remaining := args
-    | throw (IO.userError "usage: lake env lean --run Alvoki/Checks/ProofDependencies.lean MODULE DECLARATION [DECLARATION ...]")
+    | throw (IO.userError "usage: lake env lean --run Alvoki/Checks/Audit/ProofDependencies.lean MODULE DECLARATION [DECLARATION ...]")
   -- Imported environment extensions include Lean's recorded axiom summaries.
   unsafe enableInitializersExecution
   let env ← importModules #[{ module := moduleName.toName }] {} (loadExts := true)

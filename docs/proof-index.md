@@ -106,7 +106,7 @@ when extracting a helper. [WAL cutoff and its contract](../lean/Alvoki/Storage/D
 | Recovery and trace induction | [Bounded checkpoint retry](../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/CheckpointRetrySession.lean#L93) · [Writer trace](../lean/Alvoki/Storage/Disk/Proofs/Recovery/SegmentedDatabaseTrace.lean#L295) | Compose operation-specific effects, recovery outcomes and the invariant that each next step requires. This is the bridge from individual cuts to database histories. |
 | Bounded acquisition | [WAL callback trace](../lean/Alvoki/Storage/Disk/Proofs/WAL/WalSegmentReadWork.lean) · [Checkpoint read sizes](../lean/Alvoki/Storage/Disk/IntegrityCheckpointSizedRead.lean) | Count requests in the actual read schedule and tie each admitted byte range to the selected marker or manifest. Compare the exact accepted input with the existing integrity and replay model. |
 
-The filesystem results use the stated callback and crash assumptions. The [axiom audit](../lean/Alvoki/Checks/AxiomPolicy.lean) checks theorem dependencies. The [native fixtures](../scripts/check-sequential.sh) exercise the adapter's callback behavior and process-death cases.
+The filesystem results use the stated callback and crash assumptions. The [axiom audit](../lean/Alvoki/Checks/Audit/AxiomPolicy.lean) checks theorem dependencies. The [native fixtures](../scripts/check-sequential.sh) exercise the adapter's callback behavior and process-death cases.
 
 ## Where to reuse next
 
