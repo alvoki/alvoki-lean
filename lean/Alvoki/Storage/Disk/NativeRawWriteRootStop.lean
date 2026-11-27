@@ -16,6 +16,19 @@ private def asPublicationReturn {heap stop error α : Type}
     | .ok value reached => .ok (.ok value) reached
     | .error cause reached => .ok (.error cause) reached
 
+private theorem asPublicationReturn_bind {heap stop error α β : Type}
+    (action : EStateM error heap α) (next : α → EStateM error heap β) :
+    (asPublicationReturn (stop := stop) action >>= fun value => asPublicationReturn (next value)) =
+      asPublicationReturn (action >>= next) := by
+  funext before
+  cases returned : action before <;>
+    simp [asPublicationReturn, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind,
+      Pure.pure, EStateM.pure, returned]
+
+private theorem asPublicationReturn_pure {heap stop error α : Type} (value : α) :
+    asPublicationReturn (stop := stop) (pure value : EStateM error heap α) =
+      (pure value : PublicationStopM heap stop error α) := rfl
+
 private def classify {heap stop error α : Type} (kind : IO.Error → error)
     (action : PublicationStopM heap stop IO.Error α) : PublicationStopM heap stop error α :=
   fun before => match action.run before with
@@ -102,6 +115,55 @@ noncomputable def WriteRequest.runUntilPublicationStop {heap stop : Type}
     (fun next => classify .rejected (asPublicationReturn (set phase next)))
     (fun installed bytes count => classify .commitUnknown (publish installed bytes count))).run
 
+local macro "simp_publication_stop" " [" facts:Lean.Parser.Tactic.simpArg,* "]"
+    loc:(Lean.Parser.Tactic.location)? : tactic => do
+  let facts : Lean.Syntax.TSepArray
+      [`Lean.Parser.Tactic.simpStar, `Lean.Parser.Tactic.simpErase, `Lean.Parser.Tactic.simpLemma] "," :=
+    ⟨facts.elemsAndSeps⟩
+  `(tactic| simp [classify, asPublicationReturn, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk,
+    ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure, liftExcept, Except.pure,
+    Except.mapError, throw, throwThe, MonadExceptOf.throw, $facts,*] $[$loc]?)
+
+private theorem WriteRequest.publicationAfterPreparation {heap stop : Type}
+    (request : WriteRequest) (directory : DiskDirectory)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (publish : Installed → ByteArray → Nat → EStateM stop heap (Except IO.Error Unit))
+    (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    {installed : Installed} {batch : List WAL.Write} {table : PackedTable}
+    {entry : heap}
+    (nonempty : request.rows ≠ [])
+    (prepared : prepareBatch installed.table request.rows = some (batch, table))
+    (fits : installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    (loaded : get phase entry = .ok (.ready installed) entry) :
+    let count := installed.walBytes + WAL.frameSize * request.rows.length
+    request.runUntilPublicationStop directory lookup publish phase get set entry =
+      (do
+        classify .rejected (asPublicationReturn (checkActiveSegmentWith directory installed lookup))
+        publishPreparedWrite { installed with table, walBytes := count } table.committed
+          (fun next => classify .rejected (asPublicationReturn (set phase next)))
+          (classify .commitUnknown (publish installed (WAL.encodeBatch batch) count))
+        : PublicationStopM heap stop DiskWriteError UInt64).run entry := by
+  cases request with
+  | single key value =>
+    rw [WriteRequest.rows, prepareBatch_singleton] at prepared
+    cases written : installed.table.write key value with
+    | none => simp [prepareWrite, written] at prepared
+    | some next =>
+      simp only [prepareWrite, written, Option.map_some, Option.some.injEq, Prod.mk.injEq] at prepared
+      obtain ⟨rfl, rfl⟩ := prepared
+      simp only [WriteRequest.rows, List.length_singleton, Nat.mul_one] at fits
+      simp_publication_stop [runUntilPublicationStop, runWithPublication, withPreparedSingleWrite, prepareWrite,
+        WriteRequest.requireWritePreparation, loaded, written, fits, Phase.installed, WriteRequest.rows,
+        WAL.encodeBatch_singleton, publishPreparedWrite, publishPrepared]
+  | batch rows =>
+    simp only [WriteRequest.rows] at prepared fits ⊢
+    have present : rows.isEmpty = false := List.isEmpty_eq_false_iff.mpr nonempty
+    simp_publication_stop [runUntilPublicationStop, runWithPublication, writeBatchSchedule,
+      WriteRequest.requireWritePreparation, loaded, present, fits, prepared, Phase.installed,
+      publishPreparedWrite, publishPrepared]
+
 /-- The reached guard and poison setter lead to the publication. Its
 outer stop exits the schedule before the ready setter and acknowledgement. -/
 theorem WriteRequest.stopsDuringPublication {heap stop : Type} (request : WriteRequest) (directory : DiskDirectory)
@@ -121,27 +183,87 @@ theorem WriteRequest.stopsDuringPublication {heap stop : Type} (request : WriteR
     (commit : publish installed (WAL.encodeBatch batch) (installed.walBytes + WAL.frameSize * request.rows.length)
       poisoned = .error tag reached) :
     request.runUntilPublicationStop directory lookup publish phase get set entry = .error tag reached := by
-  cases request with
-  | single key value =>
-    rw [WriteRequest.rows, prepareBatch_singleton] at prepared
-    cases written : installed.table.write key value with
-    | none => simp [prepareWrite, written] at prepared
-    | some next =>
-      simp only [prepareWrite, written, Option.map_some, Option.some.injEq, Prod.mk.injEq] at prepared
-      obtain ⟨rfl, rfl⟩ := prepared
-      simp only [WriteRequest.rows, List.length_singleton, Nat.mul_one, WAL.encodeBatch_singleton] at fits commit
-      simp [runUntilPublicationStop, runWithPublication, withPreparedSingleWrite, prepareWrite, WriteRequest.requireWritePreparation,
-        publishPreparedWrite, publishPrepared, classify, asPublicationReturn, loaded, written, fits, guard, assigned, commit,
-        Phase.installed, liftExcept, Except.pure, Except.mapError, Bind.bind, ExceptT.bind, ExceptT.bindCont,
-        ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure]
-  | batch rows =>
-    simp only [WriteRequest.rows] at fits prepared commit
-    have present : rows.isEmpty = false := by
-      cases rows <;> simp_all [WriteRequest.rows]
-    simp [runUntilPublicationStop, runWithPublication, writeBatchSchedule, WriteRequest.requireWritePreparation, publishPreparedWrite,
-      publishPrepared, classify, asPublicationReturn, loaded, present, fits, prepared, guard, assigned, commit, Phase.installed,
-      liftExcept, Except.pure, Except.mapError, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, ExceptT.run,
-      EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure]
+  rw [request.publicationAfterPreparation directory lookup publish phase get set nonempty prepared fits loaded]
+  simp_publication_stop [publishPreparedWrite, publishPrepared, guard, assigned, commit]
+
+/-- An outer stop exposes the prepared batch and its actual reached guard,
+poison store and publication. An ordinary I/O failure cannot reach it. -/
+theorem WriteRequest.reachesPublicationStop {heap stop : Type} (request : WriteRequest) (directory : DiskDirectory)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (publish : Installed → ByteArray → Nat → EStateM stop heap (Except IO.Error Unit))
+    (phase : IO.Ref (Phase Installed))
+    (get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed))
+    (set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit)
+    {installed : Installed}
+    {entry reached : heap} {tag : stop}
+    (loaded : get phase entry = .ok (.ready installed) entry)
+    (stopped : request.runUntilPublicationStop directory lookup publish phase get set entry = .error tag reached) :
+    ∃ (batch : List WAL.Write) (table : PackedTable) (guarded poisoned : heap),
+      request.rows ≠ [] ∧ prepareBatch installed.table request.rows = some (batch, table) ∧
+      installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
+      checkActiveSegmentWith directory installed lookup entry = .ok () guarded ∧
+      set phase .poisoned guarded = .ok () poisoned ∧
+      publish installed (WAL.encodeBatch batch) (installed.walBytes + WAL.frameSize * request.rows.length)
+        poisoned = .error tag reached := by
+  have preparedRequest : ∃ batch table, request.rows ≠ [] ∧
+      prepareBatch installed.table request.rows = some (batch, table) ∧
+      installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size := by
+    cases request with
+    | single key value =>
+      cases prepared : prepareWrite installed.table key value with
+      | none =>
+        simp_publication_stop [runUntilPublicationStop, runWithPublication, withPreparedSingleWrite,
+          WriteRequest.requireWritePreparation, loaded, prepared, Phase.installed] at stopped
+      | some plan =>
+        obtain ⟨event, table⟩ := plan
+        by_cases fits : installed.walBytes + WAL.frameSize < UInt64.size
+        · exact ⟨[event], table, by simp [WriteRequest.rows],
+            by simp [WriteRequest.rows, prepareBatch_singleton, prepared],
+            by simpa only [WriteRequest.rows, List.length_singleton, Nat.mul_one] using fits⟩
+        · simp_publication_stop [runUntilPublicationStop, runWithPublication, withPreparedSingleWrite,
+          WriteRequest.requireWritePreparation, loaded, prepared, fits, Phase.installed] at stopped
+    | batch rows =>
+      by_cases empty : rows = []
+      · subst rows
+        simp_publication_stop [runUntilPublicationStop, runWithPublication, writeBatchSchedule, loaded,
+          Phase.installed] at stopped
+      · have present := List.isEmpty_eq_false_iff.mpr empty
+        by_cases fits : installed.walBytes + WAL.frameSize * rows.length < UInt64.size
+        · cases prepared : prepareBatch installed.table rows with
+          | none =>
+            simp_publication_stop [runUntilPublicationStop, runWithPublication, writeBatchSchedule,
+              WriteRequest.requireWritePreparation, loaded, present, fits, prepared, Phase.installed] at stopped
+          | some plan =>
+            exact ⟨plan.1, plan.2, empty, by simpa only [WriteRequest.rows] using prepared, fits⟩
+        · simp_publication_stop [runUntilPublicationStop, runWithPublication, writeBatchSchedule, loaded, present,
+          fits, Phase.installed] at stopped
+  obtain ⟨batch, table, nonempty, prepared, fits⟩ := preparedRequest
+  rw [request.publicationAfterPreparation directory lookup publish phase get set nonempty prepared fits loaded] at stopped
+  cases checked : checkActiveSegmentWith directory installed lookup entry with
+  | error cause failed =>
+    simp_publication_stop [checked] at stopped
+  | ok value guarded =>
+    cases value
+    cases assigned : set phase .poisoned guarded with
+    | error cause failed =>
+      simp_publication_stop [checked, assigned, publishPreparedWrite, publishPrepared] at stopped
+    | ok value poisoned =>
+      cases value
+      let count := installed.walBytes + WAL.frameSize * request.rows.length
+      cases commit : publish installed (WAL.encodeBatch batch) count poisoned with
+      | error actual after =>
+        simp_publication_stop [count, checked, assigned, commit, publishPreparedWrite, publishPrepared] at stopped
+        obtain ⟨rfl, rfl⟩ := stopped
+        exact ⟨batch, table, guarded, poisoned, nonempty, prepared, fits, rfl, assigned, commit⟩
+      | ok result settled =>
+        cases result with
+        | error cause =>
+          simp_publication_stop [count, checked, assigned, commit, publishPreparedWrite, publishPrepared] at stopped
+        | ok value =>
+          cases value
+          cases restored : set phase (.ready { installed with table, walBytes := count }) settled <;>
+            simp_publication_stop [count, checked, assigned, commit, restored, publishPreparedWrite,
+              publishPrepared] at stopped
 
 /-- The public dispatcher observing the original final directory fsync. -/
 noncomputable def WriteRequest.runUntilRootFsync {heap : Type} (request : WriteRequest) (directory : DiskDirectory)
@@ -377,6 +499,33 @@ noncomputable def RawWalAppendCalls.commitUntilWrite {heap stop : Type} (appende
     (fun paths => asPublicationReturn (syncer.group directory.path cache.directory cache.active cache.pending paths))
     (fun source target => asPublicationReturn (rename source target))).run
 
+/-- The marker suffix is lifted from ordinary effects. An outer stop in
+the whole commit can therefore come only from the original append. -/
+theorem RawWalAppendCalls.reachesStoppedAppend {heap stop : Type} (appender : RawWalAppendCalls heap)
+    (directory : DiskDirectory) {files : DiskTable.OpenSyncFiles}
+    (cache : OpenSyncCacheRefs files directory.path)
+    (write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit))
+    (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    {installed : Installed} {bytes : ByteArray} {count : Nat} {entry reached : heap} {tag : stop}
+    (stopped : appender.commitUntilWrite directory cache write stager syncer rename installed bytes count entry =
+      .error tag reached) :
+    appender.runUntilWrite cache.active write (directory.file (.walSegment installed.activeFirst)) bytes entry =
+      .error tag reached := by
+  simp only [commitUntilWrite, commitBytesAt_fileEffects, WAL.Boundary.commit,
+    ← asPublicationReturn_pure, asPublicationReturn_bind] at stopped
+  cases append : appender.runUntilWrite cache.active write
+      (directory.file (.walSegment installed.activeFirst)) bytes entry with
+  | error actual cut =>
+    simp_publication_stop [append] at stopped ⊢
+    exact stopped
+  | ok result appended =>
+    cases result with
+    | error cause => simp_publication_stop [append] at stopped
+    | ok value =>
+      simp_publication_stop [append] at stopped
+      split at stopped <;> contradiction
+
 section AppendStop
 
 variable {heap stop : Type} {opened : NativeOpenedHandle heap}
@@ -402,18 +551,19 @@ theorem NativeOpenedPosition.stopsDuringWalAppend
     (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     (write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit))
-    {batch : List WAL.Write} {table : PackedTable} {guarded poisoned cut : heap} {tag : stop}
-    (nonempty : request.rows ≠ [])
-    (prepared : prepareBatch (installed).table request.rows = some (batch, table))
-    (fits : (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size)
-    (checked : checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded)
-    (assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned)
-    (stopped : appender.runUntilWrite cache.active write ((dir).file (.walSegment (installed).activeFirst))
-      (WAL.encodeBatch batch) poisoned = .error tag cut) :
-    opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
-    request.runUntilPublicationStop dir lookup
+    {cut : heap} {tag : stop}
+    (stopped : request.runUntilPublicationStop dir lookup
       (appender.commitUntilWrite dir cache write stager syncer rename) opened.phase opened.get opened.set
-      current.reached = .error tag cut ∧
+      current.reached = .error tag cut) :
+    opened.table.UsesOpenWriteSchedules dir opened.files opened.phase ∧
+    ∃ (batch : List WAL.Write) (table : PackedTable) (guarded poisoned : heap),
+    request.rows ≠ [] ∧
+    prepareBatch (installed).table request.rows = some (batch, table) ∧
+    (installed).walBytes + WAL.frameSize * request.rows.length < UInt64.size ∧
+    checkActiveSegmentWith dir installed lookup current.reached = .ok () guarded ∧
+    opened.set opened.phase .poisoned guarded = .ok () poisoned ∧
+    appender.runUntilWrite cache.active write ((dir).file (.walSegment (installed).activeFirst))
+      (WAL.encodeBatch batch) poisoned = .error tag cut ∧
     let keeps (before after : heap) := (storage before).Frames (state).crashPath (storage after) ∧
       WalNamePresenceFrame dir 0 horizon (storage before) (storage after)
     ∀ (_initial : NativeReadyStorage state (storage current.reached))
@@ -449,16 +599,14 @@ theorem NativeOpenedPosition.stopsDuringWalAppend
   have valid := current.current.ready.readPrefix.refines.1
   have loaded := opened.phaseEffects.reads current.reached opened.phase _
     (current.stored.trans (congrArg some valid.phase))
-  let publish := appender.commitUntilWrite dir cache write stager syncer rename
-  have commit : publish installed (WAL.encodeBatch batch) ((installed).walBytes + WAL.frameSize * request.rows.length)
-      poisoned = .error tag cut := by
-    simp only [publish, RawWalAppendCalls.commitUntilWrite, commitBytesAt_fileEffects, WAL.Boundary.commit,
-      ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind, stopped]
-  refine ⟨current.uses.writeSchedules,
-    request.stopsDuringPublication dir lookup publish opened.phase opened.get opened.set nonempty prepared fits loaded
-      checked assigned commit, ?_⟩
+  obtain ⟨batch, table, guarded, poisoned, nonempty, prepared, fits, checked, assigned, commit⟩ :=
+    request.reachesPublicationStop dir lookup (appender.commitUntilWrite dir cache write stager syncer rename)
+      opened.phase opened.get opened.set loaded stopped
+  have append := appender.reachesStoppedAppend dir cache write stager syncer rename commit
+  refine ⟨current.uses.writeSchedules, batch, table, guarded, poisoned,
+    nonempty, prepared, fits, checked, assigned, append, ?_⟩
   intro keeps initial guardFrame poisonFrame readFrame selects writeEffect rebooted sample
-  obtain ⟨_, _, handle, issued, read, selected, noResponse⟩ := appender.reachesStoppedWrite stopped
+  obtain ⟨_, _, handle, issued, read, selected, noResponse⟩ := appender.reachesStoppedWrite append
   have compose {before middle after : heap} (first : keeps before middle) (last : keeps middle after) :
       keeps before after := ⟨first.1.trans last.1, first.2.trans last.2⟩
   obtain ⟨selectionFrame, live, bound⟩ := selects read selected

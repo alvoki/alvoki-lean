@@ -928,8 +928,10 @@ the error heap. Local effect laws preserve the canonical marker and protected na
 and bytes. The keeper may grow, and each admitted durable byte choice still extends its
 previous committed prefix. Sampling one observed reboot derives the old history, an exact
 failed-call sequence and the successful table with the uncertain submission retained as zero
-writes. The stopped public write now uses that same selection rule. Its
-cache read and append-handle selection locate the issued write. The local
+writes. An interruption observed at the public dispatcher during append
+determines the nonempty batch, the successful size and segment checks, and
+the heap after poisoning the handle. The stopped publication then identifies
+the issued append through its actual cache read and handle selection. The local
 filesystem assumptions bind its live descriptor to the keeper, protect
 the other files and preserve the committed byte prefix at that inode.
 A reboot samples that prefix with a possibly empty tail. Replay stops
