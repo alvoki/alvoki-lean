@@ -1,8 +1,0 @@
-once  file  0  1 some (some 60)  True  Error: Custom { kind: Other, error: "injected staged file fsync failure" }
-once  directory  0  2 some (some 99)  True  Error: Custom { kind: Other, error: "injected directory fsync failure" }
-once  start  0  1 some (some 60)  True  Error: Custom { kind: Other, error: "injected child death" }
-once  none  0  2 some (some 99)  True
-persistent  file  0  1 some (some 60)  True  Error: Custom { kind: Other, error: "injected staged file fsync failure" }
-persistent  directory  0  2 some (some 99)  True  Error: Custom { kind: Other, error: "injected directory fsync failure" }
-persistent  start  0  1 some (some 60)  True  Error: Custom { kind: Other, error: "injected child death" }
-persistent  none  0  2 some (some 99)  True

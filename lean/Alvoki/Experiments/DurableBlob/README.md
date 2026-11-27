@@ -60,7 +60,7 @@ effects private. These facts make the two abstract identities sufficient
 within each call. Each successful open resolves its own descriptor again,
 so neither tag asserts descriptor equality across calls or restarts.
 Compiler and runtime fidelity, the primitive effects above, and the device's
-preservation of synced data remain external. [Filesystem premises](../../../../docs/proofs/filesystem.md)
+preservation of synced data remain external. [Filesystem premises](../../../../docs/design/filesystem-assumptions.md)
 
 A process stop retains the reached visible binding. A power loss selects a
 surviving binding. An interruption uses the effect at the cut, or the

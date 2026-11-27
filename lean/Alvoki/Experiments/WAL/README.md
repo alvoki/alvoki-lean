@@ -1,16 +1,5 @@
-# Single-file WAL experiment
+# WAL components
 
-This directory explores recovery policies for a **single-segment experimental
-WAL**. It is separate from the engine's supported
-[segmented WAL](../../Storage/Disk/WAL/README.md); its formats and guarantees
-must not be assumed to describe `DiskTable`.
+This directory contains independent single-file and segmented WAL experiments. Start with the [segmented WAL guide](Segmented/README.md), which describes its format, API, assumptions, tests, and current limits. The [single-file recovery proofs](Proofs/README.md) and [segmented proofs](Segmented/README.md#verification) retain useful counterexamples about torn tails, uncertain append outcomes, recovery retries, and the limits of checksum-based detection.
 
-Start with the [design and executable walkthrough](../../../../docs/design/wal-recovery.md#run-the-one-segment-experiment).
-[SingleFile](SingleFile.lean) provides the experimental directory API;
-[Contract](Contract.lean) defines permitted observations in batches,
-[Recovery](Recovery.lean) contains framing and recovery decisions, and
-[CrashModel](CrashModel.lean) defines the modeled persistence outcomes.
-[Proofs](Proofs/README.md) explains the verified slice and its limits. The
-design links its deterministic simulation and Linux fixtures.
-
-The [segmented experiment](Segmented/README.md) composes these single-file guarantees across rotation, prefix release and repeated recovery.
+These models do not make native refinement automatic. In particular, successful file and directory synchronization, exact reads, stable directory ownership, descriptor lifetime, and the joint file/name state after a crash remain explicit filesystem premises. See [WAL recovery notes](../../../../docs/design/wal-recovery.md) for the relevant counterexamples and premise boundaries.
