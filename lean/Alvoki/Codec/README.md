@@ -11,6 +11,9 @@ array. Start with seed zero and pass the returned checksum as the seed
 for the next chunk. `Alvoki.CRC32C.extend` uses the Lean definition in
 proofs and the native backend in compiled code. Their agreement is a
 runtime assumption checked by known-answer and differential tests.
+The logical laws `extend_empty` and `extend_append` show that an empty
+chunk preserves the seed and that extending twice equals extending over
+the concatenated chunks.
 
 A normal Lake executable can import the module and call `extend`. The
 `CRC32C` library target supplies the native archive transitively. Run
