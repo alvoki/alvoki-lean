@@ -101,14 +101,21 @@ private structure Store where
 private def Store.closeChild (s : Store) : IO Unit :=
   closeChildWith (s.active.swap none) SingleFile.close
 
-/-- Dispose of the child before releasing the root lock. An I/O error
-closing the child still runs the root unlock. -/
-@[inline] def releaseWith [MonadFinally m] [Functor m] (closeChild unlock : m Unit) : m Unit :=
-  tryFinally closeChild unlock
+/-- A reported cleanup error never replaces the operation's primary error. -/
+@[inline] def cleanupOnError [Monad m] [MonadExceptOf error m]
+    (action : m α) (cleanup : m Unit) : m α :=
+  tryCatchThe error action fun err => do
+    tryCatchThe error cleanup (fun _ => pure ())
+    throw err
+
+/-- Unlock even if child close reports an error. Preserve that first error. -/
+@[inline] def releaseWith [Monad m] [MonadExceptOf error m] (closeChild unlock : m Unit) : m Unit := do
+  cleanupOnError (error := error) closeChild unlock
+  unlock
 
 private def Store.release (s : Store) : IO Unit := do
   s.controlWriter.set none
-  releaseWith s.closeChild s.lock.unlock
+  releaseWith (error := IO.Error) s.closeChild s.lock.unlock
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   s.closeChild
@@ -141,16 +148,16 @@ private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFi
 
 private def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) := do
   let child ← s.acquireChild p id
-  try SingleFile.scan child finally SingleFile.close child
+  let batches ← cleanupOnError (error := IO.Error) (SingleFile.scan child) (SingleFile.close child)
+  SingleFile.close child
+  return batches
 
 /-- Transfer the child to the caller on success. Release it on a reported
 failure anywhere in the continuation, including scan or collection. -/
 @[inline] def withActiveChild [Monad m] [MonadExceptOf error m]
     (acquire : m child) (close : child → m Unit) (resume : child → m result) : m result := do
   let child ← acquire
-  tryCatchThe error (resume child) fun err => do
-    close child
-    throw err
+  cleanupOnError (error := error) (resume child) (close child)
 
 def segmentId (name : String) : Except String (Option Nat) :=
   if ["lock", "CONTROL", "CONTROL.next"].contains name then .ok none
@@ -240,9 +247,7 @@ structure Handle where private mk ::
     let phase ← load
     let state ← newRef phase
     return (state, ← newMutex)
-  tryCatchThe error construct fun err => do
-    release
-    throw err
+  cleanupOnError (error := error) construct release
 
 /-- Both descriptors and the store use the single resolved root path. -/
 @[inline] def acquireStoreWith [Monad m]
@@ -265,21 +270,28 @@ private def acquireStore (dir : FilePath) : IO Store :=
   let owned ← acquire
   installPhaseWith (error := error) (load owned) newRef newMutex (release owned)
 
+@[inline] def installReopenedWith [Monad m] (recovery : m (Session × child))
+    (storeActive : Nat → child → m store) : m (Phase store) := do
+  let (session, child) ← recovery
+  let owned ← storeActive session.control.active child
+  return .ready owned session
+
 private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
   let load (store : Store) := match fresh with
     | some (policy, cap) => do
       unless (← entries store.root).all (fun e => e.fileName == "lock") do
         throw <| IO.userError "segmented WAL directory is not empty"
       pure (.ready store (← checked (Segmented.create store.callbacks policy cap)))
-    | none => do
-      let (session, child) ← checked <| Segmented.reopenWith store.callbacks
+    | none =>
+      let recovery := checked <| Segmented.reopenWith store.callbacks
         (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
           (store.acquireChild policy id) SingleFile.close (fun child => do
             let batches ← SingleFile.scan child
             checked (resume child batches)))
         (fun session child => pure (session, child))
-      store.active.set (some (session.control.active, child))
-      return .ready store session
+      installReopenedWith recovery fun id child => do
+        store.active.set (some (id, child))
+        return store
 
   let (state, mutex) ← openWithStore (error := IO.Error) (acquireStore dir) load
     (fun phase => IO.mkRef phase) (liftM Std.BaseMutex.new) Store.release

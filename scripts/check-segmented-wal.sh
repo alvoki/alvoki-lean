@@ -129,7 +129,13 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.nativeRootBarrier
 #check_axioms Model.reopen_nativeRoot
 #check_axioms Model.reopen_nativeHealthy
+#check_axioms Model.reopenScopedModel_refines
+#check_axioms Model.reopenScopedModel_healthy
 #check_axioms Model.nativeAppendAfterTransfer
+#check_axioms Model.installScopedModel_healthy
+#check_axioms Model.publicOpenModel_refines
+#check_axioms Model.publicOpenModel_append
+#check_axioms Model.publicOpenModel_healthy
 #check_axioms Model.repeatOpenAfterFailedDiscard
 #check_axioms Model.nativeChild_recoverable
 #check_axioms Model.nativeChild_sealed

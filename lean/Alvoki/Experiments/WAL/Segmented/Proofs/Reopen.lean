@@ -227,21 +227,21 @@ private theorem modelRootEffects (e : Effects) (call : Policy → Nat → M (Lis
     subst e
     exact collect_healthy c s
 
-private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEffects callbacks healthyRoot) {healthyCall : Prop}
-    (effects : OpenChildEffects callbacks.openSegment healthyCall) (s : State) (prior : Recoverable k req s.disk) :
-    ∃ c final, PermittedView k req (historyView c final) ∧
-      readOutcome (fun t => Opened c final t.disk) (fun t => Recoverable k req t.disk ∧ ¬ (healthyRoot ∧ healthyCall ∧
+private theorem reopen_prefix_source {k req callbacks healthyRoot healthyCall}
+    (root : OpenRootEffects callbacks healthyRoot)
+    (effects : OpenChildEffects callbacks.openSegment healthyCall) (s : State)
+    (prior : Recoverable k req s.disk) {c h p final}
+    (found : s.disk.liveControl = some c) (r : Readable c h p s.disk)
+    (allow : ∀ v, WalRecoverySlice.Contract.Permitted h p v → PermittedView k req (historyView c v))
+    (finish : Layout c final s.disk)
+    (earlier : ∀ id, id < c.active → segmentHistory c.capacity id final = segmentHistory c.capacity id h) :
+    readOutcome (fun t => Opening c h p (s.disk.segment c.active) t.disk)
+      (fun t => Recoverable k req t.disk ∧ ¬ (healthyRoot ∧ healthyCall ∧
         ∃ c, returned (callbacks.readControl.run s) = some c))
-        (sessionOf c final) ((Segmented.reopen callbacks).run s) := by
-  obtain ⟨c, found, h, p, r, allow⟩ := prior.live
-  obtain ⟨_, choice, bounded, selected⟩ := r.active.selectedBatches
-  obtain ⟨final, permitted, slice, earlier, lift⟩ := resolve_active r choice bounded
-  have finish := lift _ r.layout
-  refine ⟨c, final, allow final permitted, ?_⟩
-  simp only [sessionOf, segmentHistory_active_length finish.upper, historyView]
-  apply reopen_spec callbacks c final s (fun t => t.disk = s.disk)
-    (fun t => Opening c h p (s.disk.segment c.active) t.disk) (fun t => Opened c final t.disk)
-    _ _ ⟨finish.capacityPositive, finish.capacityFits⟩ finish.lower finish.upper finish.discardedFits
+      (c, (segmentWindow c.capacity c.firstNeeded (c.active - c.firstNeeded) final).toArray)
+      ((Segmented.reopenPrefix callbacks).run s) := by
+  apply reopenPrefix_spec callbacks c final s (fun t => t.disk = s.disk) _ _
+    ⟨finish.capacityPositive, finish.capacityFits⟩ finish.lower finish.upper finish.discardedFits
   · have facts := root.control s c found
     cases ran : callbacks.readControl.run s with
     | error => rw [ran] at facts; exact ⟨facts.symm ▸ prior, fun h => by obtain ⟨_, impossible⟩ := h.2.2; cases impossible⟩
@@ -284,6 +284,39 @@ private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEf
       change returned ((callbacks.openSegment c.policy id).run t) = none at no
       rw [no] at ok
       contradiction
+
+/-- A successful prefix still has the exact live active image and the
+single-file precondition for opening its selected child. -/
+theorem reopenPrefix_active {k req callbacks healthyRoot healthyCall}
+    (root : OpenRootEffects callbacks healthyRoot)
+    (effects : OpenChildEffects callbacks.openSegment healthyCall)
+    {s t : State} (prior : Recoverable k req s.disk) {c : Control} {sealed : Array Bytes}
+    (prefixResult : (Segmented.reopenPrefix callbacks).run s = .ok (.ok (c, sealed)) t) :
+    c.active ∈ t.disk.liveNames ∧
+      ∃ known pending, Child.Recoverable c.policy known pending (t.disk.segment c.active) := by
+  obtain ⟨original, found, h, p, readable, allowed⟩ := prior.live
+  have proof := reopen_prefix_source root effects s prior found readable allowed readable.layout (fun _ _ => rfl)
+  rw [prefixResult] at proof
+  have same : c = original := congrArg Prod.fst proof.2
+  subst c
+  exact ⟨(proof.1.selected.layout.names original.active original.selectsActive).1, _, _, proof.1.selected.active⟩
+
+private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEffects callbacks healthyRoot) {healthyCall : Prop}
+    (effects : OpenChildEffects callbacks.openSegment healthyCall) (s : State) (prior : Recoverable k req s.disk) :
+    ∃ c final, PermittedView k req (historyView c final) ∧
+      readOutcome (fun t => Opened c final t.disk) (fun t => Recoverable k req t.disk ∧ ¬ (healthyRoot ∧ healthyCall ∧
+        ∃ c, returned (callbacks.readControl.run s) = some c))
+        (sessionOf c final) ((Segmented.reopen callbacks).run s) := by
+  obtain ⟨c, found, h, p, r, allow⟩ := prior.live
+  obtain ⟨_, choice, bounded, selected⟩ := r.active.selectedBatches
+  obtain ⟨final, permitted, slice, earlier, lift⟩ := resolve_active r choice bounded
+  have finish := lift _ r.layout
+  refine ⟨c, final, allow final permitted, ?_⟩
+  simp only [sessionOf, segmentHistory_active_length finish.upper, historyView]
+  apply reopen_spec callbacks c final s
+    (fun t => Opening c h p (s.disk.segment c.active) t.disk) (fun t => Opened c final t.disk)
+    _ _ finish.lower finish.upper finish.discardedFits
+  · exact reopen_prefix_source root effects s prior found r allow finish earlier
   · intro t o
     have proof := active_step effects o allow lift (slice.symm ▸ selected)
     cases h : (callbacks.openSegment c.policy c.active).run t with

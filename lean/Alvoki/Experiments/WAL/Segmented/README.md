@@ -193,22 +193,28 @@ same reached disk and resources:
   binding, reach the successful case. Bootstrap and publication must
   eventually supply representability.
 
-The value-only model uses the same `reopenWith` executable schedule and
-erases the active payload. Its existing layout proof still supplies disk
-safety and healthy progress. The obsolete reopen dispatcher, active-cell
-simulation and value-only public install interpretation have been removed.
-`withActiveChild_reached` verifies that reported errors close the exact
-acquired child at the reached state. `nativeAppendAfterTransfer` consumes
-the returned child phase and its reached image using the existing
-single-file append proof. The native fixtures cover successful reopen
-and append, failure after active open, and root unlock after a reported
-child close error.
+The value-only model uses the same `reopenWith` schedule and erases the
+active payload. `reopenScopedModel_project` proves this erasure preserves
+the session or primary error and the reached disk, also when child close
+reports an error. Both the existing disk proof and healthy progress
+therefore apply to the run carrying the child.
 
-The remaining proof must carry the scoped child value through the disk
-layout proof and bind its returned identity to the ready store under the
-runtime reference and unlock assumptions. Rotation still prepares a
-successor in the store; when refining it, transfer the new child as an
-explicit value through publication and installation.
+`publicOpenModel_refines` follows the shared outer install and release
+schedules and reports the ready store and held root, or a released root and
+a recoverable reached disk. `publicOpenModel_append` consumes the exact
+stored child and the active image on that reached disk. Its input
+precondition comes from the shared prefix proof, and collection frames the
+child image before append. `publicOpenModel_healthy` lifts progress to the
+ready resource result. Reported cleanup errors preserve the primary error.
+Process interruption drops process-owned resources under the runtime
+premises.
+
+The model interprets successful outer child inspection and cached scan by
+their admitted values. A complete Linux adapter refinement must still
+connect the outer validation, sealed close and scan primitive outcomes to
+this interpretation. Rotation still prepares a successor in the store;
+its refinement should transfer the new child explicitly through
+publication and installation.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be

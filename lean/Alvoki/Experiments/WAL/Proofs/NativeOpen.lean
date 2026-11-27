@@ -486,6 +486,21 @@ def closeModel (policy : Policy) (r : OpenReports)
     (phase : Phase OpenTarget (AppendFiles OpenTarget)) (s : OpenImage) :=
   (closeWith phase storePhase (openEffects policy r).unlock).run s
 
+/-- The close schedule has no byte effects and reports the unlock result. -/
+theorem closeModel_frames (policy : Policy) (r : OpenReports)
+    (phase : Phase OpenTarget (AppendFiles OpenTarget)) (s : OpenImage) :
+    ∃ response after, closeModel policy r phase s = .ok response after ∧ after.image = s.image := by
+  cases phase with
+  | closed => exact ⟨_, _, rfl, rfl⟩
+  | poisoned target | active target _ _ _ =>
+    by_cases isLock : target = .lock
+    · subst target
+      refine ⟨if r.unlockError then .error "primitive error" else .ok (),
+        {s with closed := true, held := false}, ?_, rfl⟩
+      cases h : r.unlockError <;> simp [closeModel, closeWith, runBind, clear_run, unlock_run, finish, h]
+    · refine ⟨.error "primitive error", {s with closed := true}, ?_, rfl⟩
+      simp [closeModel, closeWith, openEffects, isLock, finish, ExceptT.run] <;> rfl
+
 /-- Closing a ready handle clears its shared phase before unlocking its
 description. An alias subsequently observes the cleared phase. -/
 theorem close_opened (policy : Policy) (r : OpenReports) (ready : Opened OpenTarget (AppendFiles OpenTarget))

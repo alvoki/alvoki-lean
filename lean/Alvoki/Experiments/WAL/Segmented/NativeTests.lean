@@ -101,8 +101,12 @@ private def activeScope : IO Unit := do
     require (reached == child) "continuation received a different child"
     events.modify (· ++ ["continuation"])
     throw <| IO.userError "reported collection error"
-  failed (releaseWith action (events.modify (· ++ ["root unlock"])))
-    "failed continuation returned a handle"
+  let result ← (releaseWith (error := IO.Error) action (do
+    events.modify (· ++ ["root unlock"])
+    throw <| IO.userError "reported root unlock error")).toBaseIO
+  match result with
+  | .error err => require (err.toString == "reported collection error") "cleanup replaced the primary error"
+  | .ok () => throw <| IO.userError "failed continuation returned a handle"
   require ((← events.get) == ["continuation", "child close", "root unlock"])
     "root unlock did not follow failed child close"
   let transferred ← withActiveChild (error := IO.Error) (pure child) close pure
