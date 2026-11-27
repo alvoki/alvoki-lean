@@ -18,3 +18,12 @@ lean_object *alvoki_fsync(b_lean_obj_arg handle) {
 
     return lean_io_result_mk_ok(lean_box(0));
 }
+
+/* Call immediately after opening an experimental WAL stream. A failed write
+   must not leave pending stdio output that a later finalizer could publish. */
+lean_object *alvoki_wal_unbuffered(b_lean_obj_arg handle) {
+    if (setvbuf(lean_get_external_data(handle), NULL, _IONBF, 0) != 0)
+        return lean_io_result_mk_error(lean_mk_io_user_error(
+            lean_mk_string("cannot disable WAL stream buffering")));
+    return lean_io_result_mk_ok(lean_box(0));
+}

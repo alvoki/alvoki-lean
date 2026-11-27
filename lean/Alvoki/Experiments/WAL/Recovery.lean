@@ -8,7 +8,7 @@ abbrev Bytes := List UInt8
 private def maxPayload := 32
 private def frameOverhead := 6 -- four header fields and two check bytes
 
-private def checksum (xs : Bytes) : Nat := xs.foldl (fun a b => (a * 31 + b.toNat) % 251) 7
+def checksum (xs : Bytes) : Nat := xs.foldl (fun a b => (a * 31 + b.toNat) % 251) 7
 
 def frame (seq : Nat) (payload : Bytes) : Bytes :=
   let header : Bytes := [42, 1, seq.toUInt8, payload.length.toUInt8]
@@ -61,13 +61,13 @@ def encodeMarker (endPos lastSeq : Nat) : Bytes :=
   let fields : Bytes := [77, 1, 1, lastSeq.toUInt8, (endPos / 256).toUInt8, (endPos % 256).toUInt8]
   fields ++ [(checksum fields).toUInt8]
 
-private structure Marker where
+structure Marker where
   endPos : Nat
   lastSeq : Nat
 
 /-- A short record or invalid checksum may be a torn slot. A checksum-valid record with
 wrong format, generation, slot, or empty-cursor fields is a protocol error. -/
-private def decodeMarker (slot : Nat) (bytes : Bytes) : Except String (Option Marker) := do
+def decodeMarker (slot : Nat) (bytes : Bytes) : Except String (Option Marker) := do
   if bytes.length > markerSize then throw "oversized marker file"
   match bytes with
   | [magic, format, generation, seq, hi, lo, check] =>
@@ -82,7 +82,7 @@ private def decodeMarker (slot : Nat) (bytes : Bytes) : Except String (Option Ma
   | _ => return none
 
 /-- Both reads are required, including when the first record is valid. -/
-private def selectMarker (a b : Bytes) : Except String Marker := do
+def selectMarker (a b : Bytes) : Except String Marker := do
   let a ← decodeMarker 0 a
   let b ← decodeMarker 1 b
   match a, b with
