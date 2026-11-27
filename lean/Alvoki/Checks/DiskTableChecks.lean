@@ -75,14 +75,14 @@ private def expectUnknownBatch (db : DiskTable) (target : String)
     "poisoned batch rejection changed its cause"
   expectRejectedWrite db "publication failed; reopen the database"
 
-private def expectBatchHistory (db : DiskTable) (oldSequence : UInt64) (published : Bool) :
-    IO Unit := do
+private def expectBatchHistory (db : DiskTable) (oldSequence : UInt64) (published : Bool)
+    (startingValue : UInt64 := 99) : IO Unit := do
   let latest ← db.acquire
   try
     check (latest.sequence == oldSequence + (if published then 4 else 0))
       "reopen selected only part of the write batch"
   finally db.release latest.handle
-  expectSnapshot db oldSequence [(7, some 99)]
+  expectSnapshot db oldSequence [(7, some startingValue)]
   if published then
     -- A single publication makes the completed batch current. Historical
     -- reads can still select the individual mutation sequence numbers.
@@ -2299,13 +2299,13 @@ private def checkRecoveredProbe (path : FilePath) (sequence value : UInt64) (res
   finally db.close
 
 private def checkRecoveredBatchProbe (path : FilePath) (sequence outcome : String)
-    (resume : Bool) : IO Unit := do
+    (resume : Bool) (startingValue : UInt64 := 99) : IO Unit := do
   let oldSequence ← probeWord sequence
   check (outcome == "old" || outcome == "new") "unexpected batch recovery outcome"
   let published := outcome == "new"
   let db ← DiskTable.open path
   try
-    expectBatchHistory db oldSequence published
+    expectBatchHistory db oldSequence published startingValue
     if resume then
       let next := oldSequence + (if published then 5 else 1)
       check ((← db.write 7 (some 101)) == next) "reopened batch did not permit the next append"
@@ -2417,6 +2417,8 @@ def main (args : List String) : IO Unit := do
     finally db.close
   | ["--check-recovered-batch", dir, sequence, outcome] =>
     checkRecoveredBatchProbe ⟨dir⟩ sequence outcome false
+  | ["--check-recovered-batch", dir, sequence, outcome, startingValue] =>
+    checkRecoveredBatchProbe ⟨dir⟩ sequence outcome false (← probeWord startingValue)
   | ["--resume-recovered-batch", dir, sequence, outcome] =>
     checkRecoveredBatchProbe ⟨dir⟩ sequence outcome true
   | ["--rotate-wal-once", dir] =>

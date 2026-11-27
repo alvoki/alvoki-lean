@@ -229,6 +229,8 @@ size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream) {
     // Pause before the issued append takes effect, or flush a strict prefix first.
     if (bytes != 0 && (real_write(buffer, 1, (size_t)bytes, stream) != bytes || fflush(stream) != 0)) _exit(125);
     hold_owner(ready, release);
+    // Only the zero-prefix cut can continue with the original payload.
+    if (bytes == 0) return real_write(buffer, size, count, stream);
     _exit(125);
 }
 

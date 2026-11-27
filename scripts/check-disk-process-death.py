@@ -326,6 +326,15 @@ def check_batch_append_cut(binary, shim, root, partial):
     prefix = len(acknowledged) + 7 if partial else 0
     reached = appended[:len(acknowledged) + prefix]
 
+    resume_control = root / "resume-control"
+    shutil.copytree(database, resume_control)
+    status, stderr = run_probe(binary, "--resume-recovered-batch", resume_control, "2", "old")
+    require(status == 0, f"could not prepare exact next write after recovery: {stderr}")
+    resumed_wal = (resume_control / wal.name).read_bytes()
+    resumed_marker = (resume_control / marker.name).read_bytes()
+    require(resumed_wal.startswith(acknowledged) and len(resumed_wal) == 2 * len(acknowledged),
+            "the resume control did not append one frame")
+
     ready = root / "append.pid"
     with native_process(binary, "--batch-write-once", database, env={
         **os.environ,
@@ -351,21 +360,45 @@ def check_batch_append_cut(binary, shim, root, partial):
     require(os.path.samestat(wal.stat(), original_wal) and wal.read_bytes() == reached
             and os.path.samestat(marker.stat(), original_marker) and marker.read_bytes() == boundary
             and not staged_marker.exists(), "owner exit changed the live append cut")
-    status, stderr = run_probe(binary, "--check-recovered-batch", database, "2", "old")
-    require(status == 0, f"open after the interrupted append changed the prior table: {stderr}")
-    recovered_wal = wal.stat()
-    require(os.path.samestat(recovered_wal, original_wal) == (not partial),
-            "reopen did not preserve the aligned keeper or replace the partial keeper as expected")
-    require(wal.read_bytes() == acknowledged and os.path.samestat(marker.stat(), original_marker)
-            and marker.read_bytes() == boundary and not staged_marker.exists(),
-            "reopen did not restore the exact acknowledged WAL and marker")
+
+    # The probe checks the recovered history before writing on the same table.
+    ready = root / "resume.pid"
+    release = root / "release-resume"
+    with native_process(binary, "--resume-recovered-batch", database, "2", "old", env={
+        **os.environ,
+        "LD_PRELOAD": str(shim),
+        "ALVOKI_CHECK_APPEND_HOLD": str(wal),
+        "ALVOKI_CHECK_APPEND_PREFIX": "0",
+        "ALVOKI_CHECK_APPEND_PID": str(ready),
+        "ALVOKI_CHECK_APPEND_RELEASE": str(release),
+    }) as resumed:
+        require(wait_for_cut(resumed, ready, "the first append after reopen") == resumed.pid,
+                "the next append paused in the wrong process")
+        recovered_wal = wal.stat()
+        require(os.path.samestat(recovered_wal, original_wal) == (not partial),
+                "reopen did not preserve the aligned keeper or replace the partial keeper as expected")
+        require(wal.read_bytes() == acknowledged and os.path.samestat(marker.stat(), original_marker)
+                and marker.read_bytes() == boundary and not staged_marker.exists(),
+                "reopen did not restore the exact acknowledged WAL and marker before the next append")
+        check_fixed_files()
+        release.touch(exist_ok=False)
+        _, stderr = resumed.communicate(timeout=TIMEOUT)
+        require(resumed.returncode == 0, f"the recovered table did not acknowledge and read its next write: {stderr}")
+
+    require(os.path.samestat(wal.stat(), recovered_wal) and wal.read_bytes() == resumed_wal
+            and marker.read_bytes() == resumed_marker, "the next write did not extend the recovered keeper exactly")
+    status, stderr = run_probe(binary, "--check-recovered-table", database, "3", "101")
+    require(status == 0, f"a fresh open did not recover the next write: {stderr}")
     check_fixed_files()
+
+    status, stderr = run_probe(binary, "--batch-write-once", resume_control)
+    require(status == 0, f"could not prepare the following four-frame batch: {stderr}")
     status, stderr = run_probe(binary, "--batch-write-once", database)
     require(status == 0, f"could not append a fresh batch after recovery: {stderr}")
-    status, stderr = run_probe(binary, "--check-recovered-batch", database, "2", "new")
+    status, stderr = run_probe(binary, "--check-recovered-batch", database, "3", "new", "101")
     require(status == 0, f"reopen did not recover the fresh batch: {stderr}")
-    require(os.path.samestat(wal.stat(), recovered_wal) and wal.read_bytes() == appended
-            and marker.read_bytes() == (control / marker.name).read_bytes(),
+    require(os.path.samestat(wal.stat(), recovered_wal) and wal.read_bytes() == (resume_control / wal.name).read_bytes()
+            and marker.read_bytes() == (resume_control / marker.name).read_bytes(),
             "the fresh batch did not extend the recovered keeper and marker exactly")
     check_fixed_files()
 
@@ -546,5 +579,5 @@ if __name__ == "__main__":
     print("Reopened a marker across short reads and rejected malformed lengths before repair within the read cap.")
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Interrupted ready and poisoned close before or after LOCK_UN; an inherited alias blocked only the no-effect cut.")
-    print("Recovered the exact prior table after writer exit before or during native batch payload writes.")
+    print("Recovered the prior table after native batch interruption and wrote and read the next value on that same table.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")
