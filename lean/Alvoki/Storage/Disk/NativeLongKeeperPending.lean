@@ -37,31 +37,29 @@ variable {heap stream : Type} {input : FilePath} {directory : DiskDirectory} {in
   {fileCalls : MarkedTemporaryReadCalls heap} {directoryCalls : MarkedDirectoryReadCalls heap stream}
   {prepared : NativeMarkedCheckpointReadHeap seed chronology fileCalls} {slotOf : heap → stream → DescriptorSlot}
 
-/-- The actual checkpoint, listing and seal reads preserve the new empty
-cell. A longer keeper releases its read descriptor before repair enters. -/
-theorem MarkedDirectoryReadReport.emptyPendingAfterLongKeeper
+/-- A projection of the initialized cache survives checkpoint, listing and seal
+reads. Only that projection must survive the longer keeper’s temporary read. -/
+theorem MarkedDirectoryReadReport.keepsCellAfterLongKeeper
     (listing : MarkedDirectoryReadReport prepared directoryCalls slotOf)
     {checkpoint : Option (PackedTable × UInt64)}
     (selected : SelectedIntegrityCheckpoint published.durable retry.image.directory.active.manifest checkpoint)
     {beforeKeeper afterKeeper : heap}
     (seals : MarkedSealReadChain seed fileCalls chronology.seals listing.reached beforeKeeper)
-    (readEffects : fileCalls.ScopeFrames (fun before after =>
-      view.pending after seed.pendingRef = view.pending before seed.pendingRef))
-    (listingEffects : directoryCalls.ScopeFrames directory (fun before after =>
-      view.pending after seed.pendingRef = view.pending before seed.pendingRef))
+    {α : Type} (cell : heap → α)
+    (project : ∀ {before after}, MarkedReadCacheFrame seed before after → cell after = cell before)
+    (readEffects : fileCalls.ScopeFrames (fun before after => cell after = cell before))
     (remember : FilePath → IO.FS.Handle → EStateM IO.Error heap Unit)
     (longer : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat)
     (read : fileCalls.readKeeperWithRelease remember (directory.file (.walSegment layout.keeper.first))
       layout.keeper.bytes.size reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper =
         .ok layout.keeper.bytes afterKeeper) :
-    view.pending afterKeeper seed.pendingRef = [] := by
-  let frame (before after : heap) := view.pending after seed.pendingRef = view.pending before seed.pendingRef
-  have trans {before middle after : heap} (left : frame before middle) (right : frame middle after) :
-      frame before after := right.trans left
-  obtain ⟨throughListing, throughSeals⟩ := listing.framesThroughSeals selected seals frame (fun _ => rfl)
-    trans readEffects listingEffects
-  have throughKeeper := fileCalls.longKeeperReadFrames readEffects (fun _ => rfl) trans remember _ longer read
-  exact throughKeeper.trans (throughSeals.trans (throughListing.trans seed.pendingSet))
+    cell afterKeeper = cell seed.afterPending := by
+  obtain ⟨_, _, _, _, start, _, _, _⟩ := prepared.reachesScan selected (fun _ _ => pure (⟨[], []⟩, 0))
+  obtain ⟨_, census, _, _, listed⟩ := listing.returns
+  obtain ⟨_, _, sealedReads, _⟩ := seals.reaches census
+  have keeperRead := fileCalls.longKeeperReadFrames readEffects (fun _ => rfl)
+    (fun first last => last.trans first) remember _ longer read
+  exact keeperRead.trans (project ((start.trans listed).trans sealedReads))
 
 end FromAllocation
 

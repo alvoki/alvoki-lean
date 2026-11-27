@@ -1292,6 +1292,7 @@ section FinalDirectorySync
 
 variable {renamedHeap : heap}
 
+local notation "directoryCell" => fun before after => view.directory after seed.directoryRef = view.directory before seed.directoryRef
 local notation "finalIssue" => reachedState (AlignedKeeperCacheCallbacks.getDirectory callbacks seed.directoryRef renamedHeap)
 
 set_option maxHeartbeats 1200000 in
@@ -1330,14 +1331,22 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       reads.wal.keeper.calls.metadata.byteSize.toNat beforeKeeper = .ok layout.keeper.bytes afterKeeper)
     (readerFrames : source.fileCalls.ScopeFrames retryFrame)
     (listingFrames : source.directoryCalls.ScopeFrames dir retryFrame)
-    (keeperFrame : retryFrame beforeKeeper afterKeeper)
     {publicError : IO.Error} {effective : Bool}
     (startFiles : (view.files afterKeeper).image = (view.files entry).image)
     (measured : reads.wal.keeper.calls.metadata.byteSize.toNat = authorization.keeper.metadata.byteSize.toNat)
     (workerStopped : source.workerObservingRepairRename seed.directoryRef seed.activeRef seed.pendingRef dir raw.lock
       (RawMarkedOpenInterpreter.makeCache dir seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending =
       .error publicError (reached, some renamedHeap))
-    (attached : view.directory renamedHeap seed.directoryRef = view.directory seed.afterPending seed.directoryRef)
+    (readerCell : source.fileCalls.ScopeFrames directoryCell)
+    (unlinkCell : ∀ {ordinal before after result}, ordinal ∈ layout.boundedPlan.newer →
+      source.remove ((dir).file (.walSegment ordinal)) before = .ok result after →
+      RunCollection.ownedUnlinkResult result = .ok () → directoryCell before after)
+    (syncCell : ∀ {path before after}, (path = (dir).path ∨ path = (dir).file .stagedWal) →
+      groupSync #[path] before = .ok () after → directoryCell before after)
+    (writeCell : ∀ {before after}, stageWrite ((dir).file .stagedWal) layout.boundedPlan.keeperBytes
+      before = .ok () after → directoryCell before after)
+    (renameCell : ∀ {before}, source.rename ((dir).file .stagedWal) ((dir).file (.walSegment layout.keeper.first))
+      before = .ok () renamedHeap → directoryCell before renamedHeap)
     (readRef : ∃ after, (callbacks).getDirectory seed.directoryRef renamedHeap =
       .ok (view.directory renamedHeap seed.directoryRef) after)
     (atIssue : view.handle finalIssue seed.handle = (issue.inventory, held.lifetime.directorySlot, 0))
@@ -1384,7 +1393,6 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       (liveFiles finalized.reached))
     (readerNames : source.fileCalls.ScopeFrames walNameFrame)
     (listingNames : source.directoryCalls.ScopeFrames dir walNameFrame)
-    (keeperNames : walNameFrame beforeKeeper afterKeeper)
     (namesOfDirectorySync : ∀ {before after}, groupSync #[(dir).path] before = .ok () after → walNameFrame before after)
     (namesOfCleanup : dispose.ScopeFrames finalized walNameFrame)
     (firstCovered : firstOffset ≤ target.range.through)
@@ -1489,6 +1497,26 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   obtain ⟨authorized, pruned, recorded, synced, staging, moved, groupFailed⟩ :=
     (LongKeeperRepair.observeRename_error_iff dir layout.boundedPlan _ source.remove stageWrite groupSync source.rename
       (layout.boundedPlan_valid pruning.later) bytes long).mp observed
+  have observedLong : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat := by
+    rw [measured]
+    exact pruning.longer
+  have keeperFrame := source.fileCalls.longKeeperReadFrames readerFrames
+    (fun h => NativeReadyState.SelectedRetryFrame.refl state (storage h) (visible h))
+    (fun first last => first.trans last) _ _ observedLong keeperRead
+  have keeperNames := source.fileCalls.longKeeperReadFrames readerNames (fun _ _ => rfl)
+    (fun first last start => (last start).trans (first start)) _ _ observedLong keeperRead
+  have preparedCell := listing.keepsCellAfterLongKeeper selected seals (fun h => view.directory h seed.directoryRef)
+    (fun frame => frame.directoryCell) readerCell _ observedLong keeperRead
+  have ⟨authorize, prune, written, persisted⟩ := staging
+  have prunedCell := framesReturnedPrune dir layout.boundedPlan source.remove stageWrite groupSync source.rename
+    directoryCell (fun _ => rfl) (fun first last => last.trans first) unlinkCell (syncCell (.inl rfl)) prune
+  have attached : view.directory renamedHeap seed.directoryRef = view.directory seed.afterPending seed.directoryRef := calc
+    _ = view.directory synced seed.directoryRef := renameCell moved
+    _ = view.directory recorded seed.directoryRef := syncCell (.inr rfl) persisted
+    _ = view.directory pruned seed.directoryRef := writeCell written
+    _ = view.directory authorized seed.directoryRef := prunedCell
+    _ = view.directory afterKeeper seed.directoryRef := syncCell (.inl rfl) authorize
+    _ = _ := preparedCell
   obtain ⟨afterRead, read⟩ := readRef
   have loaded : (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue := by
     rw [read, attached.trans (seed.directoryKept.trans seed.directorySet)]
@@ -1496,7 +1524,6 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   obtain ⟨diagnostic, failed, reported⟩ := (callbacks).rawDirectoryErrorAfterRead
     seed.directoryRef seed.activeRef seed.pendingRef loaded groupFailed
   subst publicError
-  have ⟨authorize, prune, written, persisted⟩ := staging
   obtain ⟨stageFrame, stageNames⟩ := stageFrames staging
   obtain ⟨renameFrame, namesOfRename⟩ := renameFrames staging moved
   obtain ⟨loadFrame, namesOfLoad⟩ := loadFrames loaded
@@ -1559,9 +1586,6 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   refine ⟨returned, selectedEffects, sameName.trans named, (sameBytes _ named).trans durable, live, active, later, ?_⟩
   intro beforeReboot reboot reset atBoot failedKeeper cacheKeeper readKeeper listKeeper
     buffered physical heldRoot rootNamed unlinkStorage records readsPending readsRoot renameEffect loadSurvivors cleanupSurvivors
-  have observedLong : layout.keeper.bytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat := by
-    rw [measured]
-    exact pruning.longer
   have liveBeforeRepair : RawOpenRetryTrace.LiveKeeperCrashChoices dir layout.target (storage afterKeeper) :=
     sameTarget.symm ▸ listing.keepsLiveKeeperBeforeRepair prior reboot reset atBoot (sameTarget ▸ targetAtKeeper)
       failedKeeper cacheKeeper readKeeper listKeeper selected seals observedLong keeperRead
@@ -1733,8 +1757,6 @@ theorem MarkedWalExtentReports.extendsLongRenameError
       result = view.directory before seed.directoryRef)
     (readPendingFrames : source.fileCalls.ScopeFrames
       (fun before after => view.pending after seed.pendingRef = view.pending before seed.pendingRef))
-    (listingPendingFrames : source.directoryCalls.ScopeFrames dir
-      (fun before after => view.pending after seed.pendingRef = view.pending before seed.pendingRef))
     (liveEffects : source.stage.ReplacementPrefixLiveEffects callbacks
       (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible
       seed.directoryRef seed.pendingRef seed.handle source.remove)
@@ -1852,8 +1874,9 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     change layout.boundedPlan.keeperBytes.size < reads.wal.keeper.calls.metadata.byteSize.toNat
     rw [size]
     exact longer
-  have emptyPending := listing.emptyPendingAfterLongKeeper selected seals readPendingFrames listingPendingFrames
-    (fun path handle => (callbacks).modifyPending seed.pendingRef (pushPending path handle)) observedLong keeperRead
+  have pendingCell := listing.keepsCellAfterLongKeeper selected seals (fun h => view.pending h seed.pendingRef)
+    (fun frame => frame.pendingCell) readPendingFrames _ observedLong keeperRead
+  have emptyPending := pendingCell.trans seed.pendingSet
   have live := protects liveEffects emptyPending
   have sameOld : visible synced old = visible afterKeeper old :=
     (List.cons.inj ((live _ keeperPath).2 old oldNamed)).1
