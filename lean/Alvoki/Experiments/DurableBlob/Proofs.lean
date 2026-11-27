@@ -268,6 +268,32 @@ theorem reopenInterrupted (directory : FilePath) (reports : Reports)
   rw [reopen_eq]
   exact .reopenInterrupted prior rfl
 
+theorem publishUncertainAdmits (directory : FilePath) (reports : Reports)
+    (stable : before.Stable old) (proposed : ByteArray) :
+    let after := match (backend directory reports).publish proposed before with
+      | .ok _ after | .error _ after => after
+    Step (.ready old) (.uncertain proposed) (.offline old (some proposed)) ∧
+      after.Admits old (some proposed) := by
+  simp only [publish_eq]
+  have effect := publish_outcome reports.publication before stable proposed
+  cases result : (model reports.publication true).backend.publish proposed before with
+  | ok _ after =>
+    rw [result] at effect
+    obtain ⟨active, survivors⟩ := effect
+    exact ⟨.uncertain, by simp [Image.Admits, Permitted, active, survivors]⟩
+  | error _ after =>
+    rw [result] at effect
+    exact ⟨.uncertain, effect⟩
+
+theorem reopenFailedAdmits (directory : FilePath) (reports : Reports)
+    (admitted : before.Admits old pending)
+    (returned : (backend directory reports).reopen before = .error err after) :
+    Step (.offline old pending) .openFailed (.offline old pending) ∧ after.Admits old pending := by
+  rw [reopen_eq] at returned
+  have outcome := reopen_outcome (fun _ => reports.directoryEffect) reports.readActive before admitted
+  rw [returned] at outcome
+  exact ⟨.openFailed, outcome⟩
+
 theorem reopenSettles (directory : FilePath) (reports : Reports)
     (admitted : before.Admits old pending)
     (returned : (backend directory reports).reopen before = .ok bytes after) :

@@ -127,12 +127,59 @@ example (dir : System.FilePath) (proposal : Version) (valid : proposal.Valid) :
     exact ⟨proposal, valid, rfl⟩
 ```
 
+The same boundary supports recovery for arbitrary valid manifest versions
+and primitive reports. The equations below select branches of the pure
+interpreter. The first open settles its choice, so a later L0 error and
+stop leave that choice pinned for a retry.
+
+```lean
+import Alvoki.Experiments.L0.RecoveryChoices
+import Alvoki.Experiments.DurableBlob.Proofs
+import Alvoki.Experiments.Manifest.Proofs
+
+open DurableBlob L0Manifest ExperimentalL0.RecoveryChoices
+open WalRecoverySlice.Segmented
+
+example (dir : System.FilePath) (publish failed opened : LinuxEffects.Reports)
+    (view : Contract.View) (old proposal : Version)
+    (oldValid : old.Valid) (proposalValid : proposal.Valid)
+    (before afterFailure settled : Image) (bytes : ByteArray)
+    (stable : before.Stable (encode old))
+    (failure :
+      let afterPublish := match (LinuxEffects.backend dir publish).publish (encode proposal) before with
+        | .ok _ image | .error _ image => image
+      (LinuxEffects.backend dir failed).reopen afterPublish = .error () afterFailure)
+    (success : (LinuxEffects.backend dir opened).reopen afterFailure = .ok bytes settled) :
+    ∃ version, decode bytes = some version ∧ settled.Stable (encode version) ∧
+      (version = old ∨ version = proposal) ∧
+      Retry (.online view) (.offline old (some proposal))
+        (.online view) (.offline version none) := by
+  have pending := (LinuxEffects.publishUncertainAdmits dir publish stable (encode proposal)).2
+  have admissible := (LinuxEffects.reopenFailedAdmits dir failed pending failure).2
+  obtain ⟨openedStep, pinned⟩ := LinuxEffects.reopenSettles dir opened admissible success
+  have permitted : Permitted (encode old) (some (encode proposal)) bytes := by
+    cases openedStep with
+    | opened allowed => exact allowed
+  have chosen : ∃ version, version.Valid ∧ bytes = encode version ∧ Permitted old (some proposal) version := by
+    rcases permitted with same | next
+    · exact ⟨old, oldValid, same, Or.inl rfl⟩
+    · exact ⟨proposal, proposalValid, (Option.some.inj next).symm, Or.inr rfl⟩
+  obtain ⟨version, valid, rfl, allowed⟩ := chosen
+  have retry : Retry (.online view) (.offline old (some proposal))
+      (.online view) (.ready version) :=
+    .manifest (.manifest .initial .openFailed trivial) (.opened allowed) trivial
+  exact ⟨version, decode_encode valid, pinned, retry.afterPublish.2,
+    .manifest retry .stop trivial⟩
+```
+
 The focused manifest script checks the producer modules and audits their
-axiom dependencies, and runs the Linux fixture. Compile this example with
+axiom dependencies, and runs the Linux fixture. Compile these examples with
 the PR #5 consumer to check the premise handoff. The kernel and axiom
 checks establish the derivation and its logical dependencies. The table
 above records the external IO premises, and the fixture samples their
-native behavior.
+native behavior. When PR #5 is integrated, move these checked examples into
+the permanent L0 composition proofs or integration checks. The L0 agent
+owns that integration and the native L0 lifecycle proof.
 
 ## Follow-up for WAL and SSTable
 
