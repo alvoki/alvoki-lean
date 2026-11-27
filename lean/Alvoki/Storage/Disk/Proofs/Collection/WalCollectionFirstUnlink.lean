@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalCollectionPreflight
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionPreflight
 import Alvoki.Storage.Disk.Proofs.Recovery.HeldDirectoryReadObservations
 
 namespace Alvoki.Storage.DiskSession

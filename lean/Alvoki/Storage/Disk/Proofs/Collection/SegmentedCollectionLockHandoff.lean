@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.RetainedWriterReopen
-import Alvoki.Storage.Disk.SegmentedCollectionRetry
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionRetry
 import Alvoki.Storage.Disk.SegmentedRetryTrace
 
 namespace Alvoki.Storage.DiskSession

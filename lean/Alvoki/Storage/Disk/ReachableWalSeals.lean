@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WalSealedSpans
-import Alvoki.Storage.Disk.WalSegmentCollectionNames
+import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollectionNames
 import Alvoki.Storage.Disk.SegmentedBatchDatabaseTrace
 
 namespace Alvoki.Storage.DiskSession

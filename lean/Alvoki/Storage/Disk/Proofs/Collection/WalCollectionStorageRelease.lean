@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalCollectionCompletePlan
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionCompletePlan
 import Alvoki.Storage.Disk.WalSealedInodeLifetime
 
 namespace Alvoki.Storage.DiskSession

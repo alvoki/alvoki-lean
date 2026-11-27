@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionReadPlan
 
 namespace Alvoki.Storage
 

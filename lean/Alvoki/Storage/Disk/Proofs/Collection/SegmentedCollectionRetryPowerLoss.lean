@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
-import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLiveReopen
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionPowerLoss
 
 namespace Alvoki.Storage.DiskSession
 

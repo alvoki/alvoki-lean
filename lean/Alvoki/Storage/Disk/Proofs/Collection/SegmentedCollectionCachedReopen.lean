@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLiveReopen
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession

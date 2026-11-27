@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalCollectionDirectoryFsync
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionDirectoryFsync
 
 namespace Alvoki.Storage.DiskSession
 

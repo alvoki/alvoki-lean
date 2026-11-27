@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.RetainedCollectionPowerLoss
+import Alvoki.Storage.Disk.Proofs.Collection.RetainedCollectionPowerLoss
 import Alvoki.Storage.Disk.SegmentedRetryTrace
 
 namespace Alvoki.Storage.DiskSession

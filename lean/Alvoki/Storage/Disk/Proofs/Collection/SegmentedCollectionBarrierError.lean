@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedCollectionLockHandoff
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLockHandoff
 
 namespace Alvoki.Storage.DiskSession
 

@@ -7,8 +7,8 @@ import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 import Alvoki.Storage.Disk.NativeOpenExternalPinRead
 import Alvoki.Storage.Disk.NativeOpenedWalPlanning
-import Alvoki.Storage.Disk.NativeOpenedWalCollection
-import Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeOpenedWalCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeOpenObsoleteRunCollection
 
 namespace Alvoki.Storage.DiskSession
 

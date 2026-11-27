@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalCollectionFirstEffect
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionFirstEffect
 
 namespace Alvoki.Storage.DiskSession
 

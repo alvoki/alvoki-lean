@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedCollectionBarrierError
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionBarrierError
 
 namespace Alvoki.Storage.DiskSession
 

@@ -172,7 +172,7 @@ unheld name durably at that reached return. `NativeExecutionTrace.reclaimsAtFirs
 states its exact eligibility, ordering and scheduling hypotheses.
 Physical storage release after unlink additionally depends on the last live reference and on filesystem
 allocation. The remaining obligations include full native retry coverage and a complete progress
-argument for eligible data. [Run collection](../../lean/Alvoki/Storage/Disk/VersionedRunCollection.lean) · [WAL collection](../../lean/Alvoki/Storage/Disk/SegmentedCollectionStep.lean) · [Scheduled name removal](../../lean/Alvoki/Storage/Disk/NativeScheduledRunReclamation.lean)
+argument for eligible data. [Run collection](../../lean/Alvoki/Storage/Disk/Proofs/Collection/VersionedRunCollection.lean) · [WAL collection](../../lean/Alvoki/Storage/Disk/Proofs/Collection/SegmentedCollectionStep.lean) · [Scheduled name removal](../../lean/Alvoki/Storage/Disk/NativeScheduledRunReclamation.lean)
 
 ### Progress and bounds
 

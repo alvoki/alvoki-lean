@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.DiskOpenAdmission
 import Alvoki.Storage.Disk.SegmentedReadyPowerLoss
-import Alvoki.Storage.Disk.SegmentedRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedRunCollection
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.LegacyManifest
 import Alvoki.Storage.Disk.RunFileSelection
-import Alvoki.Storage.Disk.RunGenerationCollection
+import Alvoki.Storage.Disk.Proofs.Collection.RunGenerationCollection
 
 namespace Alvoki.Storage
 open System CheckpointPublication

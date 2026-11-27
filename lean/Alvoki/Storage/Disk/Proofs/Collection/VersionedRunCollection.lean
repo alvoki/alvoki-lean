@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.LockedRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.LockedRunCollection
 import Alvoki.Storage.Disk.VersionedCheckpointPublication
 
 namespace Alvoki.Storage.CheckpointPublication

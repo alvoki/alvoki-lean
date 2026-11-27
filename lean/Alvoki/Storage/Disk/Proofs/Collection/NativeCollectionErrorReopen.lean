@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeReadyWalCollectionError
+import Alvoki.Storage.Disk.Proofs.Collection.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeMarkedReadPrefix
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.ClientCachedClose

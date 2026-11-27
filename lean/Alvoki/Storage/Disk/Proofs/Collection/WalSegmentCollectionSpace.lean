@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedCollectionStep
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionStep
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 
 namespace Alvoki.Storage.DiskSession

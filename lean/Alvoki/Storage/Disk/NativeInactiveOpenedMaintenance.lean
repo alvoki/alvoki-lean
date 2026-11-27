@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeInactiveOpenedSnapshots
-import Alvoki.Storage.Disk.NativeOpenedWalCollection
-import Alvoki.Storage.Disk.NativeOpenObsoleteRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeOpenedWalCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeOpenObsoleteRunCollection
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeOpenRotation
 import Alvoki.Storage.Disk.NativeOpenRunMaintenance
 

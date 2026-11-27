@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.IntegrityRunCollectionProgress
+import Alvoki.Storage.Disk.Proofs.Collection.IntegrityRunCollectionProgress
 
 namespace Alvoki.Storage.CheckpointPublication
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeReadyWalCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeReadyWalCollection
 
 namespace Alvoki.Storage.DiskSession
 

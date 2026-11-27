@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.RunRetentionCollection
-import Alvoki.Storage.Disk.WalSegmentCollectionSpace
-import Alvoki.Storage.Disk.WalSegmentCollectionNames
+import Alvoki.Storage.Disk.Proofs.Collection.RunRetentionCollection
+import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollectionSpace
+import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollectionNames
 import Alvoki.Storage.Disk.WalSealedSpans
 
 namespace Alvoki.Storage.DiskSession

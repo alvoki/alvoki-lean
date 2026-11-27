@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapZeroCreateRetry
 import Alvoki.Storage.Disk.Proofs.Bootstrap.BootstrapCreateErrorLineage
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 import Alvoki.Storage.Disk.NativeReadyCheckpoint
-import Alvoki.Storage.Disk.NativeReadyWalCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeReadyWalCollection
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
 import Alvoki.Storage.Disk.NativeCoveredWalDirectoryReopen
 import Alvoki.Storage.Disk.NativeExecutionClose
@@ -14,7 +14,7 @@ import Alvoki.Storage.Disk.NativePendingClientRecovery
 import Alvoki.Storage.Disk.NativePendingWriteProcessExit
 import Alvoki.Storage.Disk.NativeReadyProcessExit
 import Alvoki.Storage.Disk.NativeUncertainExecution
-import Alvoki.Storage.Disk.NativeCollectionErrorReopen
+import Alvoki.Storage.Disk.Proofs.Collection.NativeCollectionErrorReopen
 import Alvoki.Storage.Disk.NativeWritePreflight
 import Alvoki.Storage.Disk.NativeSnapshotExecution
 import Alvoki.Storage.Disk.NativeExplicitSnapshotRead
@@ -29,7 +29,7 @@ import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointPreflight
 import Alvoki.Storage.Disk.NativeWalPlanningQuery
 import Alvoki.Storage.Disk.Proofs.Rotation.NativeReadyRotation
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointErrorPowerLoss
-import Alvoki.Storage.Disk.NativeObsoleteRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeObsoleteRunCollection
 import Alvoki.Storage.Disk.NativeRunMaintenance
 import Alvoki.Storage.Disk.NativeRunMaintenanceReopen
 import Alvoki.Storage.Disk.NativeMarkerInterruptionReopen

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalCollectionFirstUnlink
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionFirstUnlink
 import Alvoki.Storage.Disk.WalSealedUnlinkSurvivors
 
 namespace Alvoki.Storage.DiskSession

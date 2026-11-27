@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunCollection
 import Alvoki.Storage.Disk.ObsoleteRunInodeLifetime
-import Alvoki.Storage.Disk.WalCollectionStorageRelease
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionStorageRelease
 
 namespace Alvoki.Storage.DiskSession
 

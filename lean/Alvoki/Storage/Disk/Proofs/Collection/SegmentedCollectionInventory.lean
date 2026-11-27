@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.WalSegmentBoundedOpenReports
 import Alvoki.Storage.Disk.WalSegmentPathIdentity
 

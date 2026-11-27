@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadyReadPrefix
-import Alvoki.Storage.Disk.WalCollectionCompletePlan
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionCompletePlan
 
 namespace Alvoki.Storage.DiskSession
 

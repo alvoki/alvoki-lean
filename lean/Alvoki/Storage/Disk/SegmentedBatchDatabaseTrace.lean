@@ -3,7 +3,7 @@ import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestDirectoryFailureR
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointManifestRenameFailure
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunErrorReopen
 import Alvoki.Storage.Disk.SegmentedDatabaseTrace
-import Alvoki.Storage.Disk.SegmentedRunCollectionPowerLoss
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedRunCollectionPowerLoss
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.SegmentedCheckpointObservedReopen
 import Alvoki.Storage.Disk.SessionReadGuards

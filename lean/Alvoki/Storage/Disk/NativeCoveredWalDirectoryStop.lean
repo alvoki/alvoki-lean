@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkStop
-import Alvoki.Storage.Disk.NativeReadyWalCollectionError
+import Alvoki.Storage.Disk.Proofs.Collection.NativeReadyWalCollectionError
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
 
 namespace Alvoki.Storage.DiskSession

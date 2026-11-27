@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeReadRecoveryTrace
-import Alvoki.Storage.Disk.SegmentedRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedRunCollection
 import Alvoki.Storage.Disk.Proofs.Recovery.HeldDirectoryReadObservations
 
 namespace Alvoki.Storage.DiskSession

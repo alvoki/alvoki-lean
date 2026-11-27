@@ -1,8 +1,8 @@
 import Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 import Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
-import Alvoki.Storage.Disk.WalSegmentCollectionMetadata
+import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollectionMetadata
 import Alvoki.Storage.Disk.WalSegmentSizedCheckpointReports
-import Alvoki.Storage.Disk.RetainedCollectionPowerLoss
+import Alvoki.Storage.Disk.Proofs.Collection.RetainedCollectionPowerLoss
 
 namespace Alvoki.Storage.WalSegmentRepair
 

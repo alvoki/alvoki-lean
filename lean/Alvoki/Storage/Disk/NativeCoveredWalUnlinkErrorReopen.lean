@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.NativeCoveredWalUnlinkError
-import Alvoki.Storage.Disk.NativeCollectionErrorReopen
+import Alvoki.Storage.Disk.Proofs.Collection.NativeCollectionErrorReopen
 
 namespace Alvoki.Storage.DiskSession
 

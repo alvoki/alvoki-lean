@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeObsoleteRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.NativeObsoleteRunCollection
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,9 +1,9 @@
 import Alvoki.Storage.Disk.MarkedSessionTrace
-import Alvoki.Storage.Disk.SegmentedCollectionPowerLoss
-import Alvoki.Storage.Disk.SegmentedCollectionRetry
-import Alvoki.Storage.Disk.SegmentedCollectionLiveReopen
-import Alvoki.Storage.Disk.SegmentedCollectionCachedReopen
-import Alvoki.Storage.Disk.SegmentedRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionPowerLoss
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionRetry
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLiveReopen
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionCachedReopen
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedRunCollection
 import Alvoki.Storage.Disk.SegmentedAppendRecovery
 import Alvoki.Storage.Disk.SegmentedAppendPowerLoss
 import Alvoki.Storage.Disk.SegmentedCheckpointRecovery

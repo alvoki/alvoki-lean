@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.WalCollectionOrderedPrefix
-import Alvoki.Storage.Disk.SegmentedCollectionStep
+import Alvoki.Storage.Disk.Proofs.Collection.WalCollectionOrderedPrefix
+import Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionStep
 
 namespace Alvoki.Storage.DiskSession
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentCollectionMetadata
+import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollectionMetadata
 
 namespace Alvoki.Storage.DiskSession
 

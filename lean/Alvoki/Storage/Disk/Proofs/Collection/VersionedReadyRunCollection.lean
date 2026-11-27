@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.OptionalFileRead
 import Alvoki.Storage.Disk.VersionedReadyMaintenance
-import Alvoki.Storage.Disk.VersionedRunCollection
+import Alvoki.Storage.Disk.Proofs.Collection.VersionedRunCollection
 
 namespace Alvoki.WAL.Boundary
 open System Storage CheckpointPublication Manifest
