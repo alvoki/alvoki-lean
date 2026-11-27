@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.MaintainedRecoveryWork
-import Alvoki.Storage.Disk.WalInventoryWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalInventoryWork
 
 namespace Alvoki.Storage
 

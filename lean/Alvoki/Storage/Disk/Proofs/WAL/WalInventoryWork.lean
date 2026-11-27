@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CheckedDirectoryRead
-import Alvoki.Storage.Disk.WalInventorySortWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalInventorySortWork
 
 namespace Alvoki.Storage
 

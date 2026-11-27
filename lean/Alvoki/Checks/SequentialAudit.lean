@@ -606,7 +606,7 @@ import Alvoki.Storage.Disk.HeldMetadataReadObservations
 import Alvoki.Storage.Disk.HeldWalPayloadObservations
 import Alvoki.Storage.Disk.HeldWalDecodeRejection
 import Alvoki.Storage.Disk.HeldWalInstallation
-import Alvoki.Storage.Disk.WalInventoryWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalInventoryWork
 import Alvoki.Storage.Disk.SizedCheckpointOpenFailure
 import Alvoki.Storage.Disk.CachedWalOpenFailure
 import Alvoki.Storage.Disk.CachedWalKeeperOpenFailure

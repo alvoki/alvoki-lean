@@ -672,8 +672,8 @@ lake env leanchecker Alvoki.Storage.Disk.HeldMetadataReadObservations
 lake env leanchecker Alvoki.Storage.Disk.HeldWalPayloadObservations
 lake env leanchecker Alvoki.Storage.Disk.HeldWalDecodeRejection
 lake env leanchecker Alvoki.Storage.Disk.HeldWalInstallation
-lake env leanchecker Alvoki.Storage.Disk.WalInventorySortWork
-lake env leanchecker Alvoki.Storage.Disk.WalInventoryWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalInventorySortWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalInventoryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentInstall
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedExtentOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.SizedCheckpointOpenFailure
