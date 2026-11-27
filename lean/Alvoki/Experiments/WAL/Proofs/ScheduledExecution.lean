@@ -24,7 +24,7 @@ private theorem Run.settleOffline {policy events image} (prior : Run policy even
   | cons file rest ih =>
     exact ih (.writeback prior (file.writeback image))
 
-private theorem tornAppend_withWritebacks (cut : TornAppend) (schedule : WritebackSchedule)
+theorem tornAppend_withWritebacks (cut : TornAppend) (schedule : WritebackSchedule)
     (policy : Policy) (cursor : Cursor) (p : Bytes) (image : Image) (clean : image.powerLoss = image) :
     (appendBatch (scheduledOps cut.ops schedule) policy cursor p).run image =
       (appendBatch cut.ops policy cursor p).run image := by
