@@ -1,4 +1,4 @@
-import FusedMerge
+import Alvoki.Experiments.Merge.FusedMerge
 import NativeTune
 
 #print axioms Alvoki.Packed.Run.record?_eq

@@ -1,4 +1,4 @@
-import SpanMerge
+import Alvoki.Experiments.Merge.SpanMerge
 
 namespace Alvoki.FusedMerge
 open Alvoki.Opt Alvoki.Packed

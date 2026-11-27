@@ -1,5 +1,5 @@
 import Optimizations
-import SpanMerge
+import Alvoki.Experiments.Merge.SpanMerge
 
 namespace Alvoki.NativeTune
 open Alvoki.Opt Alvoki.Packed

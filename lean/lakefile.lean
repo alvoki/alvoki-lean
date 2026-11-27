@@ -50,11 +50,13 @@ lean_lib ScopedBytesProofs where
 lean_lib ReplayProofs where
   roots := #[`Alvoki.Proofs.Merge.ReplayProofs]
 
-lean_lib FusedMerge
+lean_lib FusedMerge where
+  roots := #[`Alvoki.Experiments.Merge.FusedMerge]
 
 lean_lib Compaction
 
-lean_lib SpanMerge
+lean_lib SpanMerge where
+  roots := #[`Alvoki.Experiments.Merge.SpanMerge]
 
 lean_lib BlockCodec
 
