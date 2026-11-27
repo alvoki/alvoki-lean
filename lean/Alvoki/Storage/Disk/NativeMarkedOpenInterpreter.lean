@@ -686,6 +686,60 @@ theorem RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
     | ok _ afterDisposal | error _ afterDisposal =>
       cases unlocked : source.calls.unlock raw.lock afterDisposal <;> simp [unlocked]
 
+/-- The observed aligned, empty-suffix repair and reference allocations
+determine the public success. Each callback starts at the preceding return
+heap, and the keeper fsync uses the handle selected from the pending cell. -/
+theorem RawOpenAdmissionReport.returnsAlignedMarkedInterpreter
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    {checked marked prepared issued authorized loaded consumed repaired afterPhase reached : heap}
+    {metadata : IO.FS.Metadata} {plan : Plan} {opened : Reopened} {extent : Nat}
+    (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
+      seed.afterPending = .ok () checked)
+    (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
+      .ok (some metadata) marked)
+    (prepare : source.markedPreparation seed.pendingRef directory marked = .ok (plan, opened, extent) prepared)
+    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
+    (aligned : extent = plan.keeperSize) (noLater : plan.newer = [])
+    {keeper : IO.FS.Handle} {entries : List (FilePath × IO.FS.Handle)}
+    (loadRoot : source.keeperCallbacks.getDirectory seed.directoryRef prepared = .ok (some seed.handle) issued)
+    (syncRoot : source.keeperCallbacks.sync seed.handle issued = .ok () authorized)
+    (loadKeeper : source.keeperCallbacks.getPending seed.pendingRef authorized = .ok entries loaded)
+    (selected : entries.find? (fun item => item.1 == directory.file (.walSegment plan.keeper)) =
+      some (directory.file (.walSegment plan.keeper), keeper))
+    (consume : source.keeperCallbacks.setPending seed.pendingRef
+      (entries.filter (fun item => item.1 != directory.file (.walSegment plan.keeper))) loaded = .ok () consumed)
+    (syncKeeper : source.keeperCallbacks.sync keeper consumed = .ok () repaired)
+    {phase : IO.Ref (Phase Installed)} {token : IO.Ref Unit}
+    (phaseAllocated : source.allocatePhase (.ready opened.installed) repaired = .ok phase afterPhase)
+    (tokenAllocated : source.allocateToken () afterPhase = .ok token reached) :
+    let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
+    source.openTable input entry = .ok (RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token) reached := by
+  intro cache
+  let calls := source.keeperCallbacks.withFileReads source.fileCalls
+  let sync := calls.syncPaths directory.path seed.directoryRef seed.activeRef seed.pendingRef
+  have root := calls.syncsDirectory (dir := directory.path) (active := seed.activeRef) (pending := seed.pendingRef)
+    loadRoot syncRoot
+  have pending := calls.syncsSelectedPending (cached := seed.directoryRef) (active := seed.activeRef)
+    (file_ne_directory directory (.walSegment plan.keeper)) loadKeeper selected consume syncKeeper
+  have finished := finishBoundedMarkedOpen_alignedEmpty directory plan extent source.remove
+    (source.stage.stage seed.pendingRef calls.modifyPending) sync source.rename valid size aligned noLater root pending
+  apply (raw.returnsHealthyMarkedInterpreter source seed).2
+  change source.worker seed.directoryRef seed.activeRef seed.pendingRef directory raw.lock cache seed.afterPending = _
+  have recovered : recoverHealthyMarkedWithRefs source.fileCalls source.directoryCalls source.keeperCallbacks
+      seed.directoryRef seed.activeRef seed.pendingRef source.remove source.stage source.rename source.calls.lookup
+      directory (source.bootstrap directory cache) seed.afterPending = .ok opened repaired := by
+    change (recoverSegmentedWalWith _ _ (do
+      let (selectedPlan, replay, physicalExtent) ← source.markedPreparation seed.pendingRef directory
+      finishBoundedMarkedOpen directory selectedPlan physicalExtent source.remove
+        (source.stage.stage seed.pendingRef calls.modifyPending) sync source.rename
+      pure replay) _) seed.afterPending = _
+    simp only [recoverSegmentedWalWith, Bind.bind, EStateM.bind, flat, marker, Option.isSome, ↓reduceIte,
+      prepare, finished, Pure.pure, EStateM.pure]
+  simp only [RawMarkedOpenInterpreter.worker, installReady, Bind.bind, EStateM.bind, recovered, phaseAllocated,
+    tokenAllocated, Pure.pure, EStateM.pure]
+
 /-- After the two marked guards, the literal worker hands the values and heap
 returned by its reader to repair. Errors from preparation, repair and
 installation are carried by separate binds and may have the same diagnostic. -/

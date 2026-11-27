@@ -1996,6 +1996,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.replaysSelected
 #check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.retainedFromActualReplay
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSuccess
+#check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedEmpty
 #check_axioms Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_replacementReached
 #check_axioms Alvoki.Storage.DiskSession.returnedWalUnlinksAndBarrier
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.rootGroupReturned
@@ -4217,6 +4218,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.cacheAction
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.assembles
 #check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
+#check_axioms Alvoki.Storage.DiskSession.RawOpenAdmissionReport.returnsAlignedMarkedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.worker_reachesMarkedInstallation
 #check_axioms Alvoki.Storage.DiskSession.reachedMarkedPreparation
 #check_axioms Alvoki.Storage.DiskSession.reachedMarkedReaders

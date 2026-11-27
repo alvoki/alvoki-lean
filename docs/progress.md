@@ -17,11 +17,15 @@ determine the selected seals, keeper and any names to prune.
 the previous history under the descriptor and byte-prefix assumptions. A late
 publication error may instead retain the whole batch. A successful marked open
 reads the selected checkpoint files and bounded WAL and returns a table whose
-latest lookup agrees with that history. Once the keeper sync or trimmed
-replacement establishes a writable session, the same finite-call proof extends
-its ledger with subsequent writes and snapshots.
+latest lookup agrees with that history. For an aligned keeper with no later
+WAL files, the reached admission, successful preparation, directory and keeper
+syncs, and phase and token allocations determine that exact public return.
+The selected recovery proof can use this equality to extend the ledger with
+subsequent supported writes and snapshots. Preparation and the local callback
+returns remain inputs.
 [Public append and continuation](../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) ·
-[Literal reader and repair](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
+[Literal reader and repair](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
+[Aligned public open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 
 **What another open sees.** A live retry starts at the public failure's cleanup
 heap. Each accepted suffix removal stays visible as an absent name. If a removal

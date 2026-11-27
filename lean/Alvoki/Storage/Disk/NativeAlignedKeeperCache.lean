@@ -73,6 +73,24 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSu
             cases result
             simpa only [kept] using schedule
 
+/-- The aligned empty-suffix route has just the authorization and keeper
+barriers. Their adjacent returns determine the whole finisher result. -/
+theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_alignedEmpty {heap : Type}
+    (directory : DiskDirectory) (plan : Plan) (physicalSize : Nat)
+    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
+    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
+    (sync : Array FilePath → EStateM IO.Error heap Unit)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
+    (aligned : physicalSize = plan.keeperSize) (noLater : plan.newer = [])
+    {entry authorized reached : heap}
+    (root : sync #[directory.path] entry = .ok () authorized)
+    (keeper : sync #[directory.file (.walSegment plan.keeper)] authorized = .ok () reached) :
+    finishBoundedMarkedOpen directory plan physicalSize remove write sync rename entry = .ok () reached := by
+  simpa only [finishBoundedMarkedOpen, aligned, valid, size, Bind.bind, EStateM.bind,
+    beq_self_eq_true, decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, noLater,
+    List.isEmpty_nil, root] using keeper
+
 /-- Fold the literal unlink loop. An error identifies the accepted prefix
 and the exact reached removal that ended that loop. -/
 theorem foldWalUnlinksWithPrefix {heap model : Type}
@@ -455,23 +473,32 @@ theorem readsAligned {pending path count before opened read remembered keeper by
   simp [AlignedKeeperCacheCallbacks.readKeeper, readKeeperWith, Bind.bind, EStateM.bind, fits, openedKeeper,
     readKeeper, rememberedKeeper, Pure.pure, EStateM.pure]
 
-theorem syncsDirectory {dir cached active pending before after handle}
-    (loaded : calls.getDirectory cached before = .ok (some handle) before)
-    (synced : calls.sync handle before = .ok () after) :
+theorem syncsDirectory {dir cached active pending before issued after handle}
+    (loaded : calls.getDirectory cached before = .ok (some handle) issued)
+    (synced : calls.sync handle issued = .ok () after) :
     calls.syncPaths dir cached active pending #[dir] before = .ok () after := by
   rw [syncPaths, SyncPathGroup.run_single]
   simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, synced, Pure.pure, EStateM.pure]
 
 /-- A pending keeper bypasses the active cell and any fallback open.
 The removal from the pending cell precedes fsync. -/
+theorem syncsSelectedPending {dir path cached active pending before read consumed after handle entries}
+    (separate : path ≠ dir)
+    (loaded : calls.getPending pending before = .ok entries read)
+    (selected : entries.find? (fun item => item.1 == path) = some (path, handle))
+    (cleared : calls.setPending pending (entries.filter (fun item => item.1 != path)) read = .ok () consumed)
+    (synced : calls.sync handle consumed = .ok () after) :
+    calls.syncPaths dir cached active pending #[path] before = .ok () after := by
+  rw [syncPaths, SyncPathGroup.run_single]
+  simp [syncWithHandles, Bind.bind, EStateM.bind, separate, loaded, selected, cleared, synced, Pure.pure, EStateM.pure]
+
 theorem syncsPendingKeeper {dir path cached active pending before consumed after handle}
     (separate : path ≠ dir)
     (loaded : calls.getPending pending before = .ok [(path, handle)] before)
     (cleared : calls.setPending pending [] before = .ok () consumed)
     (synced : calls.sync handle consumed = .ok () after) :
-    calls.syncPaths dir cached active pending #[path] before = .ok () after := by
-  rw [syncPaths, SyncPathGroup.run_single]
-  simp [syncWithHandles, Bind.bind, EStateM.bind, separate, loaded, cleared, synced, Pure.pure, EStateM.pure]
+    calls.syncPaths dir cached active pending #[path] before = .ok () after :=
+  calls.syncsSelectedPending separate loaded (by simp) (by simpa using cleared) synced
 
 /-- A pending insertion selects the same handle even with other entries
 in the cell. The actual singleton sync consumes all matches before fsync. -/
@@ -734,12 +761,9 @@ theorem AlignedKeeperCacheReport.repairsAfterRead
     callbacks.syncsDirectory seen.directoryLoad seen.directorySync
   have selectedKeeper : sync #[directory.file (.walSegment layout.keeper.first)] seen.authorized = .ok () seen.reached :=
     callbacks.syncsPendingKeeper separate seen.pendingLoad seen.consume seen.keeperSync
-  change finishBoundedMarkedOpen directory layout.boundedPlan reads.wal.keeper.calls.metadata.byteSize.toNat
-      remove write sync rename seen.remembered = _
-  simp only [finishBoundedMarkedOpen, sizeEq, valid, bytes, Bind.bind, EStateM.bind,
-    beq_self_eq_true, decide_eq_true (Nat.le_refl _), Bool.and_self, ↓reduceIte, noLater, List.isEmpty_nil,
-    directorySelected]
-  exact selectedKeeper
+  exact finishBoundedMarkedOpen_alignedEmpty directory layout.boundedPlan
+    reads.wal.keeper.calls.metadata.byteSize.toNat remove write sync rename valid bytes sizeEq noLater
+    directorySelected selectedKeeper
 
 /-- Read the marked prefix and execute the two actual aligned barriers.
 The sync of the original keeper consumes its remembered reference before
