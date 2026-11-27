@@ -83,6 +83,7 @@ private structure Store where
   lock : IO.FS.Handle
   directory : IO.FS.Handle
   active : IO.Ref (Option (Nat × SingleFile.Handle))
+  controlWriter : IO.Ref (Option IO.FS.Handle)
 
 private def Store.closeChild (s : Store) : IO Unit := do
   if let some (_, child) ← s.active.swap none then SingleFile.close child
@@ -92,7 +93,8 @@ closing the child still runs the root unlock. -/
 @[inline] def releaseWith [MonadFinally m] [Functor m] (closeChild unlock : m Unit) : m Unit :=
   tryFinally closeChild unlock
 
-private def Store.release (s : Store) : IO Unit :=
+private def Store.release (s : Store) : IO Unit := do
+  s.controlWriter.set none
   releaseWith s.closeChild s.lock.unlock
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
@@ -170,11 +172,16 @@ private def Store.callbacks (s : Store) : Ops FileM where
     unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do throw "segmented WAL position exhausted"
     let stage := s.root / "CONTROL.next"
     removeRegular stage
-    liftM <| IO.FS.withFile stage .writeNew fun h => do
-      disableBuffering h
-      h.write (ControlCodec.encode c)
-      h.flush
-  syncControl := liftM <| IO.FS.withFile (s.root / "CONTROL.next") .read syncHandle
+    let h ← IO.FS.Handle.mk stage .writeNew
+    disableBuffering h
+    h.write (ControlCodec.encode c)
+    h.flush
+    s.controlWriter.set (some h)
+  syncControl := do
+    -- Consume the original writer on either outcome. An independently
+    -- opened descriptor can miss a writeback error reported to this writer.
+    let some h ← s.controlWriter.swap none | throw "no staged control writer"
+    syncHandle h
   renameControl := IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")
   readControl := readControlWith controlMetadata (fun file => IO.FS.readBinFile file) s.root
   openSegment p id := s.openChild p id
@@ -198,23 +205,39 @@ structure Handle where private mk ::
     (callbacks : Ops m) (owned : store) : m (Phase store) :=
   return .ready owned (← Segmented.reopen callbacks)
 
+@[inline] def openRootDirectoryWith [Monad m] (resolve : FilePath → m FilePath)
+    (openFile : FilePath → IO.FS.Mode → m descriptor) (dir : FilePath) :
+    m (FilePath × descriptor) := do
+  let root ← resolve dir
+  return (root, ← openFile root .read)
+
+@[inline] def installPhaseWith [Monad m] [MonadExceptOf error m]
+    (load : m phase) (newRef : phase → m cell) (newMutex : m mutex)
+    (release : m Unit) : m (cell × mutex) := do
+  let construct := do
+    let phase ← load
+    let state ← newRef phase
+    return (state, ← newMutex)
+  tryCatchThe error construct fun err => do
+    release
+    throw err
+
 private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
-  let root ← IO.FS.realPath dir
-  let directory ← IO.FS.Handle.mk root .read
+  let (root, directory) ← openRootDirectoryWith IO.FS.realPath IO.FS.Handle.mk dir
   let lock ← acquireRoot root
-  let store := {root, directory, lock, active := ← IO.mkRef none : Store}
-  try
-    let callbacks := store.callbacks
-    let phase ← match fresh with
-      | some (policy, cap) => do
-        unless (← entries root).all (fun e => e.fileName == "lock") do
-          throw <| IO.userError "segmented WAL directory is not empty"
-        pure (.ready store (← checked (Segmented.create callbacks policy cap)))
-      | none => checked (reopenPhaseWith callbacks store)
-    return ⟨← IO.mkRef phase, ← Std.BaseMutex.new⟩
-  catch e =>
-    store.release
-    throw e
+  let active ← IO.mkRef none
+  let controlWriter ← IO.mkRef none
+  let store : Store := {root, directory, lock, active, controlWriter}
+  let callbacks := store.callbacks
+  let load := match fresh with
+    | some (policy, cap) => do
+      unless (← entries root).all (fun e => e.fileName == "lock") do
+        throw <| IO.userError "segmented WAL directory is not empty"
+      pure (.ready store (← checked (Segmented.create callbacks policy cap)))
+    | none => checked (reopenPhaseWith callbacks store)
+  let (state, mutex) ← installPhaseWith (error := IO.Error) load
+    (fun phase => IO.mkRef phase) (liftM Std.BaseMutex.new) store.release
+  return ⟨state, mutex⟩
 
 def create (dir : FilePath) (policy : Policy) (capacity : Nat) : IO Handle :=
   install dir (some (policy, capacity))
@@ -229,7 +252,7 @@ private def update (h : Handle) (action : Ops FileM → Session → FileM Sessio
   match ← h.state.get with
   | .ready store session =>
     h.state.set (.poisoned store)
-    let next ← checked (action store.callbacks session)
+    let next ← try checked (action store.callbacks session) finally store.controlWriter.set none
     h.state.set (.ready store next)
     return next
   | .poisoned _ => throw <| IO.userError "segmented WAL requires reopen"

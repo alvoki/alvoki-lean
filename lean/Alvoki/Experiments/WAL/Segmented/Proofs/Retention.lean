@@ -19,7 +19,8 @@ private theorem apply_keeps {r : Request} (applied : r.apply v = some w)
     (kept : v.Keeps pos batch) : w.Keeps pos batch := by
   cases r with
   | append p =>
-    simp [Request.apply] at applied
+    simp only [Request.apply] at applied
+    split at applied <;> simp_all only [Option.some.injEq, reduceCtorEq]
     subst w
     rcases kept with gone | ⟨i, atPos, present⟩
     · exact Or.inl gone
@@ -95,7 +96,8 @@ theorem acknowledged_retained (earlier suffix : List Event) (batch : Batch) {las
   · intro _ _ before step
     cases step with
     | ack applied =>
-      simp only [Request.apply, Option.some.injEq] at applied
+      simp only [Request.apply] at applied
+      split at applied <;> simp_all only [Option.some.injEq, reduceCtorEq]
       subst_vars
       exact ⟨_, before, View.append_keeps _ _⟩
   · rintro _ _ _ step ⟨prior, valid, kept⟩
@@ -103,7 +105,11 @@ theorem acknowledged_retained (earlier suffix : List Event) (batch : Batch) {las
 
 private theorem apply_base {r : Request} (applied : r.apply v = some w) : v.base ≤ w.base := by
   cases r with
-  | append => simp [Request.apply] at applied; subst w; exact Nat.le_refl _
+  | append =>
+    simp only [Request.apply] at applied
+    split at applied <;> simp_all only [Option.some.injEq, reduceCtorEq]
+    subst w
+    exact Nat.le_refl _
   | discardThrough k =>
     simp only [Request.apply] at applied
     split at applied <;> simp_all only [Option.some.injEq, reduceCtorEq]

@@ -7,7 +7,10 @@ filesystem and owns it exclusively for the lifetime of the handle.
 `Native.create dir policy capacity` creates a WAL with 1–255 batches per segment.
 `Native.openExisting dir` opens one. `append`, `discardThrough`, `scan`, and `close`
 operate on the returned handle. A successful append returns its one-based absolute position,
-which can be passed to `discardThrough` within its native UInt64 range, including after rotation or earlier release. Recovery materializes the retained history in memory, and each
+which can be passed to `discardThrough` after rotation or earlier release. The public
+contract caps absolute positions at UInt64.max. At that tail, append rejects before
+rotation or child writes, so recovery cannot select the rejected batch. Recovery
+materializes the retained history in memory, and each
 append updates the cached session view. This experimental API is not a bounded-memory
 WAL reader. Positions are absolute: batches start at one and
 `scan` returns the last discarded position `base` plus the retained batches. Release
@@ -154,7 +157,12 @@ through its fsync, rename, and root barrier. Its directory effect must be
 framed with the WAL root's child bindings. Before CONTROL can select a new
 segment, that segment and its name need their own durability argument.
 Reclamation must respect both admissible CONTROL choices until the barrier.
-The CONTROL write-side adapter is owned separately from this read-side work.
+The native CONTROL adapter uses the writer custody from PR #5: the stage
+writer is consumed by its own fsync and cleared on cleanup. The recovery
+composition theorem covers a reported discard error, another reported open
+error, and two successful opens with the same view. It uses the shared
+root publication model and interpreted native child effects. Linking the
+actual CONTROL publication to that model remains open.
 
 ## Roadmap
 

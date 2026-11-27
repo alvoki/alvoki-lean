@@ -77,6 +77,7 @@ def rotateIfFull (ops : Ops m) (session : Session) : m (Control × Nat) := do
 
 def append (ops : Ops m) (session : Session) (payload : Bytes) : m Session := do
   if payload.length > 32 then throw "batch out of bounds"
+  if session.view.tail ≥ Contract.maxPosition then throw "segmented WAL position exhausted"
   let (next, used) ← rotateIfFull ops session
   ops.appendSegment next.policy next.active payload
   return ⟨next, used + 1, session.view.append payload⟩

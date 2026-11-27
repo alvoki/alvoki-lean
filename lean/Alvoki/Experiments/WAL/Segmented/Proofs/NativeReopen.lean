@@ -1,6 +1,7 @@
 import Alvoki.Experiments.WAL.Segmented.Native
 import Alvoki.Experiments.WAL.Segmented.Proofs.Reopen
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCodec
+import Alvoki.Experiments.WAL.Segmented.Proofs.Discard
 
 namespace WalRecoverySlice.Segmented.Native
 
@@ -73,6 +74,53 @@ theorem release_reached (close unlock : EStateM error state Unit) (before : stat
     cases unlock after with
     | ok value _ => cases value; rfl
     | error => rfl
+
+/-- The retained descriptor is opened read-only on the resolved root. -/
+theorem openRootDirectory_usesCanonicalPath (dir root : FilePath) (held : descriptor)
+    (resolve : FilePath → Except String FilePath)
+    (openFile : FilePath → IO.FS.Mode → Except String descriptor)
+    (resolved : resolve dir = .ok root) (opened : openFile root .read = .ok held) :
+    openRootDirectoryWith resolve openFile dir = .ok (root, held) := by
+  simp [openRootDirectoryWith, Bind.bind, Pure.pure, Except.bind, Except.pure, resolved, opened]
+
+/-- Interpret cleanup against the same reached state as installation, even
+when phase installation failed after the root protocol changed the disk. -/
+theorem installPhase_reached (load : EStateM String state (Except String phase))
+    (newRef : phase → EStateM String state (Except String cell))
+    (newMutex : EStateM String state (Except String mutex))
+    (release : EStateM String state (Except String Unit)) (before : state) :
+    let action : ExceptT String (EStateM String state) (cell × mutex) := do
+      let phase ← (ExceptT.mk load : ExceptT String (EStateM String state) phase)
+      let cell ← (ExceptT.mk (newRef phase) : ExceptT String (EStateM String state) cell)
+      let mutex ← (ExceptT.mk newMutex : ExceptT String (EStateM String state) mutex)
+      return (cell, mutex)
+    (installPhaseWith (error := String) (ExceptT.mk load)
+      (fun phase => ExceptT.mk (newRef phase)) (ExceptT.mk newMutex)
+      (ExceptT.mk release)).run before =
+      match action.run before with
+      | .ok (.error err) reached =>
+        match release reached with
+        | .ok (.ok ()) after => .ok (.error err) after
+        | .ok (.error cleanup) after => .ok (.error cleanup) after
+        | .error stopped after => .error stopped after
+      | other => other := by
+  dsimp only
+  simp only [installPhaseWith, tryCatchThe, MonadExceptOf.tryCatch, ExceptT.tryCatch,
+    ExceptT.run, ExceptT.mk, Bind.bind, EStateM.bind]
+  split
+  · rename_i response reached ran
+    rw [ran]
+    cases response with
+    | ok => rfl
+    | error =>
+      simp only [ExceptT.bind, ExceptT.bindCont, ExceptT.mk, Bind.bind, EStateM.bind]
+      cases release reached with
+      | error => rfl
+      | ok response _ => cases response with
+        | error => rfl
+        | ok value => cases value; rfl
+  · rename_i _ _ ran
+    rw [ran]
 
 /-- Once the protected namespace is checked, the actual dispatch opens the
 selected path and scans exactly the handle it stores under the selected ID. -/
@@ -288,5 +336,34 @@ theorem reopenPhase_nativeChild (owned : store) (root : FilePath) (effects : Eff
     | .ok (.ok _) _ => False
     | .ok (.error _) after | .error _ after => Recoverable known request after.disk :=
   reopenPhase_withChild owned effects (nativeOpenChild_effects root reports) s prior
+
+/-- The same continuation applies to every publication cut that reports an
+error. The child producer is used on each reached disk; root operations
+still use the root model. -/
+theorem repeatOpenAfterFailedDiscard (root : FilePath) (publish interruptedOpen first second : Effects)
+    (reports : Nat → Nat → SingleFile.OpenReports)
+    (session : Session) (position : Nat) (before failed retried opened done : State)
+    (selected repeated : Session) (installed : Installed session before.disk)
+    (discardError : (Segmented.discardThrough (ops publish) session position).run before =
+      .ok (.error publicationError) failed)
+    (openError : (Segmented.reopen (reopenOps interruptedOpen (nativeOpenChild root reports))).run failed =
+      .ok (.error recoveryError) retried)
+    (openFirst : (Segmented.reopen (reopenOps first (nativeOpenChild root reports))).run retried =
+      .ok (.ok selected) opened)
+    (openSecond : (Segmented.reopen (reopenOps second (nativeOpenChild root reports))).run opened =
+      .ok (.ok repeated) done) :
+    PermittedView session.view (some (.discardThrough position)) selected.view ∧
+      repeated.view = selected.view := by
+  have discard := discard_refines publish session position before installed
+  rw [discardError] at discard
+  have child := nativeOpenChild_effects root reports
+  have retry := reopenWithChild_refines interruptedOpen child failed discard
+  rw [openError] at retry
+  have chosen := reopenWithChild_refines first child retried retry
+  rw [openFirst] at chosen
+  have settled := chosen.1.offline (request := none) (.inl rfl)
+  have again := reopenWithChild_refines second child opened settled
+  rw [openSecond] at again
+  exact ⟨chosen.2, again.2.elim id (fun impossible => by cases impossible)⟩
 
 end WalRecoverySlice.Segmented.Model
