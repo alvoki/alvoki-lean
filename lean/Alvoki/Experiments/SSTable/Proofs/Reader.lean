@@ -7,7 +7,7 @@ namespace ImmutableSSTable
 successful exact reads in the image. The memory source implements this contract. -/
 structure Source.Serves [Monad m] (source : Source m) (image : ByteArray) : Prop where
   size : source.size = pure image.size
-  readAt : ∀ offset count, count ≤ 16 → offset + count ≤ image.size →
+  readAt : ∀ offset count, count ≤ rowSize → offset + count ≤ image.size →
     source.readAt offset count = pure (image.extract offset (offset + count))
 
 theorem Source.memory_serves [Monad m] (image : ByteArray) :
@@ -45,7 +45,8 @@ once. At and after the end it returns `none`. -/
 theorem Table.next_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {table : Table m} {source : Source m} {rows : List Entry}
     (bound : table.BoundTo source rows.length) (observed : source.Serves (encodeImage rows))
-    (index : Nat) : table.next index = pure (if h : index < rows.length then some (rows[index], index + 1) else none) := by
+    (index : Nat) : table.next index = pure (Contents.next rows index) := by
+  unfold Contents.next
   by_cases within : index < rows.length
   · simp [Table.next, bound.1, within, table.readEntry_encoded bound observed within]
   · simp [Table.next, bound.1, within]
@@ -61,8 +62,9 @@ def rowAt (rows : List Entry) (index : Nat) : Entry := rows[index]?.getD ⟨0, 0
 theorem Table.seek_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {table : Table m} {source : Source m} {rows : List Entry}
     (bound : table.BoundTo source rows.length) (observed : source.Serves (encodeImage rows))
-    (strict : rows.Pairwise fun a b => a.key < b.key) (key : UInt64) :
-    ∃ index, table.seek key = pure index ∧ LowerBound (fun i => (rowAt rows i).key) rows.length key index := by
+    (strict : Ordered rows) (key : UInt64) :
+    ∃ index, table.seek key = pure index ∧ Contents.IsSeek rows key index := by
+  change ∃ i, table.seek key = pure i ∧ LowerBound (fun n => (rowAt rows n).key) rows.length key i
   unfold Table.seek
   rw [bound.1]
   apply seekBetween_correct
@@ -73,12 +75,12 @@ theorem Table.seek_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     rcases Nat.eq_or_lt_of_le le with rfl | lt
     · exact UInt64.le_refl _
     · rw [rowAt_eq (Nat.lt_trans lt within), rowAt_eq within]
-      exact UInt64.le_of_lt (strict.rel_getElem_of_lt (Nat.lt_trans lt within) within lt)
+      exact UInt64.le_of_lt ((show rows.Pairwise _ from strict).rel_getElem_of_lt (Nat.lt_trans lt within) within lt)
 
 private theorem Table.lookup_hit [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {table : Table m} {source : Source m} {rows : List Entry}
     (bound : table.BoundTo source rows.length) (observed : source.Serves (encodeImage rows))
-    (strict : rows.Pairwise fun a b => a.key < b.key) (key : UInt64)
+    (strict : Ordered rows) (key : UInt64)
     {i : Nat} (within : i < rows.length) (hit : rows[i].key = key) :
     table.lookup key = pure (some rows[i].value) := by
   obtain ⟨index, seek, _, left, right⟩ := table.seek_encoded bound observed strict key
@@ -97,30 +99,31 @@ private theorem Table.lookup_hit [Monad m] [LawfulMonad m] [MonadExceptOf String
       have lower := right index (Nat.le_refl _) atIndex
       change key ≤ (rowAt rows index).key at lower
       rw [rowAt_eq atIndex] at lower
-      have ordered := strict.rel_getElem_of_lt atIndex within smaller
+      have ordered := (show rows.Pairwise _ from strict).rel_getElem_of_lt atIndex within smaller
       rw [hit] at ordered
       exact False.elim (UInt64.not_lt.mpr lower ordered)
   have next := table.next_encoded bound observed i
-  simp [Table.lookup, seek, indexEq, next, within, hit]
+  simp [Table.lookup, seek, indexEq, next, Contents.next, within, hit]
 
 private theorem Table.lookup_miss [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {table : Table m} {source : Source m} {rows : List Entry}
     (bound : table.BoundTo source rows.length) (observed : source.Serves (encodeImage rows))
-    (strict : rows.Pairwise fun a b => a.key < b.key) (key : UInt64)
+    (strict : Ordered rows) (key : UInt64)
     (miss : ∀ i (within : i < rows.length), rows[i].key ≠ key) : table.lookup key = pure none := by
   obtain ⟨index, seek, _⟩ := table.seek_encoded bound observed strict key
   have next := table.next_encoded bound observed index
   by_cases within : index < rows.length
-  · simp [Table.lookup, seek, next, within, miss index within]
-  · simp [Table.lookup, seek, next, within]
+  · simp [Table.lookup, seek, next, Contents.next, within, miss index within]
+  · simp [Table.lookup, seek, next, Contents.next, within]
 
 /-- Exact lookup on the returned table agrees with a linear search of the
 logical rows, including absent keys. Strict key order rules out duplicates. -/
 theorem Table.lookup_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {table : Table m} {source : Source m} {rows : List Entry}
     (bound : table.BoundTo source rows.length) (observed : source.Serves (encodeImage rows))
-    (strict : rows.Pairwise fun a b => a.key < b.key) (key : UInt64) :
-    table.lookup key = pure ((rows.find? fun row => row.key == key).map Entry.value) := by
+    (strict : Ordered rows) (key : UInt64) :
+    table.lookup key = pure (Contents.lookup rows key) := by
+  unfold Contents.lookup
   cases found : rows.find? (fun row => row.key == key) with
   | none =>
     simp only [Option.map_none]
@@ -141,25 +144,25 @@ theorem Table.lookup_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
 /-- Open and query the returned handle from the same image. -/
 theorem open_lookup_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {source : Source m} {rows : List Entry} (fits : rows.length ≤ maxRows)
-    (observed : source.Serves (encodeImage rows)) (strict : rows.Pairwise fun a b => a.key < b.key)
+    (observed : source.Serves (encodeImage rows)) (strict : Ordered rows)
     (key : UInt64) :
     (do let table ← openTable source; table.lookup key) =
-      pure ((rows.find? fun row => row.key == key).map Entry.value) := by
+      pure (Contents.lookup rows key) := by
   obtain ⟨table, opened, bound⟩ := openTable_encoded fits observed
   simp [opened, table.lookup_encoded bound observed strict key]
 
-/-- From the actual output of successful writer pushes, healthy positional I/O
+/-- From the flushed image of the complete writer schedule, healthy positional I/O
 returns a handle whose reads implement the input sequence. Input order and the
 declared row count follow from the writer having accepted the stream. -/
 theorem open_built_table [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {source : Source m} {rows : List Entry} {state body}
-    (built : runPushes {} rows = .ok (state, body))
-    (observed : source.Serves (state.header ++ body)) :
+    {source : Source m} {rows : List Entry} {count bytes}
+    (built : modelBuild rows = .ok (count, bytes))
+    (observed : source.Serves bytes) :
     ∃ table, openTable source = pure table ∧
-      (∀ key, table.lookup key = pure ((rows.find? fun row => row.key == key).map Entry.value)) ∧
-      (∀ key, ∃ i, table.seek key = pure i ∧ LowerBound (fun n => (rowAt rows n).key) rows.length key i) ∧
-      (∀ i, table.next i = pure (if h : i < rows.length then some (rows[i], i+1) else none)) := by
-  obtain ⟨fits, ordered, image⟩ := builder_accepts_only_ordered built
+      (∀ key, table.lookup key = pure (Contents.lookup rows key)) ∧
+      (∀ key, ∃ i, table.seek key = pure i ∧ Contents.IsSeek rows key i) ∧
+      (∀ i, table.next i = pure (Contents.next rows i)) := by
+  obtain ⟨fits, ordered, _, image⟩ := modelBuild_ok_iff.mp built
   rw [image] at observed
   obtain ⟨table, opened, bound⟩ := openTable_encoded fits observed
   exact ⟨table, opened, table.lookup_encoded bound observed ordered,

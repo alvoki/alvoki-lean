@@ -13,7 +13,7 @@ private opaque pread (handle : @& IO.FS.Handle) (offset : UInt64) (count : USize
 def handleSource (handle : IO.FS.Handle) : Source (EIO String) where
   size := (handleSize handle).toEIO toString
   readAt offset count := do
-    if count > 16 || offset + count > 2^63 - 1 then
+    if count > rowSize || offset + count > 2^63 - 1 then
       throw "SSTable read outside positional I/O bounds"
     (pread handle offset.toUInt64 count.toUSize).toEIO toString
 
@@ -27,19 +27,9 @@ def openNative (path : System.FilePath) : EIO String (Table (EIO String)) := do
 def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat := do
   let handle ← IO.FS.Handle.mk path .writeNew
   try
-    handle.write (ByteArray.mk (Array.replicate 16 0))
-    let mut state : BuilderState := {}
-    while let some row ← nextRow do
-      let (updated, bytes) ← IO.ofExcept (state.push row)
-      handle.write bytes
-      state := updated
-    handle.flush
-    handle.rewind
-    handle.write state.header
-    handle.flush
-    return state.count
+    buildStream ⟨handle.write, handle.flush, handle.rewind⟩ nextRow IO.userError
   catch err =>
-    IO.FS.removeFile path
+    try IO.FS.removeFile path catch _ => pure ()
     throw err
 
 end ImmutableSSTable

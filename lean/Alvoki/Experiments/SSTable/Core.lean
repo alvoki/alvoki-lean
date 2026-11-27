@@ -1,14 +1,14 @@
-import Alvoki.Codec.Block
+import Alvoki.Codec.WordChecksum
 import Alvoki.Experiments.SSTable.Search
 
 namespace ImmutableSSTable
 
 /-- The header is an eight-byte format identifier followed by the row count. -/
-def magic : ByteArray := "ALVSST01".toUTF8
+def magic : ByteArray := "ALVSST02".toUTF8
 
 def headerSize : Nat := 16
 
-def rowSize : Nat := 16
+def rowSize : Nat := 24
 
 /-- All valid file sizes fit a nonnegative signed 64-bit positional offset. -/
 def maxRows : Nat := (2 ^ 63 - 1 - headerSize) / rowSize
@@ -21,7 +21,8 @@ def encodeHeader (rows : Nat) : ByteArray :=
   Alvoki.pushWordFast magic rows.toUInt64
 
 def encodeEntry (row : Entry) : ByteArray :=
-  Alvoki.pushWordFast (Alvoki.pushWordFast (ByteArray.emptyWithCapacity rowSize) row.key) row.value
+  let fields := Alvoki.pushWordFast (Alvoki.pushWordFast (ByteArray.emptyWithCapacity rowSize) row.key) row.value
+  Alvoki.pushWordFast fields (Alvoki.ByteWords.checksumWords [row.key, row.value])
 
 /-- Row bytes produced by repeated streaming writes, in their given order. -/
 def encodeRows (rows : List Entry) : ByteArray :=
@@ -38,7 +39,11 @@ def decodeHeader (bytes : ByteArray) : Except String Nat := do
 
 def decodeEntry (bytes : ByteArray) : Except String Entry := do
   unless bytes.size = rowSize do throw "invalid SSTable row size"
-  return ⟨Alvoki.word bytes 0, Alvoki.word bytes 8⟩
+  let key := Alvoki.word bytes 0
+  let value := Alvoki.word bytes 8
+  unless Alvoki.word bytes 16 = Alvoki.ByteWords.checksumWords [key, value] do
+    throw "invalid SSTable row checksum"
+  return ⟨key, value⟩
 
 /-- A source carries the size and positional read for the same immutable file. -/
 structure Source (m : Type → Type) where

@@ -23,7 +23,7 @@ LEAN_EXPORT lean_obj_res alvoki_sstable_size(b_lean_obj_arg handle) {
 
 LEAN_EXPORT lean_obj_res alvoki_sstable_pread(b_lean_obj_arg handle,
                                                uint64_t offset, size_t size) {
-    if (size > 16 || offset > (uint64_t)INT64_MAX - size)
+    if (size > 24 || offset > (uint64_t)INT64_MAX - size)
         return lean_io_result_mk_error(lean_mk_io_user_error(
             lean_mk_string("SSTable read outside positional I/O bounds")));
     int fd = fileno(lean_get_external_data(handle));

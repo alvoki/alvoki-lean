@@ -45,20 +45,40 @@ theorem rowSpan (within : index < count) : rowOffset index + rowSize ≤ fileSiz
   have firstSize : first.size = 8 := by
     simp [first, pushWordFast_size]
     rfl
+  let fields := pushWordFast first row.value
+  have fieldsSize : fields.size = 16 := by simp [fields, pushWordFast_size, firstSize]
+  have data (offset : Nat) (inside : offset + 8 ≤ 16) :
+      word (encodeEntry row) offset = word fields offset := by
+    apply word_preserved
+    change offset + 7 < fields.size
+    omega
   have key : word (encodeEntry row) 0 = row.key := by
+    rw [data 0 (by decide)]
     change word (pushWordFast first row.value) 0 = row.key
     rw [word_preserved _ _ _ (by omega)]
     exact pushWordFast_roundtrip _ _
   have value : word (encodeEntry row) 8 = row.value := by
-    change word (pushWordFast first row.value) 8 = row.value
-    rw [← firstSize]
+    rw [data 8 (by decide), ← firstSize]
     exact pushWordFast_roundtrip _ _
-  simp [decodeEntry, key, value, Pure.pure, Except.pure]
+  have check : word (encodeEntry row) 16 = checksumWords [row.key, row.value] := by
+    rw [← fieldsSize]
+    exact pushWordFast_roundtrip _ _
+  simp [decodeEntry, key, value, check, Pure.pure, Except.pure]
+
+/-- Every full-length row with a mismatching checksum fails before its
+key or value can be exposed through the positional reader. -/
+theorem decodeEntry_rejects_checksum {bytes : ByteArray} (size : bytes.size = rowSize)
+    (mismatch : word bytes 16 ≠ checksumWords [word bytes 0, word bytes 8]) :
+    decodeEntry bytes = .error "invalid SSTable row checksum" := by
+  simp [decodeEntry, size, mismatch]
+  rfl
 
 @[simp] theorem encodeRows_cons (row : Entry) (rest : List Entry) :
     encodeRows (row :: rest) = encodeEntry row ++ encodeRows rest := by
   simp only [encodeRows, List.flatMap_cons, List.toByteArray_append]
-  congr 1
+  have roundtrip (bytes : ByteArray) : bytes.data.toList.toByteArray = bytes := by
+    ext1; simp
+  rw [roundtrip]
 
 @[simp] theorem encodeRows_size (rows : List Entry) : (encodeRows rows).size = rowSize * rows.length := by
   induction rows with

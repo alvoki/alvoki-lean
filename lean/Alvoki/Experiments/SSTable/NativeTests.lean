@@ -23,6 +23,7 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   let path := dir / "run"
   let rows : List Entry := [⟨2, 200⟩, ⟨7, 700⟩, ⟨11, 1100⟩]
   check ((← build path rows) == 3) "streamed count"
+  check ((← IO.FS.readBinFile path) == encodeImage rows) "native builder image"
   let table ← ok (openNative path)
   check ((← ok (table.lookup 7)) == some 700) "point hit"
   check ((← ok (table.lookup 3)) == none) "point miss"
@@ -42,6 +43,13 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   for invalid in [[(⟨2, 1⟩ : Entry), ⟨2, 2⟩], [⟨2, 1⟩, ⟨1, 2⟩]] do
     check (!(← (build bad invalid).toBaseIO).isOk) "builder accepted unordered key"
     check (!(← bad.pathExists)) "failed construction left an incomplete file"
+  -- Force both failures: the input callback removes the incomplete file before
+  -- throwing, so the builder's cleanup sees ENOENT.
+  let primary := IO.userError "input stream failed"
+  let result ← (buildFile bad (do IO.FS.removeFile bad; throw primary)).toBaseIO
+  match result with
+  | .error err => check (err.toString == primary.toString) "cleanup masked input error"
+  | .ok _ => throw <| IO.userError "failed input reported success"
   discard <| build bad []
   let empty ← ok (openNative bad)
   check ((← ok (empty.next 0)).isNone) "empty table"
@@ -58,6 +66,8 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   expectError (openNative path) "trailing bytes accepted"
   IO.FS.writeBinFile path (ByteArray.mk (Array.replicate 16 0))
   expectError (openNative path) "bad magic accepted"
+  IO.FS.writeBinFile path ((encodeHeader 0).set! 7 49)
+  expectError (openNative path) "accepted v1 table as v2"
   IO.FS.writeBinFile path (ByteArray.mk #[1])
   expectError (openNative path) "short header accepted"
 
@@ -68,7 +78,7 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   let source := handleSource writeOnly
   check ((← ok source.size) == 16) "fixture extent"
   expectError (source.readAt 0 16) "pread error became EOF"
-  expectError (source.readAt 0 17) "oversized read accepted"
+  expectError (source.readAt 0 25) "oversized read accepted"
   expectError (source.readAt (2^64) 1) "offset wrapped before pread"
   IO.println "immutable SSTable native fixtures passed"
 

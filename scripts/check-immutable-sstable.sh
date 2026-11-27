@@ -25,12 +25,13 @@ compile() {
   leanchecker "${module//\//.}"
 }
 compile Alvoki/Codec/Block native
+compile Alvoki/Codec/WordChecksum native
 for module in Contract Search Core Builder Native NativeTests; do
   compile "$table/$module" native
 done
 compile Alvoki/Kernel/BlockContracts
 compile Alvoki/Codec/ByteWords
-for proof in Search Format Builder Reader; do
+for proof in Search Format Builder Reader ReadErrors; do
   compile "$table/Proofs/$proof"
 done
 compile Alvoki/Checks/Audit/AxiomPolicy
@@ -38,9 +39,19 @@ lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.SSTable.Proofs.Builder
 import Alvoki.Experiments.SSTable.Proofs.Reader
+import Alvoki.Experiments.SSTable.Proofs.ReadErrors
 open ImmutableSSTable
 #check_axioms open_built_table
+#check_axioms decodeEntry_rejects_checksum
+#check_axioms RequiredProbeError.propagates
+#check_axioms Table.readEntry_source_error
+#check_axioms Table.readEntry_decode_error
+#check_axioms Table.seek_read_error
+#check_axioms Table.next_read_error
+#check_axioms Table.lookup_search_error
+#check_axioms Table.lookup_final_read_error
 #check_axioms builder_accepts_only_ordered
+#check_axioms modelBuild_ok_iff
 #check_axioms builder_constructs_image
 #check_axioms push_rejects_key
 #check_axioms openTable_encoded
