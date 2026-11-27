@@ -49,8 +49,8 @@ Inspection of generated `Block.c` shows the Lean native decode path boxing two `
 The Lean search loop still dispatches the predicate through `lean_apply_1`, uses runtime `Nat` operations for midpoint arithmetic, and assembles fixed-width words from individual byte loads. The optimized reader changes per-byte bounds handling but still assembles eight byte loads. The encoding improvement isolates the work removed by explicitly unrolling the append loop because the benchmark materializes input records before starting the timer. `perf` and Valgrind were unavailable. Inspect the generated C locally after building.
 
 ```sh
-rg -n 'lean_box_uint64|lean_alloc_ctor|lean_apply_1|lean_byte_array_(get|fget)' lean/.lake/build/ir/Block.c
-rg -- '-O3' lean/.lake/build/ir/Block.c.o.export.trace
+rg -n 'lean_box_uint64|lean_alloc_ctor|lean_apply_1|lean_byte_array_(get|fget)' lean/.lake/build/ir/Alvoki/Codec/Block.c
+rg -- '-O3' lean/.lake/build/ir/Alvoki/Codec/Block.c.o.export.trace
 ```
 
 The later optimization suite isolated these costs with fixed-width loads, scalar-field records, streaming decode, and specialized search. [Optimization results](../experiments/optimizations.md)

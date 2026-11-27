@@ -1,4 +1,4 @@
-import Block
+import Alvoki.Codec.Block
 
 namespace Alvoki
 

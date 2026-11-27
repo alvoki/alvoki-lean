@@ -38,7 +38,7 @@ A batch uses one append. The WAL and staged marker are synced before the marker 
 
 ## Optimized reader and search
 
-The machine-index lower bound refines natural-number search for monotone keys. The optimized eight-byte load agrees with the stock reader for an in-bounds extent and a machine-sized array. Ordered v1 records within format and machine bounds round-trip through encoding, parsing and decoding. The baseline, scalar and indexed encoders agree on the bytes. Materialized and streaming checksums agree on the decoded rows. Verus covers the sorted-key search core. Independent fixtures cover its integration into the packed Rust reader. [Search and words](../lean/Alvoki/Kernel/BlockContracts.lean) · [Optimized proofs](../lean/Alvoki/Kernel/PackedSearchContracts.lean) · [Typed parser](../lean/PackedView.lean) · [Codec](../lean/BlockCodec.lean) · [Verus](../verus/search.rs)
+The machine-index lower bound refines natural-number search for monotone keys. The optimized eight-byte load agrees with the stock reader for an in-bounds extent and a machine-sized array. Ordered v1 records within format and machine bounds round-trip through encoding, parsing and decoding. The baseline, scalar and indexed encoders agree on the bytes. Materialized and streaming checksums agree on the decoded rows. Verus covers the sorted-key search core. Independent fixtures cover its integration into the packed Rust reader. [Search and words](../lean/Alvoki/Kernel/BlockContracts.lean) · [Optimized proofs](../lean/Alvoki/Kernel/PackedSearchContracts.lean) · [Typed parser](../lean/Alvoki/Codec/PackedView.lean) · [Codec](../lean/BlockCodec.lean) · [Verus](../verus/search.rs)
 
 ## Packed output and merge
 

@@ -15,7 +15,8 @@ target readDirCheckedO pkg : FilePath := do
   buildO (pkg.buildDir / "native" / "read_dir_checked.o") source #["-I", leanInclude.toString]
     #["-O2", "-fPIC", "-Wall", "-Wextra"] "cc"
 
-lean_lib Block
+lean_lib Block where
+  roots := #[`Alvoki.Codec.Block]
 
 lean_lib Proofs where
   roots := #[`Alvoki.Kernel.BlockContracts]
@@ -30,7 +31,8 @@ lean_lib Packed
 @[default_target]
 lean_lib PackedRun
 
-lean_lib PackedView
+lean_lib PackedView where
+  roots := #[`Alvoki.Codec.PackedView]
 
 lean_lib PackedViewProofs
 

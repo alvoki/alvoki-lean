@@ -1,4 +1,4 @@
-import PackedView
+import Alvoki.Codec.PackedView
 import Alvoki.Kernel.BlockContracts
 
 namespace Alvoki.Opt
