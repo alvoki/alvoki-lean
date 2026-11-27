@@ -2707,6 +2707,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterInterruptedSecondBatch
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterCreatedRotation
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterFailedRotation
+#check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.readsAfterFailedRotationReboot
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.replaysFirstAcknowledgedWrite
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesLedger
 #check_axioms Alvoki.Storage.DiskSession.NativeObsoleteRunUnlinkCut.survivorValid
@@ -2761,7 +2762,6 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationObservation.Reached.frames
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.rotationReturnsDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationCallbacks.SuccessorFilePrefix.reachesExclusiveSync
-#check_axioms Alvoki.Storage.DiskSession.RotationRawSuccessor.observesSyncedSuccessor
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync.observesSuccessorAtRootIssue
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.samplesFailedRotationDirectory

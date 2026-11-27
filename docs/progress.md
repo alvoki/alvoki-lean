@@ -115,12 +115,19 @@ The reader uses the observed marker, keeper and seals in both cases.
 [Publication](../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Sample to open](../lean/Alvoki/Storage/Disk/NativeRawRotationReboot.lean)
 
-**Next obligation.** Connect the fresh first write's returned position,
-settled name interval and literal exclusive-create receipt to the reboot
-continuation in one theorem. Derive its successor-at-sync input from that
-receipt, then use the same selected map to record the lookup in the
-first batch's client ledger. The filesystem's survival and byte-sampling
-laws remain explicit. Further mixed calls, interruptions and maintenance
+The fresh reboot proof starts with the first acknowledged batch and follows
+the exclusive-create handle through file sync to the failed directory
+sync. With either permitted successor binding, a lookup through the
+table returned by the next successful aligned open extends that batch's
+client ledger. [Fresh WAL recovery](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
+
+**Next obligation.** The rotation proof still takes two facts across the
+entire failed call. Previously protected files must retain their bindings
+and bytes, and other WAL offsets must keep their name presence. Derive
+both from the reached callbacks. Continue from the same boot sample
+through a rejected open or a subsequent write using the corresponding
+lock and cache reset. The filesystem's survival and byte-sampling laws
+remain explicit. Further mixed calls, interruptions and maintenance
 remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).
 
 **Verification baseline.** See the [verification commands](../README.md#reproduce-on-linux-x86-64).

@@ -9,6 +9,7 @@ import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.NativeRotationWalReplay
 import Alvoki.Storage.Disk.NativeRawRotationLiveReopen
+import Alvoki.Storage.Disk.NativeRawRotationReboot
 
 namespace Alvoki.Storage.DiskSession
 
@@ -71,6 +72,12 @@ theorem refinesLedger (ledger : opened.start.current.LedgerSuffix events last) :
     by simpa only [opened.emptySubmissions, List.nil_append] using ledger.submissions,
     by simpa only [opened.emptyReads, List.nil_append] using ledger.reads,
     last.ready.readPrefix.guardedReplay⟩
+
+private theorem firstBatchLedger (ledger : opened.start.current.LedgerSuffix [.acknowledged request batch] last) :
+    last.submissions = [.acknowledgedBatch batch] ∧ last.ready.reads = [] := by
+  obtain ⟨_, log, reads, _⟩ := opened.refinesLedger ledger
+  simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.submissions, NativeExecutionEvent.reads,
+    List.append_nil] using And.intro log reads
 
 theorem refinesTrace (trace : NativeExecutionTrace opened.start.current events last) :
     last.history = events.flatMap NativeExecutionEvent.writes ∧
@@ -826,11 +833,7 @@ theorem readsAfterCreatedRotation {stream : Type} (wrote : observedFirstWrite)
     change rotated.current.ready.state.writer.target.range.through ≤ request.rows.length
     rw [valid.retained.resumed.through, writerHistory, history, (prepareBatch_spec prepared).1]
     exact Nat.le_refl _
-  obtain ⟨_, log, reads, _⟩ := opened.refinesLedger firstLedger
-  have submitted : next.current.submissions = [.acknowledgedBatch batch] := by
-    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.submissions, List.append_nil] using log
-  have noReads : next.current.ready.reads = [] := by
-    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.reads, List.append_nil] using reads
+  obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger firstLedger
   change source.ReadsClientHistoryAtOpen reopenView (state).session.directory
     storage visible rebooted namespaceView root
     [.acknowledgedBatch batch] [] batch
@@ -948,14 +951,94 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
     (fun inode bound => (entryBytes _ (.inl rfl) inode bound).trans (physical.keeper inode bound))
     markerAtEntry (by simp [noSeals]) catalog atEntry atClose modeledFiles pairAt keeperAt noManifest source
   simp only [returned, Option.some.injEq, Prod.mk.injEq, true_and] at rawClose
-  obtain ⟨_, submissions, reads, _⟩ := opened.refinesLedger ledger
-  have submitted : next.current.submissions = [.acknowledgedBatch batch] := by
-    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.submissions, List.append_nil] using submissions
-  have noReads : next.current.ready.reads = [] := by
-    simpa only [List.flatMap_cons, List.flatMap_nil, NativeExecutionEvent.reads, List.append_nil] using reads
+  obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger ledger
   refine ⟨returned, close, rawClose, ?_⟩
   rw [← submitted, ← noReads, ← batchHistory]
   exact @readsAfterOpen
+
+include covered in
+/-- A literal rotation error followed by power loss leaves the first
+acknowledged batch available through the table returned by the next open. -/
+theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWrite)
+    (source : RawMarkedOpenInterpreter heap stream) (rotation : OpenRotationCallbacks heap) :
+    ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
+      (batch : List WAL.Write) (preparedTable : PackedTable) (next : NativeOpenedPosition opened.handle),
+      let state := next.current.ready.state
+      let dir := state.session.directory
+      let usedCache : OpenSyncCacheRefs opened.handle.files opened.handle.directory.path :=
+        ⟨cache.directory, cache.active, cache.pending, cache.references,
+          congrArg DiskDirectory.path opened.start.directory ▸ cache.atRoot⟩
+      call entry = .ok opened.handle.table opened.start.reached ∧
+      request.runOnRawOpenPhase directory lookup (appender.run seed.activeRef) (stager.run seed.pendingRef)
+        (syncer.group directory.path seed.directoryRef seed.activeRef seed.pendingRef)
+        rename opened.handle.phase opened.handle.get opened.handle.set opened.start.reached = .ok sequence reached ∧
+      prepareBatch opened.start.current.ready.state.writer.installed.table request.rows = some (batch, preparedTable) ∧
+      sequence = preparedTable.committed ∧ sequence.toNat = batch.length ∧ next.reached = reached ∧
+      opened.start.current.LedgerSuffix [.acknowledged request batch] next.current ∧
+      ∀ (_firstNames : opened.start.WalNameEffects appender stager syncer cache request lookup rename storage 0 request.rows.length)
+        (_restore : ∀ {preReady installed}, opened.handle.set opened.handle.phase (.ready installed) preReady = .ok () reached →
+          WalNamePresenceFrame opened.start.current.ready.state.session.directory 0 request.rows.length
+            (storage preReady) (storage reached))
+        {poisoned afterFileSync rebooted : heap} {effective : Bool}
+        (guard : BatchActiveGuard opened.handle.directory state.writer.installed)
+        (_poisonedAt : opened.handle.set opened.handle.phase .poisoned next.reached = .ok () poisoned)
+        (filePrefix : rotation.SuccessorFilePrefix opened.handle.directory state.writer.rotationInstalled.activeFirst
+          poisoned afterFileSync)
+        (file : filePrefix.ExclusiveSync stager syncer usedCache)
+        (barrier : rotation.FailedRootBarrier syncer usedCache afterFileSync)
+        (_fileEffects : file.SuccessorEffects clientView storage visible next.reached barrier.issued)
+        (_rootEffects : filePrefix.RootErrorEffects barrier clientView storage effective next.reached)
+        (_keeps : (storage next.reached).Frames state.crashPath (storage barrier.failed))
+        (_namesFrame : RotationWalNameFrame dir 0 state.writer.target.range.through state.writer.rotationInstalled.activeFirst
+          (storage next.reached) (storage barrier.failed)),
+        let valid := next.current.ready.readPrefix.refines.1
+        let selected := state.withRotationSample valid (names rebooted)
+        let path := dir.file (.walSegment state.writer.rotationInstalled.activeFirst)
+        let inode := OpenCloseHeapView.capturedInode clientView file.opened file.handle
+        ∀ (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+          (_chosen : names rebooted ∈ (storage barrier.failed).crashNames)
+          (_sampled : ∀ path, checkpointSurvivorPath dir selected.writer selected.writer.target.pair.manifest path →
+            ∀ object, names rebooted path = some object → visible rebooted object ∈ (storage barrier.failed).files.bytes object)
+          (_pairAt : (OpenCloseHeapView.files clientView rebooted).image.directory.active =
+            ⟨(names rebooted (dir.file .manifest)).map (visible rebooted),
+              (names rebooted (dir.file .walBoundary)).map (visible rebooted)⟩)
+          (_keeperAt : (OpenCloseHeapView.files clientView rebooted).image.keeper.active =
+            (names rebooted (dir.file (.walSegment selected.writer.wal.active.first))).map (visible rebooted)),
+          rotation.run opened.handle guard.lookup usedCache.active next.reached =
+            .error (IO.userError s!"sync failed for '{opened.handle.directory.path}': {barrier.cause}") barrier.failed ∧
+          (names rebooted path = none ∨ names rebooted path = some inode) ∧
+          (effective = true → names rebooted path = some inode) ∧
+          source.ReadsClientHistoryAtOpen clientView dir storage visible rebooted namespaceView root
+            [.acknowledgedBatch batch] [] batch := by
+  obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
+    _, batchHistory, ledger, physical, _, ⟨noManifest, noSeals, history, cutoff⟩, carries⟩ :=
+    opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
+      liveChildren directoryEffect allocation returnedAt phaseFrame tokenFrame phaseInodes tokenInodes
+      modeledFiles references atDirectory census cacheAt appender stager syncer inode buffered request lookup rename nonempty wrote
+  refine ⟨cache, batch, preparedTable, next, initial, write, prepared, number, count, exactHeap, ledger, ?_⟩
+  intro firstNames restore poisoned afterFileSync rebooted effective guard poisonedAt filePrefix file barrier
+    fileEffects rootEffects keeps namesFrame valid selected path createdInode namespaceView root chosen sampled pairAt keeperAt
+  have positive : 0 < next.current.ready.state.writer.history.length := by
+    rw [history, (prepareBatch_spec prepared).1]
+    exact List.length_pos_iff.mpr nonempty
+  have nonemptyWal := valid.retained.activeBeforeCutoffOfFirstBatch noManifest noSeals positive
+  have window := (carries request.rows.length covered firstNames restore).2
+  rw [← cutoff] at window
+  obtain ⟨_, returned, _, _, _, _, _, choice, settled, openedFromSample⟩ := next.samplesFailedRotationDirectory
+    rotation syncer clientView _ guard storage visible poisonedAt filePrefix file barrier fileEffects rootEffects
+    nonemptyWal physical keeps window namesFrame chosen
+  let first := selected.writer.wal.active.first
+  have sameHistory := congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen clientView
+    next.current.ready.state.session.directory first storage visible rebooted namespaceView root writes) history
+  have replay := @Eq.mp _ _ sameHistory
+    (@openedFromSample stream source namespaceView root sampled pairAt keeperAt noManifest)
+  obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger ledger
+  have pending : PendingClientReplay [.acknowledgedBatch batch] [] batch := by
+    rw [← submitted, ← noReads, ← batchHistory]
+    exact next.current.ready.readPrefix.refines.2.2
+  refine ⟨returned, choice.imp id And.left, settled, ?_⟩
+  exact @RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
+    (opened := replay) (pending := pending)
 
 /-- The actual first acknowledgement starts the interrupted second
 write. One reboot sample selects its replay and the subsequent lookup

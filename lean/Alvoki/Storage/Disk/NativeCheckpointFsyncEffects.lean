@@ -30,11 +30,7 @@ theorem CheckpointStorageObservation.Frames.trans {footprint : FilePath → Prop
     (first : entry.Frames footprint middle) (second : middle.Frames footprint reached) :
     entry.Frames footprint reached := by
   constructor
-  · intro path keep
-    obtain ⟨intermediate, persists⟩ := first.visible path keep
-    obtain ⟨final, durable⟩ := second.visible path keep
-    exact ⟨final.trans intermediate, fun inode named =>
-      (durable inode (intermediate.trans named)).trans (persists inode named)⟩
+  · exact first.visible.trans second.visible
   · intro names allowed
     obtain ⟨intermediate, possible, kept⟩ := second.survivors names allowed
     obtain ⟨prior, earlier, preserved⟩ := first.survivors intermediate possible

@@ -289,8 +289,10 @@ catalog to the same retained-WAL reader. The write establishes its live
 marker at acknowledgement. The file barrier synchronizes the staged inode,
 rename publishes that inode, and the directory barrier and phase setter
 preserve its bytes. The live reader observes that inode through the close.
-After power loss the reader instead takes its bytes from one surviving map
-and the corresponding inode contents. Successful open still relies on
+After power loss the fresh proof derives the successor inode from the
+exclusive-create handle. With one sampled map and its inode bytes, the
+lookup extends the original batch's client ledger. It still assumes
+preservation of old files and off-successor names across the failed call. Successful open still relies on
 truthful enumeration and reads. [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
