@@ -1,4 +1,4 @@
-import Alvoki.Experiments.L0.Client
+import Alvoki.Experiments.L0.Trace
 import Alvoki.Experiments.L0.ModelRefinement
 
 namespace ExperimentalL0
@@ -34,99 +34,63 @@ inductive Run : List Event → Option Session → Image → Prop where
       Run (events ++ [.openFailed]) none after
   | stop : Run events session image → Run (events ++ [.stop]) none image
 
-private def Represents (session : Option Session) (image : Image) : Client.State → Prop
-  | .ready db => ∃ online history, session = some online ∧ db = denote history ∧
-      Installed online image.selected history
-  | .offline known pending => session = none ∧ ∃ history,
-      Client.Permitted known (denote history) pending ∧ Nonempty (Durable image.selected history)
-
 private theorem initial_durable : Nonempty (Durable ({} : Image).selected []) :=
   ⟨⟨[], [], rfl, Nat.le_refl _, rfl, rfl, List.nodup_nil, [], rfl, fun _ => rfl, by simp⟩⟩
 
-theorem Run.refines (run : Run events session image) :
-    ∃ state, Client.Allows events state ∧ Represents session image state := by
+/-- Interpret the concrete schedule using the generic operation theorems,
+then retain only the selected image for trace refinement. -/
+theorem Run.projects (run : Run events session image) :
+    Execution.Run events session image.selected := by
   induction run with
-  | initial => exact ⟨_, .initial, rfl, [], Or.inl rfl, initial_durable⟩
+  | initial => exact .initial initial_durable
   | @written _ session image faults change next after _ ran ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, history, equal, rfl, installed⟩ := represented
-      cases equal
-      have effect := write_refines (componentLaws faults) image session installed change
-      rw [ran] at effect
-      exact ⟨_, allowed.next .written, next, _, rfl, (denote_write history change).symm, effect⟩
-    · exact by have impossible := represented.1; contradiction
+    refine .written ih fun _ installed => ?_
+    have effect := write_refines (componentLaws faults) image session installed change
+    rw [ran] at effect
+    exact effect
   | @writeUncertain _ session image faults change result _ ran ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, history, equal, rfl, installed⟩ := represented
-      cases equal
-      have effect := write_refines (componentLaws faults) image session installed change
-      rw [ran] at effect
-      refine ⟨_, allowed.next .writeUncertain, rfl, ?_⟩
-      have previous (d : Nonempty (Durable (reached result).selected history)) :
-          ∃ actual, Client.Permitted (denote history) (denote actual) (some change) ∧
-            Nonempty (Durable (reached result).selected actual) := ⟨_, Or.inl rfl, d⟩
-      have appended (d : Nonempty (Durable (reached result).selected (history ++ [change]))) :
-          ∃ actual, Client.Permitted (denote history) (denote actual) (some change) ∧
-            Nonempty (Durable (reached result).selected actual) :=
-        ⟨_, Or.inr ⟨_, rfl, denote_write ..⟩, d⟩
-      cases result with
-      | ok next after =>
-        obtain ⟨d, _, _⟩ := effect
-        exact appended ⟨d⟩
-      | error error after =>
-        exact effect.elim previous appended
-    · exact by have impossible := represented.1; contradiction
+    refine .writeUncertain ih fun _ installed => ?_
+    have effect := write_refines (componentLaws faults) image session installed change
+    rw [ran] at effect
+    cases result with
+    | ok next after =>
+      obtain ⟨d, _, _⟩ := effect
+      exact Or.inr ⟨d⟩
+    | error error after => exact effect
   | @got _ session image faults key value _ ran ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, history, equal, rfl, installed⟩ := represented
-      cases equal
-      have read := get_refines (componentLaws faults) image session installed key
-      rw [ran] at read
-      obtain ⟨rfl, _⟩ := read
-      exact ⟨_, allowed.next .got, _, _, rfl, rfl, installed⟩
-    · exact by have impossible := represented.1; contradiction
+    refine .got ih fun _ installed => ?_
+    have read := get_refines (componentLaws faults) image session installed key
+    rw [ran] at read
+    exact read.1
   | @flushed _ session image faults next after _ ran ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, history, equal, rfl, installed⟩ := represented
-      cases equal
-      have effect := flush_refines (componentLaws faults) image session installed
-      rw [ran] at effect
-      exact ⟨_, allowed.next .flushed, _, _, rfl, rfl, effect⟩
-    · exact by have impossible := represented.1; contradiction
+    refine .flushed ih fun _ installed => ?_
+    have effect := flush_refines (componentLaws faults) image session installed
+    rw [ran] at effect
+    exact effect
   | @flushUncertain _ session image faults result _ ran ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, history, equal, rfl, installed⟩ := represented
-      cases equal
-      have effect := flush_refines (componentLaws faults) image session installed
-      rw [ran] at effect
-      refine ⟨_, allowed.next .flushUncertain, rfl, history, Or.inl rfl, ?_⟩
-      cases result with
-      | ok next after =>
-        obtain ⟨d, _, _⟩ := effect
-        exact ⟨d⟩
-      | error error after => exact effect
-    · exact by have impossible := represented.1; contradiction
+    refine .flushUncertain ih fun _ installed => ?_
+    have effect := flush_refines (componentLaws faults) image session installed
+    rw [ran] at effect
+    cases result with
+    | ok next after =>
+      obtain ⟨d, _, _⟩ := effect
+      exact ⟨d⟩
+    | error error after => exact effect
   | @reopened _ image faults session after _ ran ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, _, impossible, _, _⟩ := represented
-      contradiction
-    · obtain ⟨_, history, selected, ⟨d⟩⟩ := represented
-      have effect := recover_refines (componentLaws faults) image d
-      rw [ran] at effect
-      exact ⟨_, allowed.next (.reopened selected), _, _, rfl, rfl, effect.2⟩
+    refine .reopened ih fun _ durable => ?_
+    have effect := recover_refines (componentLaws faults) image durable
+    rw [ran] at effect
+    exact effect.2
   | @openFailed _ image faults error after _ ran ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, _, impossible, _, _⟩ := represented
-      contradiction
-    · obtain ⟨_, history, selected, ⟨d⟩⟩ := represented
-      have effect := recover_refines (componentLaws faults) image d
-      rw [ran] at effect
-      exact ⟨_, allowed.next .openFailed, rfl, history, selected, ⟨effect ▸ d⟩⟩
-  | stop _ ih =>
-    obtain ⟨_ | _, allowed, represented⟩ := ih
-    · obtain ⟨_, history, _, rfl, d, _, _⟩ := represented
-      exact ⟨_, allowed.next .stop, rfl, history, Or.inl rfl, ⟨d⟩⟩
-    · exact ⟨_, allowed.next .stopAgain, rfl, represented.2⟩
+    refine .openFailed ih fun _ durable => ?_
+    have effect := recover_refines (componentLaws faults) image durable
+    rw [ran] at effect
+    exact ⟨effect ▸ durable⟩
+  | stop _ ih => exact .stop ih
+
+theorem Run.refines (run : Run events session image) :
+    ∃ state, Client.Allows events state ∧ Execution.Represents session image.selected state :=
+  run.projects.refines
 
 theorem Run.healthy_open (run : Run events none image) :
     ∃ session, Run (events ++ [.reopened]) (some session) image := by

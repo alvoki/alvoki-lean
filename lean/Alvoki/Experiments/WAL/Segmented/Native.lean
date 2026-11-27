@@ -66,11 +66,13 @@ private structure Store where
   lock : IO.FS.Handle
   directory : IO.FS.Handle
   active : IO.Ref (Option (Nat × SingleFile.Handle))
+  controlWriter : IO.Ref (Option IO.FS.Handle)
 
 private def Store.closeChild (s : Store) : IO Unit := do
   if let some (_, child) ← s.active.swap none then SingleFile.close child
 
 private def Store.release (s : Store) : IO Unit := do
+  s.controlWriter.set none
   try s.closeChild finally s.lock.unlock
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
@@ -115,11 +117,16 @@ private def Store.callbacks (s : Store) : Ops FileM where
     unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do throw "segmented WAL position exhausted"
     let stage := s.root / "CONTROL.next"
     removeRegular stage
-    liftM <| IO.FS.withFile stage .writeNew fun h => do
-      disableBuffering h
-      h.write (ControlCodec.encode c)
-      h.flush
-  syncControl := liftM <| IO.FS.withFile (s.root / "CONTROL.next") .read syncHandle
+    let h ← IO.FS.Handle.mk stage .writeNew
+    disableBuffering h
+    h.write (ControlCodec.encode c)
+    h.flush
+    s.controlWriter.set (some h)
+  syncControl := do
+    -- Consume the original writer on either outcome. An independently
+    -- opened descriptor can miss a writeback error reported to this writer.
+    let some h ← s.controlWriter.swap none | throw "no staged control writer"
+    syncHandle h
   renameControl := IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")
   readControl := do
     let file := s.root / "CONTROL"
@@ -156,7 +163,9 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handl
   let root ← IO.FS.realPath dir
   let directory ← IO.FS.Handle.mk root .read
   let lock ← acquireRoot root
-  let store := {root, directory, lock, active := ← IO.mkRef none : Store}
+  let active ← IO.mkRef none
+  let controlWriter ← IO.mkRef none
+  let store : Store := {root, directory, lock, active, controlWriter}
   try
     let callbacks := store.callbacks
     let session ← match fresh with
@@ -183,7 +192,7 @@ private def update (h : Handle) (action : Ops FileM → Session → FileM Sessio
   match ← h.state.get with
   | .ready store session =>
     h.state.set (.poisoned store)
-    let next ← checked (action store.callbacks session)
+    let next ← try checked (action store.callbacks session) finally store.controlWriter.set none
     h.state.set (.ready store next)
     return next
   | .poisoned _ => throw <| IO.userError "segmented WAL requires reopen"

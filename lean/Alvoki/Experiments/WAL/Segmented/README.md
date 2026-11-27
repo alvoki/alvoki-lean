@@ -99,6 +99,9 @@ unselected object. The [artifact frame rule](Proofs/Artifacts.lean) allows arbit
 modeled child bytes and either name binding independently while offline, provided
 neither visible nor durable control selects the ID. Likewise a partial `CONTROL.next` may survive a failed stage;
 only a fully written and synced stage may be renamed over `CONTROL`. The
+native adapter keeps the original stage writer through `fsync` and releases
+it on success or failure. Cleanup can leave the private staging name for
+the next attempt. The
 [codec proof](Proofs/ControlCodec.lean) establishes canonical decoding and roundtrip
 within the native read bound. Mapping the stage, sync and rename syscalls to that
 typed control publication remains an adapter assumption.

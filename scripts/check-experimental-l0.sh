@@ -23,7 +23,7 @@ compile Alvoki/Experiments/DurableBlob/Contract
 compile Alvoki/Experiments/Manifest/Basic
 compile Alvoki/Experiments/WAL/Segmented/Contract
 l0=Alvoki/Experiments/L0
-for module in Basic ComponentContract Model Client Proofs ComponentProofs Refinement ModelRefinement ReadErrors RecoveryChoices Execution; do
+for module in Basic ComponentContract Model Client Proofs ComponentProofs Refinement ModelRefinement ReadErrors RecoveryChoices Trace Execution; do
   compile "$l0/$module"
 done
 compile Alvoki/Checks/Audit/AxiomPolicy
@@ -48,6 +48,8 @@ open ExperimentalL0
 #check_axioms RecoveryChoices.Retry.preservesDurability
 #check_axioms RecoveryChoices.Retry.afterAppend
 #check_axioms RecoveryChoices.Retry.afterPublish
+#check_axioms Execution.Run.refines
+#check_axioms Model.Run.projects
 #check_axioms Model.Run.refines
 #check_axioms Model.Run.healthy_open
 LEAN

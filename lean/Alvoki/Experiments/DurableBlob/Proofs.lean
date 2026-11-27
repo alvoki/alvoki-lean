@@ -160,6 +160,15 @@ theorem Run.refines {initial : ByteArray} (run : Run initial events online image
     · exact ⟨_, trace.next .stopAgain, rfl, by
         simpa [Image.Admits, Image.settled] using h.2 _ survived⟩
 
+/-- A returned session exposes the exact active bytes of its modeled image. -/
+theorem Run.refinesReady {initial : ByteArray} (run : Run initial events true image) :
+    Allows initial events (.ready image.active) := by
+  obtain ⟨_ | _, allowed, represented⟩ := run.refines
+  · have same := represented.2.1
+    rw [same]
+    exact allowed
+  · exact False.elim (Bool.noConfusion represented.1)
+
 theorem Run.healthy_open {initial : ByteArray} (run : Run initial events false image) :
     Run initial (events ++ [.opened image.active]) true image.barrier :=
   .opened (report := fun _ => .ok) (readOK := true) run rfl

@@ -1,8 +1,18 @@
 # Experimental L0 composition
 
-This slice runs serialized put, delete, get, explicit flush and recovery against
-a deterministic component interpreter with fault choices. It starts with a
-durably initialized empty WAL and manifest. The WAL prefix is retained.
+This slice runs serialized put, delete, get, explicit flush and recovery
+with either the component interpreter or the Linux adapters. It starts
+with a durably initialized empty WAL and manifest. The WAL prefix is
+retained.
+
+`Native.withOpen root` owns the root for a sequential callback. The root
+contains three separate, durably named directories: `wal` contains a
+previously initialized segmented WAL, `manifest` contains an initialized
+manifest blob, and `tables` starts empty. The wrapper holds a root lock
+through recovery and the callback. A table descriptor stays within one
+table operation. A failed mutating call invalidates the session, and an
+escaped handle is offline after the callback returns. Use a new
+`withOpen` to recover. [Native adapter](Native.lean)
 
 The [client contract](Client.lean) observes a map from keys to values. A
 successful write applies one mutation. If its outcome is uncertain, close the
@@ -52,11 +62,10 @@ uncertain component. `Retry.preservesDurability` carries the invariant
 from the initial choices to every pair still admissible after partial
 recovery. For a given trace, a pair selected by successful recovery can
 therefore stand for the earlier unresolved choices. The interpreter
-represents such a pair by selecting it at the cut. The concrete adapter
-must establish the phase discipline and the corresponding projection from
-its component traces, including closing any handles after a failed attempt.
-The argument uses the public steps and leaves physical crash modeling to
-the components.
+represents such a pair by selecting it at the cut. Native recovery opens
+the manifest, attaches the WAL and checks the tables before exposing a
+session. A failure consumes the phase cell and closes the attached WAL.
+The public-step argument leaves physical crash modeling to the components.
 
 [ReadErrors](ReadErrors.lean) proves that the shared schedule propagates a
 required lookup or table-open error with its reached state. The lookup
@@ -77,28 +86,52 @@ finds that input in its new table. The two paths yield the same logical
 state. The invariant and recovery proof allow a nonzero WAL base. The
 executable interpreter starts at zero and has no release operation.
 
-`Model.Run.refines` proves the public client contract for arbitrary finite
-modeled traces of the shared schedule. These include interrupted writes,
-flushes, recovery attempts and lost replies after a completed operation.
-`Model.Run.healthy_open` shows that each reachable offline image can
-reopen once both reopen callbacks succeed. [Execution proof](Execution.lean)
+## Composing the native observations
 
-The proof applies to this interpreter. For the next slice, a native table
-adapter must make the exact built bytes and fresh name durable before
-returning an ID, preserve all existing bindings on error, and give the
-point observations specified by the rows on healthy open/read. The adapter
-can use SSTable `buildFileSynced` for the file barrier on the original
-write descriptor, then sync the directory under exclusive ownership and
-the filesystem durability assumptions. File IDs must avoid retained
-orphans, and the adapter must own its handles. An order-preserving key codec and tagged mutation bytes
-can bridge to the opaque SSTable API. No SSTable offsets or file format
-appear in the L0 schedule or proof. [SSTable contract](../SSTable/README.md)
+[Trace](Trace.lean) proves client refinement for arbitrary finite executions
+from the laws of the reached operations. The interpreter projects to that
+trace and separately proves healthy recovery. [Lifecycle](Lifecycle.lean)
+proves the transitions of the phase cell used by the native wrapper:
+attachment keeps the session private, only a phase owning a WAL can publish
+a session, mutation hides it, and cleanup first consumes the handle and
+installs the offline phase.
 
-A subsequent WAL-release step may discard through `F` only after the
-manifest covering it is durable. Bootstrap, native wiring, orphan
-collection, snapshots, concurrency, compaction and automatic flush are
-separate work.
+[NativeBridge](NativeBridge.lean) derives the operation laws for a reported
+execution of the same schedule. Its append receipt names the existing
+segmented WAL execution and its exact reached sessions. The publication
+receipt uses the DurableBlob trace and its typed manifest refinement.
+`RecoveryChoices` discharges uncertain effects from the public steps.
+Successful table creation records the exact builder image under the
+new durable name and frames all other names. The read receipt serves
+that image through the opened descriptor. `open_built_table` and
+`TypedTable.represents_of_bytes` yield the lookup using the proved
+big-endian key and tagged mutation codecs. The bridge derives
+`ComponentLaws` and feeds `Execution.Run.refines` through
+`ObservedRun.refines`.
 
-Run `bash scripts/check-experimental-l0.sh` for kernel checks, the axiom
-audit and a regression that follows both manifest selections, checks
-tombstone masking, and retries recovery.
+The theorem is conditional on native callbacks being represented by those
+receipts. The remaining premises are at the IO boundary:
+
+- The WAL and blob primitives realize their modeled file effects, including
+  the effects that may precede an error. Successful reads/reopens report
+  the corresponding reached WAL view or decoded manifest. An open failure
+  frames the selection, even if private recovery progress changed.
+- Under stable, exclusive ownership, the WAL, manifest and table names
+  occupy disjoint namespaces. Creating a table uses an unused name,
+  `buildFileSynced` makes its complete builder output durable, and a
+  successful directory sync preserves the new name and the existing
+  bindings. A failed attempt may leave an orphan, which allocation skips.
+- The opened table descriptor serves the bytes bound to that name until the
+  operation returns. Linux lock and handle primitives and the runtime
+  implement the stated custody and cleanup behavior. The tests exercise
+  the IO adapter. The Lean proof does not interpret Linux syscalls.
+
+Bootstrap, WAL release, orphan collection, snapshots, concurrency,
+compaction and automatic flush are separate work.
+
+Run `bash scripts/check-experimental-l0.sh` for the interpreter proofs
+and regressions. Run `bash scripts/check-native-l0.sh` for the native
+fixture, kernel checks and axiom audit. The native fixture rotates the
+WAL, flushes multiple tables, checks persistent tombstones and WAL-suffix
+replay, retries a failed table open, and checks that a required read
+error never returns an older value.
