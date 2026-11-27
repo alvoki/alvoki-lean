@@ -39,7 +39,7 @@ for old, new in [
      "(source : ImmutableSSTable.Source m) (expectedId : UInt64)"),
     ("ImmutableSSTable.openTable source",
      "ImmutableSSTable.Unified.openTableChecked source "
-     "ImmutableSSTable.Unified.nativeCRC32C expectedId"),
+     "Alvoki.CRC32C.extend expectedId"),
     ("nativeTableAction (handle : IO.FS.Handle)",
      "nativeTableAction (handle : IO.FS.Handle) (expectedId : UInt64)"),
     ("(ImmutableSSTable.handleSource handle) use",

@@ -24,7 +24,7 @@ compile() {
 compile Alvoki/Codec/Block
 compile Alvoki/Codec/CRC32C
 for module in Contract Search Core Native \
-    UnifiedFormat UnifiedIntegrity UnifiedNativeIntegrity UnifiedBuilder UnifiedReader UnifiedNative UnifiedFixtures; do
+    UnifiedFormat UnifiedIntegrity UnifiedBuilder UnifiedReader UnifiedNative UnifiedFixtures; do
   compile "$table/$module"
 done
 compile_proof() {

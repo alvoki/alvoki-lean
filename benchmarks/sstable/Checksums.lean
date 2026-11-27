@@ -1,6 +1,6 @@
-import Alvoki.Experiments.SSTable.UnifiedNativeIntegrity
+import Alvoki.Codec.CRC32C
 
-open ImmutableSSTable.Unified
+open Alvoki.CRC32C
 
 private def inputs (size : Nat) : Array ByteArray := Id.run do
   let mut state : UInt64 := 42
@@ -18,14 +18,14 @@ private def checkCRC : IO Unit := do
   let first := bytes.extract 0 4
   let suffix := bytes.extract 4 bytes.size
   let expected : UInt32 := 0xe3069283
-  unless nativeCRC32C 0 bytes == expected && nativeCRC32C (nativeCRC32C 0 first) suffix == expected &&
-      nativeCRC32C expected ByteArray.empty == expected do
+  unless extend 0 bytes == expected && extend (extend 0 first) suffix == expected &&
+      extend expected ByteArray.empty == expected do
     throw (IO.userError "checksum test vector failed")
 
 @[noinline] private def run (buffers : Array ByteArray) (iterations : Nat) : IO UInt64 := do
   let mut sum : UInt64 := 0
   for i in [:iterations] do
-    sum := sum + (nativeCRC32C 0 buffers[i % 8]!).toUInt64
+    sum := sum + (extend 0 buffers[i % 8]!).toUInt64
   return sum
 
 private def timeTrial (buffers : Array ByteArray) (size trial : Nat) : IO Unit := do
@@ -43,7 +43,7 @@ def main : IO Unit := do
     let buffers := inputs size
     for bytes in buffers do
       for previous in #[0, 0xfedcba98] do
-        unless nativeCRC32C previous bytes == crc32c previous bytes do
+        unless extend previous bytes == crc32c previous bytes do
           throw (IO.userError "native and portable CRC32C differ")
     for trial in [:7] do
       timeTrial buffers size trial

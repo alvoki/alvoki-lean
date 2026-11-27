@@ -1,11 +1,8 @@
 import Alvoki.Experiments.SSTable.Core
-import Alvoki.Codec.CRC32C
 
 namespace ImmutableSSTable.Unified
 
 abbrev Checksum := UInt32 → ByteArray → UInt32
-
-abbrev crc32c := Alvoki.CRC32C.crc32c
 
 def checksumSize : Nat := 4
 

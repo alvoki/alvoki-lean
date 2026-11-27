@@ -1,6 +1,6 @@
 import Alvoki.Experiments.SSTable.UnifiedBuilder
 import Alvoki.Experiments.SSTable.UnifiedReader
-import Alvoki.Experiments.SSTable.UnifiedNativeIntegrity
+import Alvoki.Codec.CRC32C
 import Alvoki.Experiments.SSTable.Native
 
 namespace ImmutableSSTable.Unified
@@ -12,7 +12,7 @@ namespace ImmutableSSTable.Unified
 
 def openNativeChecked (path : System.FilePath) (expectedId : UInt64) :
     EIO String (Table (EIO String)) :=
-  openCheckedWith nativeReadPrimitives nativeCRC32C path expectedId
+  openCheckedWith nativeReadPrimitives Alvoki.CRC32C.extend path expectedId
 
 /-- The shared exclusive-create, streaming-write, flush and sync schedule. -/
 @[inline] def buildFileWith [Monad m] [MonadExceptOf ε m] (ops : OutputOps m handle)
@@ -25,7 +25,7 @@ def openNativeChecked (path : System.FilePath) (expectedId : UInt64) :
 def buildFileWithSync (path : System.FilePath) (layout : Layout)
     (nextRow : IO (Option Entry)) (options : BuildOptions)
     (syncOutput : IO.FS.Handle → IO Unit) : IO Nat :=
-  buildFileWith (nativeOutputOps syncOutput) nativeCRC32C path layout nextRow IO.userError options
+  buildFileWith (nativeOutputOps syncOutput) Alvoki.CRC32C.extend path layout nextRow IO.userError options
 
 def buildFile (path : System.FilePath) (layout : Layout) (nextRow : IO (Option Entry))
     (options : BuildOptions := {}) : IO Nat :=

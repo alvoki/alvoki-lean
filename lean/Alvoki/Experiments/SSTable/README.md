@@ -76,7 +76,7 @@ Google archive to Lake-native consumers and to the focused check.
 [End-to-end lookup benchmark](../../../../benchmarks/sstable/unified.md)
 
 The [portable checksum definition](../../Codec/CRC32C.lean) fixes the
-incremental CRC32C convention. The [native binding](UnifiedNativeIntegrity.lean)
+incremental CRC32C convention. The [native binding](../../Codec/CRC32C.lean)
 borrows the existing Lean byte array and calls the upstream implementation.
 Agreement of the native library with the logical definition is an explicit
 runtime assumption. Native tests compare the two.

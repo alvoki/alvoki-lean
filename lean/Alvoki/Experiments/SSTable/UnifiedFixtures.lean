@@ -40,10 +40,10 @@ private def seamOptions : Unified.BuildOptions := { dataTarget := 96, leafTarget
 /-- Decode the native output with the portable CRC and extract index references. -/
 private def readIndexes (bytes : ByteArray) : IO (Array Unified.Ref × Array Unified.Ref) := do
   let footerStart := bytes.size - Unified.footerBodySize - Unified.checksumSize
-  let footerBody ← pureOK <| Unified.decodePacket Unified.crc32c 0 4 0 (bytes.extract footerStart bytes.size)
+  let footerBody ← pureOK <| Unified.decodePacket Alvoki.CRC32C.crc32c 0 4 0 (bytes.extract footerStart bytes.size)
   let footer ← pureOK <| Unified.decodeFooterBody footerBody
   let readIndex (kind : UInt64) (offset size : Nat) := do
-    let block ← pureOK <| Unified.decodePacket Unified.crc32c footer.layout.tableId kind offset
+    let block ← pureOK <| Unified.decodePacket Alvoki.CRC32C.crc32c footer.layout.tableId kind offset
       (bytes.extract offset (offset + size))
     pureOK (Unified.decodeIndex block)
   let root ← readIndex 3 footer.rootOffset footer.rootSize
@@ -191,16 +191,16 @@ private def checkReadFailures (bytes : ByteArray) (id : UInt64) (footer root lea
       if offset == badOffset then throw "injected SSTable read failure"
       return bytes.extract offset (offset + count)
   }
-  expectReadFailure (Unified.openTableChecked (source footer) Unified.crc32c id) [footer]
-  expectReadFailure (Unified.openTableChecked (source root) Unified.crc32c id) [root, footer]
+  expectReadFailure (Unified.openTableChecked (source footer) Alvoki.CRC32C.crc32c id) [footer]
+  expectReadFailure (Unified.openTableChecked (source root) Alvoki.CRC32C.crc32c id) [root, footer]
   for (offset, expected) in [(leaf, [leaf]), (data, [data, leaf])] do
-    let .ok table _ := Unified.openTableChecked (source offset) Unified.crc32c id []
+    let .ok table _ := Unified.openTableChecked (source offset) Alvoki.CRC32C.crc32c id []
       | throw (IO.userError "open read an unopened leaf or data packet")
     expectReadFailure (table.lookup key) expected
     expectReadFailure (table.seek key) expected
     expectReadFailure (table.next 0) expected
 
-  let .ok table _ := Unified.openTableChecked (source bytes.size) Unified.crc32c id []
+  let .ok table _ := Unified.openTableChecked (source bytes.size) Alvoki.CRC32C.crc32c id []
     | throw (IO.userError "failed to open for typed error checks")
   let identity : Codec ByteArray := ⟨fun bytes => bytes, Except.ok⟩
   let rejected (message : String) : Codec ByteArray :=
@@ -226,7 +226,7 @@ private def checkCorruption (dir : System.FilePath) : IO Unit := do
   let some firstData := data[0]? | throw (IO.userError "missing first data packet")
   let some secondData := data[1]? | throw (IO.userError "missing second data packet")
   let footerStart := original.size - Unified.footerBodySize - Unified.checksumSize
-  let rootBody ← pureOK <| Unified.decodePacket Unified.crc32c 0 4 0
+  let rootBody ← pureOK <| Unified.decodePacket Alvoki.CRC32C.crc32c 0 4 0
     (original.extract footerStart original.size)
   let footer ← pureOK <| Unified.decodeFooterBody rootBody
   checkReadFailures original layout.tableId footerStart footer.rootOffset
@@ -267,11 +267,6 @@ private def checkCorruption (dir : System.FilePath) : IO Unit := do
   check ((← ok (table.next table.rowCount)).isNone) "unified logical EOF attempted file I/O"
 
 def run : IO Unit := IO.FS.withTempDir fun dir => do
-  check (Unified.crc32c 0 "123456789".toUTF8 == 0xe3069283) "CRC32C standard vector"
-  check (Unified.crc32c (Unified.crc32c 0 "1234".toUTF8) "56789".toUTF8 == 0xe3069283)
-    "portable CRC32C incremental vector"
-  check (Unified.nativeCRC32C (Unified.nativeCRC32C 0 "1234".toUTF8) "56789".toUTF8 == 0xe3069283)
-    "native CRC32C incremental vector"
   checkWidths dir
   checkEmpty dir
   checkFailures dir
@@ -390,7 +385,7 @@ private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCas
       source.readAt offset count
   }
   let openFor := fun input => do
-    let table ← Unified.openTableChecked input Unified.nativeCRC32C layout.tableId
+    let table ← Unified.openTableChecked input Alvoki.CRC32C.extend layout.tableId
     return (table.lookup, table.next)
   for trial in [:3] do
     let start ← IO.monoNanosNow
