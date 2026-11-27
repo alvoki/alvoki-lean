@@ -46,7 +46,7 @@ GCC and G++ on Linux x86-64. The opt-in runner builds Google CRC32C 1.1.2 from
 pinned source using upstream's SSE4.2 dispatch and portable fallback. It can
 use an already checked-out copy via `CRC32C_DIR`. The normal checks for
 existing formats require no new dependency.
-[Direct Lean checksum comparison](../../../../benchmarks/sstable/checksums.md) ·
+[Lean Google CRC32C benchmark](../../../../benchmarks/sstable/checksums.md) ·
 [End-to-end lookup benchmark](../../../../benchmarks/sstable/unified.md)
 
 The [portable checksum definition](UnifiedIntegrity.lean) fixes the

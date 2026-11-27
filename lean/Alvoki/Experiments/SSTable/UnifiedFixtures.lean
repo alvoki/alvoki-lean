@@ -204,38 +204,72 @@ private def benchKey (n : Nat) : ByteArray :=
   ⟨#[(n >>> 56).toUInt8, (n >>> 48).toUInt8, (n >>> 40).toUInt8, (n >>> 32).toUInt8,
     (n >>> 24).toUInt8, (n >>> 16).toUInt8, (n >>> 8).toUInt8, n.toUInt8]⟩
 
-private def benchRows (rows : Nat) : IO (IO (Option Entry)) := do
+private def benchKeyFor (layout : Unified.Layout) (index : Nat) : ByteArray :=
+  let bytes := benchKey index
+  if layout.keyWidth.isSome then bytes
+  else bytes ++ ByteArray.mk (Array.replicate ((index / 2) % 8) 0x42)
+
+private def benchRows (layout : Unified.Layout) (rows : Nat) : IO (IO (Option Entry)) := do
   let next ← IO.mkRef 0
   return do
     let index ← next.get
     if index == rows then return none
     next.set (index + 1)
-    return some ⟨benchKey (2 * index), encodeOffset (index + 1)⟩
+    let value := encodeOffset (index + 1)
+    let value := if layout.valueWidth.isSome then value
+      else value ++ ByteArray.mk (Array.replicate (index % 16) 0x56)
+    return some ⟨benchKeyFor layout (2 * index), value⟩
 
 private def mix (hash value : UInt64) : UInt64 := (hash ^^^ value) * 1099511628211
 
-private def benchQueries (rows queries : Nat) : Array ByteArray × UInt64 := Id.run do
-  let mut keys := Array.emptyWithCapacity queries
-  let mut expected : UInt64 := 0
+private def benchQueries (layout : Unified.Layout) (rows queries : Nat) :
+    Array ByteArray × Array ByteArray × Array ByteArray × UInt64 × UInt64 := Id.run do
+  let mut mixed := #[]
+  let mut hits := #[]
+  let mut misses := #[]
+  let mut mixedSum : UInt64 := 0
+  let mut hitSum : UInt64 := 0
   let mut seed := 12345
   for i in [:queries] do
     seed := (1664525 * seed + 1013904223) % 4294967296
     let index := (seed >>> 8) % rows
     let miss := i % 2
-    keys := keys.push (benchKey (2 * index + miss))
-    expected := mix expected (if miss == 0 then (index + 1).toUInt64 else 0)
-  return (keys, expected)
+    let key := benchKeyFor layout (2 * index + miss)
+    let value := if miss == 0 then (index + 1).toUInt64 else 0
+    mixed := mixed.push key
+    mixedSum := mix mixedSum value
+    if miss == 0 then
+      hits := hits.push key
+      hitSum := mix hitSum value
+    else
+      misses := misses.push key
+  return (mixed, hits, misses, mixedSum, hitSum)
 
-private abbrev Lookup := ByteArray → EIO String (Option ByteArray)
-
-private abbrev OpenLookup := Source (EIO String) → EIO String Lookup
-
-private def lookups (lookup : Lookup) (queries : Array ByteArray) : EIO String UInt64 := do
+private def lookups (lookup : ByteArray → EIO String (Option ByteArray))
+    (queries : Array ByteArray) : EIO String UInt64 := do
   let mut checksum := 0
   for key in queries do
     let value ← lookup key
     checksum := mix checksum (value.elim 0 (Alvoki.word · 0))
   return checksum
+
+private def scan (next : Nat → EIO String (Option (Entry × Nat))) (rows : Nat) :
+    EIO String UInt64 := do
+  let mut checksum := 0
+  for index in [:rows] do
+    let some (entry, following) ← next index | throw "benchmark scan ended early"
+    unless following == index + 1 do throw "benchmark scan cursor"
+    checksum := mix checksum (Alvoki.word entry.value 0)
+  return checksum
+
+private structure BenchmarkCase where
+  label : String
+  layoutName : String
+  dataTarget : Nat := 0
+  leafTarget : Nat := 0
+  leaves : Nat := 0
+  blocks : Nat := 0
+  fileBytes : Nat := 0
 
 private structure ReadStats where
   indexCalls : Nat := 0
@@ -243,15 +277,28 @@ private structure ReadStats where
   dataCalls : Nat := 0
   dataBytes : Nat := 0
 
-private def benchmarkLookups (path : System.FilePath) (label : String) (rows : Nat)
-    (queries : Array ByteArray) (expected : UInt64) (openLookup : OpenLookup)
-    (isIndex : Nat → Bool) : IO Unit := do
+private def report (configuration : BenchmarkCase) (operation : String)
+    (items trial elapsed : Nat) (sample : ReadStats := {}) : IO Unit :=
+  IO.println s!"{configuration.label},{configuration.layoutName},{configuration.dataTarget},{configuration.leafTarget},{configuration.leaves},{configuration.blocks},{configuration.fileBytes},{operation},{items},{trial},{elapsed},{sample.indexCalls},{sample.indexBytes},{sample.dataCalls},{sample.dataBytes}"
+
+private def measure (configuration : BenchmarkCase) (operation : String) (items : Nat)
+    (action traced : EIO String UInt64) (expected : UInt64) (stats : IO.Ref ReadStats) : IO Unit := do
+  check ((← ok action) == expected) "benchmark warm-up checksum"
+  stats.set {}
+  check ((← ok traced) == expected) "benchmark traced checksum"
+  let sample ← stats.get
+  for trial in [:3] do
+    let started ← IO.monoNanosNow
+    let checksum ← ok action
+    let elapsed := (← IO.monoNanosNow) - started
+    check (checksum == expected) "benchmark timed checksum"
+    report configuration operation items trial elapsed sample
+
+private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCase)
+    (layout : Unified.Layout) (rows : Nat) (isIndex : Nat → Bool) (scanSum : UInt64) :
+    IO Unit := do
   let file ← IO.FS.Handle.mk path .read
   let source := handleSource file
-  let bytes ← ok source.size
-  let lookup ← ok (openLookup source)
-  check ((← ok (lookups lookup queries)) == expected) "unified benchmark warm-up checksum"
-
   let stats ← IO.mkRef ({} : ReadStats)
   let traced : Source (EIO String) := {
     size := source.size
@@ -263,38 +310,51 @@ private def benchmarkLookups (path : System.FilePath) (label : String) (rows : N
           { sample with dataCalls := sample.dataCalls + 1, dataBytes := sample.dataBytes + count }
       source.readAt offset count
   }
-  let traceLookup ← ok (openLookup traced)
-  stats.set {}
-  check ((← ok (lookups traceLookup queries)) == expected) "unified benchmark traced checksum"
-  let sample ← stats.get
+  let openFor := fun input => do
+    if configuration.label == "ALVSST03" then
+      let table ← openTable input
+      return (table.lookup, table.next)
+    else
+      let handle ← Unified.openChecked input Unified.nativeCRC32C layout.tableId
+      return (handle.lookup, handle.next)
   for trial in [:3] do
-    let started ← IO.monoNanosNow
-    let checksum ← ok (lookups lookup queries)
-    let elapsed := (← IO.monoNanosNow) - started
-    check (checksum == expected) "unified benchmark timed checksum"
-    IO.println s!"{label},{rows},{queries.size},{trial},{bytes},{elapsed},{sample.indexCalls},{sample.indexBytes},{sample.dataCalls},{sample.dataBytes},{checksum}"
+    let start ← IO.monoNanosNow
+    discard <| ok (openFor source)
+    report configuration "open" 1 trial ((← IO.monoNanosNow) - start)
+  let (lookup, next) ← ok (openFor source)
+  let (traceLookup, traceNext) ← ok (openFor traced)
+  let (mixed, hits, misses, mixedSum, hitSum) := benchQueries layout rows 4096
+  for (label, queries, expected) in [("mixed", mixed, mixedSum), ("hit", hits, hitSum), ("miss", misses, 0)] do
+    measure configuration label queries.size (lookups lookup queries) (lookups traceLookup queries) expected stats
+  measure configuration "scan-next" rows (scan next rows) (scan traceNext rows) scanSum stats
 
 def benchmark : IO Unit := IO.FS.withTempDir fun dir => do
   let rows := 65537
-  let (queries, expected) := benchQueries rows 4096
-  let layout : Unified.Layout := ⟨some 8, some 8, 84⟩
-  let variablePath := dir / "variable"
-  let unified := dir / "unified"
-  check ((← buildFile variablePath (← benchRows rows)) == rows) "variable benchmark build count"
-  check ((← Unified.buildFile unified layout (← benchRows rows) { leafTarget := 1024 }) == rows) "unified benchmark build count"
-
-  IO.println "format,rows,lookups,trial,file_bytes,elapsed_ns,index_reads,index_bytes,data_reads,data_bytes,checksum"
-  let variableSize := (← IO.FS.readBinFile variablePath).size
-  let indexStart := variableSize - footerSize - 8 * (rows + 1)
-  benchmarkLookups variablePath "variable" rows queries expected
-    (fun source => return (← openTable source).lookup) (· ≥ indexStart)
-
-  let (leaves, _) ← readIndexes (← IO.FS.readBinFile unified)
-  let isIndex := fun offset => leaves.any (·.offset == offset)
-  let runWith crc label := benchmarkLookups unified label rows queries expected
-    (fun source => return (← Unified.openChecked source crc layout.tableId).lookup) isIndex
-  runWith Unified.nativeCRC32C "unified-native-crc32c"
-  runWith Unified.crc32c "unified-portable-crc32c"
+  let scanSum := (List.range rows).foldl (fun hash index => mix hash (index + 1).toUInt64) 0
+  IO.println "format,layout,data_target,leaf_target,leaf_blocks,data_blocks,file_bytes,operation,items,trial,elapsed_ns,index_reads,index_bytes,data_reads,data_bytes"
+  for (name, keyWidth, valueWidth) in [
+      ("fixed-fixed", some 8, some 8), ("fixed-variable", some 8, none),
+      ("variable-fixed", none, some 8), ("variable-variable", none, none)] do
+    let layout : Unified.Layout := ⟨keyWidth, valueWidth, 84⟩
+    for (dataTarget, leafTarget) in [(0, 0), (1024, 1024), (4096, 1024), (16384, 1024), (4096, 4096)] do
+      let legacy := dataTarget == 0
+      let path := dir / s!"{name}-{dataTarget}-{leafTarget}"
+      let provider ← benchRows layout rows
+      let start ← IO.monoNanosNow
+      let count ← if legacy then buildFile path provider
+        else Unified.buildFile path layout provider { dataTarget, leafTarget }
+      let buildTime := (← IO.monoNanosNow) - start
+      check (count == rows) "benchmark build count"
+      let image ← IO.FS.readBinFile path
+      let (leaves, blocks) ← if legacy then pure (#[], #[]) else readIndexes image
+      let configuration : BenchmarkCase :=
+        ⟨if legacy then "ALVSST03" else "ALVSST05", name, dataTarget, leafTarget,
+          leaves.size, blocks.size, image.size⟩
+      report configuration "build" rows 0 buildTime
+      let indexStart := image.size - footerSize - 8 * (rows + 1)
+      let isIndex : Nat → Bool := if legacy then fun offset => decide (indexStart ≤ offset) else fun offset => leaves.any (·.offset == offset)
+      benchmarkCase path configuration layout rows isIndex scanSum
+      IO.FS.removeFile path
 
 end ImmutableSSTable.UnifiedFixtures
 

@@ -1,5 +1,11 @@
 # Fixed-width SSTable experiment
 
+For the current CRC32C path, see the [ALVSST05 benchmark matrix](unified.md)
+and the [Lean Google CRC32C benchmark](checksums.md). The experiments below
+measure the earlier ALVSST03 and ALVSST04 FNV-1a layouts. The alignment,
+validation-policy and two-level data-block search numbers describe those
+historical layouts.
+
 Run from the repository root with the pinned Lean toolchain and a C compiler.
 
 ```sh
