@@ -45,6 +45,8 @@ open ImmutableSSTable
 #check_axioms open_built_table
 #check_axioms decodeEntry_rejects_checksum
 #check_axioms RequiredProbeError.propagates
+#check_axioms Table.readEntry_index_error
+#check_axioms Table.readEntry_index_decode_error
 #check_axioms Table.readEntry_source_error
 #check_axioms Table.readEntry_decode_error
 #check_axioms Table.seek_read_error
@@ -54,15 +56,15 @@ open ImmutableSSTable
 #check_axioms modelBuild_ok_iff
 #check_axioms push_rejects_key
 #check_axioms openTable_encoded
-#check_axioms open_lookup_encoded
-#check_axioms decodeHeader_encodeHeader
+#check_axioms decodeFooter_encodeFooter
 #check_axioms decodeEntry_encodeEntry
 #check_axioms Table.readEntry_encoded
 #check_axioms Table.next_encoded
 #check_axioms Table.lookup_encoded
 #check_axioms Table.seek_encoded
-#check_axioms fileSize_bound
-#check_axioms rowSpan
+#check_axioms encodeImage_size
+#check_axioms decodeImage_offsets
+#check_axioms encodeImage_extract_row
 #check_axioms seekBetween_correct
 #check_axioms seekBetween_probes
 LEAN
