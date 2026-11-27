@@ -152,4 +152,3 @@ The native replacement path uses exclusive creation for its scratch files. Same-
 ### Lean readability review
 
 The checkpoint loader cleanup uses Lean's `IO.ofExcept` and constructs an installed state after WAL recovery. Acknowledged writes measured 3.20 ms before and 3.13 ms after. Reopen medians ranged from 0.93× to 1.03× over the same-machine WAL workload matrix. The initial four-run checkpoint medians were 9.24 and 10.29 ms. In a follow-up with 12 interleaved rounds of three samples per build, the pooled medians were 11.47 and 11.47 ms, with a median paired ratio of 1.012×. [Raw samples and environment](../../benchmarks/results/disk/readability)
-
