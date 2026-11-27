@@ -126,6 +126,15 @@ failed-sync cleanup certifies durability of a directory entry. A reported
 sync failure may follow a completed effect. The proof preserves the primary
 error and runs cleanup from the reached state.
 
+Failed acquisition remains a separate runtime obligation. The pinned Lean
+runtime can leak a descriptor when `open` succeeds and `fdopen` fails before
+returning a handle. Verify the acquisition fault with a runtime carrying the
+fix before accepting native descriptor custody. Even with the fix, failed
+exclusive creation can leave a new unpublished path. Cleanup may unlink
+only a name the writer acquired. An arbitrary acquisition error can also
+mean an existing name was rejected and must be preserved.
+[Lean handle-acquisition fix](https://github.com/leanprover/lean4/pull/16010)
+
 The [read bridge](../../../native/sstable.c) checks the descriptor with
 `fstat` and uses bounded `pread` on that descriptor. Successful operations
 on the immutable regular inode must return its extent and requested
@@ -138,6 +147,9 @@ Run `bash scripts/check-sstable-l0-consumer.sh` with the pinned PR #5 revision
 available locally to compile the component theorem into the real L0 typed
 consumer. The native fixture checks scoped hit, tombstone, ordinary miss,
 and that a packet or typed-decoding error aborts the real lookup loop.
+A separate proof and fault fixture route an injected position-read failure
+through a selected data packet after a newer table misses. Both preserve
+the error and stop before a known older hit.
 The check stages PR #5 code in a temporary checkout and adapts checked open
 to accept its table ID.
 
