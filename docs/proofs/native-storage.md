@@ -501,10 +501,13 @@ taking effect. Before the effect, a surviving map keeps the protected bindings o
 predecessor. After the effect, it reflects the live directory at fsync. In either case,
 `SettledCrashFiles` relates each sampled name and payload through the marker to the
 protected files at prune authorization. A live retry starts at the public
-error's cleanup heap. The accepted unlinks determine its later WAL names
-for either barrier outcome. The selected keeper and its visible bytes
-supply the entry for the next attempt. See `extendsFailedPruneBarrier`
-in the [repair proof](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean).
+error's cleanup heap. If the unlink loop fails, the executed prefix
+identifies the successful removals and the name whose removal failed.
+The filesystem observation at that call determines whether the victim
+is still present. The other names and selected keeper retain their bindings.
+The same retry invariant handles a failure at the following directory sync.
+[`extendsFailedPruneBlock`](../../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) ·
+[Ordered unlink execution](../../lean/Alvoki/Storage/Disk/NativeAlignedKeeperCache.lean)
 
 An unlink error uses the same relation. The unlink loop carries it over each actual
 result, including the reached heap of the failed removal, then cleanup carries it to

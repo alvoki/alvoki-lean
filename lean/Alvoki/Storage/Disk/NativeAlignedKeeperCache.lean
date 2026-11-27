@@ -73,35 +73,44 @@ theorem _root_.Alvoki.Storage.WalSegmentRepair.finishBoundedMarkedOpen_reachedSu
             cases result
             simpa only [kept] using schedule
 
-private theorem foldWalUnlinks {heap model : Type}
+/-- Fold the literal unlink loop. An error identifies the accepted prefix
+and the exact reached removal that ended that loop. -/
+theorem foldWalUnlinksWithPrefix {heap model : Type}
     (directory : DiskDirectory) (plan : Plan)
     (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
     (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
     (sync : Array FilePath → EStateM IO.Error heap Unit)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     (invariant : model → heap → Prop) (applyUnlink : model → Nat → model)
-    (failed : IO.Error → heap → Prop) {initial : model} {first : heap}
-    (entered : invariant initial first)
+    {initial : model} {first : heap} (entered : invariant initial first)
     (unlink : ∀ {ordinal start finish result before}, ordinal ∈ plan.newer →
       remove (directory.file (.walSegment ordinal)) start = .ok result finish →
       RunCollection.ownedUnlinkResult result = .ok () →
-      invariant before start → invariant (applyUnlink before ordinal) finish)
-    (outerError : ∀ {ordinal start finish cause before}, ordinal ∈ plan.newer →
-      remove (directory.file (.walSegment ordinal)) start = .error cause finish →
-      invariant before start → failed cause finish)
-    (innerError : ∀ {ordinal start finish result cause before}, ordinal ∈ plan.newer →
-      remove (directory.file (.walSegment ordinal)) start = .ok result finish →
-      RunCollection.ownedUnlinkResult result = .error cause →
-      invariant before start → failed cause finish) :
-    match ((plan.newer.map Step.unlink).forM (performPaths directory plan remove throw write sync rename)) first with
+      invariant before start → invariant (applyUnlink before ordinal) finish) :
+    let run := performPaths directory plan remove throw write sync rename
+    match ((plan.newer.map Step.unlink).forM run) first with
     | .ok () last => invariant (plan.newer.foldl applyUnlink initial) last
-    | .error cause last => failed cause last := by
-  let run := performPaths directory plan remove throw write sync rename
+    | .error cause last =>
+      ∃ (earlier : List Nat) (victim : Nat) (suffix : List Nat) (atVictim : heap),
+        plan.newer = earlier ++ victim :: suffix ∧
+        ((earlier.map Step.unlink).forM run) first = .ok () atVictim ∧
+        invariant (earlier.foldl applyUnlink initial) atVictim ∧
+        (remove (directory.file (.walSegment victim)) atVictim = .error cause last ∨
+          ∃ result, remove (directory.file (.walSegment victim)) atVictim = .ok result last ∧
+            RunCollection.ownedUnlinkResult result = .error cause) := by
+  intro run
   have preserve {ordinals : List Nat} (included : ∀ ordinal ∈ ordinals, ordinal ∈ plan.newer)
       {start : heap} {before : model} (known : invariant before start) :
       match ((ordinals.map Step.unlink).forM run) start with
-      | .ok () finish => invariant (ordinals.foldl applyUnlink before) finish
-      | .error cause finish => failed cause finish := by
+      | .ok () last => invariant (ordinals.foldl applyUnlink before) last
+      | .error cause last =>
+        ∃ (earlier : List Nat) (victim : Nat) (suffix : List Nat) (atVictim : heap),
+          ordinals = earlier ++ victim :: suffix ∧
+          ((earlier.map Step.unlink).forM run) start = .ok () atVictim ∧
+          invariant (earlier.foldl applyUnlink before) atVictim ∧
+          (remove (directory.file (.walSegment victim)) atVictim = .error cause last ∨
+            ∃ result, remove (directory.file (.walSegment victim)) atVictim = .ok result last ∧
+              RunCollection.ownedUnlinkResult result = .error cause) := by
     induction ordinals generalizing start before with
     | nil => exact known
     | cons ordinal rest ih =>
@@ -109,17 +118,30 @@ private theorem foldWalUnlinks {heap model : Type}
         RunCollection.performPaths, Bind.bind, EStateM.bind]
       cases removed : remove (directory.file (.walSegment ordinal)) start with
       | error cause reached =>
-        exact outerError (included _ List.mem_cons_self) removed known
+        exact ⟨[], ordinal, rest, start, rfl, rfl, known, .inl removed⟩
       | ok result reached =>
         cases accepted : RunCollection.ownedUnlinkResult result with
         | error cause =>
-          simpa only [accepted, throw, throwThe, MonadExceptOf.throw, EStateM.throw] using
-            innerError (included _ List.mem_cons_self) removed accepted known
+          simp only [accepted, throw, throwThe, MonadExceptOf.throw, EStateM.throw]
+          exact ⟨[], ordinal, rest, start, rfl, rfl, known, .inr ⟨result, removed, accepted⟩⟩
         | ok value =>
           cases value
           simp only [accepted, Pure.pure, EStateM.pure]
-          exact ih (fun other member => included other (List.mem_cons_of_mem _ member))
+          have next := ih (fun other member => included other (List.mem_cons_of_mem _ member))
             (unlink (included _ List.mem_cons_self) removed accepted known)
+          simp only [List.forM_eq_forM, run] at next
+          cases remaining : forM (rest.map Step.unlink) (performPaths directory plan remove throw write sync rename) reached with
+          | ok value last =>
+            cases value
+            simpa only [remaining, List.foldl_cons] using next
+          | error cause last =>
+            simp only [remaining] at next
+            obtain ⟨earlier, victim, suffix, atVictim, split, ran, prior, rejected⟩ := next
+            refine ⟨ordinal :: earlier, victim, suffix, atVictim, ?_, ?_, prior, rejected⟩
+            · simpa only [List.cons_append] using congrArg (ordinal :: ·) split
+            · simpa only [List.map_cons, List.forM_eq_forM, List.forM_cons, run, performPaths,
+                RunCollection.performPaths, Bind.bind, EStateM.bind, removed, accepted, Pure.pure, EStateM.pure]
+                using ran
   exact preserve (fun _ member => member) entered
 
 /-- Fold the accepted removes of the actual WAL unlink loop in call order. -/
@@ -138,8 +160,8 @@ theorem foldReturnedWalUnlinks {heap model : Type}
     (returned : ((plan.newer.map Step.unlink).forM
       (performPaths directory plan remove throw write sync rename)) first = .ok () last) :
     invariant (plan.newer.foldl applyUnlink initial) last := by
-  simpa only [returned] using foldWalUnlinks directory plan remove write sync rename invariant applyUnlink
-    (fun _ _ => True) entered unlink (fun _ _ _ => trivial) (fun _ _ _ _ => trivial)
+  simpa only [returned] using
+    foldWalUnlinksWithPrefix directory plan remove write sync rename invariant applyUnlink entered unlink
 
 /-- Carry a frame across every reached remove, including the one whose
 outer failure or rejected unlink result ends the loop. -/
@@ -161,14 +183,22 @@ theorem framesWalUnlinks {heap : Type}
       (returns : remove (directory.file (.walSegment ordinal)) before = result)
       (reached : NativeFileEffectProjection.reached result = after) :
       frame before after := by simpa only [returns, reached] using unlink ordinal member before
-  have framed := foldWalUnlinks directory plan remove write sync rename (fun (_ : Unit) => frame first)
-    (fun _ _ => ()) (fun _ => frame first) (initial := ()) (refl first)
+  have framed := foldWalUnlinksWithPrefix directory plan remove write sync rename (fun (_ : Unit) => frame first)
+    (fun _ _ => ()) (initial := ()) (refl first)
     (fun member returns _ prior => trans prior (called member returns rfl))
-    (fun member returns prior => trans prior (called member returns rfl))
-    (fun member returns _ prior => trans prior (called member returns rfl))
+  dsimp only at framed
   cases result : ((plan.newer.map Step.unlink).forM
     (performPaths directory plan remove throw write sync rename)) first with
-  | error => simpa only [result, NativeFileEffectProjection.reached] using framed
+  | error cause last =>
+    simp only [result] at framed
+    obtain ⟨_, victim, _, _, split, _, prior, stopped⟩ := framed
+    have member : victim ∈ plan.newer := by
+      rw [split]
+      exact List.mem_append_right _ List.mem_cons_self
+    change frame first last
+    rcases stopped with outer | ⟨_, inner, _⟩
+    · exact trans prior (called member outer rfl)
+    · exact trans prior (called member inner rfl)
   | ok value => cases value; simpa only [result, NativeFileEffectProjection.reached] using framed
 
 /-- Only a longer keeper or a nonempty suffix reaches the prune block.
