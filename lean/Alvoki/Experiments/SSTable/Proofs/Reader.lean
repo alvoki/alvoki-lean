@@ -1,4 +1,4 @@
-import Alvoki.Experiments.SSTable.Proofs.Format
+import Alvoki.Experiments.SSTable.Proofs.Builder
 import Alvoki.Experiments.SSTable.Proofs.Search
 
 namespace ImmutableSSTable
@@ -147,5 +147,22 @@ theorem open_lookup_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
       pure ((rows.find? fun row => row.key == key).map Entry.value) := by
   obtain ⟨table, opened, bound⟩ := openTable_encoded fits observed
   simp [opened, table.lookup_encoded bound observed strict key]
+
+/-- From the actual output of successful writer pushes, healthy positional I/O
+returns a handle whose reads implement the input sequence. Input order and the
+declared row count follow from the writer having accepted the stream. -/
+theorem open_built_table [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+    {source : Source m} {rows : List Entry} {state body}
+    (built : runPushes {} rows = .ok (state, body))
+    (observed : source.Serves (state.header ++ body)) :
+    ∃ table, openTable source = pure table ∧
+      (∀ key, table.lookup key = pure ((rows.find? fun row => row.key == key).map Entry.value)) ∧
+      (∀ key, ∃ i, table.seek key = pure i ∧ LowerBound (fun n => (rowAt rows n).key) rows.length key i) ∧
+      (∀ i, table.next i = pure (if h : i < rows.length then some (rows[i], i+1) else none)) := by
+  obtain ⟨fits, ordered, image⟩ := builder_accepts_only_ordered built
+  rw [image] at observed
+  obtain ⟨table, opened, bound⟩ := openTable_encoded fits observed
+  exact ⟨table, opened, table.lookup_encoded bound observed ordered,
+    table.seek_encoded bound observed ordered, table.next_encoded bound observed⟩
 
 end ImmutableSSTable

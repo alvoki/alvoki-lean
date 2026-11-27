@@ -39,6 +39,8 @@ import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.SSTable.Proofs.Builder
 import Alvoki.Experiments.SSTable.Proofs.Reader
 open ImmutableSSTable
+#check_axioms open_built_table
+#check_axioms builder_accepts_only_ordered
 #check_axioms builder_constructs_image
 #check_axioms push_rejects_key
 #check_axioms openTable_encoded

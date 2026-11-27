@@ -60,4 +60,56 @@ theorem builder_constructs_image (rows : List Entry) (fits : rows.length ≤ max
   obtain ⟨last, output, count⟩ := runPushes_from rows {} (by simpa using fits) ordered (by simp)
   exact ⟨last, output, by simpa using count, by simp [BuilderState.header, count, encodeImage]⟩
 
+private theorem runPushes_ordered {state : BuilderState} {rows : List Entry} {last bytes}
+    (bound : state.count ≤ maxRows) (ok : runPushes state rows = .ok (last, bytes)) :
+    state.count + rows.length ≤ maxRows ∧
+    rows.Pairwise (fun a b => a.key < b.key) ∧
+    ∀ key ∈ state.lastKey, ∀ r ∈ rows, key < r.key := by
+  induction rows generalizing state last bytes with
+  | nil => simp [bound]
+  | cons row rest ih =>
+    have room : state.count < maxRows := by
+      by_cases h : state.count < maxRows
+      · exact h
+      · simp [runPushes, BuilderState.push, Nat.le_of_not_gt h, Bind.bind, Except.bind,
+          throw] at ok
+    have ordered : ∀ key ∈ state.lastKey, key < row.key := by
+      intro key member
+      have same : state.lastKey = some key := member
+      by_cases good : key < row.key
+      · exact good
+      · rw [runPushes, push_rejects_key room same (UInt64.not_lt.mp good)] at ok
+        contradiction
+    rw [runPushes, push_ok room ordered] at ok
+    let next : BuilderState := ⟨state.count + 1, some row.key⟩
+    cases tail : runPushes next rest with
+    | error _ =>
+      simp only [next] at tail
+      simp [Bind.bind, Except.bind, tail] at ok
+    | ok pair =>
+      obtain ⟨finalState, suffix⟩ := pair
+      obtain ⟨fits, restOrdered, later⟩ := ih (by dsimp [next]; omega) tail
+      have greater := later row.key rfl
+      refine ⟨?_, List.pairwise_cons.mpr ⟨greater, restOrdered⟩, ?_⟩
+      · dsimp [next] at fits
+        simp only [List.length_cons]
+        omega
+      · intro key member r atRow
+        rcases List.mem_cons.mp atRow with rfl | inside
+        · exact ordered key member
+        · exact UInt64.lt_trans (ordered key member) (greater r inside)
+
+/-- Successful construction establishes every input premise required by the
+reader, even when the caller supplied an unchecked sequence. -/
+theorem builder_accepts_only_ordered {rows : List Entry} {last body}
+    (ok : runPushes {} rows = .ok (last, body)) :
+    rows.length ≤ maxRows ∧ rows.Pairwise (fun a b => a.key < b.key) ∧
+    last.header ++ body = encodeImage rows := by
+  obtain ⟨bound, sorted, _⟩ := runPushes_ordered (Nat.zero_le _) ok
+  simp only [Nat.zero_add] at bound
+  obtain ⟨_, encoded, _, image⟩ := builder_constructs_image rows bound sorted
+  rw [ok] at encoded
+  cases encoded
+  exact ⟨bound, sorted, image⟩
+
 end ImmutableSSTable

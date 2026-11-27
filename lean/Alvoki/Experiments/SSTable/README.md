@@ -14,9 +14,9 @@ The native reader returns I/O and decoding errors through `EIO String`. Each row
 
 ## Why reads agree with construction
 
-1. The writer's checked push enforces increasing keys and emits one encoded row. For any sorted input within the size limit, the final header plus all emitted bytes equals its canonical image. [Builder proof](Proofs/Builder.lean)
+1. The writer's checked push enforces increasing keys and emits one encoded row. Every accepted stream is strictly ordered, fits the offset bound, and emits its canonical image. Conversely, every ordered input within that bound is accepted. [Builder proof](Proofs/Builder.lean)
 2. The header recovers the row count. Each row occupies a disjoint fixed-width slice and decodes back to its input entry. The entire file fits a signed 64-bit offset. [Format and bounds](Proofs/Format.lean)
-3. Given a stable source serving those bytes, opening binds the returned table to the source and count. Each iteration step returns the corresponding input row. Seek partitions the input at the target key, and lookup agrees with linear search. [Source contract and reader proofs](Proofs/Reader.lean) · [Search and probe bound](Proofs/Search.lean)
+3. The end-to-end theorem `open_built_table` takes a successful construction and a stable source serving those bytes. Opening binds the returned table to the source and count. Each iteration step returns the corresponding input row. Seek partitions the input at the target key, and lookup agrees with linear search. [Source contract and reader proofs](Proofs/Reader.lean) · [Search and probe bound](Proofs/Search.lean)
 
 The caller keeps the file immutable while any table handle is live. Open detects a malformed header, an unsupported count and a size mismatch. Reads detect short records and propagate backend errors. Same-length value changes, key substitutions and reordered records can pass these checks. There is no checksum or whole-file ordering scan. The native writer's file effects and the operating system's positional-read implementation are exercised with real files and remain environmental assumptions of the byte-level proof. Crash-safe publication belongs to the caller.
 
