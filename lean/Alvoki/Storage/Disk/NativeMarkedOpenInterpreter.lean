@@ -111,12 +111,12 @@ private noncomputable def interpretWorker {state : Type}
   ordinary (installReady reopened.installed source.allocatePhase source.allocateToken
     fun phase token => pure (assemble directory lock cache phase token))
 
-private def outsideRepair (action : EStateM IO.Error heap α) : EStateM IO.Error (heap × Option heap) α :=
+private def outsideRepair (action : EStateM IO.Error heap α) : EStateM IO.Error (heap × Option (LongKeeperRepair.RenameOutcome heap)) α :=
   fun (before, _) => match action before with
     | .ok value after => .ok value (after, none)
     | .error error after => .error error (after, none)
 
-/-- Interpret the held worker, retaining a successful replacement rename only
+/-- Interpret the held worker, retaining the replacement rename outcome only
 on errors inside repair. Installation can report the same error on the same
 heap after a successful repair. It starts outside the observed interval. -/
 noncomputable def workerObservingRepairRename (cached : IO.Ref (Option IO.FS.Handle))
@@ -134,19 +134,19 @@ failed finisher at its returned heap, before installation can run. -/
 theorem worker_observesRepairError_iff (directory : DiskDirectory) (lock : IO.FS.Handle)
     (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (cache : DiskTable.OpenSyncFiles)
-    {entry checked marked : heap} {metadata : IO.FS.Metadata} {cause : IO.Error} {failed renamed : heap}
+    {entry checked marked : heap} {metadata : IO.FS.Metadata} {cause : IO.Error} {failed : heap} {outcome : LongKeeperRepair.RenameOutcome heap}
     (flat : rejectFlatWalWith directory (optionalMetadataWith (source.calls.lookup (directory.file .wal)))
       entry = .ok () checked)
     (marker : optionalMetadataWith (source.calls.lookup (directory.file .walBoundary)) checked =
       .ok (some metadata) marked) :
     let keeper := source.keeperCallbacks.withFileReads source.fileCalls
     source.workerObservingRepairRename cached active pending directory lock cache entry =
-        .error cause (failed, some renamed) ↔
+        .error cause (failed, some outcome) ↔
       ∃ plan opened extent prepared, source.markedPreparation pending directory marked =
           .ok (plan, opened, extent) prepared ∧
         LongKeeperRepair.observeRename directory plan extent source.remove (source.stage.stage pending keeper.modifyPending)
           (keeper.syncPaths directory.path cached active pending) source.rename prepared =
-          .error cause (failed, some renamed) := by
+          .error cause (failed, some outcome) := by
   intro keeper
   simp only [workerObservingRepairRename, interpretWorker, recoverSegmentedWalWith, Bind.bind, EStateM.bind,
     outsideRepair, flat, marker, Option.isSome, ↓reduceIte]

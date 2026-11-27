@@ -96,10 +96,14 @@ Removing its sole entry preserves the file image, and successful fsync of its in
 payload durable under the local file-sync projection. On reboot, one sampled namespace covers
 the keeper, immutable children, bounded WAL interval and every actually removed name.
 
-**Next source boundary.** The rename-error consumer still receives the returned
-authorization, prune, scratch write and grouped sync separately. Derive that
-prefix from a worker observation that identifies the failed rename, retaining
-both physical outcomes of the rename error.
+The model interpreter of the marked worker records whether the replacement rename failed or returned.
+Either observation identifies the measured repair, and its trace supplies the
+completed authorization, prune, scratch write and sync. For a failed rename,
+the local filesystem observation determines whether the new binding took effect.
+
+**Next source boundary.** A failed scratch fsync occurs before the worker
+reaches rename. Its retry proof still takes the stage and cache callbacks as
+inputs. Derive their reached prefix from the worker's scratch-fsync observation.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

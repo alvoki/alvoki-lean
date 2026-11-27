@@ -534,9 +534,11 @@ At another observed power loss, `selectsRetryAfterRepair` samples the keeper, ma
 manifest, seals and runs through that one map and rebuilds the ordinary retry entry. It
 requires the selected immutable child names on that map to agree with the reached names.
 Both repair errors derive the post-prune settlement and synced-stage bytes from the same
-unlinks, root fsync, staged write and pending-file fsync. On a final directory error, the
-[worker's rename observation](../../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
-selects its measured repair and the reached staging and rename heaps.
+unlinks, root fsync, staged write and pending-file fsync. The worker records whether
+rename failed or returned its heap to the final directory sync. Both observations
+identify the same measured repair prefix. A failed rename can still have changed
+the binding, as determined by the local filesystem effect.
+[Worker observation](../../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)
 The measured seal census and local descriptor conditions carry the allocated directory handle, live slot and inode to the final fsync. Storage frames carry the root name to that same inode. The staged-file fsync establishes the trimmed bytes on a fresh inode. The returned prune and staging operations determine the logical image before rename. Rename and the cache load carry that image, the keeper binding and its bytes to the directory fsync. An effective final barrier settles the replacement. An
 ineffective one preserves a predecessor map, which may name the old keeper. Both establish a retry entry for the same committed target.
 The earlier successful directory sync after pruning settles present and absent WAL names over

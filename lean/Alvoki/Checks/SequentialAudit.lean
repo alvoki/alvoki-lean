@@ -2280,6 +2280,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.rawFinalSyncError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.rawDirectoryTarget
 #check_axioms Alvoki.Storage.DiskSession.AlignedKeeperCacheCallbacks.directoryGroupError_iff
+#check_axioms Alvoki.Storage.WalSegmentRepair.LongKeeperRepair.RenameOutcome
 #check_axioms Alvoki.Storage.WalSegmentRepair.LongKeeperRepair.longerOfObservedRenameError
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.visibleAfterRename
 #check_axioms Alvoki.Storage.DiskSession.ListedLongKeeperDirectoryIssue.readyAfterEffect

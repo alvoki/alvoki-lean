@@ -137,25 +137,12 @@ theorem keeperSurvivors (settled : ∀ names ∈ before.crashNames,
 
 end WalKeeperRenameEffect
 
-/-- A failed literal keeper rename returns its own error. Its reached
-heap contains the corresponding pre-barrier repair prefix, the actual
-live keeper, and the protected namespace and payload frame. -/
+/-- The physical outcome of the failed rename determines the logical
+repair prefix, keeper and retry frames before any final directory sync. -/
 theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap FileImage)
-    (state : NativeReadyState) (target : Target) (plan : Plan) (extent : Nat)
+    (state : NativeReadyState) (target : Target)
     (storage : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
-    (write : FilePath → ByteArray → EStateM IO.Error heap Unit)
-    (sync : Array FilePath → EStateM IO.Error heap Unit)
-    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
-    {entry authorized pruned recorded synced reached : heap} {cause : IO.Error} {effective : Bool}
-    {old replacement : Nat}
-    (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize) (longer : plan.keeperSize < extent)
-    (selected : plan.keeper = target.first) (payload : plan.keeperBytes = target.trimmed)
-    (authorize : sync #[state.session.directory.path] entry = .ok () authorized)
-    (prune : ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM
-      (performPaths state.session.directory plan remove throw write sync rename)) authorized = .ok () pruned)
-    (written : write (state.session.directory.file .stagedWal) target.trimmed pruned = .ok () recorded)
-    (persisted : sync #[state.session.directory.file .stagedWal] recorded = .ok () synced)
+    {entry pruned synced reached : heap} {effective : Bool} {old replacement : Nat}
     (prunedTrace : EffectTrace target (view.files entry).image (view.files pruned).image)
     (prunedEmpty : (view.files pruned).image.later.DurablyEmpty)
     (syncedImage : (view.files synced).image = (view.files pruned).image.withScratch (some (target.trimmed, true)))
@@ -165,24 +152,14 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
     (oldNamed : (storage synced).files.names (state.session.directory.file (.walSegment target.first)) = some old)
     (oldSettled : ∀ names ∈ (storage synced).crashNames,
       names (state.session.directory.file (.walSegment target.first)) = some old)
-    (stagedNamed : (storage synced).files.names (state.session.directory.file .stagedWal) = some replacement)
-    (distinct : replacement ≠ old)
     (stagedLive : visible synced replacement = target.trimmed)
     (stagedDurable : (storage synced).files.bytes replacement = [target.trimmed])
     (keeper : RawOpenRetryTrace.KeeperAt view state.session.directory target
       (fun atHeap => (storage atHeap).files.names) visible synced)
-    (failed : rename (state.session.directory.file .stagedWal)
-      (state.session.directory.file (.walSegment target.first)) synced = .error cause reached)
-    (observation : rename (state.session.directory.file .stagedWal)
-      (state.session.directory.file (.walSegment target.first)) synced = .error cause reached →
-      (storage synced).files.names (state.session.directory.file .stagedWal) = some replacement →
-      (storage synced).files.names (state.session.directory.file (.walSegment target.first)) = some old →
-      replacement ≠ old →
-      WalKeeperRenameEffect state.session.directory target.first replacement effective
-        (storage synced) (storage reached) (visible synced) (visible reached) ∧
-      (if effective then (view.files synced).image.effect target (.replace .renameStaged)
-        else some (view.files synced).image) = some (view.files reached).image) :
-    finishBoundedMarkedOpen state.session.directory plan extent remove write sync rename entry = .error cause reached ∧
+    (effect : WalKeeperRenameEffect state.session.directory target.first replacement effective
+      (storage synced) (storage reached) (visible synced) (visible reached))
+    (image : (if effective then (view.files synced).image.effect target (.replace .renameStaged)
+      else some (view.files synced).image) = some (view.files reached).image) :
     EffectTrace target (view.files entry).image (view.files reached).image ∧
     state.SelectedRetryFrame (storage entry) (storage reached) (visible entry) (visible reached) ∧
     RawOpenRetryTrace.KeeperAt view state.session.directory target
@@ -202,7 +179,6 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
     (view.files reached).image.later.DurablyEmpty := by
   let directory := state.session.directory
   let keeperPath := directory.file (.walSegment target.first)
-  obtain ⟨effect, image⟩ := observation failed stagedNamed oldNamed distinct
   have named := effect.liveKeeper oldNamed
   have oldPayload : (view.files synced).image.keeper.active = some (visible synced old) := by
     simpa [RawOpenRetryTrace.KeeperAt, oldNamed] using keeper
@@ -244,15 +220,8 @@ theorem failedLongKeeperRename {heap : Type} (view : OpenCloseHeapView heap File
   have absent : (view.files reached).image.later.DurablyEmpty := by
     rw [imageAfter, syncedImage]
     cases effective <;> exact prunedEmpty
-  refine ⟨?_, trace, prefixFrame.trans (effect.framesRetry rfl safe), keeperAt, laterAt,
+  exact ⟨trace, prefixFrame.trans (effect.framesRetry rfl safe), keeperAt, laterAt,
     fun lower upper => effect.walNames oldNamed oldSettled lower upper, named,
     effect.keeperSurvivors oldSettled stagedDurable, absent⟩
-  rw [finishBoundedMarkedOpen_afterStage directory plan extent remove write sync rename valid size longer
-    authorize prune (payload.symm ▸ written)]
-  have syncStage : performPaths directory plan remove throw write sync rename (.replace .syncStaged) recorded = .ok () synced :=
-    persisted
-  have renameStage : performPaths directory plan remove throw write sync rename (.replace .renameStaged) synced = .error cause reached := by
-    simpa [directory, performPaths, Publication.performReplacement, selected] using failed
-  simp only [Bind.bind, EStateM.bind, syncStage, renameStage]
 
 end Alvoki.Storage.DiskSession

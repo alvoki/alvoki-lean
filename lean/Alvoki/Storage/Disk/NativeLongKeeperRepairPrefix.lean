@@ -45,13 +45,19 @@ theorem finishBoundedMarkedOpen_afterStage {heap : Type} (directory : DiskDirect
 
 namespace LongKeeperRepair
 
-/-- A successful replacement rename records its return heap for this invocation.
-Other callbacks preserve the observation, including when they report an error. -/
+/-- Which exit of the replacement rename was reached in this repair.
+A returned rename retains the heap used to issue the final directory sync. -/
+inductive RenameOutcome (heap : Type) where
+  | failed
+  | returned (reached : heap)
+
+/-- Record only the exit of the rename itself. The outer result still
+carries the original diagnostic and the heap after any physical effects. -/
 private def observe (action : EStateM IO.Error heap α) (recordRename : Bool := false) :
-    EStateM IO.Error (heap × Option heap) α := fun (before, prior) =>
+    EStateM IO.Error (heap × Option (RenameOutcome heap)) α := fun (before, prior) =>
   match action before with
-  | .ok value after => .ok value (after, if recordRename then some after else prior)
-  | .error cause after => .error cause (after, prior)
+  | .ok value after => .ok value (after, if recordRename then some (.returned after) else prior)
+  | .error cause after => .error cause (after, if recordRename then some .failed else prior)
 
 variable (dir : DiskDirectory) (plan : Plan) (extent : Nat)
   (remove : FilePath → EStateM IO.Error heap (Except IO.Error Unit))
@@ -61,13 +67,13 @@ variable (dir : DiskDirectory) (plan : Plan) (extent : Nat)
 
 /-- The literal bounded finisher with one observation, initially absent. The
 same rename on an earlier open cannot supply the returned heap. -/
-def observeRename (start : heap) : EStateM.Result IO.Error (heap × Option heap) Unit :=
+def observeRename (start : heap) : EStateM.Result IO.Error (heap × Option (RenameOutcome heap)) Unit :=
   finishBoundedMarkedOpen dir plan extent (fun path => observe (remove path))
     (fun path bytes => observe (write path bytes)) (fun paths => observe (sync paths))
     (fun src dst => observe (rename src dst) true) (start, none)
 
 private theorem observe_pure (value : α) :
-    (pure value : EStateM IO.Error (heap × Option heap) α) = observe (pure value) := rfl
+    (pure value : EStateM IO.Error (heap × Option (RenameOutcome heap)) α) = observe (pure value) := rfl
 
 private theorem observe_bind (action : EStateM IO.Error heap α) (next : α → EStateM IO.Error heap β) :
     (observe action >>= fun value => observe (next value)) = observe (action >>= next) := by
@@ -107,8 +113,8 @@ fast path, and a prune followed by an ordinary keeper sync preserve the
 initial empty observation, even when one of their calls fails. -/
 theorem longerOfObservedRenameError
     (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
-    {start renamed reached : heap} {cause : IO.Error}
-    (observed : observeRename dir plan extent remove write sync rename start = .error cause (reached, some renamed)) :
+    {start reached : heap} {outcome : RenameOutcome heap} {cause : IO.Error}
+    (observed : observeRename dir plan extent remove write sync rename start = .error cause (reached, some outcome)) :
     plan.keeperSize < extent := by
   apply Classical.byContradiction
   intro short
@@ -126,7 +132,7 @@ theorem longerOfObservedRenameError
     · have remainder : (steps plan.newer false).forM seen = (do
           observe ((plan.newer.map Step.unlink ++ [Step.syncPruned]).forM perform)
           seen Step.syncKeeper
-          pure () : EStateM IO.Error (heap × Option heap) Unit) := by
+          pure () : EStateM IO.Error (heap × Option (RenameOutcome heap)) Unit) := by
         unfold steps
         simp only [Bool.false_eq_true, ite_false]
         rw [List.forM_eq_forM, List.forM_append, ← List.forM_eq_forM,
@@ -151,17 +157,18 @@ def StagedFrom (start authorized pruned staged synced : heap) : Prop :=
     write (dir.file .stagedWal) plan.keeperBytes pruned = .ok () staged ∧
     sync #[dir.file .stagedWal] staged = .ok () synced
 
-/-- Reaching an error with a recorded rename is equivalent to the ordinary
-prefix returning, the actual rename returning at that heap, and the final
-directory group failing there. Both earlier directory syncs share its target. -/
+/-- Both rename outcomes share the literal authorization, prune, write and
+file sync. Only a returned rename can reach the final directory group. -/
 theorem observeRename_error_iff
     (valid : plan.valid = true) (size : plan.keeperBytes.size = plan.keeperSize)
-    (long : plan.keeperSize < extent) {start renamed reached : heap} {cause : IO.Error} :
-    observeRename dir plan extent remove write sync rename start = .error cause (reached, some renamed) ↔
+    (long : plan.keeperSize < extent) {start reached : heap} {outcome : RenameOutcome heap} {cause : IO.Error} :
+    observeRename dir plan extent remove write sync rename start = .error cause (reached, some outcome) ↔
       ∃ authorized pruned staged synced,
         StagedFrom dir plan remove write sync rename start authorized pruned staged synced ∧
-        rename (dir.file .stagedWal) (dir.file (.walSegment plan.keeper)) synced = .ok () renamed ∧
-        sync #[dir.path] renamed = .error cause reached := by
+        match outcome with
+        | .failed => rename (dir.file .stagedWal) (dir.file (.walSegment plan.keeper)) synced = .error cause reached
+        | .returned renamed => rename (dir.file .stagedWal) (dir.file (.walSegment plan.keeper)) synced = .ok () renamed ∧
+            sync #[dir.path] renamed = .error cause reached := by
   unfold StagedFrom observeRename
   simp only [and_assoc]
   rw [finishBoundedMarkedOpen_long _ _ _ _ _ _ _ valid size long]
@@ -179,25 +186,25 @@ theorem observeRename_error_iff
   rename_i stagedHeap
   cases synced : sync #[dir.file .stagedWal] stagedHeap <;> simp
   rename_i syncedHeap
-  cases moved : rename (dir.file .stagedWal) (dir.file (.walSegment plan.keeper)) syncedHeap <;> simp
-  rename_i renamedHeap
-  by_cases same : renamedHeap = renamed
-  · subst renamedHeap
-    cases final : sync #[dir.path] renamed <;> simp [Pure.pure, EStateM.pure]
-  · cases final : sync #[dir.path] renamedHeap <;> simp [same, Pure.pure, EStateM.pure]
+  cases moved : rename (dir.file .stagedWal) (dir.file (.walSegment plan.keeper)) syncedHeap with
+  | error diagnostic after => cases outcome <;> simp
+  | ok value renamed =>
+    cases final : sync #[dir.path] renamed <;> cases outcome <;>
+      simp_all [Pure.pure, EStateM.pure, and_comm, and_assoc] <;>
+      rintro rfl <;> simp [final, and_comm]
 
 /-- Forget the repair-local rename observation while retaining the native
 return or error and the exact heap, including effects before an error. -/
-def forgetRename : EStateM.Result IO.Error (heap × Option heap) α → EStateM.Result IO.Error heap α
+def forgetRename : EStateM.Result IO.Error (heap × Option (RenameOutcome heap)) α → EStateM.Result IO.Error heap α
   | .ok value (after, _) => .ok value after
   | .error cause (after, _) => .error cause after
 
 /-- An observed action projects to the same return and heap for every incoming observation. -/
-def Erases (tagged : EStateM IO.Error (heap × Option heap) α) (ordinary : EStateM IO.Error heap α) : Prop :=
+def Erases (tagged : EStateM IO.Error (heap × Option (RenameOutcome heap)) α) (ordinary : EStateM IO.Error heap α) : Prop :=
   ∀ before prior, forgetRename (tagged (before, prior)) = ordinary before
 
-theorem Erases.bind {tagged : EStateM IO.Error (heap × Option heap) α} {ordinary : EStateM IO.Error heap α}
-    {nextTagged : α → EStateM IO.Error (heap × Option heap) β} {next : α → EStateM IO.Error heap β}
+theorem Erases.bind {tagged : EStateM IO.Error (heap × Option (RenameOutcome heap)) α} {ordinary : EStateM IO.Error heap α}
+    {nextTagged : α → EStateM IO.Error (heap × Option (RenameOutcome heap)) β} {next : α → EStateM IO.Error heap β}
     (first : Erases tagged ordinary) (later : ∀ x, Erases (nextTagged x) (next x)) :
     Erases (tagged >>= nextTagged) (ordinary >>= next) := by
   intro before prior
