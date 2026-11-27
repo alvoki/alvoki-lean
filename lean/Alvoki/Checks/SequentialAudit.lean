@@ -627,12 +627,12 @@ import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedRecoveryWork
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstBarrierWork
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstBarrierRetries
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedBarrierRetryReopen
-import Alvoki.Storage.Disk.NativeCloseMarkedBarrierReopen
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeCloseMarkedBarrierReopen
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstUnlinkError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedUnlinkRetryReopen
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedLongStageCreateError
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeUncertainRebootStageError
-import Alvoki.Storage.Disk.NativeUncertainStageRetry
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeUncertainStageRetry
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenWork
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedListingWork
 import Alvoki.Storage.Disk.MaintainedRecoveryWork

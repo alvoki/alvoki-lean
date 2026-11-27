@@ -8,7 +8,7 @@ import Alvoki.Storage.Disk.NativeCoveredWalUnlinkReopen
 import Alvoki.Storage.Disk.NativeCoveredWalDirectoryReopen
 import Alvoki.Storage.Disk.NativeExecutionClose
 import Alvoki.Storage.Disk.NativeReadyCloseRetries
-import Alvoki.Storage.Disk.NativeCloseMarkedBarrierReopen
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeCloseMarkedBarrierReopen
 import Alvoki.Storage.Disk.NativePendingCloseRecovery
 import Alvoki.Storage.Disk.NativePendingClientRecovery
 import Alvoki.Storage.Disk.NativePendingWriteProcessExit
@@ -37,7 +37,7 @@ import Alvoki.Storage.Disk.NativeObsoleteRunBarrierError
 import Alvoki.Storage.Disk.NativeRejectedOpenAlignedRecovery
 import Alvoki.Storage.Disk.NativeContendedOpen
 import Alvoki.Storage.Disk.NativeClassifiedWriteAck
-import Alvoki.Storage.Disk.NativeUncertainStageRetry
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeUncertainStageRetry
 import Alvoki.Storage.Disk.NativeUncertainWritePowerLoss
 import Alvoki.Storage.Disk.NativePendingCheckpointRecovery
 import Alvoki.Storage.Disk.NativeCheckpointRunDirectoryReboot
