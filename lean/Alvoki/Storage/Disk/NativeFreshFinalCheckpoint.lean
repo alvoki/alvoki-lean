@@ -48,7 +48,7 @@ theorem NativeReturnedCalls.refinesReadyBeforeCheckpointStop
     contradiction
   have covered := executed.readyResponsesOfNotPoisoned view inodes runs storage inode buffered
     effects start sameEntry samePins initial notPoisoned
-  obtain ⟨last, events, atCheckpoint, pins, physical, length, records, ledger, budget, frames⟩ :=
+  obtain ⟨last, events, atCheckpoint, pins, physical, length, records, ledger, budget, _, frames⟩ :=
     executed.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
   have cacheAt : view.cacheAt checkpointEntry writes.cache.directory writes.cache.active writes.cache.pending =
       last.current.ready.state.cache := atCheckpoint ▸ physical.cacheAt

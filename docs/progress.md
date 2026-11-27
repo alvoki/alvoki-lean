@@ -21,8 +21,8 @@ the submitted batch. After a failed sync group, the recovered ledger can
 continue through a failed open or through a successful open, another write
 and a snapshot read. Failed opens may have effects: an unlink may remove
 a name, a directory sync may take effect before returning an error, and a
-failed replacement may leave either keeper inode. The next reboot samples
-the namespace actually reached.
+failed replacement may leave either keeper inode. The next reboot samples one allowed
+crash map from the reached filesystem state.
 [Write and repair boundaries](proofs/native-storage.md#refinement-boundaries)
 
 **Current WAL milestone.** Fresh open and the first acknowledged write
@@ -30,15 +30,21 @@ establish the physical write entry and bounded WAL namespace. On a
 failed nonempty rotation, the exclusive successor starts at the committed
 cutoff. A sampled reboot chooses whether that name survives. The reader
 observes the selected marker, keeper and sealed files. Failed opens
-that preserve those bindings and bytes also preserve the absence of
-higher WAL names through the sampled bound. If that bound covers the
+that preserve the bounded WAL name map, including missing names, and the
+selected bytes carry this absence to the retry heap. If that bound covers the
 successful retry's held listing, it has no later segment to unlink.
 Directory and keeper sync still take place.
 [Fresh execution](../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean)
 · [Writable retry](../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean)
 
-**Next obligation.** Carry that namespace bound through earlier writes and
-snapshot calls on the same handle before a failed rotation. An interrupted
+The mixed-prefix proof starts from an established write entry and bounded
+namespace on a returned handle. The ready phase read at rotation excludes
+an earlier poisoned return. The preceding writes and snapshots supply the
+actual client ledger, cache and unchanged manifest at the rotation entry.
+The same sampled-WAL proof then carries that ledger to the returned table.
+[Mixed rotation and retry](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
+
+**Next obligation.** An interrupted
 append can leave extra bytes in a bound keeper. Its repair requires a byte
 argument even when no higher name exists. For layouts with extra files,
 derive the next retry entry from a modifying failed repair, including an

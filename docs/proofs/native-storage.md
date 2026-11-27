@@ -299,13 +299,17 @@ marker and seals and the directory's own binding in its parent. When failed
 attempts preserve these durable observations, the opener supplies the actual
 cache and keeper for writes and snapshots on the returned table.
 
-For the first acknowledged batch followed by a failed rotation, the sampled
-directory also rules out segment names strictly above the cutoff through
-the chosen horizon. Failed attempts transport this observation to the
-successful opener. When the horizon covers all later names in its held
-listing, its prune list is empty and it enters keeper repair at the heap
-reached by the first directory sync. Longer mixed write histories still
-need their own namespace bound.
+At a nonempty rotation following writes and snapshots on one handle,
+the initial ready-phase read excludes a prior commit-unknown return.
+`NativeReturnedCalls.refinesReadyFramed` supplies the final write entry,
+client ledger and WAL name interval. The manifest and sealed segment list
+survive these calls, so the pre-checkpoint reader can use the initial
+manifest observation. The sampled directory rules out higher segment
+names through the supplied horizon. If that horizon covers the successful
+retry's held listing, its prune list is empty. A read on the returned
+table uses the prefix's recorded submissions and reads. The writable
+continuation also requires the durable reset and retry frames above.
+[Mixed calls through rotation](../../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean) ·
 [Fresh rotation and retry](../../lean/Alvoki/Storage/Disk/NativeFreshOpenedSessions.lean) ·
 [Writable reopen](../../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean) · [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·

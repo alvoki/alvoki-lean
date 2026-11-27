@@ -1197,7 +1197,7 @@ theorem refinesReadyCallsFramed {input : FilePath} {directory : DiskDirectory}
         opened.start.WalWindowAt storage first through → last.WalWindowAt storage first through) := by
   have physical := opened.readyCallStorage used resolved writes view storage (fun atHeap => (inodes atHeap).visible)
     census cacheAt settled
-  obtain ⟨last, events, heap, pins, stored, length, records, ledger, budget, names⟩ :=
+  obtain ⟨last, events, heap, pins, stored, length, records, ledger, budget, _, names⟩ :=
     executed.refinesReadyFramed covered view inodes runs storage inode buffered effects opened.start rfl
       (by rw [opened.emptyPins]; rfl) physical
   obtain ⟨history, submissions, reads, replay⟩ := opened.refinesLedger ledger

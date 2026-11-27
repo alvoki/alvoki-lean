@@ -159,7 +159,7 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
   · simpa only [← sameHeap] using writeEntry
   · intro appender stager syncer lookup rename writes issuer inode buffered reported calls reached executed covered
     have initial : writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) start := writeEntry
-    obtain ⟨last, events, heap, pins, physical, length, records, ledger, budget, frames⟩ :=
+    obtain ⟨last, events, heap, pins, physical, length, records, ledger, budget, _, frames⟩ :=
       executed.refinesReadyFramed covered view inodes runs observe inode buffered reported start sameHeap
         (by rw [emptyPins]; rfl) initial
     refine ⟨last, events, heap, pins, physical, length, records, across.append ledger,

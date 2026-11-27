@@ -399,6 +399,8 @@ private theorem NativeReadyWriteCalls.refinesQuietWrite (writes : NativeReadyWri
       next.reached = reached ∧ next.pins.map NativeOpenedPin.raw = start.pins.map NativeOpenedPin.raw ∧
       writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) next ∧
       (NativeReturnedCall.write (opened := opened) request result).Records event ∧ start.current.LedgerSuffix [event] next.current ∧
+      (next.current.ready.state.writer.target.pair.manifest = start.current.ready.state.writer.target.pair.manifest ∧
+        next.current.ready.state.writer.wal.sealed = start.current.ready.state.writer.wal.sealed) ∧
       (∀ {first through}, writes.WalWindowEffects storage first through →
         start.WalWindowAt storage first through → next.WalWindowAt storage first through) := by
   let state := start.current.ready.state
@@ -447,15 +449,17 @@ private theorem NativeReadyWriteCalls.refinesQuietWrite (writes : NativeReadyWri
     (congrArg (fun position : NativeExecutionPosition => position.ready.state) current).trans
       (NativeReadyState.withInstalledTable valid).symm
   refine ⟨next, .writePreflight request seen.response, nextHeap, congrArg (List.map NativeOpenedPin.raw) pins,
-    writes.keepsStorage view storage _ initial updated frame, .preflight seen, ledger, ?_⟩
-  intro first through names window
-  apply NativeOpenedPosition.keepsWalWindow updated _ window
-  rw [nextHeap]
-  by_cases same : reached = start.reached
-  · rw [same]
-    exact .refl _
-  · obtain ⟨_, actual⟩ := failedGuard same path
-    exact names.guardLookup start same actual
+    writes.keepsStorage view storage _ initial updated frame, .preflight seen, ledger, ?_, ?_⟩
+  · rw [updated]
+    exact ⟨rfl, rfl⟩
+  · intro first through names window
+    apply NativeOpenedPosition.keepsWalWindow updated _ window
+    rw [nextHeap]
+    by_cases same : reached = start.reached
+    · rw [same]
+      exact .refl _
+    · obtain ⟨_, actual⟩ := failedGuard same path
+      exact names.guardLookup start same actual
 
 private theorem NativeReturnedCall.refinesReady
     (call : NativeReturnedCall opened) (writes : NativeReadyWriteCalls opened) (issuer : opened.LatestIssuer)
@@ -471,6 +475,8 @@ private theorem NativeReturnedCall.refinesReady
       next.pins.map NativeOpenedPin.raw = call.pinsAfter (start.pins.map NativeOpenedPin.raw) ∧
       writes.StorageAt view storage (fun atHeap => (inodes atHeap).visible) next ∧
       call.Records event ∧ start.current.LedgerSuffix [event] next.current ∧
+      (next.current.ready.state.writer.target.pair.manifest = start.current.ready.state.writer.target.pair.manifest ∧
+        next.current.ready.state.writer.wal.sealed = start.current.ready.state.writer.wal.sealed) ∧
       (∀ {first through}, writes.WalWindowEffects storage first through →
         start.WalWindowAt storage first through → next.WalWindowAt storage first through) := by
   cases call with
@@ -525,7 +531,8 @@ private theorem NativeReturnedCall.refinesReady
         have seen : start.ObservesPublishedWrite writes.appender writes.stager writes.syncer view cache inodes runs
             storage inode buffered request writes.lookup writes.rename sequence reached :=
           ⟨files, sameStorage, raw, callbacks⟩
-        obtain ⟨_, _, batch, table, next, _, prepared, committed, atHeap, pins, _, ledger, ready, _, _, keepsNames⟩ :=
+        obtain ⟨_, _, batch, table, next, _, prepared, committed, atHeap, pins, _, ledger, ready, _,
+          retainedCheckpoint, keepsNames⟩ :=
           start.acknowledgesObservedWrite writes.appender writes.stager writes.syncer view cache inodes runs
             storage inode buffered request writes.lookup writes.rename nonempty initial seen
         obtain ⟨length, replayed, rows, numbered⟩ := prepareBatch_spec prepared
@@ -547,7 +554,7 @@ private theorem NativeReturnedCall.refinesReady
               omega)
             simp [number]
         refine ⟨next, .acknowledged request batch, atHeap, congrArg (List.map NativeOpenedPin.raw) pins, ready,
-          .write rows lastSequence, ledger, ?_⟩
+          .write rows lastSequence, ledger, retainedCheckpoint, ?_⟩
         intro first through names window
         obtain ⟨phaseNames, restore⟩ := names.write start request nonempty observed
         exact keepsNames window.1 window.2 phaseNames restore
@@ -567,8 +574,10 @@ private theorem NativeReturnedCall.refinesReady
       have framed := effects.acquire start (table := table) setter
       have ready := writes.keepsStorage view storage (fun atHeap => (inodes atHeap).visible) initial updated framed
       refine ⟨next, .snapshotControl .acquire (.ok (start.current.ready.state.session.sessionRef, pin.localPin)),
-        sameHeap.symm, ?_, ready, .acquire pin, acquired.common.ledgerSuffix, ?_⟩
+        sameHeap.symm, ?_, ready, .acquire pin, acquired.common.ledgerSuffix, ?_, ?_⟩
       · simp only [pins, List.map_append, List.map_cons, List.map_nil, pinsAfter]
+      · rw [updated]
+        exact ⟨rfl, rfl⟩
       · intro first through names window
         exact NativeOpenedPosition.keepsWalWindow updated (names.acquire start setter) window
   | read pin request result =>
@@ -601,13 +610,15 @@ private theorem NativeReturnedCall.refinesReady
         · exact initial.physical
         · exact initial.keeper
         · exact initial.root
-      refine ⟨next, event, heapEq, rfl, ready, .read pin, continued.ledgerSuffix, ?_⟩
-      intro first through _ window
-      simpa only [NativeOpenedPosition.WalWindowAt, next, read.state] using window
+      refine ⟨next, event, heapEq, rfl, ready, .read pin, continued.ledgerSuffix, ?_, ?_⟩
+      · simp only [next, read.state, and_self]
+      · intro first through _ window
+        simpa only [NativeOpenedPosition.WalWindowAt, next, read.state] using window
 
 /-- Refine any finite supported ready sequence on the fixed public
 dispatcher. The next transition uses the preceding returned heap,
-actual pins, and physical write entry derived by that transition. -/
+actual pins, and physical write entry derived by that transition.
+The final witness keeps the initial manifest and exact sealed segment list. -/
 theorem NativeReturnedCalls.refinesReadyFramed
     {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}
     {entry reached : heap} {known : List DiskSnapshotPin} {calls : List (NativeReturnedCall opened)}
@@ -627,21 +638,26 @@ theorem NativeReturnedCalls.refinesReadyFramed
       events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
       start.current.LedgerSuffix events last.current ∧
       last.current.history.length ≤ start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum ∧
+      (last.current.ready.state.writer.target.pair.manifest = start.current.ready.state.writer.target.pair.manifest ∧
+        last.current.ready.state.writer.wal.sealed = start.current.ready.state.writer.wal.sealed) ∧
       (∀ {first through}, writes.WalWindowEffects storage first through →
         start.WalWindowAt storage first through → last.WalWindowAt storage first through) := by
   induction executed generalizing start with
-  | empty => exact ⟨start, [], sameEntry, samePins, initial, rfl, by simp, .empty _, by simp, fun _ window => window⟩
+  | empty =>
+    exact ⟨start, [], sameEntry, samePins, initial, rfl, by simp, .empty _, by simp,
+      ⟨rfl, rfl⟩, fun _ window => window⟩
   | @cons middle rest last before known call observed _ ih =>
     have atStart : call.Reaches writes issuer known start.reached middle := sameEntry ▸ observed
     have first := covered call List.mem_cons_self
-    obtain ⟨next, event, nextHeap, pins, ready, recorded, firstLedger, firstFrame⟩ :=
+    obtain ⟨next, event, nextHeap, pins, ready, recorded, firstLedger, firstCheckpoint, firstFrame⟩ :=
       call.refinesReady writes issuer view inodes runs storage inode buffered effects start atStart first initial
     have tail : NativeReturnedCalls.ReadyResponses rest :=
       fun call member => covered call (List.mem_cons_of_mem _ member)
-    obtain ⟨finish, events, done, finalPins, physical, length, records, ledger, lengthBound, finalFrame⟩ :=
+    obtain ⟨finish, events, done, finalPins, physical, length, records, ledger, lengthBound, finalCheckpoint, finalFrame⟩ :=
       ih tail next nextHeap
         (pins.trans (congrArg call.pinsAfter samePins)) ready
     refine ⟨finish, event :: events, done, finalPins, physical, by simp [length], ?_, firstLedger.append ledger, ?_,
+      ⟨finalCheckpoint.1.trans firstCheckpoint.1, finalCheckpoint.2.trans firstCheckpoint.2⟩,
       fun names window => finalFrame names (firstFrame names window)⟩
     · intro pair member
       rcases List.mem_cons.mp member with rfl | member
@@ -769,7 +785,7 @@ theorem NativeReturnedCalls.refinesReadyBeforeWrite
         exact coveredIfRejected cause declared
       · exact ran.readyResponsesOfNotPoisoned view inodes runs storage inode buffered
           effects start sameEntry samePins initial (returned.writeNotPoisoned (fun cause declared => rejected ⟨cause, declared⟩))
-    obtain ⟨last, events, atMiddle, pins, physical, length, records, ledger, budget, frames⟩ :=
+    obtain ⟨last, events, atMiddle, pins, physical, length, records, ledger, budget, _, frames⟩ :=
       ran.refinesReadyFramed covered view inodes runs storage inode buffered effects start sameEntry samePins initial
     refine ⟨last, events, atMiddle.symm ▸ ran, pins, physical, length, records, ledger,
       (frames names window).restrictUpper (Nat.add_le_add_right budget _), ?_⟩
