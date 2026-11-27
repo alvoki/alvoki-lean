@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.MaintainedDirectoryWork
+import Alvoki.Storage.Disk.Proofs.WAL.MaintainedDirectoryWork
 import Alvoki.Storage.Disk.NativeRotatedMaintenanceBound
-import Alvoki.Storage.Disk.WalReplayWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalReplayWork
 
 namespace Alvoki.Storage.DiskSession
 

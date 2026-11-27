@@ -226,7 +226,7 @@ import Alvoki.Storage.Disk.FirstMarkedSession
 import Alvoki.Storage.Disk.WalSegmentCheckpointPublication
 import Alvoki.Storage.Disk.WalSegmentCheckpointRetryLayout
 import Alvoki.Storage.Disk.WalSegmentSerialReplay
-import Alvoki.Storage.Disk.WalReplayWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalReplayWork
 import Alvoki.Storage.Disk.WalSegmentReplay
 import Alvoki.Storage.Disk.CheckpointCutSession
 import Alvoki.Storage.Disk.CheckpointSuccessSession
@@ -535,8 +535,8 @@ import Alvoki.Storage.Disk.CheckpointClientTrace
 import Alvoki.Storage.Disk.SegmentedCollectionReadPlan
 import Alvoki.Storage.Disk.SegmentedCollectionInventory
 import Alvoki.Storage.Disk.SegmentedRetainedWriter
-import Alvoki.Storage.Disk.WalSegmentRecoveryWork
-import Alvoki.Storage.Disk.WalSegmentReadWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRecoveryWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentReadWork
 import Alvoki.Storage.Disk.RecoverySizedReads
 import Alvoki.Storage.Disk.WalSegmentSizedOpen
 import Alvoki.Storage.Disk.IntegrityCheckpointSizedRead
@@ -640,7 +640,7 @@ import Alvoki.Storage.Disk.NativeRotatedMaintenanceBound
 import Alvoki.Storage.Disk.RotatedMaintenanceRecoveryWork
 import Alvoki.Storage.Disk.NativeMaintenanceFrameBudget
 import Alvoki.Storage.Disk.NativeScheduledRunReclamation
-import Alvoki.Storage.Disk.MaintainedDirectoryWork
+import Alvoki.Storage.Disk.Proofs.WAL.MaintainedDirectoryWork
 import Alvoki.Storage.Disk.WalSegmentCollectionSpace
 import Alvoki.Storage.Disk.WalSegmentCollectionNames
 import Alvoki.Storage.Disk.ReachableWalSeals

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.NativeExecutionTrace
 import Alvoki.Storage.Disk.NamedMaintenanceBudget
-import Alvoki.Storage.Disk.WalReplayWork
+import Alvoki.Storage.Disk.Proofs.WAL.WalReplayWork
 
 namespace Alvoki.Storage.DiskSession
 

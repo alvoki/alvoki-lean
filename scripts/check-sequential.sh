@@ -605,7 +605,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadPlan
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepair
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadIO
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentReplay
-lake env leanchecker Alvoki.Storage.Disk.WalReplayWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalReplayWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentMarkerRead
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairIO
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairOpen
@@ -706,7 +706,7 @@ lake env leanchecker Alvoki.Storage.Disk.MaintainedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.NativeRotatedMaintenanceBound
 lake env leanchecker Alvoki.Storage.Disk.RotatedMaintenanceRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMaintenanceFrameBudget
-lake env leanchecker Alvoki.Storage.Disk.MaintainedDirectoryWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.MaintainedDirectoryWork
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionSpace
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCollectionNames
 lake env leanchecker Alvoki.Storage.Disk.WalSealedSpans
@@ -753,8 +753,8 @@ lake env leanchecker Alvoki.Storage.Disk.AlignedWalChunkSync
 lake env leanchecker Alvoki.Storage.Disk.LongWalStagedCustody
 lake env leanchecker Alvoki.Storage.Disk.LongWalBindingPublication
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentCachedAppendPowerLoss
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentRecoveryWork
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentReadWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRecoveryWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentReadWork
 lake env leanchecker Alvoki.Storage.Disk.RecoverySizedReads
 lake env leanchecker Alvoki.Storage.Disk.ReadRecoveryPrefix
 lake env leanchecker Alvoki.Storage.Disk.WalSegmentSizedOpen
