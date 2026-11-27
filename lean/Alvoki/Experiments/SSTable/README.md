@@ -28,6 +28,19 @@ and then the row. Lookup may read one more row to distinguish an exact match.
 
 ## File layout
 
+```text
+Start of file                                             End of file
+[ Row 0 ][ Row 1 ] … [ Row n−1 ][ Offset table ][ Footer · 24 bytes ]
+
+Row i         [ Key length · 8 B ][ Key bytes ][ Value bytes ][ FNV-1a · 8 B ]
+Offset table  [ o₀ ][ o₁ ] … [ oₙ ]                     (8 bytes per offset)
+Footer        [ ALVSST03 · 8 B ][ Row count · 8 B ][ Index start · 8 B ]
+```
+
+The footer's index start locates the offset table. Row `i` occupies bytes
+`[oᵢ, oᵢ₊₁)`, so `oₙ` is both the end of the row data and the start of the
+offset table.
+
 - Each row contains an eight-byte key length, the key bytes, the value bytes and
   an eight-byte FNV-1a checksum of the preceding row bytes. The offset pair
   determines the total row size, so only the key length is stored. A row,
