@@ -44,7 +44,7 @@ Alvoki is pre-release and has one active encoding per on-disk artifact. The run 
 
 The byte length must be exactly `16 + 32*n` and fit in a machine word. Keys sort in increasing unsigned order. For a given key, sequences sort in strictly decreasing order. A key and sequence pair can appear at most once per run. The run format has no internal checksum. The checkpoint manifest covers each run's complete bytes. [Executable parser](../lean/Compaction.lean) · [Codec proofs](../lean/CompactionCodec.lean)
 
-At a snapshot, the highest sequence at or below the snapshot determines each key's value. A winning tombstone makes the key absent. When merging two runs with the same key and sequence, the right run supplies the entry. Compaction retains every version above the floor and the newest version at or below the floor for each key, including boundary tombstones that can mask older values. The table serves snapshots between its retained floor and committed sequence, inclusive. [Compaction model](../lean/CompactionModel.lean) · [Snapshot table](../lean/Alvoki/Storage/Table/SnapshotTable.lean)
+At a snapshot, the highest sequence at or below the snapshot determines each key's value. A winning tombstone makes the key absent. When merging two runs with the same key and sequence, the right run supplies the entry. Compaction retains every version above the floor and the newest version at or below the floor for each key, including boundary tombstones that can mask older values. The table serves snapshots between its retained floor and committed sequence, inclusive. [Compaction model](../lean/Alvoki/Compaction/Model.lean) · [Snapshot table](../lean/Alvoki/Storage/Table/SnapshotTable.lean)
 
 ## WAL and checkpoint manifest
 

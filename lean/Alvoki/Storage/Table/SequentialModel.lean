@@ -1,4 +1,4 @@
-import CompactionModel
+import Alvoki.Compaction.Model
 
 namespace Alvoki.Sequential
 open Compaction.Model

@@ -60,7 +60,8 @@ lean_lib SpanMerge where
 
 lean_lib BlockCodec
 
-lean_lib CompactionModel
+lean_lib CompactionModel where
+  roots := #[`Alvoki.Compaction.Model]
 
 lean_lib RunProofs where
   roots := #[`Alvoki.Proofs.Packed.RunProofs]

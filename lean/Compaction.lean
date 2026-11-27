@@ -1,6 +1,6 @@
 import PackedView
 import ScopedBytes
-import CompactionModel
+import Alvoki.Compaction.Model
 import Alvoki.Codec.ByteWords
 
 namespace Alvoki.Compaction

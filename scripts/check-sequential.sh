@@ -24,7 +24,7 @@ if ! grep -q "unexpected axiom dependencies for 'unexpectedDependency':.*sorryAx
 fi
 echo "Axiom policy accepted the audited proofs and rejected its negative control."
 lake env leanchecker Alvoki.Codec.ByteWords
-lake env leanchecker CompactionModel
+lake env leanchecker Alvoki.Compaction.Model
 lake env leanchecker Alvoki.Storage.Table.SequentialModel
 lake env leanchecker Alvoki.Storage.Table.SequentialPurge
 lake env leanchecker Alvoki.Storage.Table.SnapshotTable

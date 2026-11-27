@@ -1,5 +1,5 @@
 import Alvoki.Proofs.Packed.RunProofs
-import CompactionModel
+import Alvoki.Compaction.Model
 
 namespace Alvoki.Packed
 open Alvoki.Opt Alvoki.ByteWords
