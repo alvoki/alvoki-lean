@@ -10,7 +10,8 @@ def openNativeChecked (path : System.FilePath) (expectedId : UInt64) :
   let handle ← (IO.FS.Handle.mk path .read).toEIO toString
   openTableChecked (handleSource handle) nativeCRC32C expectedId
 
-private def buildFileWithSync (path : System.FilePath) (layout : Layout)
+/-- Use the original flushed descriptor for the caller's sync operation. -/
+def buildFileWithSync (path : System.FilePath) (layout : Layout)
     (nextRow : IO (Option Entry)) (options : BuildOptions)
     (syncOutput : IO.FS.Handle → IO Unit) : IO Nat :=
   withFreshOutput path

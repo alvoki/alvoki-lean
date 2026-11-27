@@ -75,26 +75,31 @@ and checksum checks reject malformed packets as they are visited. A checked
 footer and CRC do not authenticate bytes or certify global key order in an
 externally supplied image. The explicit [leaf-read error theorem](Proofs/UnifiedOpen.lean)
 covers an error from the positional read on the selected lookup path.
-The native fixture covers corrupt and substituted files, truncated reads,
-and all four field-width combinations. Durable publication and descriptor
-effects remain assumptions of the native adapter and its caller.
+The native fixtures cover all four field-width combinations, corrupt and
+substituted files, truncated reads, and positional I/O failures. They also
+exercise successful sync, failed sync cleanup, and an open descriptor
+surviving pathname replacement. Durable publication and descriptor effects
+remain assumptions of the native adapter and its caller.
 
 ## Roadmap
 
-The [L0 adapter](https://github.com/alvoki/alvoki-lean/pull/5) can migrate to
-the checked open by passing the expected ID from its catalog. Its producer
-must tie its exact row supplier and original write descriptor to the emitted
-image, then establish the directory barrier and use the actual reopened
-descriptor. Publication and merging belong to L0. The caller bounds live
-descriptors and root buffers across tables and measures lookup through the
-scoped open used by the adapter.
+The next refinement milestone is to migrate the
+[L0 adapter](https://github.com/alvoki/alvoki-lean/pull/5) to checked open.
+It is complete when the L0 publication and reopen proof supplies the catalog
+ID and the immutable-source premise for the actual reopened descriptor.
+Work from the original write descriptor, its flush and sync, and the
+directory barrier. Follow the shared native and model schedules down to
+filesystem primitives as in [DurableBlob](../DurableBlob/README.md).
+Publication and merging belong to L0. The caller bounds live descriptors
+and root buffers across tables and measures lookup through its scoped open.
 
 As part of the future work on a common filesystem model, investigate whether
 durable immutable file creation and [DurableBlob](../DurableBlob/README.md)
 can share streaming file construction. Compare a streaming extension of
 DurableBlob with a smaller shared building block.
 
-Measure sequential scans, point reads and seeks before changing the physical
-layout. Independently known key and value widths can permit cheaper field
-access, and two fixed widths can permit direct addressing. Buffered reads and
-data blocks with a sparse index are further options. Block iterators and alignment measurements on the target filesystem remain follow-up work.
+For the next performance iteration, measure whether a block iterator can
+reuse a validated leaf and data packet across successive rows. Compare scan
+time and read counts to the current indexed cursor and preserve its logical
+order and end-of-table behavior. Measure packet alignment separately on
+the target filesystem.

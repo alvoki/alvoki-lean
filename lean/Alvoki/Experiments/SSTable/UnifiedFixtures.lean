@@ -116,14 +116,16 @@ private def checkFailures (dir : System.FilePath) : IO Unit := do
       "unified writer accepted invalid packet target"
     check (!(← path.pathExists)) "unified invalid target left destination"
 
-  let supplied ← IO.mkRef false
+  let remaining ← IO.mkRef [first, later]
   let primary := IO.userError "unified input failure"
-  let result ← (Unified.buildFile path layout do
-    if ← supplied.get then
+  let result ← (Unified.buildFile path layout (do
+    match ← remaining.get with
+    | [] =>
       IO.FS.removeFile path
       throw primary
-    supplied.set true
-    return some first).toBaseIO
+    | entry :: tail =>
+      remaining.set tail
+      return some entry) { seamOptions with dataTarget := 1 }).toBaseIO
   match result with
   | .error error => check (error.toString == primary.toString) "unified cleanup masked input error"
   | .ok _ => throw (IO.userError "unified input failure reported success")
@@ -131,6 +133,41 @@ private def checkFailures (dir : System.FilePath) : IO Unit := do
   let before ← IO.FS.readBinFile path
   check (!(← (build path layout [later]).toBaseIO).isOk) "unified writer overwrote an existing file"
   check ((← IO.FS.readBinFile path) == before) "unified failed build changed an existing file"
+
+private def checkNativeHandles (dir : System.FilePath) : IO Unit := do
+  let path := dir / "synced"
+  let layout : Unified.Layout := ⟨none, none, 17⟩
+  let primary := IO.userError "injected SSTable sync failure"
+  let result ← (Unified.buildFileWithSync path layout (pure none) {} fun handle => do
+    let size ← ok (handleSource handle).size
+    check (size == Unified.footerPacketSize) "sync ran before the footer was flushed"
+    throw primary).toBaseIO
+  match result with
+  | .error error => check (error.toString == primary.toString) "cleanup masked sync error"
+  | .ok _ => throw (IO.userError "sync failure reported success")
+  check (!(← path.pathExists)) "failed sync left an output file"
+
+  let entry := row layout 1
+  let remaining ← IO.mkRef (some entry)
+  let written ← Unified.buildFileSynced path layout (remaining.modifyGet fun pending => (pending, none))
+  check (written == 1) "synced build count"
+  let table ← ok (Unified.openNativeChecked path layout.tableId)
+  let replacement := { entry with value := .empty }
+  IO.FS.rename path (dir / "renamed")
+  discard <| build path { layout with tableId := 18 } [replacement]
+  check ((← ok (table.lookup entry.key)) == some entry.value) "retained inode after rename"
+  expectError (Unified.openNativeChecked path layout.tableId) "replacement accepted with old table ID"
+  let other ← ok (Unified.openNativeChecked path 18)
+  check ((← ok (other.lookup entry.key)) == some replacement.value) "replacement file lookup"
+
+  let writeOnly ← IO.FS.Handle.mk (dir / "write-only") .write
+  writeOnly.write entry.key
+  writeOnly.flush
+  let source := handleSource writeOnly
+  check ((← ok source.size) == entry.key.size) "write-only fixture extent"
+  expectError (source.readAt 0 1) "pread error became EOF"
+  expectError (source.readAt 0 (maxRowSize + 1)) "oversized read accepted"
+  expectError (source.readAt (2^64) 1) "offset wrapped before pread"
 
 private def corrupt (bytes : ByteArray) (offset : Nat) : ByteArray :=
   bytes.set! offset (bytes[offset]! ^^^ 1)
@@ -197,6 +234,7 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkWidths dir
   checkEmpty dir
   checkFailures dir
+  checkNativeHandles dir
   checkCorruption dir
   IO.println "unified immutable SSTable native fixtures passed"
 
