@@ -67,7 +67,11 @@ until release, and persistence of an acknowledged release. The proof composes th
 actual segmented schedules with modeled namespace and child operations; the
 [layout](Proofs/Layout.lean), [child](Proofs/Child.lean),
 [publication](Proofs/Publication.lean), and [reopen](Proofs/Reopen.lean) modules
-own its intermediate obligations.
+own its intermediate obligations. Rotation consumes a settled sealed history and an
+installed empty successor. An uncertain append produces a recoverable child with one
+pending batch; successful reopen selects a permitted history and installs the child
+for the next append. The [child predicates](Proofs/SegmentRecovery.lean) and their
+operation proofs own the local cursor, marker and durability details.
 
 ### Namespace assumptions
 
@@ -78,8 +82,13 @@ removed retired directory; reopen retries its removal. Unexpected names, links o
 file types can make cleanup fail. A selected incomplete segment makes open fail.
 The model treats successful prepare as a fully initialized child and successful
 remove as an unlink. The native adapter must confine intermediate effects to the
-unselected object. Likewise a partial `CONTROL.next` may survive a failed stage;
-only a fully written and synced stage may be renamed over `CONTROL`.
+unselected object. The [artifact frame rule](Proofs/Artifacts.lean) allows arbitrary
+modeled child bytes and either name binding independently while offline, provided
+neither visible nor durable control selects the ID. Likewise a partial `CONTROL.next` may survive a failed stage;
+only a fully written and synced stage may be renamed over `CONTROL`. The
+[codec proof](Proofs/ControlCodec.lean) establishes canonical decoding and roundtrip
+within the native read bound. Mapping the stage, sync and rename syscalls to that
+typed control publication remains an adapter assumption.
 
 The trace models child calls using the single-file effects interpreter, including
 source-level failures and prefix tears. It also admits full-length tears with an intact

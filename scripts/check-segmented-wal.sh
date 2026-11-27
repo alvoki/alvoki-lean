@@ -16,14 +16,16 @@ lean -o "$scratch/$wal/Recovery.olean" -c "$scratch/recovery.c" "$wal/Recovery.l
 lean -o "$scratch/$wal/SingleFile.olean" -c "$scratch/single.c" "$wal/SingleFile.lean"
 lean -o "$scratch/$seg/Contract.olean" -c "$scratch/contract.c" "$seg/Contract.lean"
 lean -o "$scratch/$seg/Protocol.olean" -c "$scratch/protocol.c" "$seg/Protocol.lean"
+lean -o "$scratch/$seg/ControlCodec.olean" -c "$scratch/control_codec.c" "$seg/ControlCodec.lean"
 lean -o "$scratch/$seg/Native.olean" -c "$scratch/native.c" "$seg/Native.lean"
 leanchecker Alvoki.Experiments.WAL.Segmented.Contract
 leanchecker Alvoki.Experiments.WAL.Segmented.Protocol
+leanchecker Alvoki.Experiments.WAL.Segmented.ControlCodec
 leanchecker Alvoki.Experiments.WAL.Segmented.Native
 lean --run "$seg/Tests.lean"
 lean -c "$scratch/native_tests.c" "$seg/NativeTests.lean"
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" \
-  "$scratch/contract.c" "$scratch/protocol.c" "$scratch/native.c" "$scratch/native_tests.c" \
+  "$scratch/contract.c" "$scratch/protocol.c" "$scratch/control_codec.c" "$scratch/native.c" "$scratch/native_tests.c" \
   native/fsync.c native/read_dir_checked.c -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/native_tests"
 "$scratch/native_tests"
@@ -34,7 +36,7 @@ lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
 done
-for proof in Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Writeback Bootstrap Rotation Append Reopen Retention Discard Execution; do
+for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution; do
   lean -o "$scratch/$seg/Proofs/$proof.olean" "$seg/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Segmented.Proofs.$proof"
 done
@@ -42,6 +44,8 @@ lean --run "$seg/ModelTests.lean"
 lean -o "$scratch/Alvoki/Checks/Audit/AxiomPolicy.olean" Alvoki/Checks/Audit/AxiomPolicy.lean
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
+import Alvoki.Experiments.WAL.Segmented.Proofs.Artifacts
+import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCodec
 import Alvoki.Experiments.WAL.Segmented.Proofs.Layout
 import Alvoki.Experiments.WAL.Segmented.Proofs.SegmentRecovery
 import Alvoki.Experiments.WAL.Segmented.Proofs.ScheduledAppend
@@ -58,6 +62,10 @@ import Alvoki.Experiments.WAL.Segmented.Proofs.Retention
 import Alvoki.Experiments.WAL.Segmented.Proofs.Discard
 import Alvoki.Experiments.WAL.Segmented.Proofs.Execution
 open WalRecoverySlice.Segmented
+#check_axioms Recoverable.withUnselectedArtifact
+#check_axioms ControlCodec.decode_encode
+#check_axioms ControlCodec.canonical_of_decode
+#check_axioms ControlCodec.encoded_size
 #check_axioms selectedHistory_eq
 #check_axioms readSealed_spec
 #check_axioms reopen_spec
@@ -78,6 +86,7 @@ open WalRecoverySlice.Segmented
 #check_axioms rotateIfFull_refines
 #check_axioms appendActive_refines
 #check_axioms append_refines
+#check_axioms append_returned_position
 #check_axioms Model.reopen_refines
 #check_axioms Model.reopen_healthy
 #check_axioms Recoverable.powerLoss
