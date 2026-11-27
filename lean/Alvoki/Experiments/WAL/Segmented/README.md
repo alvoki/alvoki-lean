@@ -138,12 +138,14 @@ branch when taking up that work.
 The [native reopen proof modules](Proofs/NativeReopen.lean) check lock-path
 selection, decoding bytes from the protected CONTROL binding, child dispatch
 to the selected path and returned handle, and installation and scan of the
-session returned by the modeled root schedule. The native child interpreter
-inserts the exact reached child image into the selected disk slot, including
-on error. A sealed child preserves its exact file image. An active child
-that returns selects the value determined by its live bytes. Composition through every reached native root barrier and
-reclamation primitive, plus root resource cleanup on partial recovery,
-remains open.
+session returned by the shared root schedule. The native child interpreter
+inserts the exact reached image into the selected disk slot, including on
+error. A sealed child preserves its file image. An active child that returns
+selects the value determined by its live bytes. `reopenPhase_nativeChild`
+composes that producer with the root model to prove the public open step and
+scan result, or retryability on the exact reached disk. The Linux root
+barrier, enumeration and reclamation effects, and root ownership and cleanup
+after partial recovery still need to be connected to this theorem.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be

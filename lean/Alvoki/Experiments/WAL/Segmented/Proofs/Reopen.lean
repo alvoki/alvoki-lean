@@ -51,29 +51,63 @@ private theorem outcome_reached {α : Type} {result : Result α} {expected : α}
     | error => exact fail rfl
     | ok v => exact ok v rfl
 
-private theorem sealed_step {c h p active} (e : Effects) {s : State} {id : Nat}
+/-- Local effects of an open on one named child. Both interpreters construct
+these facts for the actual returned result before composing the root schedule. -/
+structure OpenChildEffects (call : Policy → Nat → M (List Bytes)) (healthyCall : Prop) : Prop where
+  frame : ∀ policy id (s : State), id ∈ s.disk.liveNames →
+    ∃ image cursor, (reached ((call policy id).run s)).disk = s.disk.setSegment id image cursor
+  settled : ∀ {policy id s history}, id ∈ s.disk.liveNames →
+    Child.Settled policy (s.disk.segment id) history →
+    (∀ b ∈ history, b.length ≤ 32) → history.length ≤ 255 →
+    let r := (call policy id).run s
+    (reached r).disk.segment id = s.disk.segment id ∧
+      (∀ batches, returned r = some batches → batches = history)
+  dirty : ∀ {policy id s known pending}, id ∈ s.disk.liveNames →
+    Child.Recoverable policy known pending (s.disk.segment id) →
+    let r := (call policy id).run s
+    Child.Recoverable policy known pending ((reached r).disk.segment id) ∧
+      ∀ batches, returned r = some batches →
+        WalRecoverySlice.Contract.Permitted known pending batches ∧
+        Child.Installed policy ((reached r).disk.segment id) ((reached r).disk.cursor id) batches
+  selected : ∀ {policy id s batches known pending}, id ∈ s.disk.liveNames →
+    Child.Recoverable policy known pending (s.disk.segment id) →
+    Child.Selects policy (s.disk.segment id) batches →
+    ∀ observed, returned ((call policy id).run s) = some observed → observed = batches
+  healthy : ∀ {policy id s known pending}, id ∈ s.disk.liveNames →
+    Child.Recoverable policy known pending (s.disk.segment id) →
+    healthyCall → ∃ batches, returned ((call policy id).run s) = some batches
+
+private theorem modelChildEffects (e : Effects) : OpenChildEffects (ops e).openSegment (e = healthy) where
+  frame _ _ _ named := openSegment_frame e _ named
+  settled named entry bounded fits :=
+    let facts := openSegment_settled e named entry bounded fits
+    ⟨facts.1, fun batches observed => (facts.2 batches observed).1⟩
+  dirty named entry := openSegment_dirty e named entry
+  selected named _ chosen _ observed := openSegment_selected e named chosen observed
+  healthy named entry h := by subst e; exact openSegment_healthy named entry
+
+private theorem sealed_step {c h p active} {call} {healthyCall : Prop}
+    (effects : OpenChildEffects call healthyCall) {s : State} {id : Nat}
     (o : Opening c h p active s.disk) (low : c.firstNeeded ≤ id) (lt : id < c.active) :
-    let result := ((ops e).openSegment c.policy id).run s
+    let result := (call c.policy id).run s
     Opening c h p active (reached result).disk ∧
       (∀ v, returned result = some v → v = segmentHistory c.capacity id h) ∧
-      (e = healthy → ∃ v, returned result = some v) := by
+      (healthyCall → ∃ v, returned result = some v) := by
   have selects : c.selects id := ⟨low, Nat.le_of_lt lt⟩
   have named := (o.selected.layout.names id selects).1
   have settled := o.selected.layout.sealed id selects lt
   have bs := segmentHistory_bounded o.selected.layout id
   have fits := Nat.le_trans (segmentHistory_fits c.capacity id h) o.selected.layout.capacityFits
-  have result := openSegment_settled e named settled bs fits
+  have result := effects.settled named settled bs fits
   dsimp only at result ⊢
-  obtain ⟨image, cursor, frame⟩ := openSegment_frame e c.policy named
-  have files (i : Nat) : (reached (((ops e).openSegment c.policy id).run s)).disk.segment i = s.disk.segment i := by
+  obtain ⟨image, cursor, frame⟩ := effects.frame c.policy id s named
+  have files (i : Nat) : (reached ((call c.policy id).run s)).disk.segment i = s.disk.segment i := by
     by_cases same : i = id
     · subst i; exact result.1
     · rw [frame]; exact Disk.setSegment_other _ _ _ same
-  refine ⟨⟨by rw [frame]; exact o.live, by rw [frame]; exact o.durable,
+  exact ⟨⟨by rw [frame]; exact o.live, by rw [frame]; exact o.durable,
     o.selected.frame (by rw [frame]; exact o.selected.layout.names) (fun i _ => files i),
-    (files _).trans o.sameActive⟩, fun v ret => (result.2 v ret).1, ?_⟩
-  intro eqn; subst e
-  exact openSegment_healthy named (settled.recoverable bs fits)
+    (files _).trans o.sameActive⟩, result.2, effects.healthy named (settled.recoverable bs fits)⟩
 
 private structure Opened (c : Control) (history : List Bytes) (d : Disk) : Prop where
   ready : ReadyLayout c history d
@@ -84,21 +118,22 @@ private theorem Opened.recoverable {c final d known req} (o : Opened c final d)
     (perm : PermittedView known req (historyView c final)) : Recoverable known req d :=
   ⟨⟨c, o.live, o.ready.choice perm⟩, ⟨c, o.durable, o.ready.choice perm⟩⟩
 
-private theorem active_step {c h p active final known req} (e : Effects) {s : State}
+private theorem active_step {c h p active final known req} {call} {healthyCall : Prop}
+    (effects : OpenChildEffects call healthyCall) {s : State}
     (o : Opening c h p active s.disk)
     (allow : ∀ v, WalRecoverySlice.Contract.Permitted h p v → PermittedView known req (historyView c v))
     (layout : ∀ disk, Layout c h disk → Layout c final disk)
     (canonical : Child.Selects c.policy active (segmentHistory c.capacity c.active final)) :
     readOutcome (fun t => Opened c final t.disk)
-      (fun t => Recoverable known req t.disk ∧ e ≠ healthy)
-      (segmentHistory c.capacity c.active final) (((ops e).openSegment c.policy c.active).run s) := by
+      (fun t => Recoverable known req t.disk ∧ ¬ healthyCall)
+      (segmentHistory c.capacity c.active final) ((call c.policy c.active).run s) := by
   let id := c.active
-  let out := ((ops e).openSegment c.policy id).run s
+  let out := (call c.policy id).run s
   let later := (reached out).disk
   have named := (o.selected.layout.names id c.selectsActive).1
-  obtain ⟨image, cursor, frame⟩ := openSegment_frame e c.policy named
+  obtain ⟨image, cursor, frame⟩ := effects.frame c.policy id s named
   change later = _ at frame
-  have ⟨retry, success⟩ := openSegment_dirty e named o.selected.active
+  have ⟨retry, success⟩ := effects.dirty named o.selected.active
   have names : ∀ i, c.selects i → i ∈ later.liveNames ∧ i ∈ later.durableNames := by
     rw [frame]; exact o.selected.layout.names
   have closed (i : Nat) (_ : c.selects i) (lt : i < id) : later.segment i = s.disk.segment i := by
@@ -110,13 +145,13 @@ private theorem active_step {c h p active final known req} (e : Effects) {s : St
   · intro v ack
     change returned out = some v at ack
     obtain ⟨_, installed⟩ := success v ack
-    have chosen := openSegment_selected e named (o.sameActive ▸ canonical) ack
+    have chosen := effects.selected named o.selected.active (o.sameActive ▸ canonical) v ack
     rw [chosen] at installed
     exact ⟨⟨⟨layout later oldLayout, installed⟩, lh, dh⟩, chosen⟩
   · intro no
-    have available : e ≠ healthy := by
-      intro he; subst e
-      obtain ⟨v, ret⟩ := openSegment_healthy named o.selected.active
+    have available : ¬ healthyCall := by
+      intro he
+      obtain ⟨v, ret⟩ := effects.healthy named o.selected.active he
       rw [no] at ret
       contradiction
     let r : Readable c h p later := ⟨oldLayout, o.selected.room, retry⟩
@@ -148,17 +183,37 @@ private theorem collect_step {c h k req} (e : Effects) (s : State) (o : Opened c
       rw [eqn] at frame
       exact ⟨keep frame.1, rfl⟩
 
-private theorem reopen_source {k req} (e : Effects) (s : State) (prior : Recoverable k req s.disk) :
+def reopenOps (root : Effects) (openChild : Policy → Nat → M (List Bytes)) : Ops M :=
+  { ops root with openSegment := openChild }
+
+private theorem collect_reopenOps (root : Effects) (openChild : Policy → Nat → M (List Bytes))
+    (c : Control) : Segmented.collect (reopenOps root openChild) c = Segmented.collect (ops root) c := by
+  have remove (ids : List Nat) :
+      Segmented.removeRetired (reopenOps root openChild) c.firstNeeded ids =
+        Segmented.removeRetired (ops root) c.firstNeeded ids := by
+    induction ids with
+    | nil => rfl
+    | cons id rest ih =>
+      simp only [Segmented.removeRetired, ih]
+      rfl
+  simp only [Segmented.collect]
+  congr 1
+  funext ids
+  rw [remove]
+  rfl
+
+private theorem reopen_source {k req} (e : Effects) {call} {healthyCall : Prop}
+    (effects : OpenChildEffects call healthyCall) (s : State) (prior : Recoverable k req s.disk) :
     ∃ c final, PermittedView k req (historyView c final) ∧
-      readOutcome (fun t => Opened c final t.disk) (fun t => Recoverable k req t.disk ∧ e ≠ healthy)
-        (sessionOf c final) ((Segmented.reopen (ops e)).run s) := by
+      readOutcome (fun t => Opened c final t.disk) (fun t => Recoverable k req t.disk ∧ ¬ (e = healthy ∧ healthyCall))
+        (sessionOf c final) ((Segmented.reopen (reopenOps e call)).run s) := by
   obtain ⟨c, found, h, p, r, allow⟩ := prior.live
   obtain ⟨_, choice, bounded, selected⟩ := r.active.selectedBatches
   obtain ⟨final, permitted, slice, earlier, lift⟩ := resolve_active r choice bounded
   have finish := lift _ r.layout
   refine ⟨c, final, allow final permitted, ?_⟩
   simp only [sessionOf, segmentHistory_active_length finish.upper, historyView]
-  apply reopen_spec (ops e) c final s (fun t => t.disk = s.disk)
+  apply reopen_spec (reopenOps e call) c final s (fun t => t.disk = s.disk)
     (fun t => Opening c h p (s.disk.segment c.active) t.disk) (fun t => Opened c final t.disk)
     _ _ ⟨finish.capacityPositive, finish.capacityFits⟩ finish.lower finish.upper finish.discardedFits
   · change readOutcome _ _ _ (read (e.controlRead s.step) _ s)
@@ -167,7 +222,7 @@ private theorem reopen_source {k req} (e : Effects) (s : State) (prior : Recover
     | none => exact ⟨rfl, rfl⟩
     | some a =>
       have ne : e ≠ healthy := by rintro rfl; cases fx
-      cases a <;> exact ⟨prior, ne⟩
+      cases a <;> exact ⟨prior, fun h => ne h.1⟩
   · intro t same
     have synced : Opening c h p (s.disk.segment c.active) t.disk.syncRoot := by
       rw [same]
@@ -177,34 +232,52 @@ private theorem reopen_source {k req} (e : Effects) (s : State) (prior : Recover
     cases fx : e.root t.step with
     | before a =>
       have ne : e ≠ healthy := by rintro rfl; cases fx
-      cases a <;> exact ⟨same.symm ▸ prior, ne⟩
+      cases a <;> exact ⟨same.symm ▸ prior, fun h => ne h.1⟩
     | after a =>
       cases a with
       | none => exact ⟨synced, rfl⟩
       | some a =>
         have ne : e ≠ healthy := by rintro rfl; cases fx
-        cases a <;> exact ⟨synced.recoverable allow, ne⟩
+        cases a <;> exact ⟨synced.recoverable allow, fun h => ne h.1⟩
   · intro id low lt t o
-    have result := sealed_step e o low lt
+    have result := sealed_step effects o low lt
     apply outcome_reached
     · exact fun v ret => ⟨result.1, (result.2.1 v ret).trans (earlier id lt).symm⟩
     · intro no
       refine ⟨result.1.recoverable allow, fun eq => ?_⟩
-      obtain ⟨v, ok⟩ := result.2.2 eq
+      obtain ⟨v, ok⟩ := result.2.2 eq.2
+      change returned ((call c.policy id).run t) = none at no
       rw [no] at ok
       contradiction
   · intro t o
-    apply active_step e o allow lift
-    exact slice.symm ▸ selected
-  · exact fun t o => collect_step e t o (allow final permitted)
+    simp only [reopenOps]
+    have proof := active_step effects o allow lift (slice.symm ▸ selected)
+    cases h : (call c.policy c.active).run t with
+    | error => rw [h] at proof; exact ⟨proof.1, fun h => proof.2 h.2⟩
+    | ok value _ =>
+      rw [h] at proof
+      cases value with
+      | error => exact ⟨proof.1, fun h => proof.2 h.2⟩
+      | ok => exact proof
+  · intro t o
+    rw [collect_reopenOps]
+    have proof := collect_step e t o (allow final permitted)
+    cases h : (Segmented.collect (ops e) c).run t with
+    | error => rw [h] at proof; exact ⟨proof.1, fun h => proof.2 h.1⟩
+    | ok value _ =>
+      rw [h] at proof
+      cases value with
+      | error => exact ⟨proof.1, fun h => proof.2 h.1⟩
+      | ok => exact proof
 
 /-- A successful source reopen installs the exact permitted view. Every reported
 I/O error or interruption leaves a state from which the same request can recover. -/
-theorem reopen_refines {k req} (e : Effects) (s : State) (prior : Recoverable k req s.disk) :
+theorem reopenWithChild_refines {k req} (e : Effects) {call} {healthyCall : Prop}
+    (effects : OpenChildEffects call healthyCall) (s : State) (prior : Recoverable k req s.disk) :
     DiskPost (fun next disk => Installed next disk ∧ PermittedView k req next.view)
-      (Recoverable k req) ((Segmented.reopen (ops e)).run s) := by
-  obtain ⟨c, final, permit, post⟩ := reopen_source e s prior
-  cases hr : (Segmented.reopen (ops e)).run s with
+      (Recoverable k req) ((Segmented.reopen (reopenOps e call)).run s) := by
+  obtain ⟨c, final, permit, post⟩ := reopen_source e effects s prior
+  cases hr : (Segmented.reopen (reopenOps e call)).run s with
   | error _ _ => rw [hr] at post; exact post.1
   | ok result t =>
     cases result with
@@ -214,15 +287,21 @@ theorem reopen_refines {k req} (e : Effects) (s : State) (prior : Recoverable k 
       obtain ⟨opened, rfl⟩ := post
       exact ⟨⟨final, rfl, opened.ready, opened.live, opened.durable⟩, permit⟩
 
+theorem reopen_refines {k req} (e : Effects) (s : State) (prior : Recoverable k req s.disk) :
+    DiskPost (fun next disk => Installed next disk ∧ PermittedView k req next.view)
+      (Recoverable k req) ((Segmented.reopen (ops e)).run s) :=
+  reopenWithChild_refines e (modelChildEffects e) s prior
+
 /-- Once faults cease, the actual source reopen finishes after any permitted prefix. -/
 theorem reopen_healthy {k req} (s : State) (prior : Recoverable k req s.disk) :
     ∃ next after, ((Segmented.reopen (ops healthy)).run s) = .ok (.ok next) after := by
-  obtain ⟨_, _, _, post⟩ := reopen_source healthy s prior
+  obtain ⟨_, _, _, post⟩ := reopen_source healthy (modelChildEffects healthy) s prior
+  change readOutcome _ _ _ ((Segmented.reopen (ops healthy)).run s) at post
   cases hr : (Segmented.reopen (ops healthy)).run s with
-  | error _ _ => rw [hr] at post; exact False.elim (post.2 rfl)
+  | error _ _ => rw [hr] at post; exact False.elim (post.2 ⟨rfl, rfl⟩)
   | ok result t =>
     cases result with
-    | error => rw [hr] at post; exact False.elim (post.2 rfl)
+    | error => rw [hr] at post; exact False.elim (post.2 ⟨rfl, rfl⟩)
     | ok v => exact ⟨v, t, rfl⟩
 
 end WalRecoverySlice.Segmented.Model

@@ -72,13 +72,15 @@ theorem openChild_dispatch (root : FilePath) (p : Policy) (id : Nat) (returned :
 end WalRecoverySlice.Segmented.Native
 
 namespace WalRecoverySlice.Segmented.Model
+open System
 open Persistence
 
 /-- The shared phase wrapper preserves the disk proof of the existing model
 schedule and ties the public scan to the exact installed session. -/
-theorem reopenPhase_model (owned : store) (effects : Effects) (s : State)
+theorem reopenPhase_withChild (owned : store) (root : Effects)
+    {call} {healthyCall : Prop} (childEffects : OpenChildEffects call healthyCall) (s : State)
     (prior : Recoverable known request s.disk) :
-    let result := (Native.reopenPhaseWith (ops effects) owned).run s
+    let result := (Native.reopenPhaseWith (reopenOps root call) owned).run s
     match result with
     | .ok (.ok (.ready owner session)) after =>
       owner = owned ∧ Installed session after.disk ∧
@@ -86,14 +88,14 @@ theorem reopenPhase_model (owned : store) (effects : Effects) (s : State)
       Native.scanWith (m := Except String) (.ready owner session) = .ok session.view
     | .ok (.ok _) _ => False
     | .ok (.error _) after | .error _ after => Recoverable known request after.disk := by
-  have physical := reopen_refines effects s prior
+  have physical := reopenWithChild_refines root childEffects s prior
   have phase :
-      (Native.reopenPhaseWith (ops effects) owned).run s =
-        match (Segmented.reopen (ops effects)).run s with
+      (Native.reopenPhaseWith (reopenOps root call) owned).run s =
+        match (Segmented.reopen (reopenOps root call)).run s with
         | .ok (.ok session) after => .ok (.ok (.ready owned session)) after
         | .ok (.error err) after => .ok (.error err) after
         | .error token after => .error token after := by
-    cases ran : (Segmented.reopen (ops effects)).run s with
+    cases ran : (Segmented.reopen (reopenOps root call)).run s with
     | error =>
       simp [Native.reopenPhaseWith, Bind.bind, ExceptT.run, ExceptT.bind,
         ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢
@@ -104,7 +106,7 @@ theorem reopenPhase_model (owned : store) (effects : Effects) (s : State)
           ExceptT.bindCont, ExceptT.mk, EStateM.bind] at ran ⊢ <;> rw [ran] <;> rfl
   dsimp only
   rw [phase]
-  cases issued : (Segmented.reopen (ops effects)).run s with
+  cases issued : (Segmented.reopen (reopenOps root call)).run s with
   | error => rw [issued] at physical; exact physical
   | ok response _ =>
     rw [issued] at physical
@@ -206,5 +208,61 @@ theorem nativeChild_selected (dir : System.FilePath) (r : SingleFile.OpenReports
   have exact := scheduledReopen_selected preserved r.worker r.writebacks ready.recovered
   rw [← SingleFile.recoverScheduled_eq] at exact
   exact congrArg Decoded.batches (exact physical.2)
+
+/-- Interpret the public single-file producer at the selected segment path. -/
+def nativeOpenChild (root : FilePath) (reports : Nat → Nat → SingleFile.OpenReports)
+    (policy : Policy) (id : Nat) : M (List Bytes) := fun s =>
+  child s id (nativeChildWorker (Native.segmentPath root id) policy (reports s.step id))
+    Decoded.cursor Decoded.batches
+
+theorem nativeOpenChild_effects (root : FilePath) (reports : Nat → Nat → SingleFile.OpenReports) :
+    OpenChildEffects (nativeOpenChild root reports) False where
+  frame _ _ _ named := child_frame named _ _ _
+  settled {policy id s history} named entry bounded fits := by
+    have frame := child_reached named
+      (nativeChildWorker (Native.segmentPath root id) policy (reports s.step id))
+      Decoded.cursor Decoded.batches
+    have facts := nativeChild_recoverable (Native.segmentPath root id) (reports s.step id)
+      named (entry.recoverable bounded fits)
+    refine ⟨?_, fun batches observed => ?_⟩
+    · change (reached (child s id _ Decoded.cursor Decoded.batches)).disk.segment id = _
+      rw [frame, Disk.setSegment_here]
+      exact nativeChild_sealed _ _ entry bounded fits
+    · have permitted := (facts.2 batches observed).1
+      cases permitted with
+      | inl same => exact same
+      | inr same => simpa using same
+  dirty {policy id s known pending} named entry :=
+    nativeChild_recoverable (Native.segmentPath root id) (reports s.step id) named entry
+  selected {policy id s batches known pending} named entry chosen observed ack := by
+    let dir := Native.segmentPath root id
+    let r := reports s.step id
+    change returned (child s id (nativeChildWorker dir policy r) Decoded.cursor Decoded.batches) = _ at ack
+    rw [child_returned named] at ack
+    cases opened : SingleFile.openExistingModel dir policy r {image := s.disk.segment id} with
+    | error => simp [nativeChildWorker, ExceptT.run, opened, Persistence.acknowledged] at ack
+    | ok response after =>
+      cases response with
+      | error => simp [nativeChildWorker, ExceptT.run, opened, Persistence.acknowledged] at ack
+      | ok ready =>
+        have eq : ready.recovered.batches = observed := by
+          simpa [nativeChildWorker, ExceptT.run, opened, Persistence.acknowledged] using ack
+        exact eq.symm.trans (nativeChild_selected dir r entry chosen opened)
+  healthy _ _ impossible := impossible.elim
+
+/-- The native child producer supplies the root recovery proof. Root namespace
+operations here still use the root model. -/
+theorem reopenPhase_nativeChild (owned : store) (root : FilePath) (effects : Effects)
+    (reports : Nat → Nat → SingleFile.OpenReports) (s : State)
+    (prior : Recoverable known request s.disk) :
+    let result := (Native.reopenPhaseWith (reopenOps effects (nativeOpenChild root reports)) owned).run s
+    match result with
+    | .ok (.ok (.ready owner session)) after =>
+      owner = owned ∧ Installed session after.disk ∧
+      Contract.Step (.offline known request) (.opened session.view) (.online session.view) ∧
+      Native.scanWith (m := Except String) (.ready owner session) = .ok session.view
+    | .ok (.ok _) _ => False
+    | .ok (.error _) after | .error _ after => Recoverable known request after.disk :=
+  reopenPhase_withChild owned effects (nativeOpenChild_effects root reports) s prior
 
 end WalRecoverySlice.Segmented.Model
