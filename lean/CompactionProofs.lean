@@ -1,5 +1,4 @@
-import CompactionCodec
-import Alvoki.Storage.Table.SequentialModel
+import Alvoki.Storage.Table.CompactionReadContract
 
 namespace Alvoki.Compaction
 open Alvoki.Opt
@@ -22,11 +21,6 @@ private theorem retainedRows_eq (left right : Run) (floor : UInt64)
     at rightRows
   rw [retainedRows, ← leftRows, ← rightRows, Model.union_map, Model.retain_map]
   rfl
-
-theorem Run.decoded_valid {bytes : ByteArray} {run : Run} (accepted : parse bytes = .ok run) :
-    Model.Ordered run.decodeV3 ∧ ∀ r ∈ run.decodeV3, CanonicalRow r := by
-  have h := parse_spec accepted
-  simpa only [Run.decodeV3, h.1, h.2.1] using h.2.2.2.2.2
 
 private theorem positionBytes_encode (left right : Run) (rows : List (Model.Entry Position))
     (members : ∀ r ∈ rows, r ∈ Model.union (left.positions false) (right.positions true))
@@ -103,8 +97,6 @@ theorem compact_preserves {left right out : Run} {leftBytes rightBytes : ByteArr
   rw [decode_compact lp rp parsed]
   exact Model.winner_retain _ key live
 
-def isPut (payload : UInt64 × UInt64) : Bool := payload.1 == 0
-
 def checksum (sum : UInt64) (row : RawEntry) : UInt64 := sum + (row.key ^^^ row.payload.2)
 
 private theorem fold_eq_on {rows : List α} (a b : β → α → β)
@@ -159,15 +151,6 @@ theorem compact_scan_eq {left right out : Run} {leftBytes rightBytes : ByteArray
   have outFits : out.bytes.size < USize.size := (parse_spec parsed).1 ▸ (parse_spec parsed).2.2.1
   rw [out.scan_refines snapshot outFits, scan_refines left right snapshot leftFits rightFits,
     compact_visibleRows_eq lp rp parsed live]
-
-def decodedValue (payload : UInt64 × UInt64) : Option UInt64 :=
-  if isPut payload then some payload.2 else none
-
-/-- Turn an accepted v3 block into a sequential history with typed tombstones. -/
-def Run.history {bytes : ByteArray} {run : Run} (accepted : parse bytes = .ok run) :
-    Sequential.History UInt64 :=
-  ⟨run.decodeV3.map (Model.Entry.mapPayload decodedValue),
-    List.pairwise_map.mpr ((Run.decoded_valid accepted).1.imp fun before => before)⟩
 
 /-- The packed compactor implements the sequential model's adjacent-run replacement. -/
 theorem compact_history {left right out : Run} {leftBytes rightBytes : ByteArray}

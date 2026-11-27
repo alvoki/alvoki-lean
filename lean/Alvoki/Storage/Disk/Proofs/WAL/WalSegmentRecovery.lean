@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableLookup
 import Alvoki.Storage.Disk.Proofs.Checkpoint.MarkedCheckpointReady
 import Alvoki.Storage.Disk.Proofs.Read.RecoveredPinRefinement
 import Alvoki.Storage.Disk.Proofs.WAL.RetainedWalBoundary

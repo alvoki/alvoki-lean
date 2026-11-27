@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableLookup
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.LegacyCheckpointRead
 import Alvoki.Storage.Disk.MarkedWalReopenModel

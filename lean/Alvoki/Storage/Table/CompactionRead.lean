@@ -1,3 +1,4 @@
+import Alvoki.Storage.Table.CompactionReadContract
 import CompactionProofs
 import OptProofs
 
@@ -158,7 +159,7 @@ decreasing_by
   have step := addOne i stop order
   omega
 
-private theorem key_lt_bound (checked : CheckedRun) (target : UInt64) (i : Nat)
+theorem CheckedRun.key_lt_bound (checked : CheckedRun) (target : UInt64) (i : Nat)
     (within : i < checked.run.count.toNat) :
     (rawRow checked.run.bytes i).key < target ↔ i < (checked.lowerBoundKey target).toNat := by
   have ⟨_, lo, hi⟩ := checked.lowerBoundKey_spec target
@@ -166,18 +167,6 @@ private theorem key_lt_bound (checked : CheckedRun) (target : UInt64) (i : Nat)
   · intro lt
     by_cases past : (checked.lowerBoundKey target).toNat ≤ i
     · exact (of_decide_eq_false (hi i past within) lt).elim
-    · omega
-  · intro before
-    exact of_decide_eq_true (lo i before)
-
-private theorem key_le_bound (checked : CheckedRun) (target : UInt64) (i : Nat)
-    (within : i < checked.run.count.toNat) :
-    (rawRow checked.run.bytes i).key ≤ target ↔ i < (checked.upperBoundKey target).toNat := by
-  have ⟨_, lo, hi⟩ := checked.upperBoundKey_spec target
-  constructor
-  · intro le
-    by_cases past : (checked.upperBoundKey target).toNat ≤ i
-    · exact (of_decide_eq_false (hi i past within) le).elim
     · omega
   · intro before
     exact of_decide_eq_true (lo i before)
@@ -212,24 +201,10 @@ private theorem raw_keyRange (checked : CheckedRun) (start stop : UInt64) :
   apply congrArg (List.map (rawRow checked.run.bytes))
   apply filterIndexRange _ _ _ _ (checked.lowerBoundKey_spec stop).1
   intro i bound
-  have lo := key_lt_bound checked start i bound
-  have hi := key_lt_bound checked stop i bound
+  have lo := checked.key_lt_bound start i bound
+  have hi := checked.key_lt_bound stop i bound
   simp only [Function.comp_apply, inRange, Bool.and_eq_true_iff, decide_eq_true_eq, hi]
   rw [← UInt64.not_lt, lo, Nat.not_lt]
-
-private theorem raw_keyVersions (checked : CheckedRun) (key : UInt64) :
-    (checked.run.decodeV3.filter (fun row => row.key == key)) =
-      rawInterval checked.run (checked.lowerBoundKey key) (checked.upperBoundKey key) := by
-  unfold Run.decodeV3 rawRows rawInterval
-  rw [List.filter_map]
-  apply congrArg (List.map (rawRow checked.run.bytes))
-  apply filterIndexRange _ _ _ _ (checked.upperBoundKey_spec key).1
-  intro i bound
-  have lo := key_lt_bound checked key i bound
-  have hi := key_le_bound checked key i bound
-  simp only [Function.comp_apply, beq_iff_eq, ← hi, ← Nat.not_lt, ← lo, UInt64.not_lt]
-  exact ⟨fun e => e ▸ ⟨UInt64.le_refl _, UInt64.le_refl _⟩,
-    fun ⟨ge, le⟩ => UInt64.le_antisymm le ge⟩
 
 theorem CheckedRun.foldRange_eq (checked : CheckedRun) (start stop : UInt64)
     (consume : α → Model.Entry (Option UInt64) → α) (initial : α) :
@@ -241,17 +216,17 @@ theorem CheckedRun.foldRange_eq (checked : CheckedRun) (start stop : UInt64)
   rw [List.filter_map, List.foldl_map]
   rfl
 
-theorem CheckedRun.lookupEntry_eq (checked : CheckedRun) (key snapshot : UInt64) :
-    checked.lookupEntry key snapshot = Model.winner checked.history.rows key snapshot := by
+/-- The private search over the bounded interval agrees with scanning those
+raw rows. This boundary does not claim the interval contains exactly a key. -/
+theorem CheckedRun.lookupEntry_as_interval (checked : CheckedRun) (key snapshot : UInt64) :
+    checked.lookupEntry key snapshot =
+      ((List.range' (checked.lowerBoundKey key).toNat
+        ((checked.upperBoundKey key).toNat - (checked.lowerBoundKey key).toNat)).map
+          (rawRow checked.run.bytes) |>.find? (fun row => row.sequence ≤ snapshot)).map
+        RawEntry.version := by
   unfold CheckedRun.lookupEntry
-  rw [findFrom_eq _ _ _ _ checked.fits, ← raw_keyVersions, List.find?_filter]
-  change _ = (checked.run.decodeV3.map RawEntry.version).find? _
-  rw [List.find?_map]
+  rw [findFrom_eq _ _ _ _ checked.fits]
   rfl
-
-theorem CheckedRun.lookup_eq (checked : CheckedRun) (key snapshot : UInt64) :
-    checked.lookup key snapshot = Model.read checked.history.rows key snapshot := by
-  rw [CheckedRun.lookup, checked.lookupEntry_eq, Model.read]
 
 private theorem foldPrepend (rows acc : List α) :
     (rows.foldl (fun out row => row :: out) acc).reverse = acc.reverse ++ rows := by

@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableLookup
 import Alvoki.Storage.Disk.Proofs.Recovery.MarkedDatabaseTrace
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedSessionInstall
 

@@ -1,3 +1,4 @@
+import Alvoki.Storage.Proofs.Table.PackedTableLookup
 import Alvoki.Storage.Disk.Proofs.Read.SessionReadGuards
 import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterMaintenance
 

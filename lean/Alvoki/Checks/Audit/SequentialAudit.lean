@@ -1,3 +1,5 @@
+import Alvoki.Storage.Proofs.Table.PackedTableLookup
+import Alvoki.Storage.Proofs.Table.CheckedRunLookup
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Storage.Disk.Proofs.WAL.WalBatchRecovery
 import Alvoki.Storage.Disk.Proofs.WAL.WalBatchMarkerPowerLoss

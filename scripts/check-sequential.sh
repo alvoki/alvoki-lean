@@ -27,7 +27,10 @@ lake env leanchecker CompactionModel
 lake env leanchecker Alvoki.Storage.Table.SequentialModel
 lake env leanchecker Alvoki.Storage.Table.SequentialPurge
 lake env leanchecker Alvoki.Storage.Table.SnapshotTable
+lake env leanchecker Alvoki.Storage.Table.CompactionReadContract
 lake env leanchecker Alvoki.Storage.Table.CompactionRead
+lake env leanchecker Alvoki.Storage.Proofs.Table.CheckedRunLookup
+lake env leanchecker Alvoki.Storage.Proofs.Table.PackedTableLookup
 lake env leanchecker Alvoki.Storage.Table.MemTableContract
 lake env leanchecker Alvoki.Storage.Table.MemTableTree
 lake env leanchecker Alvoki.Storage.Table.MemTable
