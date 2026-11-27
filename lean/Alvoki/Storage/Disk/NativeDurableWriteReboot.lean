@@ -6,6 +6,34 @@ namespace Alvoki.Storage.DiskSession
 
 open System WalSegmentRepair
 
+/-- The already selected files whose durability is required before
+the aligned open repairs and syncs the active keeper. -/
+def SegmentedWriterState.walOpenDurablePath (writer : SegmentedWriterState)
+    (directory : DiskDirectory) (path : FilePath) : Prop :=
+  path = directory.path ∨ path = directory.file .walBoundary ∨
+    ∃ segment ∈ writer.wal.sealed, path = directory.file (.walSegment segment.first)
+
+/-- The immutable WAL bytes and the database directory's settled name
+are independent of the handles acquired by the next open. -/
+structure SegmentedWriterState.WalOpenDurability (writer : SegmentedWriterState)
+    (directory : DiskDirectory) (storage : CheckpointStorageObservation) : Prop where
+  marker : storage.files.Stored (directory.file .walBoundary)
+    (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64)
+  sealed : ∀ segment ∈ writer.wal.sealed,
+    storage.files.Stored (directory.file (.walSegment segment.first)) segment.bytes
+  parentSettled : ∀ names ∈ storage.crashNames, names directory.path = storage.files.names directory.path
+
+theorem SegmentedWriterState.WalOpenDurability.frame {writer : SegmentedWriterState} {directory : DiskDirectory}
+    {before after : CheckpointStorageObservation} (kept : writer.WalOpenDurability directory before)
+    (frame : before.Frames (writer.walOpenDurablePath directory) after) :
+    writer.WalOpenDurability directory after := by
+  refine ⟨frame.visible.stored (.inr (.inl rfl)) kept.marker,
+    fun segment member => frame.visible.stored (.inr (.inr ⟨segment, member, rfl⟩)) (kept.sealed segment member), ?_⟩
+  intro names survived
+  obtain ⟨prior, allowed, same⟩ := frame.survivors names survived
+  exact (same directory.path (.inl rfl)).trans ((kept.parentSettled prior allowed).trans
+    (frame.visible directory.path (.inl rfl)).1.symm)
+
 /-- The immutable physical footprint of a selected retry. The keeper
 can be trimmed or replaced during repair and has its own live relation.
 The root's name in its parent must remain settled independently of any

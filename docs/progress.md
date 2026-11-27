@@ -126,9 +126,16 @@ WAL names from the individual filesystem callbacks. A failed open can be
 retried any finite number of times when each attempt preserves the sampled
 WAL files. The successful retry reads those files on its own entry heap.
 
-**Next obligation.** Establish the writable keeper, lock and cache state of
-that returned session so its next acknowledged write extends the same ledger.
-An attempt that changes files during repair needs a local transition proof.
+For a subsequent write, reboot must also settle the selected marker, sealed
+segments and directory binding. Given those reset and retry effects, the
+actual opener supplies its lock, cache and keeper to the same finite write
+and snapshot proof used after checkpoint recovery. Its ledger starts with
+the original acknowledged batch. [Writable reopen](../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean)
+
+**Next obligation.** Derive the opener's projected sealed files and later
+WAL names at the retry entry from the reached filesystem observations.
+A failed attempt that changes selected files during repair needs a local
+transition that establishes the next attempt's entry.
 The filesystem's survival and byte-sampling laws
 remain explicit. Further mixed calls, interruptions and maintenance
 remain in the [checklist](proof-roadmap.md#completion-checklist-for-native-key-value-refinement).

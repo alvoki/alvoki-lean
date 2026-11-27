@@ -409,6 +409,44 @@ theorem NativeReadyState.visibleWalAtRotationSample
 
 end SampledReader
 
+/-- Restore the exact selected marker and seals at the reboot heap,
+then carry them and the settled parent binding through the failed opens. -/
+theorem SegmentedWriterState.VisibleWalFiles.durabilityAfterRebootRetries
+    {heap stream : Type} {source : RawMarkedOpenInterpreter heap stream}
+    {writer : SegmentedWriterState} {directory : DiskDirectory} {descriptor : Nat}
+    {storage : heap → CheckpointStorageObservation} {visible : heap → Nat → ByteArray}
+    {rebooted entry : heap} {errors : List (FilePath × IO.Error)}
+    (files : writer.VisibleWalFiles directory (storage rebooted).files.names (visible rebooted))
+    (ready : writer.RetainedReady directory descriptor)
+    (restore : ∀ path, writer.walOpenDurablePath directory path → path ≠ directory.path →
+      ∀ inode, (storage rebooted).files.names path = some inode →
+      (storage rebooted).files.bytes inode = [visible rebooted inode])
+    (root : ∀ names ∈ (storage rebooted).crashNames,
+      names directory.path = (storage rebooted).files.names directory.path)
+    (attempts : source.FailedCalls rebooted errors entry)
+    (each : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+      source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(input, cause)]) errors →
+      source.openTable input before = .error cause after →
+      (storage before).Frames (writer.walOpenDurablePath directory) (storage after)) :
+    writer.WalOpenDurability directory (storage entry) := by
+  have stored (path : FilePath) (selected : writer.walOpenDurablePath directory path)
+      (child : path ≠ directory.path) {payload : ByteArray}
+      (live : ((storage rebooted).files.names path).map (visible rebooted) = some payload) :
+      (storage rebooted).files.Stored path payload := by
+    obtain ⟨inode, named, contents⟩ := Option.map_eq_some_iff.mp live
+    exact ⟨inode, named, (restore path selected child inode named).trans (congrArg List.singleton contents)⟩
+  have marker : writer.target.pair.walBoundary = some (WAL.Boundary.encode (WAL.encode writer.history).size.toUInt64) :=
+    (congrArg DirectoryPublication.Bindings.walBoundary ready.resumed.ready.selected).symm.trans
+      (congrArg Publication.Image.active ready.resumed.markerImage)
+  have initial : writer.WalOpenDurability directory (storage rebooted) :=
+    ⟨stored _ (.inr (.inl rfl)) (file_ne_directory directory .walBoundary) (files.marker.trans marker),
+      fun segment member => stored _ (.inr (.inr ⟨segment, member, rfl⟩))
+        (file_ne_directory directory (.walSegment segment.first)) (files.seals segment member), root⟩
+  exact initial.frame (attempts.framesAfter .empty
+    (fun before after => (storage before).Frames (writer.walOpenDurablePath directory) (storage after))
+    (fun atHeap => .refl _ (storage atHeap)) (fun earlier later => earlier.trans later)
+    (fun prior inside returned => each prior (by simpa only [List.nil_append] using inside) returned))
+
 /-- The filesystem effects through a failed root barrier select the keeper
 and retained WAL files in one joint reboot sample. -/
 theorem NativeOpenedPosition.samplesFailedRotationDirectory {heap : Type}

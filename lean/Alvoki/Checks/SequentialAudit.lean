@@ -514,6 +514,7 @@ import Alvoki.Storage.Disk.NativeMarkedScanFrame
 import Alvoki.Storage.Disk.NativePrunedKeeperStorage
 import Alvoki.Storage.Disk.NativeAlignedMarkedReady
 import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
+import Alvoki.Storage.Disk.NativeAlignedReadyCalls
 import Alvoki.Storage.Disk.NativePublishedWriteSnapshot
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
 import Alvoki.Storage.Disk.NativeGroupedWriteSnapshot
@@ -2615,6 +2616,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawAlignedCheckpointReopenEffects.returnsSelectedFromFixedInterpreter
 #check_axioms Alvoki.Storage.DiskSession.RawManifestStatError.finalizesSelectedCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.FailedCalls.carriesCheckpointReset
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.WalOpenDurability.frame
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.VisibleWalFiles.durabilityAfterRebootRetries
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.crashPath_forSelectedCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceStop.reopensSampledFinalCheckpoint
 #check_axioms Alvoki.Storage.DiskSession.NativeCheckpointSourceError.reopensSampledRenameError
@@ -2765,6 +2768,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.OpenRotationCallbacks.SuccessorFilePrefix.ExclusiveSync.observesSuccessorAtRootIssue
 #check_axioms Alvoki.Storage.DiskSession.OpenCloseHeapView.ClosedFrom.readsAfterRotationDirectoryError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.samplesFailedRotationDirectory
+#check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.VisibleWalFiles.alignedLayout
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.opensRetainedWalForCalls
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.visibleWalAtRotationSample
 #check_axioms Alvoki.Storage.DiskSession.SegmentedWriterState.VisibleWalFiles.afterFailedCalls
@@ -4377,6 +4382,9 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.readsLiteralMarkedOpen
 #check_axioms Alvoki.Storage.DiskSession.RawOpenRetryTrace.SelectedEntry.replaysWalBeforeCheckpointAtOpen
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.replaysVisibleWalBeforeCheckpointAtOpen
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.walOnlyCheckpoint
+#check_axioms Alvoki.Storage.DiskSession.CanonicalKeeperLayout.walOnlyAccepted
+#check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.readsLiteralWalOnly
 #check_axioms Alvoki.Storage.DiskSession.RawWriteRebootEntry.replaysWalBeforeCheckpointAtOpen
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.replaysWalBeforeCheckpointAtOpen
 #check_axioms Alvoki.Storage.DiskSession.AlignedRepairImageEffects.readyAfterReturn

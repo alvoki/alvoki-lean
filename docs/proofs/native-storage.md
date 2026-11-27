@@ -299,7 +299,13 @@ the other WAL names. The sampled map establishes `VisibleWalFiles`, which
 the shared reader consumes. A finite sequence of rejected opens preserves
 this invariant when each reached attempt preserves the bounded name
 bindings and visible bytes. Successful open still relies on truthful
-enumeration and reads. [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
+enumeration and reads. For a writable reopen, the reboot also resets the
+marker and seals to the sampled bytes and settles the parent binding of the
+directory. Failed attempts must preserve these durable observations. The
+literal WAL reader then supplies the held cache and keeper to the ordinary
+write and snapshot proof. Its remaining file-model inputs include agreement
+with the projected seals and coverage of later WAL names by the held scan.
+[Writable reopen](../../lean/Alvoki/Storage/Disk/NativeAlignedReadyCalls.lean) · [Marker at acknowledgement](../../lean/Alvoki/Storage/Disk/NativeReadyWriteStorage.lean) ·
 [Live reopen](../../lean/Alvoki/Storage/Disk/NativeRawRotationLiveReopen.lean) ·
 [Shared reader](../../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 

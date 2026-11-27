@@ -5,7 +5,7 @@ import Alvoki.Storage.Disk.NativeEarlyCheckpointTerminal
 import Alvoki.Storage.Disk.NativeReadyCallRefinement
 import Alvoki.Storage.Disk.NativeRawWriteReboot
 import Alvoki.Storage.Disk.NativeRawWriteRootStop
-import Alvoki.Storage.Disk.NativeAlignedWriteRecovery
+import Alvoki.Storage.Disk.NativeAlignedReadyCalls
 import Alvoki.Storage.Disk.NativeCheckpointRunDurability
 import Alvoki.Storage.Disk.NativeRotationWalReplay
 import Alvoki.Storage.Disk.NativeRawRotationLiveReopen
@@ -957,8 +957,8 @@ theorem readsAfterFailedRotation {stream : Type} (wrote : observedFirstWrite)
   exact @readsAfterOpen
 
 include covered in
-/-- A literal rotation error followed by power loss leaves the first
-acknowledged batch available through the table returned by the next open. -/
+/-- A failed rotation and one reboot preserve the first batch for reads.
+A durable reset and scoped retry frames also support calls on the reopened writer. -/
 theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWrite)
     (source : RawMarkedOpenInterpreter heap stream) (rotation : OpenRotationCallbacks heap) :
     ∃ (cache : OpenSyncCacheRefs opened.handle.files opened.start.current.ready.state.session.directory.path)
@@ -1005,14 +1005,24 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
                 ∀ object, names rebooted path = some object → visible rebooted object ∈ (storage barrier.failed).files.bytes object)
               {errors : List (FilePath × IO.Error)} {retryAt : heap}
               (attempts : source.FailedCalls rebooted errors retryAt)
-              (_effects : attempts.PreserveWalFiles (directory := dir) selected.writer.history.length names visible)
-              (_pairAt : (OpenCloseHeapView.files clientView retryAt).image.directory.active =
+              (_effects : attempts.PreserveWalFiles (directory := dir) selected.writer.history.length names visible),
+              (∀ (_pairAt : (OpenCloseHeapView.files clientView retryAt).image.directory.active =
                 ⟨(names retryAt (dir.file .manifest)).map (visible retryAt),
                   (names retryAt (dir.file .walBoundary)).map (visible retryAt)⟩)
-              (_keeperAt : (OpenCloseHeapView.files clientView retryAt).image.keeper.active =
-                (names retryAt (dir.file (.walSegment selected.writer.wal.active.first))).map (visible retryAt)),
-            source.ReadsClientHistoryAtOpen clientView dir storage visible retryAt namespaceView root
-              [.acknowledgedBatch batch] [] batch := by
+                (_keeperAt : (OpenCloseHeapView.files clientView retryAt).image.keeper.active =
+                  (names retryAt (dir.file (.walSegment selected.writer.wal.active.first))).map (visible retryAt)),
+              source.ReadsClientHistoryAtOpen clientView dir storage visible retryAt namespaceView root
+                [.acknowledgedBatch batch] [] batch) ∧
+              ∀ (_restored : ∀ child, selected.writer.walOpenDurablePath dir child → child ≠ dir.path →
+                  ∀ object, names rebooted child = some object →
+                    (storage rebooted).files.bytes object = [visible rebooted object])
+                (_rootSettled : ∀ possible ∈ (storage rebooted).crashNames, possible dir.path = names rebooted dir.path)
+                (_kept : ∀ {prior : List (FilePath × IO.Error)} {before after : heap} {input : FilePath} {cause : IO.Error},
+                  source.FailedCalls rebooted prior before → List.IsPrefix (prior ++ [(input, cause)]) errors →
+                  source.openTable input before = .error cause after →
+                  (storage before).Frames (selected.writer.walOpenDurablePath dir) (storage after)),
+                source.WritesAfterWalOpen clientView dir selected.writer retryAt namespaceView root
+                  opened.start.current [.acknowledged request batch] seen.keeperPhysical.inodes runs storage := by
   obtain ⟨cache, batch, preparedTable, next, _, initial, write, prepared, number, count, _, _, _, exactHeap,
     _, batchHistory, ledger, physical, _, ⟨noManifest, noSeals, history, cutoff⟩, carries⟩ :=
     opened.acknowledgesFirstWriteWithWindow seen resolved used runs files through createdKeeps createdWal rootNames
@@ -1033,22 +1043,33 @@ theorem readsAfterFailedRotationReboot {stream : Type} (wrote : observedFirstWri
     rotation syncer clientView _ storage visible filePrefix file barrier fileEffects rootEffects
     nonemptyWal physical fileFrames window chosen
   refine ⟨choice.imp id And.left, settled, ?_⟩
-  intro namespaceView root sampled errors retryAt attempts effects pairAt keeperAt
-  have filesAtRetry := (sampledFiles sampled noManifest).afterFailedCalls ready.layout attempts effects
+  intro namespaceView root sampled errors retryAt attempts effects
+  have bootFiles := sampledFiles sampled noManifest
+  have filesAtRetry := bootFiles.afterFailedCalls ready.layout attempts effects
   have missing := (congrArg DirectoryPublication.Bindings.manifest pair).trans noManifest
-  have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
-    (source := source) (view := clientView) («storage» := storage) («visible» := visible) (entry := retryAt)
-    (namespaceView := namespaceView) (root := root) (ready := ready) (missing := missing)
-    (files := filesAtRetry) (pairAt := pairAt) (keeperAt := keeperAt)
-  have replay := @Eq.mp _ _ (congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen clientView
-    next.current.ready.state.session.directory selected.writer.wal.active.first storage visible retryAt namespaceView root writes)
-    (sameHistory.trans history)) (@openedRetry)
-  obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger ledger
-  have pending : PendingClientReplay [.acknowledgedBatch batch] [] batch := by
-    rw [← submitted, ← noReads, ← batchHistory]
-    exact next.current.ready.readPrefix.refines.2.2
-  exact @RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
-    (opened := replay) (pending := pending)
+  constructor
+  · intro pairAt keeperAt
+    have openedRetry := @RawMarkedOpenInterpreter.replaysRetainedWalAtOpen
+      (source := source) (view := clientView) («storage» := storage) («visible» := visible) (entry := retryAt)
+      (namespaceView := namespaceView) (root := root) (ready := ready) (missing := missing)
+      (files := filesAtRetry) (pairAt := pairAt) (keeperAt := keeperAt)
+    have replay := @Eq.mp _ _ (congrArg (fun writes => source.ReplaysWalBeforeCheckpointAtOpen clientView
+      next.current.ready.state.session.directory selected.writer.wal.active.first storage visible retryAt namespaceView root writes)
+      (sameHistory.trans history)) (@openedRetry)
+    obtain ⟨submitted, noReads⟩ := opened.firstBatchLedger ledger
+    have pending : PendingClientReplay [.acknowledgedBatch batch] [] batch := by
+      rw [← submitted, ← noReads, ← batchHistory]
+      exact next.current.ready.readPrefix.refines.2.2
+    exact @RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
+      (opened := replay) (pending := pending)
+  · intro restored rootSettled kept
+    have durable := bootFiles.durabilityAfterRebootRetries (source := source)
+      («storage» := storage) («visible» := visible) (rebooted := rebooted) (entry := retryAt)
+      ready restored rootSettled attempts (fun prior inside returned => kept prior inside returned)
+    exact RawMarkedOpenInterpreter.opensRetainedWalForCalls (source := source) (view := clientView)
+      (entry := retryAt) (namespaceView := namespaceView) (root := root)
+      seen.keeperPhysical.inodes runs storage ready missing filesAtRetry durable
+      (sameHistory.trans next.current.ready.readPrefix.refines.2.1) ledger
 
 /-- The actual first acknowledgement starts the interrupted second
 write. One reboot sample selects its replay and the subsequent lookup
