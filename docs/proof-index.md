@@ -24,6 +24,19 @@ its input bytes and the bytes the opener read from the selected inode. Follow th
 through the [invariant map](proofs/native-storage.md#refinement-boundaries).
 [Reached execution](../lean/Alvoki/Storage/Disk/Proofs/Native/Execution/NativeExecutionPrefix.lean) · [Exact prefix reads](../lean/Alvoki/Storage/Disk/ReadRecoveryPrefix.lean)
 
+Test a reusable boundary by stating the next caller's proof in the vocabulary of its
+contract. The experimental WAL exposes an acknowledged history and at most one outstanding
+batch. Its refinement proof accounts for bytes, syncs and marker slots. Establish separately
+that a healthy retry can succeed from every reachable offline state. A contract that allows
+failed opens could otherwise admit an implementation that always fails to reopen.
+[Client contract](../lean/Alvoki/Experiments/WAL/Contract.lean) · [Trace refinement and healthy reopen](../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean)
+
+When policies share a client contract, demonstrate the extra guarantee on the same storage
+image. Remove a whole published batch while retaining its valid marker. The log ends on a
+valid frame boundary, so log-only recovery accepts the shorter history. The marker lets
+the other opener detect the loss. State which evidence must survive and whether the loss
+is possible under the ordinary crash assumptions. [WAL policy comparison](../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean)
+
 ### Choose an invariant that can be carried forward
 
 Define what has to remain true at a stable boundary and prove how each operation establishes,
