@@ -6,27 +6,49 @@ open System
 @[extern "alvoki_fsync"]
 private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 
-/-- Bind the Linux file operations to the protocol. The staged sync receives
-the exact handle that performed the write and flush. -/
-def nativeFiles (directory : FilePath) (syncStaged : IO.FS.Handle → IO Unit) :
-    Files IO IO.FS.Handle :=
+/-- The Linux adapter's primitive operations. `files` below is shared by
+the IO binding and the filesystem-effect interpreter. -/
+structure Primitives (m : Type → Type) (handle : Type) where
+  openFile : FilePath → IO.FS.Mode → m handle
+  write : handle → ByteArray → m Unit
+  flush : handle → m Unit
+  sync : handle → m Unit
+  rename : FilePath → FilePath → m Unit
+  read : FilePath → m ByteArray
+
+@[inline] def Primitives.files [Monad m] (ops : Primitives m handle) (directory : FilePath)
+    (syncStaged : handle → m Unit) : Files m handle :=
   let active := directory / "BLOB"
   let staged := directory / "BLOB.next"
   {
     writeStaged := fun bytes => do
-      let handle ← IO.FS.Handle.mk staged .write
-      handle.write bytes
-      handle.flush
+      let handle ← ops.openFile staged .write
+      ops.write handle bytes
+      ops.flush handle
       return handle
     syncStaged
-    renameStaged := IO.FS.rename staged active
-    syncDirectory := do syncHandle (← IO.FS.Handle.mk directory .read)
-    readActive := IO.FS.readBinFile active
+    renameStaged := ops.rename staged active
+    syncDirectory := do ops.sync (← ops.openFile directory .read)
+    readActive := ops.read active
   }
+
+@[inline] def Primitives.backend [Monad m] (ops : Primitives m handle) (directory : FilePath) :
+    Backend m ByteArray :=
+  (ops.files directory ops.sync).backend
+
+@[inline] private def linux : Primitives IO IO.FS.Handle :=
+  ⟨IO.FS.Handle.mk, IO.FS.Handle.write, IO.FS.Handle.flush, syncHandle,
+    IO.FS.rename, IO.FS.readBinFile⟩
+
+/-- Test hooks may replace the staged sync. Production binds it to the
+same fsync primitive as the directory sync. -/
+def nativeFiles (directory : FilePath) (syncStaged : IO.FS.Handle → IO Unit) :
+    Files IO IO.FS.Handle :=
+  linux.files directory syncStaged
 
 /-- The directory already exists durably. Its owner reserves BLOB and BLOB.next.
 The active file is initialized by the caller before the first session. -/
 def native (directory : FilePath) : Backend IO ByteArray :=
-  (nativeFiles directory syncHandle).backend
+  linux.backend directory
 
 end DurableBlob

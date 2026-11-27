@@ -23,28 +23,56 @@ distinct regular files without aliases to other files. Missing active data
 or a read error propagates as an error. The staging file can be left behind
 and overwritten by the next publication.
 
-The filesystem must provide exact reads or errors, flushed staged writes,
-file sync durability, atomic same-directory replacement, and directory sync
-durability for visible bindings. Before the directory barrier, power loss
-may select either intact binding. Filesystem errors at sync or rename can
-precede or follow their effects. The model excludes post-sync data loss,
-external modification of the directory or files, and corrupted bytes.
-The native callback mapping depends on the runtime, filesystem and device.
-[Filesystem premises](../../../../docs/proofs/filesystem.md)
+The native backend and the proof interpreter instantiate the same
+`Primitives.backend`. This fixes the paths, modes, descriptor passed to
+each write, flush and fsync, and the order and error handling of the calls.
+The interpreter in [Proofs](Proofs.lean) takes outcomes of those individual
+primitives. `LinuxEffects.reopen` and `LinuxEffects.publish` extend the
+existing `Run` with the exact returned or submitted bytes.
+`Run.refines` yields the public `Allows` trace, while
+`LinuxEffects.reopenSettles` gives the public open step and the settled
+image directly. `Run.healthy_open` shows that a reachable offline image
+can reopen when the read and barrier succeed.
 
-`Run.refines` interprets the same Lean protocol using primitive effects and
-checks arbitrary finite traces of publication, recovery, process exit and
-power loss. `Run.healthy_open` shows that any reachable offline image can
-reopen when its read and barrier succeed. A response lost after a completed
-publication leaves a durable new value, even though the caller must recover
-to learn the outcome. [Proofs](Proofs.lean)
+The Linux interpretation assumes the following primitive effects at the
+reached paths and descriptions:
 
-The focused manifest check also runs a model regression that exposes the new
-binding before the directory barrier, reopens successfully, then simulates
-power loss and reopens again.
+- A successful directory open holds the managed directory. A successful
+  stage open holds the private staging inode, truncated or created.
+  Open errors, partial writes, failed flushes and late finalization of
+  scratch can affect scratch. They preserve the active bytes and binding.
+  Scratch bookkeeping between attempts may be stale. Each publication
+  overwrites it and must complete write and flush before syncing or renaming.
+- A successful read returns the exact bytes of the visible active binding.
+  The read and directory open do not modify that binding. Write followed
+  by successful flush provides the complete staged bytes on the held writer.
+  File fsync persists the bytes through that descriptor. Releasing it
+  after a successful flush and sync preserves the persisted bytes.
+- Rename atomically replaces the visible active binding with the staged
+  inode. Directory fsync on the held directory settles its visible bindings.
+  A failed rename or fsync can have either the before or after effect.
+  Before the barrier, a crash can select either intact binding. The model
+  can retain both choices until a barrier even if writeback has narrowed
+  the physical choices.
+- The runtime and compiler preserve the meanings of these reached calls,
+  including descriptor lifetime and the native fsync wrapper. The filesystem
+  and device preserve synced data under the specified crash model. Recovery
+  may fail on resource or I/O errors. The owner supplies the stable,
+  exclusive namespace described above.
+  [Filesystem premises](../../../../docs/proofs/filesystem.md)
+
+A process stop retains the reached visible binding. A power loss selects a
+surviving binding. An interruption uses the effect at the cut, or the
+completed effect if the final reply was lost. `LinuxEffects.publishUncertain`
+and `LinuxEffects.reopenInterrupted` retain that image without issuing an
+acknowledgement or ready session. `LinuxEffects.reopenAgain` checks that a
+second successful open after stop or power loss returns the first reply.
+The focused manifest check exercises rename and barrier errors in the
+interpreter and uses the native adapter for its Linux fixture.
 
 A future segmented WAL change could reuse this protocol for `CONTROL`.
-First establish that WAL preparation makes any newly referenced segment
+PR #5 retains the original CONTROL writer for sync.
+Before sharing publication code, establish that WAL preparation makes any newly referenced segment
 durable, that recovery settles the selected control before collecting files,
 and that the WAL's directory ownership and initialization satisfy the blob
 premises. The WAL retains its control codec and segment-lifetime rules.
