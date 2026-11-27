@@ -72,17 +72,33 @@ def Source.memory [Monad m] (bytes : ByteArray) : Source m where
 
 structure Table (m : Type → Type) where private mk ::
   rowCount : Nat
-  private indexStart : Nat
-  private source : Source m
+  private readRow : Nat → m Entry
 
-/-- Identifies the layout and source retained by the returned handle. -/
-def Table.BoundTo (table : Table m) (source : Source m) (count indexStart : Nat) : Prop :=
-  table.rowCount = count ∧ table.indexStart = indexStart ∧ table.source = source
+/-- Expose a physical reader through the shared logical operations. The
+    reader is called only at valid row indices. -/
+def Table.ofReader (count : Nat) (readRow : Nat → m Entry) : Table m :=
+  ⟨count, readRow⟩
 
 def liftDecode [Monad m] [MonadExceptOf String m] (result : Except String α) : m α :=
   match result with
   | .ok value => pure value
   | .error error => throw error
+
+/-- Read adjacent offsets together, then check the span before reading the row. -/
+def readVariableEntry [Monad m] [MonadExceptOf String m] (source : Source m)
+    (indexStart index : Nat) : m Entry := do
+  let bytes ← source.readAt (indexStart + 8 * index) 16
+  let (start, stop) ← liftDecode (decodeOffsetPair bytes)
+  unless start < stop ∧ stop ≤ indexStart ∧ stop - start ≤ maxRowSize do
+    throw "invalid SSTable row span"
+  let row ← source.readAt start (stop - start)
+  unless row.size = stop - start do throw "short SSTable row read"
+  liftDecode (decodeEntry row)
+
+/-- Identifies the variable layout and source retained by the returned handle. -/
+def Table.BoundTo [Monad m] [MonadExceptOf String m] (table : Table m) (source : Source m)
+    (count indexStart : Nat) : Prop :=
+  table.rowCount = count ∧ table.readRow = readVariableEntry source indexStart
 
 /-- Admit a footer and the declared directory extent in one positional read. -/
 def openTable [Monad m] [MonadExceptOf String m] (source : Source m) : m (Table m) := do
@@ -92,18 +108,16 @@ def openTable [Monad m] [MonadExceptOf String m] (source : Source m) : m (Table 
   let (count, indexStart) ← liftDecode (decodeFooter bytes)
   unless indexStart + 8 * (count + 1) + footerSize = size do
     throw "invalid SSTable index extent"
-  return ⟨count, indexStart, source⟩
+  return Table.ofReader count (readVariableEntry source indexStart)
 
-/-- Read adjacent offsets together, then check the span before reading the row. -/
 def Table.readEntry [Monad m] [MonadExceptOf String m] (table : Table m) (index : Nat) : m Entry := do
   unless index < table.rowCount do throw "SSTable cursor out of bounds"
-  let bytes ← table.source.readAt (table.indexStart + 8 * index) 16
-  let (start, stop) ← liftDecode (decodeOffsetPair bytes)
-  unless start < stop ∧ stop ≤ table.indexStart ∧ stop - start ≤ maxRowSize do
-    throw "invalid SSTable row span"
-  let row ← table.source.readAt start (stop - start)
-  unless row.size = stop - start do throw "short SSTable row read"
-  liftDecode (decodeEntry row)
+  table.readRow index
+
+theorem Table.ofReader_readEntry [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+    {count index : Nat} (readRow : Nat → m Entry) (within : index < count) :
+    (Table.ofReader count readRow).readEntry index = readRow index := by
+  simp [Table.readEntry, Table.ofReader, within]
 
 def Table.seek [Monad m] [MonadExceptOf String m] (table : Table m) (key : ByteArray) : m Nat :=
   seekBetween table.readEntry key 0 table.rowCount

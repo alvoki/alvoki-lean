@@ -26,13 +26,13 @@ compile() {
 }
 compile Alvoki/Codec/Block native
 compile Alvoki/Codec/WordChecksum native
-for module in Contract Search Core Builder Native NativeTests; do
+for module in Contract Search Core Builder Native FixedFormat FixedBuilder FixedReader FixedNative; do
   compile "$table/$module" native
 done
 compile "$table/Representation"
 compile Alvoki/Kernel/BlockContracts
 compile Alvoki/Codec/ByteWords
-for proof in Search Format Builder Reader ReadErrors Typed; do
+for proof in Search Format Builder Reader ReadErrors Typed FixedFormat FixedBuilder FixedGeometry FixedReader; do
   compile "$table/Proofs/$proof"
 done
 compile Alvoki/Checks/Audit/AxiomPolicy
@@ -42,7 +42,12 @@ import Alvoki.Experiments.SSTable.Proofs.Builder
 import Alvoki.Experiments.SSTable.Proofs.Reader
 import Alvoki.Experiments.SSTable.Proofs.ReadErrors
 import Alvoki.Experiments.SSTable.Proofs.Typed
+import Alvoki.Experiments.SSTable.Proofs.FixedReader
 open ImmutableSSTable
+#check_axioms Fixed.open_built_table
+#check_axioms Fixed.readEntry_source_error
+#check_axioms Fixed.decodeBlock_rejects_checksum
+#check_axioms Fixed.decodeFooter_rejects_checksum
 #check_axioms open_built_table
 #check_axioms TypedTable.represents_of_bytes
 #check_axioms decodeEntry_rejects_checksum
@@ -71,6 +76,11 @@ open ImmutableSSTable
 #check_axioms seekBetween_probes
 LEAN
 lean --run "$table/Tests.lean"
-cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
-  -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-sstable"
-"$out/test-sstable"
+for fixture in NativeTests FixedNativeTests; do
+  entry="$out/$table/$fixture"
+  lean -o "$entry.olean" -c "$entry.c" "$table/$fixture.lean"
+  leanchecker "${table//\//.}.$fixture"
+  cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" "$entry.c" native/sstable.c native/fsync.c \
+    -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-sstable"
+  "$out/test-sstable"
+done

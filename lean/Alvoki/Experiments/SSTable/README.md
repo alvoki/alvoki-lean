@@ -96,6 +96,33 @@ the caller.
   publication and WAL policy. A shared filesystem model is future work.
   [Native adapter](Native.lean)
 
+## Fixed-width experiment
+
+[`Fixed.buildFile` and `Fixed.openNative`](FixedNative.lean) exercise an
+alternative format, `ALVSST04`, for fixed-width keys and values. The caller
+supplies both widths, a rows-per-block limit and a table ID. The writer checks
+each row against the declared widths and buffers one block. Full blocks are
+written immediately and the final block may be shorter. The reader calculates
+block and row positions from the checked footer. There are no offsets, length
+fields or index pages in this fixed-width layout.
+
+Each block stores concatenated key and value bytes followed by an eight-byte
+FNV-1a checksum over a format domain, the table ID, the block ordinal and the
+payload. The 56-byte footer stores the magic, row count, key and value widths,
+rows per block, table ID and its own checksum. Open reads only the footer and
+validates the file extent. A requested row validates its entire block. An
+intact block copied from another ordinal or a table with a different ID fails
+if the checksum differs under the expected context. A whole-file replacement
+requires an expected identity supplied independently of the file.
+
+[`Fixed.open_built_table`](Proofs/FixedReader.lean) establishes the same
+`Table.Represents` relation from a successful modeled build and a stable
+source. The typed refinement applies unchanged. The dedicated native entry
+points leave ALVSST03 as the existing variable-width path. The
+[benchmark](../../../../benchmarks/sstable/README.md) compares the existing
+path with one and 128 rows per block, including a scan that consumes one
+verified block at a time.
+
 ## Roadmap
 
 A minimal LSM can build sorted, unique byte rows, publish the completed file

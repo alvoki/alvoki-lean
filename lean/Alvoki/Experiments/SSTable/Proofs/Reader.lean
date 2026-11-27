@@ -29,14 +29,14 @@ theorem openTable_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
   rw [Nat.sub_add_cancel footerWithin, encodeImage_extract_footer] at footer
   simp only [openTable, observed.size, pure_bind, ite_eq_left (And.intro footerWithin fileFits), footer,
     decodeFooter_encodeFooter countFits startFits, liftDecode, ite_eq_left extent.symm]
-  exact ⟨_, rfl, rfl, rfl, rfl⟩
+  exact ⟨_, rfl, rfl, rfl⟩
 
 theorem Table.readEntry_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {table : Table m} {source : Source m} {rows : List Entry}
     (bound : table.BoundTo source rows.length (encodeRows rows).size)
     (observed : source.Serves (encodeImage rows)) (fits : Fits rows)
     {index : Nat} (within : index < rows.length) : table.readEntry index = pure (getElem rows index within) := by
-  obtain ⟨count, indexStart, retained⟩ := bound
+  obtain ⟨count, retained⟩ := bound
   have extent := encodeImage_size rows
   have offsets := observed.readAt ((encodeRows rows).size + 8 * index) 16 (by unfold maxRowSize; omega)
     (show (encodeRows rows).size + 8 * index + 16 ≤ (encodeImage rows).size by omega)
@@ -57,7 +57,7 @@ theorem Table.readEntry_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String 
     (rowPosition 0 rows (index + 1) - rowPosition 0 rows index) span.2.2
     (by rw [Nat.add_sub_of_le (Nat.le_of_lt span.1), extent]; omega)
   rw [Nat.add_sub_of_le (Nat.le_of_lt span.1), encodeImage_extract_row rows within] at payload
-  simp only [Table.readEntry, count, indexStart, retained, ite_eq_left within, offsets, pure_bind,
+  simp only [Table.readEntry, readVariableEntry, count, retained, ite_eq_left within, offsets, pure_bind,
     decodeImage_offsets rows fits within, liftDecode, ite_eq_left span, payload, ite_eq_left length.symm,
     decodeEntry_encodeEntry _ sizeBound]
 
@@ -167,6 +167,15 @@ theorem Table.lookup_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     have matched : (row.key == key) = true := List.find?_some (p := fun entry : Entry => entry.key == key) found
     exact beq_iff_eq.mp matched
 
+/-- A physical reader that returns every indexed row implements the public
+observations, independently of the storage layout. -/
+theorem Table.represents_of_indexed_reads [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+    {table : Table m} {rows : List Entry} (count : table.rowCount = rows.length)
+    (reads : ∀ i (within : i < rows.length), table.readEntry i = pure rows[i])
+    (ordered : Ordered rows) : table.Represents rows :=
+  ⟨ordered, count, table.lookup_encoded count reads ordered,
+    table.seek_encoded count reads ordered, table.next_encoded count reads⟩
+
 theorem open_built_table [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {source : Source m} {rows : List Entry} {count bytes}
     (built : modelBuild rows = .ok (count, bytes))
@@ -176,7 +185,6 @@ theorem open_built_table [Monad m] [LawfulMonad m] [MonadExceptOf String m]
   rw [image] at observed
   obtain ⟨table, opened, bound⟩ := openTable_encoded fits observed
   have reads := fun (i : Nat) (within : i < rows.length) => table.readEntry_encoded bound observed fits within
-  exact ⟨table, opened, ordered, bound.1, table.lookup_encoded bound.1 reads ordered,
-    table.seek_encoded bound.1 reads ordered, table.next_encoded bound.1 reads⟩
+  exact ⟨table, opened, table.represents_of_indexed_reads bound.1 reads ordered⟩
 
 end ImmutableSSTable

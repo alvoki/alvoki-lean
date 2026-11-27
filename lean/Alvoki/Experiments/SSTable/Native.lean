@@ -49,26 +49,34 @@ private def openScratch : IO IO.FS.Handle := do
 @[extern "alvoki_fsync"]
 private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 
-/-- Build at a fresh path with exclusive name ownership. After flushing the
-complete image, call `syncOutput` on the original write handle, before reporting
-success. The callback must leave the bytes and name unchanged and must not
-retain the handle. -/
-def buildFileWithSync (path : System.FilePath) (nextRow : IO (Option Entry))
+/-- Sync file contents through an already flushed output handle. -/
+def syncFileHandle (handle : IO.FS.Handle) : IO Unit := syncHandle handle
+
+/-- Own a fresh output path through build, flush and sync. The writer must
+flush the complete image before returning. Callbacks must leave the name
+unchanged and must not retain the handle. -/
+def withFreshOutput (path : System.FilePath) (writeImage : IO.FS.Handle → IO Nat)
     (syncOutput : IO.FS.Handle → IO Unit) : IO Nat := do
   let handle ← IO.FS.Handle.mk path .writeNew
   try
-    let scratch ← openScratch
-    let count ← buildStream {
-      writeData := handle.write
-      writeOffset := scratch.write
-      appendOffsets := copyOffsets scratch handle
-      flush := handle.flush
-    } nextRow IO.userError
+    let count ← writeImage handle
     syncOutput handle
     return count
   catch err =>
     try IO.FS.removeFile path catch _ => pure ()
     throw err
+
+/-- Build a variable-width image and sync through the original output handle. -/
+def buildFileWithSync (path : System.FilePath) (nextRow : IO (Option Entry))
+    (syncOutput : IO.FS.Handle → IO Unit) : IO Nat :=
+  withFreshOutput path (fun handle => do
+    let scratch ← openScratch
+    buildStream {
+      writeData := handle.write
+      writeOffset := scratch.write
+      appendOffsets := copyOffsets scratch handle
+      flush := handle.flush
+    } nextRow IO.userError) syncOutput
 
 /-- Build and flush the image. The caller owns publication. -/
 def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
@@ -77,6 +85,6 @@ def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
 /-- Build, flush, then fsync the original write descriptor. The caller owns
 directory syncing and publication. -/
 def buildFileSynced (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat :=
-  buildFileWithSync path nextRow syncHandle
+  buildFileWithSync path nextRow syncFileHandle
 
 end ImmutableSSTable

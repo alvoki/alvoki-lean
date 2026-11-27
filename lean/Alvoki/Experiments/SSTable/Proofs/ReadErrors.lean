@@ -40,16 +40,16 @@ theorem Table.readEntry_index_error {table : Table (EStateM String σ)} {source}
     (bound : table.BoundTo source count indexStart) (within : index < count)
     (failed : source.readAt (indexStart + 8 * index) 16 before = .error message reached) :
     table.readEntry index before = .error message reached := by
-  obtain ⟨rowCount, directory, retained⟩ := bound
-  simp [Table.readEntry, rowCount, within, directory, retained, Bind.bind, EStateM.bind, failed]
+  obtain ⟨rowCount, retained⟩ := bound
+  simp [Table.readEntry, readVariableEntry, rowCount, within, retained, Bind.bind, EStateM.bind, failed]
 
 theorem Table.readEntry_index_decode_error {table : Table (EStateM String σ)} {source}
     (bound : table.BoundTo source count indexStart) (within : index < count)
     (received : source.readAt (indexStart + 8 * index) 16 before = .ok bytes reached)
     (invalid : decodeOffsetPair bytes = .error message) :
     table.readEntry index before = .error message reached := by
-  obtain ⟨rowCount, directory, retained⟩ := bound
-  simp [Table.readEntry, rowCount, within, directory, retained, Bind.bind, EStateM.bind,
+  obtain ⟨rowCount, retained⟩ := bound
+  simp [Table.readEntry, readVariableEntry, rowCount, within, retained, Pure.pure, Bind.bind, EStateM.bind,
     received, invalid, liftDecode]
   rfl
 
@@ -60,9 +60,9 @@ theorem Table.readEntry_source_error {table : Table (EStateM String σ)} {source
     (span : start < stop ∧ stop ≤ indexStart ∧ stop - start ≤ maxRowSize)
     (failed : source.readAt start (stop - start) afterIndex = .error message reached) :
     table.readEntry index before = .error message reached := by
-  obtain ⟨rowCount, directory, retained⟩ := bound
-  simp [Table.readEntry, rowCount, within, directory, retained, Bind.bind, EStateM.bind,
-    received, decoded, liftDecode, Pure.pure, EStateM.pure, span, (show stop ≤ maxRowSize + start by have := span.2.2; omega), failed]
+  obtain ⟨rowCount, retained⟩ := bound
+  simp [Table.readEntry, readVariableEntry, rowCount, within, retained, Pure.pure, EStateM.pure, Bind.bind, EStateM.bind,
+    received, decoded, liftDecode, span, (show stop ≤ maxRowSize + start by have := span.2.2; omega), failed]
 
 theorem Table.readEntry_decode_error {table : Table (EStateM String σ)} {source}
     (bound : table.BoundTo source count indexStart) (within : index < count)
@@ -72,9 +72,9 @@ theorem Table.readEntry_decode_error {table : Table (EStateM String σ)} {source
     (gotRow : source.readAt start (stop - start) afterIndex = .ok bytes reached)
     (size : bytes.size = stop - start) (invalid : decodeEntry bytes = .error message) :
     table.readEntry index before = .error message reached := by
-  obtain ⟨rowCount, directory, retained⟩ := bound
-  simp [Table.readEntry, rowCount, within, directory, retained, Bind.bind, EStateM.bind,
-    gotOffsets, decoded, liftDecode, Pure.pure, EStateM.pure, span, (show stop ≤ maxRowSize + start by have := span.2.2; omega), gotRow, size, invalid]
+  obtain ⟨rowCount, retained⟩ := bound
+  simp [Table.readEntry, readVariableEntry, rowCount, within, retained, Pure.pure, EStateM.pure, Bind.bind, EStateM.bind,
+    gotOffsets, decoded, liftDecode, span, (show stop ≤ maxRowSize + start by have := span.2.2; omega), gotRow, size, invalid]
   rfl
 
 theorem Table.next_read_error {table : Table (EStateM String σ)}
