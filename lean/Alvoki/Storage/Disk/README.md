@@ -10,4 +10,4 @@ For other entry points:
 - [Manifest.lean](Manifest.lean) describes a checkpoint manifest. [CheckpointRead.lean](CheckpointRead.lean) and [IntegrityCheckpointRead.lean](IntegrityCheckpointRead.lean) handle checkpoint reads; [Recovery.lean](Recovery.lean) connects recovered data to the table.
 - [Proofs](Proofs/README.md) groups proof and observation modules by operation. The [native storage invariant map](../../../../docs/proofs/native-storage.md) explains assumptions, proved cases and remaining refinement work.
 
-The supported disk path uses a segmented WAL. The separate [single-file WAL experiment](../../Experiments/WAL/SingleFile.lean) explores recovery policies and is not the `DiskTable` implementation. Run native examples and checks using the [getting-started guide](../../../../docs/getting-started.md).
+The supported disk path uses a segmented WAL. The separate [single-file WAL experiment](../../Experiments/WAL/README.md) explores recovery policies and is not the `DiskTable` implementation. Run native examples and checks using the [getting-started guide](../../../../docs/getting-started.md).

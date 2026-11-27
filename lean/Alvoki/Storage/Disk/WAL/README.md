@@ -24,7 +24,7 @@ After checkpointing, `DiskTable.collectCoveredWal` can remove covered segments. 
 
 ## Experiment and compatibility
 
-The separate [single-file WAL experiment](../../../Experiments/WAL/SingleFile.lean) explores recovery policies and a modeled client contract. It is distinct from the segmented `DiskTable` path; `DiskTable` rejects a flat WAL binding on open. The [design note](../../../../../docs/design/wal-recovery.md) describes the experiment and limits of its proof.
+The separate [single-file WAL experiment](../../../Experiments/WAL/README.md) explores recovery policies and a modeled client contract. It is distinct from the segmented `DiskTable` path; `DiskTable` rejects a flat WAL binding on open. The [design note](../../../../../docs/design/wal-recovery.md) describes the experiment and limits of its proof.
 
 `DiskTable` no longer transitively imports the WAL publication and crash models. Code using those declarations must import [WalSegmentCollection.lean](../Proofs/Collection/WalSegmentCollection.lean) or the relevant model module explicitly. The former `WalSegmentCollection` and `WalSegmentCollectionPlan` module paths remain as compatibility imports.
 
