@@ -21,9 +21,10 @@ latest lookup agrees with that history. For an aligned keeper with no later
 WAL files, the selected checkpoint, marker, listing and WAL read callbacks
 determine the actual prepared replay and measured keeper extent. With the
 reached admission, two syncs and phase and token allocations, this gives
-the exact public return. The selected recovery proof can use this equality
-for subsequent supported writes and snapshots. The successful marked probes
-and reached callback observations remain inputs.
+the exact public return. A latest snapshot lookup on that table uses its
+allocated phase and token, and returns the selected replay's value and
+sequence. The reached callbacks still supply the marked probes, phase
+initialization and preservation, and token comparison for that lookup.
 [Public append and continuation](../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean) ·
 [Literal reader and repair](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean) ·
 [Aligned public open](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean)

@@ -1,6 +1,7 @@
 import Alvoki.Storage.Disk.NativeLongKeeperRepairPrefix
 import Alvoki.Storage.Disk.NativeRawOpenCacheDisposal
 import Alvoki.Storage.Disk.RawHealthyMarkedOpenEffects
+import Alvoki.Storage.Disk.NativeOpenSnapshotControls
 
 namespace Alvoki.Storage.DiskSession
 
@@ -688,11 +689,12 @@ theorem RawOpenAdmissionReport.returnsHealthyMarkedInterpreter
 
 /-- The successful aligned return starts after preparation. Its remaining
 inputs follow the two syncs and allocations on their reached heaps. -/
-abbrev RawOpenAdmissionReport.ReturnsAlignedAfterPreparation
+abbrev RawOpenAdmissionReport.AfterAlignedPreparation
     (source : RawMarkedOpenInterpreter heap stream)
     (raw : RawOpenAdmissionReport admission view source.calls entry)
     (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
-    (prepared : heap) (plan : Plan) (opened : Reopened) : Prop :=
+    (prepared : heap) (plan : Plan) (opened : Reopened)
+    (post : DiskTable → IO.Ref (Phase Installed) → IO.Ref Unit → heap → heap → Prop) : Prop :=
     ∀ {issued authorized loaded consumed repaired afterPhase reached : heap} {keeper : IO.FS.Handle} {entries : List (FilePath × IO.FS.Handle)}
     (_loadRoot : source.keeperCallbacks.getDirectory seed.directoryRef prepared = .ok (some seed.handle) issued)
     (_syncRoot : source.keeperCallbacks.sync seed.handle issued = .ok () authorized)
@@ -706,7 +708,15 @@ abbrev RawOpenAdmissionReport.ReturnsAlignedAfterPreparation
     (_phaseAllocated : source.allocatePhase (.ready opened.installed) repaired = .ok phase afterPhase)
     (_tokenAllocated : source.allocateToken () afterPhase = .ok token reached),
     let cache := RawMarkedOpenInterpreter.makeCache directory seed.directoryRef seed.activeRef seed.pendingRef
-    source.openTable input entry = .ok (RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token) reached
+    post (RawMarkedOpenInterpreter.assemble directory raw.lock cache phase token) phase token afterPhase reached
+
+abbrev RawOpenAdmissionReport.ReturnsAlignedAfterPreparation
+    (source : RawMarkedOpenInterpreter heap stream)
+    (raw : RawOpenAdmissionReport admission view source.calls entry)
+    (seed : OpenSyncCacheAllocations admission.opened view source.init raw.afterFlock)
+    (prepared : heap) (plan : Plan) (opened : Reopened) : Prop :=
+  raw.AfterAlignedPreparation source seed prepared plan opened fun table _ _ _ reached =>
+    source.openTable input entry = .ok table reached
 
 /-- The observed aligned, empty-suffix repair and reference allocations
 determine the public success. Each callback starts at the preceding return
@@ -786,8 +796,21 @@ theorem MarkedWalExtentReports.returnsAlignedMarkedInterpreter
     ∃ opened,
       source.markedPreparation seed.pendingRef directory seed.afterPending =
         .ok (layout.boundedPlan, opened, reads.wal.keeper.calls.metadata.byteSize.toNat) afterKeeper ∧
-      raw.ReturnsAlignedAfterPreparation source seed afterKeeper layout.boundedPlan opened := by
-  obtain ⟨opened, measured, _⟩ := extents.preparesMeasuredWal seals selected valid following accepted ordered _ readKeeper
+      raw.AfterAlignedPreparation source seed afterKeeper layout.boundedPlan opened
+        (fun table phase token afterPhase reached =>
+          source.openTable input entry = .ok table reached ∧
+          ∀ {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+            {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+            (_cells : OpenPhaseCellEffects view.phase get set)
+            (_initialized : view.phase afterPhase phase = some (.ready opened.installed))
+            (_preserved : view.phase reached phase = view.phase afterPhase phase)
+            (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+            (_compares : ∀ {pinned : PackedTable} {after},
+              set phase (.ready { opened.installed with table := pinned }) reached = .ok () after →
+              ptrEq token token after = .ok true after)
+            (key : UInt64), table.LatestWalLookup phase token get set ptrEq reached history key) := by
+  obtain ⟨opened, measured, _, model, refined, represents⟩ :=
+    extents.preparesMeasuredWal seals selected valid following accepted ordered _ readKeeper
   have empty : layout.boundedPlan.newer = [] := noLater
   have checked := layout.boundedPlan_valid (by simp [empty])
   have size : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
@@ -800,7 +823,13 @@ theorem MarkedWalExtentReports.returnsAlignedMarkedInterpreter
       _ = _ := size
   have continues : raw.ReturnsAlignedAfterPreparation source seed afterKeeper layout.boundedPlan opened :=
     raw.returnsAlignedMarkedInterpreter source seed flat marker measured checked size extent empty
-  exact ⟨opened, measured, @continues⟩
+  refine ⟨opened, measured, ?_⟩
+  intro issued authorized loaded consumed repaired afterPhase reached file entries loadRoot syncRoot loadKeeper
+    picked consume syncKeeper phase token phaseAllocated tokenAllocated cache
+  refine ⟨continues loadRoot syncRoot loadKeeper picked consume syncKeeper phaseAllocated tokenAllocated, ?_⟩
+  intro get set cells initialized preserved ptrEq compares key
+  have uses := (RawMarkedOpenInterpreter.assembles directory raw.lock cache).usesReferences phase token
+  exact uses.lookupLatestAfterRepresentedHistory cells (preserved.trans initialized) refined represents ptrEq compares key
 
 /-- After the two marked guards, the literal worker hands the values and heap
 returned by its reader to repair. Errors from preparation, repair and

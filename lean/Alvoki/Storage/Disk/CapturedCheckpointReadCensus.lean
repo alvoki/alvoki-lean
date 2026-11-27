@@ -337,7 +337,8 @@ theorem CapturedMarkedReadReports.preparesFromSelectedWal
       prepareBoundedMarkedFromReaders directory (pure checkpoint) (fun _ => pure (some marker)) readWal before =
         .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) reached ∧
       report.walReads.prepare report.reads.readPrefix (admission.reached, admission.held) =
-        .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) := by
+        .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) ∧
+      ∃ model, opened.table.Refines model ∧ RepresentsWalHistory history model := by
   obtain ⟨watermark, _, canonicalMarker, canonicalLength, bound, canonicalDecoded, count⟩ :=
     DirectoryPublication.Bindings.walRange_accounting layout.decoded
   rw [Option.some.inj (bound.symm.trans markerBound), decoded] at canonicalDecoded
@@ -345,7 +346,8 @@ theorem CapturedMarkedReadReports.preparesFromSelectedWal
   subst canonicalLength
   let sizes := SizedCheckpointRunReports.ofChunkReads (checkpoint := checkpoint) selected report.reads
     report.stat report.chunkReads
-  obtain ⟨opened, reportedCheckpoint, _, projected, exactCheckpoint, reference, generation, bytes, keeper, _⟩ :=
+  obtain ⟨opened, reportedCheckpoint, model, projected, exactCheckpoint, reference, generation, bytes, keeper,
+    _, _, refined, represents, _⟩ :=
     report.walReads.prepares (admission.reached, admission.held) laterValid following accepted ordered
       sizes (report.metadata.manifestRead layout.decoded) (report.metadata.markerRead layout.decoded)
   have checkpointSame := exactCheckpoint.uniqueResult selected
@@ -373,7 +375,7 @@ theorem CapturedMarkedReadReports.preparesFromSelectedWal
   have extent : report.wal.keeper.calls.metadata.byteSize.toNat = layout.plan.keeperBytes.size :=
     report.wal.keeper.observesFile.extent
   dsimp only [files] at tableSeen lastFile
-  refine ⟨opened, ?_, projected⟩
+  refine ⟨opened, ?_, projected, model, refined, represents⟩
   simp only [prepareBoundedMarkedFromReaders, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, lengthSeen, seen,
     extent, tableSeen, lastFile, exactOpened, through]
   rfl
@@ -431,9 +433,19 @@ theorem CapturedMarkedReadReports.preparesFromCensus (report : CapturedMarkedRea
     exact Nat.le_add_right ..
   have keeperReturned := readCachedWalPayloads_keeperSuccess directory (length.toNat / WAL.frameSize)
     (readTemporarySeal report.reads released) readKeeper size covers keeperRead
-  rw [entered]
-  apply report.preparesFromSelectedWal selected marker.bound decoded following laterValid accepted ordered
-  simp only [Bind.bind, EStateM.bind, keeperReturned, Pure.pure, EStateM.pure]
+  let readWal (_ : Nat) (_ : UInt64) : EStateM IO.Error ReadState (WalSegmentMarkerReads × Nat) := do
+    let (last, extent) ← readCachedWalPayloads directory (length.toNat / WAL.frameSize)
+      (readTemporarySeal report.reads released) readKeeper [(layout.keeper.first, report.wal.keeper.calls.metadata)]
+    pure (⟨layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++ last, retry.image.later.visible⟩, extent)
+  have observed : readWal (checkpoint.getD (.empty, 0)).1.committed.toNat length
+      (admission.cache, captured.atOpen, admission.held) =
+      .ok (⟨layout.sealed.map (fun segment => (segment.first, segment.bytes)) ++
+        [(layout.keeper.first, layout.keeper.bytes)], retry.image.later.visible⟩,
+        report.wal.keeper.calls.metadata.byteSize.toNat) (keeperCache, keeperCensus, admission.held) := by
+    simp only [readWal, Bind.bind, EStateM.bind, keeperReturned, Pure.pure, EStateM.pure]
+  obtain ⟨opened, returned, projected, _⟩ :=
+    report.preparesFromSelectedWal selected marker.bound decoded following laterValid accepted ordered readWal observed
+  exact ⟨opened, entered.trans returned, projected⟩
 
 /-- Chronological reports from admitted checkpoint metadata to the
 exact keeper entry, shared by the aligned and longer-keeper branches. -/

@@ -49,7 +49,8 @@ theorem MarkedWalExtentReports.preparesMeasuredWal
           (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal readKeeper) seed.afterPending =
         .ok (layout.boundedPlan, opened, reads.wal.keeper.calls.metadata.byteSize.toNat) afterKeeper ∧
       reads.walReads.prepare reads.reads.readPrefix (admission.reached, admission.held) =
-        .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) := by
+        .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) ∧
+      ∃ model, opened.table.Refines model ∧ RepresentsWalHistory history model := by
   let readWal := fun watermark length =>
     readSelectedWithCachedExtents directory watermark length directoryCalls.run
       (MarkedWalExtentReports.inspect fileCalls) fileCalls.seal readKeeper
@@ -72,10 +73,10 @@ theorem MarkedWalExtentReports.preparesMeasuredWal
     unfold readWal
     rw [reachedKeeper]
     simp only [Bind.bind, EStateM.bind, finishKeeper, Pure.pure, EStateM.pure]
-  obtain ⟨opened, actual, projected⟩ :=
+  obtain ⟨opened, actual, projected, model⟩ :=
     reads.preparesFromSelectedWal selected chronology.marker.bound decoded following valid.newer accepted ordered readWal wal
   obtain ⟨_, _, _, _, _, _, _, atScan⟩ := prepared.reachesScan selected readWal
-  exact ⟨opened, atScan.trans (extent ▸ actual), projected⟩
+  exact ⟨opened, atScan.trans (extent ▸ actual), projected, model⟩
 
 /-- Run the guarded marked worker on the opened cache. The keeper
 callback and the chosen repair start at their actual reached heaps.
@@ -119,7 +120,7 @@ theorem MarkedWalExtentReports.recoversFromOpenedCacheWith
           | .error cause ended => .error cause ended) ∧
       reads.walReads.prepare reads.reads.readPrefix (admission.reached, admission.held) =
         .ok (layout.boundedPlan, opened, layout.plan.keeperBytes.size) (admission.reached, admission.held) := by
-  obtain ⟨opened, actual, projected⟩ := extents.preparesMeasuredWal seals selected valid following accepted ordered
+  obtain ⟨opened, actual, projected, _⟩ := extents.preparesMeasuredWal seals selected valid following accepted ordered
     readKeeper keeperRead
   refine ⟨opened, ?_, projected⟩
   simp only [recoverSegmentedWalWith, rejectFlatWalWith, Bind.bind, EStateM.bind, flat, marker,
