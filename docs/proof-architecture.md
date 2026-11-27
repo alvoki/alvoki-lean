@@ -7,6 +7,25 @@ induction over the actual source schedules and their admitted primitive outcomes
 the state it reaches, including failed opens and interruptions, so that later steps can compose
 without a separate proof for each sequence. [Target execution argument](proofs/native-storage.md#target-execution-argument)
 
+## The correctness argument in plain language
+
+The intended guarantee is a single legal client history across writes, failures and later opens.
+The argument connects five questions:
+
+1. **Filesystem effects:** Which bytes and directory entries may survive the operations and a crash?
+2. **Storage selection:** Which checkpoint and WAL prefix does a given surviving image select?
+3. **Logical history:** Which ordered writes does replay of those selected bytes represent?
+4. **Returned session:** Does the table returned by a successful open represent that replay?
+5. **Client observations:** Does one history retain acknowledged batches and explain the snapshot reads already returned?
+
+For example, in the [worked example](proofs/native-storage.md#worked-example), a second batch
+is interrupted after an earlier batch was acknowledged. An admitted crash image can select the
+earlier history or include the whole interrupted batch. The example follows a particular covered stop
+through a successful reopen and its lookup. The general source-to-history argument is not yet
+complete: existing results are conditional on the stated filesystem effects, observations and
+coverage of the path being composed. The tables and diagrams below distinguish those results
+from the remaining obligation.
+
 ## Three views of the engine
 
 | View | Question it answers | Start here |

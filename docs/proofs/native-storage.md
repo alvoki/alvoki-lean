@@ -6,6 +6,51 @@ The [active checklist](../proof-roadmap.md#completion-checklist-for-native-key-v
 tracks missing production paths. See the [storage design](../architecture.md#sequential-storage)
 for the executable protocol.
 
+## Worked example
+
+Imagine batch A has been acknowledged. A following batch B contains two writes, but the
+process stops before the caller receives its result. After a crash, an allowed storage image
+may lead recovery to A alone or to A followed by all of B. A partial B would violate the
+batch-history contract. On the covered path below, a successful reopen returns a table whose
+latest lookup agrees with the history selected by that image.
+
+```mermaid
+flowchart LR
+    A["Batch A acknowledged"] --> B["Batch B: two writes; no response"]
+    B --> C["Stop at marker publication; crash"]
+    C --> D["Admitted image selects A"]
+    C --> E["Admitted image selects A + all of B"]
+    D --> R["Successful reopen and lookup agree with replay"]
+    E --> R
+```
+
+This is one verified route, not a claim that every possible interruption is already connected
+end to end. It relies on the modeled file and directory effects, one allowed joint crash image,
+observed successful open and the stated phase and token behavior. A sync or rename error may
+have taken effect; the proof uses the observed effects rather than inferring them from the error.
+The [premise provenance](#premise-provenance) and [recovery assessment](#recovery-and-retry)
+make those assumptions and coverage explicit.
+
+### Evidence for this route
+
+In the covered execution, a fresh table acknowledges one row in A and B adds two rows.
+The stop is at the final directory fsync while publishing the WAL marker:
+
+1. The first acknowledgement gives the original sequence, ready phase and stored WAL. Given
+   the observed name frames and a horizon covering both batches, it supplies the bounded WAL
+   window to the next call on that same handle. [First acknowledgement with a WAL window][fresh-trace]
+2. `RawSyncCalls.reachesRootFsyncStop` derives the successful append, staging, file-sync group,
+   rename and cache read from the literal public write-stop. The cache read gives the issued
+   fsync handle. The file effects and the sampled reboot map give the surviving marker and
+   keeper on one physical selection. The recovered history is the first row or all three rows.
+   No response is added for the second batch. The ledger records one uncertain submission.
+   [Source stop and sampled selection][write-stop]
+3. `Returned.readsAfterInterruptedSecondBatch` connects that selected history to a successful
+   marked open on the sampled files. Its latest lookup uses the returned table's phase and token,
+   at sequence 1 or 3 according to the chosen replay. A key first written by the second batch is
+   visible only in the three-row history. The theorem uses the local file and reference effects,
+   one reboot sample, and the observed successful open. [Fresh two-write proof][fresh-trace] · [Literal lookup and replay][authority]
+
 ## Refinement boundaries
 
 Read the table from top to bottom. At each handoff, the output describes the same reached heap,
@@ -88,27 +133,6 @@ primitive reports for the concluding attempt. The read, decoder and maintenance 
 specified callbacks, work or named payload under their own premises. Descriptor exhaustion,
 allocated space and completion across every reachable failure are still open.
 [Conditional recovery][progress] · [Selected read work][read-work] · [Named maintenance budget][budget] · [Detailed bounds](filesystem.md)
-
-## Worked example
-
-Suppose a fresh table acknowledges a one-row batch. A second batch writes two more rows and
-execution stops while publishing its WAL marker, at the final directory fsync. The first batch,
-the unanswered request and the rebooted table are linked as follows.
-
-1. The first acknowledgement gives the original sequence, ready phase and stored WAL. Given
-   the observed name frames and a horizon covering both batches, it supplies the bounded WAL
-   window to the next call on that same handle. [First acknowledgement with a WAL window][fresh-trace]
-2. `RawSyncCalls.reachesRootFsyncStop` derives the successful append, staging, file-sync group,
-   rename and cache read from the literal public write-stop. The cache read gives the issued
-   fsync handle. The file effects and the sampled reboot map give the surviving marker and
-   keeper on one physical selection. The recovered history is the first row or all three rows.
-   No response is added for the second batch. The ledger records one uncertain submission.
-   [Source stop and sampled selection][write-stop]
-3. `Returned.readsAfterInterruptedSecondBatch` connects that selected history to a successful
-   marked open on the sampled files. Its latest lookup uses the returned table's phase and token,
-   at sequence 1 or 3 according to the chosen replay. A key first written by the second batch is
-   visible only in the three-row history. The theorem uses the local file and reference effects,
-   one reboot sample, and the observed successful open. [Fresh two-write proof][fresh-trace] · [Literal lookup and replay][authority]
 
 ## Premise provenance
 
