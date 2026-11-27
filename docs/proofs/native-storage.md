@@ -47,8 +47,8 @@ The stop is at the final directory fsync while publishing the WAL marker:
    [Source stop and sampled selection][write-stop]
 3. `Returned.readsAfterInterruptedSecondBatch` connects that selected history to a successful
    marked open on the sampled files. Its latest lookup uses the returned table's phase and token,
-   at sequence 1 or 3 according to the chosen replay. A key first written by the second batch is
-   visible only in the three-row history. The theorem uses the local file and reference effects,
+   at sequence 1 or 3 according to the chosen replay. When B is retained, its overwrites and
+   deletes contribute in order to the replayed lookup result. The theorem uses the local file and reference effects,
    one reboot sample, and the observed successful open. [Fresh two-write proof][fresh-trace] · [Literal lookup and replay][authority]
 
 ## Refinement boundaries
