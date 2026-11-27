@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.IntegrityCheckpointRead
-import Alvoki.Storage.Disk.WalSegmentReadIO
-import Alvoki.Storage.Disk.WalSegmentReplay
+import Alvoki.Storage.Disk.WAL.WalSegmentReadIO
+import Alvoki.Storage.Disk.WAL.WalSegmentReplay
 import Alvoki.Storage.Disk.WalSegmentRepairIO
 
 namespace Alvoki.Storage.WalSegmentRepair

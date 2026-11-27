@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.VersionedCheckpointRetry
-import Alvoki.Storage.Disk.WalSegmentReadPlan
+import Alvoki.Storage.Disk.WAL.WalSegmentReadPlan
 
 namespace Alvoki.Storage.CheckpointPublication
 

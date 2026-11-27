@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentBoundedOpen
+import Alvoki.Storage.Disk.WAL.WalSegmentBoundedOpen
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunChunkReports
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedRetryCompletion
 import Alvoki.Storage.Disk.Proofs.Native.Recovery.NativeFileEffectProjection

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentBoundedOpen
+import Alvoki.Storage.Disk.WAL.WalSegmentBoundedOpen
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentReplayStability
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRetryReadEffects
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WAL.CollectionRange
-import Alvoki.Storage.Disk.WalSegmentReadIO
+import Alvoki.Storage.Disk.WAL.WalSegmentReadIO
 import Alvoki.Storage.Disk.RunFileSelection
 
 namespace Alvoki.Storage

@@ -198,7 +198,7 @@ import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentPathIdentity
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRecovery
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation
 import Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotationCommit
-import Alvoki.Storage.Disk.WalSegmentReadPlan
+import Alvoki.Storage.Disk.WAL.WalSegmentReadPlan
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentMarkerRead
 import Alvoki.Storage.Disk.WalSegmentRepairOpen
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentReopenEffects
@@ -230,7 +230,7 @@ import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointPublication
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCheckpointRetryLayout
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentSerialReplay
 import Alvoki.Storage.Disk.Proofs.WAL.WalReplayWork
-import Alvoki.Storage.Disk.WalSegmentReplay
+import Alvoki.Storage.Disk.WAL.WalSegmentReplay
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointCutSession
 import Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointSuccessSession
 import Alvoki.Storage.Disk.Proofs.Recovery.SegmentedCheckpointStep

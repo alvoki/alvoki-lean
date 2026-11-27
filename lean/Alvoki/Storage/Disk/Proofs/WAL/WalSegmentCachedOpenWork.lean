@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
+import Alvoki.Storage.Disk.WAL.WalSegmentCachedExtentOpen
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRecoveryWork
 import Alvoki.Storage.Disk.ReadRecoveryPrefix
 

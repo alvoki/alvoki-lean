@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.StagingFile
-import Alvoki.Storage.Disk.WalSegmentReadIO
+import Alvoki.Storage.Disk.WAL.WalSegmentReadIO
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.WalSegmentRepairIO
 import Alvoki.Storage.Disk.WalSegmentRepairOpen

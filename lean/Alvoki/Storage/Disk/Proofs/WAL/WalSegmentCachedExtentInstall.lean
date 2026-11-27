@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentCachedExtentOpen
+import Alvoki.Storage.Disk.WAL.WalSegmentCachedExtentOpen
 
 namespace Alvoki.Storage.WalSegmentRepair
 

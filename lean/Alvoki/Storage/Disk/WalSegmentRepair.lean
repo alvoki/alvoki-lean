@@ -1,6 +1,6 @@
-import Alvoki.Storage.Disk.WalSegmentReplay
+import Alvoki.Storage.Disk.WAL.WalSegmentReplay
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentPathIdentity
-import Alvoki.Storage.Disk.WalSegmentReadPlan
+import Alvoki.Storage.Disk.WAL.WalSegmentReadPlan
 
 namespace Alvoki.Storage
 

@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.WAL.RetainedWalBoundary
-import Alvoki.Storage.Disk.WalSegmentReplay
+import Alvoki.Storage.Disk.WAL.WalSegmentReplay
 
 namespace Alvoki.Storage
 

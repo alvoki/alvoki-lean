@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentReplay
+import Alvoki.Storage.Disk.WAL.WalSegmentReplay
 
 namespace Alvoki.Storage
 

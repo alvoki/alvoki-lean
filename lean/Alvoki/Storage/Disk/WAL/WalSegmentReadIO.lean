@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentFileName
+import Alvoki.Storage.Disk.WAL.WalSegmentFileName
 import Alvoki.Storage.Disk.WriteAheadLog
 
 namespace Alvoki.Storage

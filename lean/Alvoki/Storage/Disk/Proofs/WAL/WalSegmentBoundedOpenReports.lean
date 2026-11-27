@@ -1,5 +1,5 @@
-import Alvoki.Storage.Disk.WalSegmentBoundedOpen
-import Alvoki.Storage.Disk.WalSegmentReadPlan
+import Alvoki.Storage.Disk.WAL.WalSegmentBoundedOpen
+import Alvoki.Storage.Disk.WAL.WalSegmentReadPlan
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRetryReads
 
 namespace Alvoki.Storage.WalSegmentRepair

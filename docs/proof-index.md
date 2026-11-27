@@ -52,7 +52,7 @@ use the same marker guard. Its failure leaves the entry state intact. On success
 the reader receives the exact cutoff in frames. A proof about I/O costs can
 then start at the directory listing, and a proof about a rejected marker can
 stop before it. Preserve callback order and compare the native release path
-when extracting a helper. [WAL cutoff and its contract](../lean/Alvoki/Storage/Disk/WalSegmentReadIO.lean#L93)
+when extracting a helper. [WAL cutoff and its contract](../lean/Alvoki/Storage/Disk/WAL/WalSegmentReadIO.lean#L93)
 
 ### Review the proof boundary
 
