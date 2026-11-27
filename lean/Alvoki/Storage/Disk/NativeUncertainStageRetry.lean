@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeUncertainRebootStageError
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeUncertainRebootStageError
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 
 namespace Alvoki.Storage.DiskSession

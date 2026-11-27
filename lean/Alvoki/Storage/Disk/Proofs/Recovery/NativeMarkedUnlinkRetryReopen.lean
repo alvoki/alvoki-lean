@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstUnlinkError
-import Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedBarrierRetryReopen
 
 namespace Alvoki.Storage.DiskSession
 

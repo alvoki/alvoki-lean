@@ -693,12 +693,12 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.MetadataRecoveryChunkWo
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstBarrierWork
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstBarrierRetries
-lake env leanchecker Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedBarrierRetryReopen
 lake env leanchecker Alvoki.Storage.Disk.NativeCloseMarkedBarrierReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedFirstUnlinkError
-lake env leanchecker Alvoki.Storage.Disk.NativeMarkedUnlinkRetryReopen
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedUnlinkRetryReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedLongStageCreateError
-lake env leanchecker Alvoki.Storage.Disk.NativeUncertainRebootStageError
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeUncertainRebootStageError
 lake env leanchecker Alvoki.Storage.Disk.NativeUncertainStageRetry
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeRejectedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedListingWork
