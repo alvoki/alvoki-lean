@@ -37,16 +37,21 @@ compile_proof Alvoki/Codec/WordChecksum
 compile_proof Alvoki/Codec/ByteWords
 compile_proof "$table/Representation"
 for module in Reader Search Typed UnifiedMetadata UnifiedData UnifiedImage UnifiedSearch \
-    UnifiedGroups UnifiedReads UnifiedOpen UnifiedBuilder UnifiedEndToEnd; do
+    UnifiedGroups UnifiedReads UnifiedOpen UnifiedBuilder UnifiedEndToEnd UnifiedNativeReader; do
   compile_proof "$table/Proofs/$module"
 done
 compile_proof Alvoki/Checks/Audit/AxiomPolicy
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
-import Alvoki.Experiments.SSTable.Proofs.UnifiedEndToEnd
+import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeReader
 import Alvoki.Experiments.SSTable.Proofs.Typed
 open ImmutableSSTable
 #check_axioms Unified.open_built_table
+#check_axioms Unified.openCheckedWith_built_table_at
+#check_axioms ReadSnapshot.readsExactly
+#check_axioms Unified.openCheckedWith_acquire_error
+#check_axioms Unified.openCheckedWith_size_error
+#check_axioms ReadPrimitives.source_pread_error
 #check_axioms Unified.Handle.lookup_leaf_error
 #check_axioms TypedTable.represents_of_bytes
 LEAN
