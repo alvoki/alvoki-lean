@@ -149,7 +149,7 @@ The Linux effect on the surviving directory bindings is a separate premise at th
 Selection then uses the published run custody and bytes from one allowed crash image.
 [Source stop and recovery](../../lean/Alvoki/Storage/Disk/Proofs/Native/Checkpoint/NativeFreshFinalCheckpoint.lean)
 Proofs cover the reported cut families. Derivation from all reached raw schedules and interrupted
-manifest preparation branches remains open. [Checkpoint protocol](../../lean/Alvoki/Storage/Publication/CheckpointPublicationModel.lean) · [Final directory cut](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/CheckpointManifestDirectoryCut.lean) · [Manifest rename and selected read](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointManifestRenameReboot.lean)
+manifest preparation branches remains open. [Checkpoint protocol](../../lean/Alvoki/Storage/Proofs/Publication/CheckpointPublicationModel.lean) · [Final directory cut](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/CheckpointManifestDirectoryCut.lean) · [Manifest rename and selected read](../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointManifestRenameReboot.lean)
 
 ### Recovery and retry
 

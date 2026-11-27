@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Checkpoint.NativeCheckpointRunCollection
-import Alvoki.Storage.Table.RunRetentionPass
+import Alvoki.Storage.Proofs.Table.RunRetentionPass
 
 namespace Alvoki.Storage.DiskSession
 

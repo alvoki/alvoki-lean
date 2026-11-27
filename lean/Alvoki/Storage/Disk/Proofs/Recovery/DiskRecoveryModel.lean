@@ -1,7 +1,7 @@
 import Alvoki.Storage.Disk.DiskTable
 import Alvoki.Storage.Disk.LegacyCheckpointRead
 import Alvoki.Storage.Disk.MarkedWalReopenModel
-import Alvoki.Storage.Publication.CheckpointPublicationModel
+import Alvoki.Storage.Proofs.Publication.CheckpointPublicationModel
 
 namespace Alvoki.Storage
 open Alvoki.Compaction (CheckedRun)

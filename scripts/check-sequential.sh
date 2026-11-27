@@ -497,7 +497,7 @@ lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLo
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionLiveReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.SegmentedCollectionCachedReopen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.SegmentedRunRetentionReopen
-lake env leanchecker Alvoki.Storage.Table.RunRetentionPass
+lake env leanchecker Alvoki.Storage.Proofs.Table.RunRetentionPass
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.RunRetentionCheckpoint
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.RunRetentionCollection
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Session.NamedMaintenanceBudget
@@ -812,7 +812,7 @@ lake env leanchecker Alvoki.Storage.Disk.WalWritePublicationModel
 lake env leanchecker Alvoki.Storage.Disk.MarkedWalReopenModel
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.ReplacedWalDescriptor
 lake env leanchecker Alvoki.Storage.Publication.CheckpointPublication
-lake env leanchecker Alvoki.Storage.Publication.CheckpointPublicationModel
+lake env leanchecker Alvoki.Storage.Proofs.Publication.CheckpointPublicationModel
 lake env leanchecker Alvoki.Storage.Publication.DirectoryPublicationModel
 lake env lean --run Alvoki/Checks/SequentialChecks.lean
 lake env lean --run Alvoki/Checks/PackedTableChecks.lean

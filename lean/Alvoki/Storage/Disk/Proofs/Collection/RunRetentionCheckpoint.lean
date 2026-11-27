@@ -1,4 +1,4 @@
-import Alvoki.Storage.Table.RunRetentionPass
+import Alvoki.Storage.Proofs.Table.RunRetentionPass
 import Alvoki.Storage.Disk.Proofs.Write.SegmentedWriterTrace
 
 namespace Alvoki.Storage.DiskSession

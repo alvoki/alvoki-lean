@@ -665,7 +665,7 @@ import Alvoki.Storage.Publication.DiskPublicationModel
 import Alvoki.Storage.Disk.WalBoundaryModel
 import Alvoki.Storage.Disk.MarkedWalReopenModel
 import Alvoki.Storage.Disk.Proofs.WAL.ReplacedWalDescriptor
-import Alvoki.Storage.Publication.CheckpointPublicationModel
+import Alvoki.Storage.Proofs.Publication.CheckpointPublicationModel
 import Alvoki.Storage.Publication.DirectoryPublicationModel
 
 #check_axioms Alvoki.Sequential.SnapshotPins.floor_check_cost
