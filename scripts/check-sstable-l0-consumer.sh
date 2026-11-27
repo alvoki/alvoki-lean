@@ -52,14 +52,11 @@ path.write_text(schedule)
 PY
 
 cd "$scratch/lean"
-bash "$repo/benchmarks/sstable/build-crc32c.sh" "$scratch/ffi" "$(lean --print-prefix)"
 cat >> lakefile.lean <<'LEAN'
 
-target l0ConsumerCRC pkg : FilePath := inputBinFile (pkg.dir / ".." / "ffi" / "libalvoki_crc32c.a")
 
 lean_lib L0ConsumerCheck where
   globs := #[`Alvoki.Experiments.L0.+]
-  moreLinkObjs := #[l0ConsumerCRC]
 
 lean_exe l0ConsumerCheck where
   root := `Alvoki.Experiments.L0.SSTableConsumerCheck

@@ -11,7 +11,7 @@ prefix=$(lean --print-prefix)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 export LEAN_PATH="$out"
-bash "$repo/benchmarks/sstable/build-crc32c.sh" "$out" "$prefix"
+lake build crc32cArchive
 table=Alvoki/Experiments/SSTable
 sources=()
 compile() {
@@ -22,6 +22,7 @@ compile() {
   sources+=("$out/$module.c")
 }
 compile Alvoki/Codec/Block
+compile Alvoki/Codec/CRC32C
 for module in Contract Search Core Native \
     UnifiedFormat UnifiedIntegrity UnifiedNativeIntegrity UnifiedBuilder UnifiedReader UnifiedNative UnifiedFixtures; do
   compile "$table/$module"
@@ -93,6 +94,6 @@ open ImmutableSSTable
 #check_axioms TypedTable.represents_of_bytes
 LEAN
 cc -O2 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
-  "$out/libalvoki_crc32c.a" -lstdc++ -L"$prefix/lib/lean" \
+  ".lake/build/native/libalvoki_crc32c.a" -lstdc++ -L"$prefix/lib/lean" \
   -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-unified-sstable"
 "$out/test-unified-sstable" "$@"

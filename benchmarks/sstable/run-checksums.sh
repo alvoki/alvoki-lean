@@ -4,11 +4,6 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
-if [[ -n ${CRC32C_DIR:-} ]]; then
-  CRC32C_DIR=$(cd "$CRC32C_DIR" && pwd)
-  export CRC32C_DIR
-fi
-
 cd "$root/lean"
 if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
   export ELAN_HOME="$(cd "${ALVOKI_TOOLCHAINS:-../../work/toolchains}/elan" && pwd)"
@@ -17,7 +12,7 @@ fi
 export LC_ALL=C LEAN_PATH="$out"
 prefix=$(lean --print-prefix)
 lean_bin="$prefix/bin/lean"
-bash "$root/benchmarks/sstable/build-crc32c.sh" "$out" "$prefix"
+lake build crc32cArchive
 sources=()
 compile() {
   local module=$1
@@ -26,13 +21,14 @@ compile() {
   sources+=("$out/$module.c")
 }
 compile Alvoki/Codec/Block
+compile Alvoki/Codec/CRC32C
 table=Alvoki/Experiments/SSTable
 for module in Contract Search Core UnifiedIntegrity UnifiedNativeIntegrity; do
   compile "$table/$module"
 done
 "$lean_bin" --root="$root" -c "$out/checksums.c" "$root/benchmarks/sstable/Checksums.lean"
 cc -O3 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" "$out/checksums.c" \
-  "$out/libalvoki_crc32c.a" -lstdc++ \
+  ".lake/build/native/libalvoki_crc32c.a" -lstdc++ \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/checksums"
 affinity=$(taskset -pc "$$")
 affinity=${affinity##*: }

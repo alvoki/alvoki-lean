@@ -69,13 +69,13 @@ tables separately.
 ## Verification and status
 
 Run `bash scripts/check-immutable-sstable.sh` with the pinned Lean toolchain,
-GCC and G++ on Linux x86-64. The runner also runs in the standard reproduction suite. It builds Google CRC32C 1.1.2 from
-pinned source using upstream's SSE4.2 dispatch and portable fallback. It can
-use an already checked-out copy via `CRC32C_DIR`. The shell runner links the native CRC32C library. Lake builds the Lean modules, and a separate native executable using `UnifiedNative` must link the CRC32C library too.
+GCC and G++ on Linux x86-64. This is part of the standard reproduction suite.
+The [shared CRC32C library](../../Codec/README.md#crc32c) supplies the pinned
+Google archive to Lake-native consumers and to the focused check.
 [Lean Google CRC32C benchmark](../../../../benchmarks/sstable/checksums.md) ·
 [End-to-end lookup benchmark](../../../../benchmarks/sstable/unified.md)
 
-The [portable checksum definition](UnifiedIntegrity.lean) fixes the
+The [portable checksum definition](../../Codec/CRC32C.lean) fixes the
 incremental CRC32C convention. The [native binding](UnifiedNativeIntegrity.lean)
 borrows the existing Lean byte array and calls the upstream implementation.
 Agreement of the native library with the logical definition is an explicit
