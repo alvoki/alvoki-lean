@@ -1,3 +1,4 @@
+import Alvoki.Codec.WordChecksum
 import Alvoki.Kernel.BlockContracts
 
 namespace Alvoki.ByteWords
@@ -121,11 +122,5 @@ theorem encodeSixWords (bytes : ByteArray) (size : bytes.size = 48) :
   intro k bound
   have lane : k = 0 ∨ k = 1 ∨ k = 2 ∨ k = 3 ∨ k = 4 ∨ k = 5 := by omega
   rcases lane with rfl | rfl | rfl | rfl | rfl | rfl <;> rw [word_encodeWords] <;> first | rfl | simp
-
-/-- FNV-1a over the little-endian encoding of consecutive words. -/
-def checksumWords (words : List UInt64) : UInt64 :=
-  words.foldl (fun hash field =>
-    (List.range 8).foldl (fun state lane =>
-      (state ^^^ (splitByte field lane).toUInt64) * 1099511628211) hash) 14695981039346656037
 
 end Alvoki.ByteWords
