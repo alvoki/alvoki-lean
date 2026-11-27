@@ -204,19 +204,27 @@ def OpenGuarantee (policy : Policy) (known : List Bytes) (pending : Option Bytes
       ready.phase = .active ready.lock (appendFiles ready.writer ready.reader ready.markers) ready.recovered.cursor ready.recovered.batches
     | .ok (.error _) after | .error _ after => after.held = false
 
+private def workerProvenance (policy : Policy) (r : OpenReports) (image : Image)
+    (result : OpenResult (Opened OpenTarget (AppendFiles OpenTarget))) : Prop :=
+  let worker := (recoverScheduled r.worker r.writebacks policy).run image
+  ((postState result).image = image ∨ (postState result).image = reached worker) ∧
+    match result with
+    | .ok (.ok ready) _ => acknowledged worker = some ready.recovered
+    | _ => True
+
 private theorem install_result (dir : FilePath) (r : OpenReports) (s : OpenImage)
     (held : s.held = true) (prior : Dirty policy known pending s.image)
     (markers : policy = .logOnly → s.image.MarkersSettled) :
     let result := (installWith (openEffects policy r) (workerEffect r) appendFiles dir .lock).run s
-    OpenGuarantee policy known pending
-      (match result with
+    let released := match result with
        | .ok (.ok ready) after => .ok (.ok ready) after
        | .ok (.error err) after => .ok (.error err) {after with held := false}
-       | .error token after => .error token {after with held := false}) := by
+       | .error token after => .error token {after with held := false}
+    OpenGuarantee policy known pending released ∧ workerProvenance policy r s.image released := by
   obtain ⟨abort, files⟩ := openFiles_result dir policy r s
-  simp only [installWith, runBind, files]
+  simp only [installWith, runBind, files, workerProvenance]
   cases abort with
-  | some abort => cases abort <;> exact ⟨prior, markers, rfl⟩
+  | some abort => cases abort <;> exact ⟨⟨prior, markers, rfl⟩, Or.inl rfl, trivial⟩
   | none =>
     have physical : policy = .boundary ∨ s.image.MarkersSettled := by
       cases policy with
@@ -235,10 +243,10 @@ private theorem install_result (dir : FilePath) (r : OpenReports) (s : OpenImage
     generalize (recoverScheduled r.worker r.writebacks policy).run s.image = work at facts ⊢
     cases work with
     | error token image =>
-      exact ⟨facts.1, fun p => facts.2.1 (markers p), rfl⟩
+      exact ⟨⟨facts.1, fun p => facts.2.1 (markers p), rfl⟩, Or.inr rfl, trivial⟩
     | ok value image =>
       cases value with
-      | error err => exact ⟨facts.1, fun p => facts.2.1 (markers p), rfl⟩
+      | error err => exact ⟨⟨facts.1, fun p => facts.2.1 (markers p), rfl⟩, Or.inr rfl, trivial⟩
       | ok decoded =>
         dsimp only
         obtain ⟨choice, cursor, ready, _, _, clean⟩ := facts.2.2 decoded rfl
@@ -251,7 +259,7 @@ private theorem install_result (dir : FilePath) (r : OpenReports) (s : OpenImage
           dsimp only
           obtain ⟨same, _, _⟩ := settled
           simp only [postState] at same
-          exact ⟨same ▸ facts.1, fun p => same ▸ facts.2.1 (markers p), rfl⟩
+          exact ⟨⟨same ▸ facts.1, fun p => same ▸ facts.2.1 (markers p), rfl⟩, Or.inr same, trivial⟩
         | ok response after =>
           rw [barrierEq] at settled
           dsimp only
@@ -259,14 +267,16 @@ private theorem install_result (dir : FilePath) (r : OpenReports) (s : OpenImage
           simp only [postState] at same lockEq
           cases response with
           | error err =>
-            exact ⟨same ▸ facts.1, fun p => same ▸ facts.2.1 (markers p), rfl⟩
+            exact ⟨⟨same ▸ facts.1, fun p => same ▸ facts.2.1 (markers p), rfl⟩, Or.inr same, trivial⟩
           | ok value =>
             cases value
-            change OpenGuarantee policy known pending (.ok (.ok _) after)
-            obtain ⟨stamp, names⟩ := barriers after rfl
-            exact ⟨same ▸ facts.1, fun p => same ▸ facts.2.1 (markers p),
-              rfl, rfl, rfl, rfl, rfl, lockEq.trans held, stamp, names, choice,
-              cursor, same ▸ ready, same ▸ closed, rfl⟩
+            constructor
+            · change OpenGuarantee policy known pending (.ok (.ok _) after)
+              obtain ⟨stamp, names⟩ := barriers after rfl
+              exact ⟨same ▸ facts.1, fun p => same ▸ facts.2.1 (markers p),
+                rfl, rfl, rfl, rfl, rfl, lockEq.trans held, stamp, names, choice,
+                cursor, same ▸ ready, same ▸ closed, rfl⟩
+            · exact ⟨Or.inr same, rfl⟩
 
 private theorem acquired_result (dir : FilePath) (r : OpenReports) (s : OpenImage)
     (free : s.held = false) :
@@ -301,7 +311,8 @@ namespace barriers. Error cleanup returns no ready phase. -/
 private theorem openAttempt_refines (dir : FilePath) (policy : Policy) (r : OpenReports)
     (s : OpenImage) (free : s.held = false) (prior : Dirty policy known pending s.image)
     (markers : policy = .logOnly → s.image.MarkersSettled) :
-    OpenGuarantee policy known pending (openAttempt dir policy r s) := by
+    OpenGuarantee policy known pending (openAttempt dir policy r s) ∧
+      workerProvenance policy r s.image (openAttempt dir policy r s) := by
   have acquire := acquired_result (policy := policy) dir r s free
   dsimp only at acquire
   unfold openAttempt openExistingWith
@@ -310,13 +321,13 @@ private theorem openAttempt_refines (dir : FilePath) (policy : Policy) (r : Open
   | error token after =>
     rw [h] at acquire
     obtain rfl := acquire.2.2 token after rfl
-    exact ⟨prior, markers, rfl⟩
+    exact ⟨⟨prior, markers, rfl⟩, Or.inl rfl, trivial⟩
   | ok response after =>
     rw [h] at acquire
     cases response with
     | error err =>
       obtain rfl := acquire.2.1 err after rfl
-      exact ⟨prior, markers, free⟩
+      exact ⟨⟨prior, markers, free⟩, Or.inl rfl, trivial⟩
     | ok descriptor =>
       obtain ⟨rfl, rfl⟩ := acquire.1 descriptor after rfl
       have installed := install_result dir r {s with held := true} rfl prior markers
@@ -346,7 +357,7 @@ private theorem openAttempt_refines (dir : FilePath) (policy : Policy) (r : Open
         | ok ready => exact installed
         | error err =>
           cases un : r.unlockError <;>
-            simpa [runBind, unlock_run, finish, un, run_throw, OpenGuarantee, postState] using installed
+            simpa [runBind, unlock_run, finish, un, run_throw, OpenGuarantee, workerProvenance, postState] using installed
 
 private def settleImage (files : List WalFile) (state : OpenImage) : OpenImage :=
   {state with image := settleFiles files state.image}
@@ -373,8 +384,8 @@ theorem openExisting_refines (dir : FilePath) (policy : Policy) (r : OpenReports
     (s : OpenImage) (free : s.held = false) (prior : Dirty policy known pending s.image)
     (markers : policy = .logOnly → s.image.MarkersSettled) :
     OpenGuarantee policy known pending (openExistingModel dir policy r s) := by
-  have outcome := openAttempt_refines dir policy r (settleImage r.beforeWorker s) free
-    (keepDirty _ prior) (fun log => keepMarkers _ (markers log))
+  have outcome := (openAttempt_refines dir policy r (settleImage r.beforeWorker s) free
+    (keepDirty _ prior) (fun log => keepMarkers _ (markers log))).1
   unfold openExistingModel
   cases issued : openAttempt dir policy r (settleImage r.beforeWorker s) with
   | error token after =>
@@ -391,6 +402,33 @@ theorem openExisting_refines (dir : FilePath) (policy : Policy) (r : OpenReports
         unfold settleImage
         rw [settleFiles_clean _ _ settled]
       simpa only [settleResult, unchanged] using outcome
+
+/-- Names and lock operations leave the child file image alone. A returned
+child came from the exact scheduled worker selected by native open. -/
+theorem openExisting_worker (dir : FilePath) (policy : Policy) (r : OpenReports)
+    (s : OpenImage) (free : s.held = false) (prior : Dirty policy known pending s.image)
+    (markers : policy = .logOnly → s.image.MarkersSettled) :
+    let before := settleFiles r.beforeWorker s.image
+    let worker := (recoverScheduled r.worker r.writebacks policy).run before
+    let result := openExistingModel dir policy r s
+    ((postState result).image = settleFiles r.afterWorker before ∨
+      (postState result).image = settleFiles r.afterWorker (reached worker)) ∧
+    match result with
+    | .ok (.ok ready) _ => acknowledged worker = some ready.recovered
+    | _ => True := by
+  have source := (openAttempt_refines dir policy r (settleImage r.beforeWorker s) free
+    (keepDirty _ prior) (fun log => keepMarkers _ (markers log))).2
+  unfold openExistingModel
+  cases ran : openAttempt dir policy r (settleImage r.beforeWorker s) with
+  | error =>
+    rw [ran] at source
+    exact ⟨source.1.imp (congrArg (settleFiles r.afterWorker))
+      (congrArg (settleFiles r.afterWorker)), trivial⟩
+  | ok value _ =>
+    rw [ran] at source
+    cases value <;>
+      exact ⟨source.1.imp (congrArg (settleFiles r.afterWorker))
+        (congrArg (settleFiles r.afterWorker)), source.2⟩
 
 /-- The reference-allocation primitive is interpreted by its initial content. -/
 def storedPhase (ready : Opened OpenTarget (AppendFiles OpenTarget)) : Phase OpenTarget (AppendFiles OpenTarget) :=

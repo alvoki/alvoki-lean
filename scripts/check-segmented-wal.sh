@@ -113,4 +113,6 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.close_ready
 #check_axioms Model.reopenPhase_model
 #check_axioms Model.nativeChild_recoverable
+#check_axioms Model.nativeChild_sealed
+#check_axioms Model.nativeChild_selected
 LEAN

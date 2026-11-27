@@ -72,6 +72,7 @@ theorem openChild_dispatch (root : FilePath) (p : Policy) (id : Nat) (returned :
 end WalRecoverySlice.Segmented.Native
 
 namespace WalRecoverySlice.Segmented.Model
+open Persistence
 
 /-- The shared phase wrapper preserves the disk proof of the existing model
 schedule and ties the public scan to the exact installed session. -/
@@ -168,5 +169,42 @@ theorem nativeChild_recoverable {id : Nat} {s : State} (dir : System.FilePath)
       obtain ⟨_, _, _, permitted, installed, _⟩ := facts.2
       rw [Disk.setCursor_here]
       exact ⟨permitted, installed⟩
+
+/-- The public child path keeps an already settled sealed segment's exact
+bytes, even if a later namespace action fails. -/
+theorem nativeChild_sealed (dir : System.FilePath) (r : SingleFile.OpenReports)
+    (entry : Child.Settled policy image history)
+    (bounded : ∀ b ∈ history, b.length ≤ 32) (fits : history.length ≤ 255) :
+    Persistence.reached ((nativeChildWorker dir policy r).run image) = image := by
+  have physical := SingleFile.openExisting_worker dir policy r {image} rfl
+    (entry.recoverable bounded fits).dirty (entry.recoverable bounded fits).markers
+  have worker := (reopensSettledSegmentScheduled entry.ready entry.clean bounded fits r.worker r.writebacks).1
+  rw [← SingleFile.recoverScheduled_eq] at worker
+  dsimp only at physical
+  rw [settleFiles_clean _ _ entry.clean, worker, settleFiles_clean _ _ entry.clean] at physical
+  have same := physical.1.elim id id
+  unfold nativeChildWorker
+  cases ran : SingleFile.openExistingModel dir policy r {image} with
+  | error => simpa [ExceptT.run, ran, Persistence.reached, SingleFile.postState] using same
+  | ok value _ => cases value <;>
+      simpa [ExceptT.run, ran, Persistence.reached, SingleFile.postState] using same
+
+/-- A successful public child open returns the value selected from the
+live child bytes. Whole-file writeback outside the worker keeps that view. -/
+theorem nativeChild_selected (dir : System.FilePath) (r : SingleFile.OpenReports)
+    (entry : Child.Recoverable policy known pending image)
+    (selected : Child.Selects policy image batches)
+    (opened : SingleFile.openExistingModel dir policy r {image} = .ok (.ok ready) after) :
+    ready.recovered.batches = batches := by
+  have physical := SingleFile.openExisting_worker dir policy r {image} rfl entry.dirty entry.markers
+  rw [opened] at physical
+  obtain ⟨marker, decoded, selected, rfl⟩ := selected
+  have preserved : ReopenSelection policy (settleFiles r.beforeWorker image) marker decoded := by
+    apply writebacks_keep (P := fun state => ReopenSelection policy state marker decoded) _ _ selected
+    intro state file prior
+    cases policy <;> cases marker <;> cases file <;> exact prior
+  have exact := scheduledReopen_selected preserved r.worker r.writebacks ready.recovered
+  rw [← SingleFile.recoverScheduled_eq] at exact
+  exact congrArg Decoded.batches (exact physical.2)
 
 end WalRecoverySlice.Segmented.Model

@@ -140,7 +140,8 @@ selection, decoding bytes from the protected CONTROL binding, child dispatch
 to the selected path and returned handle, and installation and scan of the
 session returned by the modeled root schedule. The native child interpreter
 inserts the exact reached child image into the selected disk slot, including
-on error. Composition through every reached native root barrier and
+on error. A sealed child preserves its exact file image. An active child
+that returns selects the value determined by its live bytes. Composition through every reached native root barrier and
 reclamation primitive, plus root resource cleanup on partial recovery,
 remains open.
 
