@@ -200,43 +200,6 @@ and explain the actual ready tables and snapshot responses.
    trace evidence from that chronology, reusing the current replay and read induction.
    [Invariant map](#refinement-boundaries) · [Finite trace][trace] · [Architecture](../proof-architecture.md)
 
-## Checkpoint pilot
-
-The early checkpoint pilot at `4a79765e` reused one selected-file installer for two stops.
-The run-file stop consumes the pending run handle and keeps its issued descriptor live. The
-first directory stop uses the original cached directory after the run slots are closed. Both
-produce the literal returned table after the admitted reboot and aligned install.
-`NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest` uses that table and its issued pin
-for the next point or range response. The separate manifest-rename error case established that
-the shared installer also accepts either selected watermark. Later source work uses issued
-prefix facts and protected-file frames through additional cuts and failed opens.
-[Early checkpoint proof][pilot-early] · [Pilot read][pilot-read] · [Manifest rename][pilot-rename] · [Later source proof][source-stop]
-
-## Why adding cases is expensive
-
-The earlier trace architecture often bundled a stop, release or reboot, retries and successful
-open into one constructor and report. The same cut could need a separate terminal report.
-Shared local producer facts and exact reached endpoints let both consumers reuse the same
-stop and let the retry proof handle the next open independently. Historical constructor counts,
-detailed path notes and baseline revisions are recorded in the [archived assessment](https://github.com/alvoki/alvoki-lean/blob/d9adc1c9c1dde8b16b9490015a0b91e239cc8666/docs/proofs/native-storage.md).
-
-## Research applied here
-
-FSCQ separates crash conditions from ordinary returns. Argosy models each successive recovery
-attempt at the state it actually reaches. IronSpec motivates testing which counterexamples the
-specification itself admits, as with the partial batch above.
-[FSCQ](https://dspace.mit.edu/entities/publication/0aa2b42b-3078-4bd5-93d3-4bc406534381) · [Argosy](https://doi.org/10.1145/3314221.3314585) · [IronSpec](https://www.usenix.org/conference/osdi24/presentation/goldweber)
-
-## Migration test
-
-Use the early run and directory fsync stops to test one reached-stop interface. Derive the
-issued prefix once. End the execution at that stop, or extend the same prefix through a selected
-reboot, a failed open, and the exact returned table of the next successful open. Check a read on
-its issued pin. Then vary the selected manifest and the reached repair outcome independently.
-Extend the same composition to an acknowledged batch followed by an uncertain one and reuse
-the existing ledger proof. The [active checklist](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
-owns the current acceptance checks.
-
 ## Evidence and checks
 
 The kernel and axiom audit check the Lean statements and proof dependencies. The sequential
@@ -260,6 +223,48 @@ lake env lean --run Alvoki/Checks/Audit/ProofDependencies.lean \
 The probe loads the module environment and its initializers. It reports direct references
 in declaration types and available bodies, and transitive axioms. Check premise provenance
 and production coverage against the source separately. [Dependency probe](../../lean/Alvoki/Checks/Audit/ProofDependencies.lean)
+
+## Proof-engineering background
+
+The following pilot and migration method explain how the argument evolved. The active checklist
+owns current obligations; the sections above describe the present guarantees and evidence.
+
+### Checkpoint pilot
+
+The early checkpoint pilot at `4a79765e` reused one selected-file installer for two stops.
+The run-file stop consumes the pending run handle and keeps its issued descriptor live. The
+first directory stop uses the original cached directory after the run slots are closed. Both
+produce the literal returned table after the admitted reboot and aligned install.
+`NativeOpenedSessionTrace.stopsCheckpointEarlyAndReadsLatest` uses that table and its issued pin
+for the next point or range response. The separate manifest-rename error case established that
+the shared installer also accepts either selected watermark. Later source work uses issued
+prefix facts and protected-file frames through additional cuts and failed opens.
+[Early checkpoint proof][pilot-early] · [Pilot read][pilot-read] · [Manifest rename][pilot-rename] · [Later source proof][source-stop]
+
+### Why adding cases is expensive
+
+The earlier trace architecture often bundled a stop, release or reboot, retries and successful
+open into one constructor and report. The same cut could need a separate terminal report.
+Shared local producer facts and exact reached endpoints let both consumers reuse the same
+stop and let the retry proof handle the next open independently. Historical constructor counts,
+detailed path notes and baseline revisions are recorded in the [archived assessment](https://github.com/alvoki/alvoki-lean/blob/d9adc1c9c1dde8b16b9490015a0b91e239cc8666/docs/proofs/native-storage.md).
+
+### Research applied here
+
+FSCQ separates crash conditions from ordinary returns. Argosy models each successive recovery
+attempt at the state it actually reaches. IronSpec motivates testing which counterexamples the
+specification itself admits, as with the partial batch above.
+[FSCQ](https://dspace.mit.edu/entities/publication/0aa2b42b-3078-4bd5-93d3-4bc406534381) · [Argosy](https://doi.org/10.1145/3314221.3314585) · [IronSpec](https://www.usenix.org/conference/osdi24/presentation/goldweber)
+
+### Migration test
+
+Use the early run and directory fsync stops to test one reached-stop interface. Derive the
+issued prefix once. End the execution at that stop, or extend the same prefix through a selected
+reboot, a failed open, and the exact returned table of the next successful open. Check a read on
+its issued pin. Then vary the selected manifest and the reached repair outcome independently.
+Extend the same composition to an acknowledged batch followed by an uncertain one and reuse
+the existing ledger proof. The [active checklist](../proof-roadmap.md#completion-checklist-for-native-key-value-refinement)
+owns the current acceptance checks.
 
 [frame]: ../../lean/Alvoki/Storage/Disk/Proofs/Checkpoint/NativeCheckpointFsyncEffects.lean#L18
 [reboot]: ../../lean/Alvoki/Storage/Disk/Proofs/Write/NativeDurableWriteReboot.lean
