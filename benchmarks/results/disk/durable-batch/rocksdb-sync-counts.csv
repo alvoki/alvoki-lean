@@ -1,4 +1,0 @@
-batch_size,wal_fsyncs,other_syncs
-1,64,17
-8,8,17
-32,2,17

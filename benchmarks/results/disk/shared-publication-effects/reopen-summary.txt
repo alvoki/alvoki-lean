@@ -1,5 +1,0 @@
-CPU 1, 14 interleaved pairs, Linux-6.18.57-x86_64-with-glibc2.41
-32 aligned: 1.220 -> 1.165 ms; median paired ratio 0.992x
-32 repair: 2.905 -> 2.979 ms; median paired ratio 1.038x
-2048 aligned: 1.704 -> 1.701 ms; median paired ratio 1.014x
-2048 repair: 3.440 -> 3.584 ms; median paired ratio 1.023x

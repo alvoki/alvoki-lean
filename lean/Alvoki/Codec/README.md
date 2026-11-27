@@ -1,7 +1,5 @@
-# Block and packed codecs
+# Shared byte codecs
 
-These shared modules implement block layout, byte words and packed views and runs. Storage uses some of these definitions.
+[`Block`](Block.lean) defines block layout and byte access, [`WordChecksum`](WordChecksum.lean) and [`ByteWords`](ByteWords.lean) provide word encoding and checksums used by manifest and SSTable components. These shared modules remain separate from the component implementations.
 
-Start: [Block](Block.lean) · [Packed view](PackedView.lean) · [Byte words](ByteWords.lean).
-
-Checks: [Correctness checks](../../../scripts/check.sh).
+Their kernel and axiom checks run through [`scripts/reproduce.sh`](../../../scripts/reproduce.sh).

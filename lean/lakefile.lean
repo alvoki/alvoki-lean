@@ -15,140 +15,20 @@ target readDirCheckedO pkg : FilePath := do
   buildO (pkg.buildDir / "native" / "read_dir_checked.o") source #["-I", leanInclude.toString]
     #["-O2", "-fPIC", "-Wall", "-Wextra"] "cc"
 
-lean_lib Block where
-  roots := #[`Alvoki.Codec.Block]
+target sstableO pkg : FilePath := do
+  let source ← inputTextFile (pkg.dir / "native" / "sstable.c")
+  let leanInclude ← getLeanIncludeDir
+  buildO (pkg.buildDir / "native" / "sstable.o") source #["-I", leanInclude.toString]
+    #["-O2", "-fPIC", "-Wall", "-Wextra"] "cc"
 
-lean_lib Proofs where
-  roots := #[`Alvoki.Kernel.BlockContracts]
-
-lean_lib Optimizations where
-  roots := #[`Alvoki.Experiments.Packed.Optimizations]
-
-lean_lib OptProofs where
-  roots := #[`Alvoki.Kernel.PackedSearchContracts]
-
-lean_lib Packed where
-  roots := #[`Alvoki.Experiments.Packed.Packed]
+lean_lib ComponentPrimitives where
+  roots := #[`Alvoki.Codec.Block, `Alvoki.Codec.WordChecksum, `Alvoki.Codec.ByteWords,
+    `Alvoki.Kernel.BlockContracts]
 
 @[default_target]
-lean_lib PackedRun where
-  roots := #[`Alvoki.Codec.PackedRun]
-
-lean_lib PackedView where
-  roots := #[`Alvoki.Codec.PackedView]
-
-lean_lib PackedViewProofs where
-  roots := #[`Alvoki.Proofs.Packed.PackedViewProofs]
-
-lean_lib MergeModel where
-  roots := #[`Alvoki.Packed.MergeModel]
-
-lean_lib MergeProofs where
-  roots := #[`Alvoki.Proofs.Merge.MergeProofs]
-
-lean_lib NativeTune where
-  roots := #[`Alvoki.Experiments.Packed.NativeTune]
-  moreLeancArgs := #["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize", "-Rpass-analysis=loop-vectorize"]
-
-lean_lib MergePhases where
-  roots := #[`Alvoki.Experiments.Merge.MergePhases]
-
-lean_lib ScopedBytes where
-  roots := #[`Alvoki.Kernel.ScopedBytes]
-
-lean_lib ScopedBytesProofs where
-  roots := #[`Alvoki.Proofs.Bytes.ScopedBytesProofs]
-
-lean_lib ReplayProofs where
-  roots := #[`Alvoki.Proofs.Merge.ReplayProofs]
-
-lean_lib FusedMerge where
-  roots := #[`Alvoki.Experiments.Merge.FusedMerge]
-
-lean_lib Compaction where
-  roots := #[`Alvoki.Compaction.Core]
-
-lean_lib SpanMerge where
-  roots := #[`Alvoki.Experiments.Merge.SpanMerge]
-
-lean_lib BlockCodec where
-  roots := #[`Alvoki.Codec.BlockCodec]
-
-lean_lib CompactionModel where
-  roots := #[`Alvoki.Compaction.Model]
-
-lean_lib RunProofs where
-  roots := #[`Alvoki.Proofs.Packed.RunProofs]
-
-lean_lib ByteWords where
-  roots := #[`Alvoki.Codec.WordChecksum, `Alvoki.Codec.ByteWords]
-
-lean_lib CompactionCodec where
-  roots := #[`Alvoki.Compaction.Codec]
-
-lean_lib CompactionProofs where
-  roots := #[`Alvoki.Storage.Proofs.Table.Compaction]
-
-lean_lib RunMergeProofs where
-  roots := #[`Alvoki.Proofs.Packed.RunMergeProofs]
-
-lean_lib CodecVariants where
-  roots := #[`Alvoki.Experiments.Packed.CodecVariants]
-
-lean_lib Alvoki.Storage where
-  globs := #[`Alvoki.Storage.+]
-  moreLinkObjs := #[fsyncO, readDirCheckedO]
+lean_lib Components where
+  globs := #[`Alvoki.Experiments.DurableBlob.+, `Alvoki.Experiments.Manifest.+,
+    `Alvoki.Experiments.SSTable.+, `Alvoki.Experiments.WAL.+]
+  moreLinkObjs := #[fsyncO, readDirCheckedO, sstableO]
 
 lean_lib Alvoki.Checks.Audit.AxiomPolicy
-
-@[default_target]
-lean_exe alvoki where
-  root := `Alvoki.Bench.Block.Main
-
-lean_exe «alvoki-opt» where
-  root := `Alvoki.Bench.Packed.OptMain
-
-lean_exe «alvoki-packed» where
-  root := `Alvoki.Bench.Packed.PackedMain
-  moreLinkArgs := #[".lake/alvoki-packed.o"]
-
-lean_exe «alvoki-native» where
-  root := `Alvoki.Bench.Packed.NativeMain
-
-lean_exe «alvoki-merge-phases» where
-  root := `Alvoki.Bench.Merge.MergePhasesMain
-
-lean_exe «alvoki-fused-merge» where
-  root := `Alvoki.Bench.Merge.FusedMergeMain
-
-lean_exe «alvoki-compaction» where
-  root := `Alvoki.Bench.Compaction.CompactionMain
-
-lean_exe «alvoki-compaction-cursor» where
-  root := `Alvoki.Bench.Compaction.CompactionCursorMain
-
-lean_exe «alvoki-disk-checks» where
-  root := `Alvoki.Checks.Tests.DiskTableChecks
-
-lean_exe «alvoki-disk-replay» where
-  root := `Alvoki.Bench.Disk.DiskReplayBench
-
-lean_exe «alvoki-disk-write» where
-  root := `Alvoki.Bench.Disk.DiskWriteBench
-
-lean_exe «alvoki-disk-checkpoint» where
-  root := `Alvoki.Bench.Disk.DiskCheckpointBench
-
-lean_exe «alvoki-wide-accessors» where
-  root := `WideAccessorBench
-  srcDir := "runtime-experiment/wide-accessors"
-  moreLeancArgs := #["-include", "runtime-experiment/wide-accessors/accessors.h"]
-
-lean_exe «alvoki-disk-workload» where
-  root := `Alvoki.Bench.Disk.DiskWorkloadBench
-
-lean_exe «alvoki-disk-crash» where
-  root := `Alvoki.Bench.Disk.DiskCrashBench
-
-lean_exe «alvoki-disk-batch» where
-  root := `Alvoki.Bench.Disk.DiskBatchBench

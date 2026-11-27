@@ -1,7 +1,9 @@
 # Native bindings
 
-The storage adapter uses C bindings for fsync and checked directory enumeration; packed.c supports a separate packed benchmark.
+These small C adapters are still used by the component experiments and their Linux fixtures:
 
-Start: [Sync binding](fsync.c) · [Directory binding](read_dir_checked.c) · [Packed benchmark support](packed.c).
+- [`fsync.c`](fsync.c) exposes checked file synchronization.
+- [`read_dir_checked.c`](read_dir_checked.c) reports directory enumeration errors to the segmented WAL adapter.
+- [`sstable.c`](sstable.c) supports the retained native SSTable reader.
 
-Checks: [Native storage checks](../../scripts/check-sequential.sh).
+The packed benchmark helper was retired with the old benchmark stack. Run the retained adapters through [`scripts/reproduce.sh`](../../scripts/reproduce.sh).

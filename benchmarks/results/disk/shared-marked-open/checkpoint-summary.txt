@@ -1,2 +1,0 @@
-CPU 1, 4 runs of 32 rows: 1.236 -> 1.227 ms; median paired ratio 0.984x (14 pairs)
-CPU 1, 32 runs of 128 rows: 2.598 -> 2.545 ms; median paired ratio 0.977x (14 pairs)

@@ -1,2 +1,0 @@
-CPU 1, 12 interleaved write pairs: 3.068 -> 3.084 ms/op, median paired ratio 0.999x
-CPU 1, 12 interleaved checkpoint pairs: 9.388 -> 9.434 ms/op, median paired ratio 1.012x
