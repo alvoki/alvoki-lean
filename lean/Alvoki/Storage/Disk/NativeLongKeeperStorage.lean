@@ -239,6 +239,32 @@ structure LongKeeperStageCallbacks.StagingFileFrames
     calls.setPending pending (entries.filter (fun entry => entry.1 != scratch)) before = .ok () after →
     frame before after
 
+/-- Project the successful stage callbacks onto the repair image. Only the
+scratch field may change; a flush exposes the attached inode's bytes and
+pending registration has no effect on those bytes or their durability. -/
+structure LongKeeperStageCallbacks.StagingImageEffects
+    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
+    (scratch : FilePath) (scope : FilePath → Prop) (view : OpenCloseHeapView heap image)
+    (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (files : heap → FileImage)
+    extends stage.StagingWriteFrames calls scratch scope view observe pending
+      (fun a b => (files b).withScratch none = (files a).withScratch none) where
+  flushImage : ∀ {before after file slot inode}, ScopedStagingFile scratch scope view observe file slot inode before →
+    stage.flush file before = .ok () after → (files after).keeper.staged = some (visible after inode, false)
+  recordImage : ∀ {before after file}, calls.modifyPending pending (pushPending scratch file) before = .ok () after →
+    (files after).keeper.staged = (files before).keeper.staged
+
+/-- Reconstruct the registered image from the frame outside the scratch
+field and the literal fresh-inode payload established at flush. -/
+theorem registeredScratchImage {entry staged : FileImage} {flushed : Option (ByteArray × Bool)}
+    {physical requested : ByteArray}
+    (others : staged.withScratch none = entry.withScratch none)
+    (kept : staged.keeper.staged = flushed) (projected : flushed = some (physical, false))
+    (payload : physical = requested) : staged = entry.withScratch (some (requested, false)) := by
+  have contents : staged.keeper.staged = some (requested, false) := payload ▸ kept.trans projected
+  exact (congrArg (fun f => FileImage.withScratch f staged.keeper.staged) others).trans
+    (congrArg entry.withScratch contents)
+
 /-- A successful stage prefix has one private inode with the requested bytes at
 issue, before the filesystem chooses the result of fsync. Each reached frame
 remains available to callers carrying additional storage or root invariants. -/
@@ -545,6 +571,10 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       visible issued replacement = plan.keeperBytes.extract 0 plan.keeperSize ∧
       RegularFileSyncEffect replacement [visible issued replacement] (observe issued) (observe synced) ∧
       visible synced replacement = visible issued replacement ∧
+      (∀ {files : heap → FileImage},
+        stage.StagingImageEffects calls (state.session.directory.file .stagedWal) state.crashPath view observe
+          visible pending files →
+        files staged = (files pruned).withScratch (some (plan.keeperBytes.extract 0 plan.keeperSize, false))) ∧
       (∀ {first through}, stage.StagingWalNameFrames calls state first through view observe pending →
         WalNamePresenceFrame state.session.directory first through (observe pruned) (observe synced)) ∧
       (stage.ReplacementPrefixLiveEffects calls state view observe visible cached pending root remove →
@@ -585,7 +615,7 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
   rw [show stage.acquire (dir.file .stagedWal) pruned = .ok file opened from acquired,
     NativeFileEffectProjection.reached] at acquiredFrame
   obtain ⟨acquireFrame, acquiredRoot, acquiredNames⟩ := acquiredFrame
-  obtain ⟨slot, replacement, openedStage, writtenStage, loadedStage, syncedStage, stageBytes, _, _, prefixFrames,
+  obtain ⟨slot, replacement, openedStage, writtenStage, loadedStage, syncedStage, stageBytes, flushedBytes, registeredFrames, prefixFrames,
       writeFrame, flushFrame, recordFrame, loadFrame, clearFrame⟩ :=
     stage.issuesStagedFile calls effects.toStagingPrefixEffects (fun f => f.carries)
       acquired wrote didFlush recorded got chosenStage cleared
@@ -621,7 +651,10 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     keeperAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
     ⟨prunedNames, settled⟩, consumed, file, slot, replacement, ⟨opened, acquired, openedStage.1, openedStage.2.1⟩,
     stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
-    syncedVisible, ?_, ?_⟩
+    syncedVisible, ?_, ?_, ?_⟩
+  · intro files model
+    have unchanged := registeredFrames model.toStagingWriteFrames (fun _ => rfl) (fun earlier later => later.trans earlier)
+    exact registeredScratchImage unchanged (model.recordImage recorded) (model.flushImage writtenStage didFlush) flushedBytes
   · intro first through localFrames
     have reached := prefixFrames localFrames (fun h => .refl (observe h)) (fun earlier later => earlier.trans later)
     exact reached.trans (.ofFileSync fileSync)

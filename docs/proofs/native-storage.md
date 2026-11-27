@@ -711,8 +711,9 @@ determine the logical repair trace for either final-barrier effect. Cleanup
 preserves the acquired inode and its durable bytes. At the cutoff the sampled
 retry observations supply the entry for the shared marked opener. Both error
 paths use the same local staging effects to preserve the selected retry files.
-The pre-fsync proof derives the bytes at flush from the empty exclusive file
-and the write. Registration preserves the scratch image. Local frames carry
+The scratch-fsync, rename and final directory-fsync error paths reconstruct
+the registered scratch image from the flushed inode bytes and callback frames
+for the rest of the file image. Local frames carry
 bounded names for a successful sync, or the old keeper’s durable bytes and
 joint namespace on a failed sync.
 The latter footprint includes immutable children and every actually pruned

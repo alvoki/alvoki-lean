@@ -83,19 +83,16 @@ payload. The sampled recovery observations at the cutoff supply the entry for
 the shared opener. Both rename-error and final-directory-error paths derive
 their retry frame from the returned authorization, unlinks and staging operations.
 
-Exclusive creation supplies an empty scratch inode. Write and flush determine
-its visible bytes, and registering the handle preserves that scratch image.
-The failed-fsync proof composes callback frames for the other files and lock
-owners through registration, then follows the actual pending lookup and removal. For a returned fsync it carries
-bounded WAL-name presence to the rename. For a failed fsync it carries the
-old keeper’s durable payloads and one namespace covering immutable children,
-the bounded WAL interval and every actually removed name. The next reboot
-uses that same map even for removals beyond the interval.
+Exclusive creation supplies an empty scratch inode. The write and flush determine
+its visible bytes. Registration preserves the scratch field. The scratch-fsync,
+rename and final directory-fsync error proofs reconstruct the registered image
+from these bytes and callback frames for the rest of the image. Only the first
+also needs lock custody across staging. On reboot, one sampled namespace covers
+the keeper, immutable children, bounded WAL interval and every actually removed name.
 
-**Next source boundary.** The rename-error and final directory-fsync routes still
-consume the logical image of a complete successful stage write. Derive that
-image from the same flushed payload and registration, with frames restricted
-to the file image used by those consumers.
+**Next source boundary.** The successful scratch-fsync prefix still takes the
+logical image after the grouped sync. Derive it from the reached pending lookup,
+filtered removal and successful fsync of the same attached inode.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)
