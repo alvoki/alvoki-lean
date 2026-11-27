@@ -22,8 +22,8 @@ def openNative (path : System.FilePath) : EIO String (Table (EIO String)) := do
   openTable (handleSource handle)
 
 /-- Build at a fresh path owned exclusively by the caller until return.
-    Retains one entry at a time. A caught construction error removes the
-    incomplete file. Crash publication and durability belong to the caller. -/
+    Retains one entry at a time. After acquiring the handle, a caught error triggers
+    best-effort removal of the incomplete file. Crash publication and durability belong to the caller. -/
 def buildFile (path : System.FilePath) (nextRow : IO (Option Entry)) : IO Nat := do
   let handle ← IO.FS.Handle.mk path .writeNew
   try

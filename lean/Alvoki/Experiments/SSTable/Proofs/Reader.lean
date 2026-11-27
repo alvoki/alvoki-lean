@@ -7,12 +7,12 @@ namespace ImmutableSSTable
 successful exact reads in the image. The memory source implements this contract. -/
 structure Source.Serves [Monad m] (source : Source m) (image : ByteArray) : Prop where
   size : source.size = pure image.size
-  readAt : ∀ offset count, offset + count ≤ image.size →
+  readAt : ∀ offset count, count ≤ 16 → offset + count ≤ image.size →
     source.readAt offset count = pure (image.extract offset (offset + count))
 
 theorem Source.memory_serves [Monad m] (image : ByteArray) :
     (Source.memory (m := m) image).Serves image :=
-  ⟨rfl, fun _ _ _ => rfl⟩
+  ⟨rfl, fun _ _ _ _ => rfl⟩
 
 /-- Opening an encoded image returns a table retaining that same source and the
 exact encoded row count. Opening does not read the rows. -/
@@ -21,7 +21,7 @@ theorem openTable_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     (observed : source.Serves (encodeImage rows)) :
     ∃ table, openTable source = pure table ∧ table.BoundTo source rows.length := by
   have headerWithin : headerSize ≤ fileSize rows.length := by simp [fileSize]
-  have header := observed.readAt 0 headerSize (by simpa using headerWithin)
+  have header := observed.readAt 0 headerSize (by decide) (by simpa using headerWithin)
   rw [Nat.zero_add, encodeImage_extract_header] at header
   simp [openTable, observed.size, header, fits, encodeImage_size, headerWithin]
   exact ⟨_, rfl, rfl, rfl⟩
@@ -36,7 +36,7 @@ theorem Table.readEntry_encoded [Monad m] [LawfulMonad m] [MonadExceptOf String 
   have span : rowOffset index + rowSize ≤ (encodeImage rows).size := by
     rw [encodeImage_size]
     exact rowSpan within
-  have row := observed.readAt (rowOffset index) rowSize span
+  have row := observed.readAt (rowOffset index) rowSize (by decide) span
   rw [encodeImage_extract_row rows index within] at row
   simp [Table.readEntry, count, sourceEq, within, row]
 
