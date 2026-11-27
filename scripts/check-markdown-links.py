@@ -43,6 +43,10 @@ def visible(text):
             indented_code = False
             paragraph = False
             lines.append(re.sub(r'[^\n]', ' ', line))
+        elif re.match(r'^ {0,3}#{1,6}(?:[ \t]|$)', line):
+            indented_code = False
+            paragraph = False
+            lines.append(line)
         elif line.strip() and not item and indent >= code_indent and (indented_code or not paragraph):
             indented_code = True
             lines.append(re.sub(r'[^\n]', ' ', line))

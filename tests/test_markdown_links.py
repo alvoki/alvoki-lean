@@ -50,6 +50,7 @@ class LinkChecks(unittest.TestCase):
 
     def test_indented_code_and_list_continuation(self):
         self.assertEqual([], self.check('    [code](missing.md)\n    [](missing.md)\n'))
+        self.assertEqual([], self.check('# Heading\n    [example](missing.md)\n'))
         self.assertEqual([], self.check('- item\n\n      [code](missing.md)\n'))
         self.assertEqual(1, len(self.check('- item\n  [link](missing.md)\n')))
         self.assertEqual(1, len(self.check('paragraph\n    [link](missing.md)\n')))
