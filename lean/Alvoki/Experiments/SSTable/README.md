@@ -92,8 +92,12 @@ range. Both index levels and the in-block search consume those facts.
 This theorem concerns successful immutable reads. The reader's structural
 and checksum checks reject malformed packets as they are visited. A checked
 footer and CRC do not authenticate bytes or certify global key order in an
-externally supplied image. The explicit [leaf-read error theorem](Proofs/UnifiedOpen.lean)
-covers an error from the positional read on the selected lookup path.
+externally supplied image. The [error propagation proofs](Proofs/UnifiedReadErrors.lean)
+cover footer and root failures during open and failures at the leaf, data and
+row probes selected by lookup, seek and iteration. They also cover caller
+codec failures in typed reads. In the stateful model, an error returns the
+state reached at the failed action.
+
 The native fixtures cover all four field-width combinations, corrupt and
 substituted files, truncated reads, and positional I/O failures. They also
 exercise successful sync, failed sync cleanup, and an open descriptor

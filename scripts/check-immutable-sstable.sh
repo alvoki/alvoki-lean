@@ -37,13 +37,15 @@ compile_proof Alvoki/Codec/WordChecksum
 compile_proof Alvoki/Codec/ByteWords
 compile_proof "$table/Representation"
 for module in Reader Search Typed UnifiedMetadata UnifiedData UnifiedImage UnifiedSearch \
-    UnifiedGroups UnifiedReads UnifiedOpen UnifiedBuilder UnifiedEndToEnd UnifiedNativeReader; do
+    UnifiedGroups UnifiedReads UnifiedOpen UnifiedBuilder UnifiedEndToEnd \
+    UnifiedNativeReader UnifiedReadErrors; do
   compile_proof "$table/Proofs/$module"
 done
 compile_proof Alvoki/Checks/Audit/AxiomPolicy
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeReader
+import Alvoki.Experiments.SSTable.Proofs.UnifiedReadErrors
 import Alvoki.Experiments.SSTable.Proofs.Typed
 open ImmutableSSTable
 #check_axioms Unified.open_built_table
@@ -52,7 +54,38 @@ open ImmutableSSTable
 #check_axioms Unified.openCheckedWith_acquire_error
 #check_axioms Unified.openCheckedWith_size_error
 #check_axioms ReadPrimitives.source_pread_error
+#check_axioms RequiredProbeError.propagates
+#check_axioms Unified.readPacket_source_error
+#check_axioms Unified.readPacket_short_error
+#check_axioms Unified.readPacket_decode_error
+#check_axioms Unified.readFooter_size_error
+#check_axioms Unified.readFooter_extent_error
+#check_axioms Unified.readFooter_source_error
+#check_axioms Unified.readFooter_short_error
+#check_axioms Unified.readFooter_packet_error
+#check_axioms Unified.readFooter_decode_error
+#check_axioms Unified.openTableChecked_footer_error
+#check_axioms Unified.openTableChecked_identity_error
+#check_axioms Unified.openTableChecked_root_error
+#check_axioms Unified.openTableChecked_root_decode_error
+#check_axioms Unified.Handle.readLeaf_packet_error
+#check_axioms Unified.Handle.readLeaf_decode_error
+#check_axioms Unified.Handle.readData_packet_error
+#check_axioms Unified.Handle.readData_decode_error
+#check_axioms Unified.Handle.locate_leaf_error
+#check_axioms Unified.Handle.locate_data_error
+#check_axioms Unified.Handle.locate_row_probe_error
+#check_axioms Unified.Handle.table_lookup_seek_error
+#check_axioms Unified.Handle.table_lookup_row_error
+#check_axioms Unified.Handle.table_next_leaf_error
+#check_axioms Unified.Handle.table_next_data_error
+#check_axioms Unified.Handle.table_next_row_error
 #check_axioms Unified.Handle.lookup_leaf_error
+#check_axioms TypedTable.lookup_read_error
+#check_axioms TypedTable.lookup_decode_error
+#check_axioms TypedTable.next_read_error
+#check_axioms TypedTable.next_key_decode_error
+#check_axioms TypedTable.next_value_decode_error
 #check_axioms TypedTable.represents_of_bytes
 LEAN
 cc -O2 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \

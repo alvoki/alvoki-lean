@@ -126,16 +126,4 @@ theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     fun key => handle.seek_observed observed imageFacts.ordered key,
     fun index => handle.next_observed observed index⟩
 
-/-- A failed positional read of the leaf selected by the actual lookup
-preserves the source error and its reached state. -/
-theorem Handle.lookup_leaf_error {handle : Handle (EStateM String σ)}
-    {parent : Ref} {key : ByteArray} {start reached : σ} {message : String}
-    (selected : findRef handle.root (fun ref => decide (ref.lastKey < key)) = some parent)
-    (bounds : checksumSize ≤ parent.size ∧ parent.size ≤ maxRowSize ∧
-      parent.offset + parent.size ≤ maxFileSize)
-    (failed : handle.source.readAt parent.offset parent.size start = .error message reached) :
-    handle.lookup key start = .error message reached := by
-  simp [Handle.lookup, Handle.locate, selected, Handle.readLeaf, readPacket, bounds,
-    Bind.bind, EStateM.bind, failed]
-
 end ImmutableSSTable.Unified

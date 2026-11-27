@@ -172,6 +172,45 @@ private def checkNativeHandles (dir : System.FilePath) : IO Unit := do
 private def corrupt (bytes : ByteArray) (offset : Nat) : ByteArray :=
   bytes.set! offset (bytes[offset]! ^^^ 1)
 
+private def expectReadFailure (action : EStateM String (List Nat) α) (offsets : List Nat)
+    (message : String := "injected SSTable read failure") : IO Unit := do
+  match action [] with
+  | .error actual reached =>
+    check (actual == message) "reader did not preserve the error"
+    check (reached == offsets) "reader did not stop at the failed action"
+  | .ok .. => throw (IO.userError "reader accepted a failed action")
+
+/-- Exercise public operations on the native image with one failing positional
+read at a time. The trace is the exact callback state when the reader stops. -/
+private def checkReadFailures (bytes : ByteArray) (id : UInt64) (footer root leaf data : Nat)
+    (key : ByteArray) : IO Unit := do
+  let source (badOffset : Nat) : Source (EStateM String (List Nat)) := {
+    size := pure bytes.size
+    readAt := fun offset count => do
+      modify (offset :: ·)
+      if offset == badOffset then throw "injected SSTable read failure"
+      return bytes.extract offset (offset + count)
+  }
+  expectReadFailure (Unified.openTableChecked (source footer) Unified.crc32c id) [footer]
+  expectReadFailure (Unified.openTableChecked (source root) Unified.crc32c id) [root, footer]
+  for (offset, expected) in [(leaf, [leaf]), (data, [data, leaf])] do
+    let .ok table _ := Unified.openTableChecked (source offset) Unified.crc32c id []
+      | throw (IO.userError "open read an unopened leaf or data packet")
+    expectReadFailure (table.lookup key) expected
+    expectReadFailure (table.seek key) expected
+    expectReadFailure (table.next 0) expected
+
+  let .ok table _ := Unified.openTableChecked (source bytes.size) Unified.crc32c id []
+    | throw (IO.userError "failed to open for typed error checks")
+  let identity : Codec ByteArray := ⟨fun bytes => bytes, Except.ok⟩
+  let rejected (message : String) : Codec ByteArray :=
+    ⟨fun bytes => bytes, fun _ => .error message⟩
+  let badValue := TypedTable.mk table identity (rejected "invalid test value")
+  let badKey := TypedTable.mk table (rejected "invalid test key") (rejected "invalid test value")
+  expectReadFailure (badValue.lookup key) [data, leaf] "invalid test value"
+  expectReadFailure (badValue.next 0) [data, leaf] "invalid test value"
+  expectReadFailure (badKey.next 0) [data, leaf] "invalid test key"
+
 private def checkCorruption (dir : System.FilePath) : IO Unit := do
   let path := dir / "original"
   let secondPath := dir / "second"
@@ -190,6 +229,8 @@ private def checkCorruption (dir : System.FilePath) : IO Unit := do
   let rootBody ← pureOK <| Unified.decodePacket Unified.crc32c 0 4 0
     (original.extract footerStart original.size)
   let footer ← pureOK <| Unified.decodeFooterBody rootBody
+  checkReadFailures original layout.tableId footerStart footer.rootOffset
+    firstLeaf.offset firstData.offset (row layout 0).key
 
   for bytes in [corrupt original footerStart, corrupt original footer.rootOffset,
                 original.extract 0 (original.size - 1), original ++ ⟨#[0]⟩] do
