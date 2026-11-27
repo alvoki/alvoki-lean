@@ -1,6 +1,6 @@
 import Optimizations
 import NativeTune
-import ScopedBytes
+import Alvoki.Kernel.ScopedBytes
 
 namespace Alvoki.MergePhases
 open Alvoki.Opt Alvoki.Packed Alvoki.ScopedBytes

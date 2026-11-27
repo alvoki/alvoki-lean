@@ -1,5 +1,5 @@
 import PackedViewProofs
-import ScopedBytes
+import Alvoki.Kernel.ScopedBytes
 
 namespace Alvoki.Packed.MergeModel
 open Alvoki.Opt Alvoki.ScopedBytes

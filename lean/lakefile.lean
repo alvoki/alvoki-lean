@@ -44,7 +44,8 @@ lean_lib NativeTune where
 
 lean_lib MergePhases
 
-lean_lib ScopedBytes
+lean_lib ScopedBytes where
+  roots := #[`Alvoki.Kernel.ScopedBytes]
 
 lean_lib ScopedBytesProofs where
   roots := #[`Alvoki.Proofs.Bytes.ScopedBytesProofs]

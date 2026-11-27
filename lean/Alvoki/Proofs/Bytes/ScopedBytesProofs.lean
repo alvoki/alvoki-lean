@@ -1,4 +1,4 @@
-import ScopedBytes
+import Alvoki.Kernel.ScopedBytes
 
 namespace Alvoki.ScopedBytes
 

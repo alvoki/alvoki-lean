@@ -33,7 +33,7 @@ If the bytes are optional, one consumer was faster on the direct path in every p
 
 ## Fixed-width write candidate
 
-The opt-in build inlines the existing guarded `ByteArray.copySlice` specialization into the generated compaction C. It uses a constant-width copy for a disjoint source and exclusive destination with enough capacity. Shared, aliased, clipped, and capacity-growing cases use the stock fallback. This exercises a possible standard runtime optimization through the existing Lean builder API. The proof states the source-level byte contract and the native prototype is checked by differential tests. [Copy candidate](../../lean/runtime-experiment/fixed-copy.h) · [Builder contract](../../lean/ScopedBytes.lean) · [Copy contract fixtures](../../lean/MergePhases.lean)
+The opt-in build inlines the existing guarded `ByteArray.copySlice` specialization into the generated compaction C. It uses a constant-width copy for a disjoint source and exclusive destination with enough capacity. Shared, aliased, clipped, and capacity-growing cases use the stock fallback. This exercises a possible standard runtime optimization through the existing Lean builder API. The proof states the source-level byte contract and the native prototype is checked by differential tests. [Copy candidate](../../lean/runtime-experiment/fixed-copy.h) · [Builder contract](../../lean/Alvoki/Kernel/ScopedBytes.lean) · [Copy contract fixtures](../../lean/MergePhases.lean)
 
 | Workload | Stock rows | Fixed-copy rows | Stock spans | Fixed-copy spans | Best Rust materialization |
 |---|---:|---:|---:|---:|---:|

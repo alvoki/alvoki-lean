@@ -1,5 +1,5 @@
 import PackedView
-import ScopedBytes
+import Alvoki.Kernel.ScopedBytes
 import Alvoki.Compaction.Model
 import Alvoki.Codec.ByteWords
 
