@@ -61,11 +61,20 @@ The on-disk batch has a four-byte header (magic, generation, sequence, payload l
 
 Starting at the initialized empty files, every finite sequence of appends, scans, process exits, power losses and successful or interrupted open attempts satisfies the same rule. After a successful append of B to history H, the known history is H followed by B. An uncertain append leaves H and at most the whole B. A successful open exposes one permitted choice and establishes it for subsequent operations. Failed opens expose no history. When faults cease, a healthy open can return from every reachable offline state. The file format permits 255 batches of up to 32 bytes each. Over-limit submissions fail before the first filesystem action. [Client contract](../../lean/Alvoki/Experiments/WAL/Contract.lean) · [Trace refinement and healthy-open theorems](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean)
 
-| Boundary | Fact passed to the next layer |
-|---|---|
-| Append and sync | The settled prefix survives. Only the outstanding frame can be partial or torn. Publishing its marker requires the entire frame to have reached stable storage. [Primitive model](../../lean/Alvoki/Experiments/WAL/CrashModel.lean) · [Append proof](../../lean/Alvoki/Experiments/WAL/Proofs/Append.lean) · [Interrupted torn append](../../lean/Alvoki/Experiments/WAL/Proofs/TornAppend.lean) |
-| Choose a boundary | An intact marker round-trips. The reader ignores a 14-byte record whose checksum fails and selects the highest valid sequence. [Marker proofs](../../lean/Alvoki/Experiments/WAL/Proofs/Marker.lean) |
-| Decode and reopen | A sequence of encoded frames decodes to the submitted batches. A proper byte prefix of the next frame drops out in log-only mode. Boundary mode reads through the selected offset. [Scanner proofs](../../lean/Alvoki/Experiments/WAL/Proofs/Scan.lean) · [Reopen proof](../../lean/Alvoki/Experiments/WAL/Proofs/Persistence.lean) |
+#### Which guarantee depends on which assumption?
+
+Read the argument from the files up. The storage contract determines which bytes can be
+observed. The encoding contract maps those bytes to batches or an error. The client
+contract describes observations across successive calls, including a crash during recovery.
+
+| Layer and scope | Assumption | Guarantee that uses it |
+|---|---|---|
+| Storage, both | One writer owns initialized, durably named files. Reads return live bytes or an error. Process exit can retain cache, power loss selects durable bytes. | Recovery can distinguish a failed read from an empty log. Native ownership and initialization are entry assumptions. [Primitive interpreter](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L135) · [Native adapter](../../lean/Alvoki/Experiments/WAL/SingleFile.lean) |
+| Storage, both | Append and truncate preserve the settled prefix. Successful sync fixes bytes and length. Background writeback can settle one whole file at a time. | An ACK survives later operations, including repair interrupted before its final barrier. [Physical write outcomes](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L76) · [Writeback schedule](../../lean/Alvoki/Experiments/WAL/Writeback.lean#L41) |
+| Encoding, log-only | A full-length torn final frame retains its first 12 bytes (header and header hash), the declared payload length, and a mismatching trailer. Genuine prefixes are also admitted. | The scanner can locate the uncertain frame and discard it while preserving the known history. The physical shape and checksum mismatch are separate premises. [Residue bytes](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L163) · [Detection premise](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L175) · [Scanner theorem](../../lean/Alvoki/Experiments/WAL/Proofs/Scan.lean#L216) |
+| Publication, boundary | An interrupted write to the inactive slot preserves the active slot and cannot forge a newer valid marker. Detecting subsequent loss requires the authoritative marker to survive. | The selected marker excludes unpublished bytes without a suffix checksum premise. A scan error inside the published extent fails open before repair. [Admitted traces](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean#L24) · [Published scan error](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L74) |
+| Encoding, both | Within the replayed history, arbitrary substitution by another valid frame falls outside the fault model. | A returned batch comes from the submitted history. Length, sequence and the existing marker cannot authenticate a coherent replacement. [Substitution counterexample](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L116) |
+| Client, both | Safety quantifies over all admitted traces. Progress requires a healthy open attempt from a reachable offline state. | Every successful open retains the known history and resolves the outstanding batch as a whole. Once I/O succeeds, recovery can return. [Allowed histories](../../lean/Alvoki/Experiments/WAL/Contract.lean#L20) · [Safety and progress](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean#L186) |
 
 For a stopped append, the model chooses visible and durable residues independently.
 Each may contain a genuine prefix, or the full expected header followed by an observed
@@ -98,6 +107,7 @@ modeled primitives remain separate obligations. [Native adapter](../../lean/Alvo
   eight-byte trailer, the error is detectable. A torn marker with a bad checksum is likewise
   detectable. Either check can accept a different internally consistent record. No collision
   is needed to substitute an entirely valid frame of equal length with the expected sequence.
+  Recovery can refuse a damaged published frame. Reconstructing its original bytes requires independent redundancy.
   A checksum-valid header with the wrong sequence produces a gap error. Admitting that image
   after an ordinary crash would require revisiting the healthy-reopen claim.
 - **Protocol response.** Log-only recovery can discard that detectable final frame. A strict
