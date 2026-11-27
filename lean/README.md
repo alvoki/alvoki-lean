@@ -1,30 +1,14 @@
 # Lean source
 
-[Alvoki/Storage](Alvoki/Storage) contains the storage engine, its models and proofs. Start with the [disk layout](Alvoki/Storage/Disk/README.md) for the native storage implementation. [Alvoki/Checks/Tests](Alvoki/Checks/Tests) contains executable checks; [Alvoki/Checks/Audit](Alvoki/Checks/Audit) contains proof audits and dependency tools.
+The current implementation is under [Alvoki/Experiments](Alvoki/Experiments). It contains independent contracts, executable models and native adapters for durable blobs, manifests, immutable SSTables, and a segmented WAL. [Shared codec primitives](Alvoki/Codec/Block.lean) and [block proof contracts](Alvoki/Kernel/BlockContracts.lean) are imported by the SSTable component and are kept outside its implementation.
 
-[Alvoki/Bench/Disk](Alvoki/Bench/Disk) contains the disk benchmark entry points. Lake target names and build settings are in [lakefile.lean](lakefile.lean); the repository [getting-started guide](../docs/getting-started.md) documents the pinned toolchain and checks. The storage engine also imports shared modules such as [compaction](Alvoki/Compaction/Core.lean), its [codec](Alvoki/Compaction/Codec.lean), and [PackedView](Alvoki/Codec/PackedView.lean). The [benchmark entry points](Alvoki/Bench) drive separate disk, merge, search, codec and compaction experiments.
+The principal verification entry points are the component scripts under [`../scripts`](../scripts): `check-experimental-manifest.sh`, `check-wal-recovery-slice.sh`, `check-segmented-wal.sh`, and the SSTable checks. They run focused kernel, axiom, model, and native checks. `lakefile.lean` describes the shared component libraries; `lake build` builds the retained component roots.
 
-Follow a [snapshot read](Alvoki/Storage/Table/README.md) from the table to one run, or follow [WAL collection](Alvoki/Storage/Disk/WAL/README.md) from a checkpoint and marker to the selected segments. Both guides point to the executable operation and its separate refinement proofs. Consumers of lookup, snapshot, compaction and retention theorems should import their proof modules explicitly.
-
-For an experiment, the `alvoki-fused-merge` target in [lakefile.lean](lakefile.lean)
-starts [FusedMergeMain.lean](Alvoki/Bench/Merge/FusedMergeMain.lean), which calls
-the shared [FusedMerge](Alvoki/Experiments/Merge/FusedMerge.lean) kernel and its
-[SpanMerge](Alvoki/Experiments/Merge/SpanMerge.lean) emitter. Run the workload
-and its fixtures through `bash scripts/fused-merge.sh`; see the
-[benchmark guide](../docs/performance/benchmarks.md) for options and results.
-
-## Other source directories and top-level modules
-
-| Location | What lives here |
+| Location | Purpose |
 |---|---|
-| [Alvoki/Storage](Alvoki/Storage/README.md) | Runtime table, disk adapter, durable publication schedules and storage refinements. |
-| [Alvoki/Bench](Alvoki/Bench) and [Alvoki/Checks](Alvoki/Checks) | Benchmark drivers, executable fixtures and proof audit tools. |
-| [native](native) | C bindings including checked directory enumeration, descriptor sync and packed operations. |
-| [runtime-experiment](runtime-experiment) | Experimental C lowerings, ABI checks and tooling for packed builders and accessors. |
-| [Alvoki/Codec](Alvoki/Codec), [Alvoki/Compaction](Alvoki/Compaction), [Alvoki/Kernel](Alvoki/Kernel), and [Alvoki/Packed](Alvoki/Packed) | Shared codecs, compaction operations, kernel contracts and packed models used by storage and experiments. |
-| [Alvoki/Experiments](Alvoki/Experiments) and [Alvoki/Proofs](Alvoki/Proofs) | Experimental kernels and standalone byte, merge and packed correctness proofs. |
+| [Alvoki/Experiments](Alvoki/Experiments/README.md) | Component implementations and their guides. |
+| [Alvoki/Codec](Alvoki/Codec) and [Alvoki/Kernel](Alvoki/Kernel) | Shared byte encoding and proved block contracts. |
+| [Alvoki/Checks/Audit](Alvoki/Checks/Audit) | Axiom policy and proof dependency audit support. |
+| [native](native/README.md) | Linux sync, checked directory listing, and SSTable C bindings. |
 
-The only Lean source file kept directly in this directory is
-[lakefile.lean](lakefile.lean), the package configuration Lake discovers at the
-project root. Its existing target names remain the entry points for builds and
-executables.
+The project-level [reproduction guide](../README.md#build-and-verify) lists the pinned toolchain setup and current checks.

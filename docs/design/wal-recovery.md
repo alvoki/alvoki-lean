@@ -1,122 +1,25 @@
-# WAL recovery policies and deterministic simulation
+# WAL recovery assumptions and counterexamples
 
-**Design proposal.** Start with a single writer, one durably named segment and whole batches. The current engine publishes an absolute WAL byte boundary using a staged marker, grouped file sync, rename and directory sync. Its callback-based schedule is a useful starting point. The two policies below would require a versioned on-disk format and their own source-level proofs. [Current commit path](../../lean/Alvoki/Storage/Disk/WAL/WalSegmentCommit.lean) · [Current filesystem contract](../proofs/filesystem.md)
+The WAL models preserve several correctness obligations that continue to matter to the component work. A crash contract must describe the joint file and namespace state that can survive, including an error after a sync has taken effect. A successful first open must establish a history that a second open with no intervening operation returns again. Healthy recovery must be possible once faults stop. These are proof obligations, not consequences of a checksum or of a successful model run.
 
-## What the caller buys
+## Counterexamples the contract must admit
 
-| Persistent database policy | ACK boundary | Successful recovery |
-|---|---|---|
-| Log only | Append the complete batch, flush any userspace buffering and successfully data-sync the segment. | Recover a contiguous sequence of complete submitted batches starting at the required checkpoint position. Every ACK survives under the crash assumptions below. A complete uncertain tail may survive. |
-| Durable commit boundary | Make the batch data durable, then durably publish the boundary covering it before ACK. | Replay through the selected boundary. Missing bytes, a gap or detectable corruption inside it must produce an error. Discard any later unpublished suffix before reusing the segment. |
+<a id="what-the-single-file-proof-establishes"></a>
 
-The experimental trace theorem gives both policies the same client contract. Two additional theorems compare actual opens on the same file images. With a complete B after H and an intact selected marker ending at H, log-only recovery adopts B and boundary recovery discards it. If the segment ends cleanly at H but the intact selected marker covers H followed by B, boundary recovery reports missing bytes and log-only recovery accepts H. This second comparison measures detection after loss of a complete frame, including faults outside the trace model's stable-prefix assumption. [Policy comparison proofs](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean)
+- **Uncertain append.** After A is acknowledged and B's append or sync reply is lost, a surviving complete B may be retained; a damaged final B may be discarded only when the selected durability boundary does not cover it. Recovery must never lose A.
+- **Missing published data.** If a durable marker covers B but the corresponding bytes are missing or detectably corrupt, open must report an error. If the marker ends at A, an unpublished suffix can be discarded.
+- **Valid substitution.** A different checksum-valid record with the expected sequence and length can pass ordinary framing checks. The abstract client history must reject a recovered write that was never submitted. A checksum is not authentication.
+- **Interrupted repair.** If dirty tail bytes are written back before recovery truncates them, then recovery stops before syncing that truncate, a power loss can reveal the tail again. Retry must account for both the reached state and the sync outcome.
+- **Lost sync response.** A reported file or directory sync error does not establish that the operation had no effect. Keep both possible outcomes and feed the observed filesystem choice into retry and reopen.
 
-Record the format and policy durably at creation. An existing database opens under its recorded policy. A missing required marker is an error. New formats need an explicit migration or a fresh database. The boundary identifies the segment generation, byte end and last sequence. Its publication must survive a crash as one old or new valid choice and a completed barrier must preserve the newer choice. Loss or coherent rollback of both the marker and the data is beyond this detector. A marker can become durable before the caller receives the ACK.
+The single-file proofs model append residues, writeback and the policy-dependent treatment of an uncertain suffix. Their important boundary is explicit: valid arbitrary substitution is outside the filesystem crash model and must be caught by the client-history contract. See [policy counterexamples](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean), [physical write outcomes](../../lean/Alvoki/Experiments/WAL/CrashModel.lean), and [writeback proofs](../../lean/Alvoki/Experiments/WAL/Writeback.lean).
 
-**Assumptions to prove against.** The writer owns the directory and establishes the segment name durably. A successful data-sync preserves the bytes and the metadata needed to retrieve them. A subsequent append or tail repair preserves previously synchronized prefix bytes, including when two batches share a filesystem block. Process death may leave dirty data visible. Power loss selects an allowed joint image of file contents and directory entries. A read error provides no evidence that the tail is empty.
+## Filesystem premises
 
-Use bounded, checked batch headers (generation, sequence and length) and a validity check over the header and payload. Define exactly which torn writes or corruptions the encoding detects. A CRC alone cannot prove authenticity against arbitrary replacement bytes or checksum collisions. An old valid batch in a recycled file is another reason to check generation and sequence. Before claiming the log-only theorem, prove that every accepted tail under the admitted fault model decodes to a complete submitted batch, or explicitly narrow that model.
+The executable schedule needs explicit premises for exclusive stable directory ownership, durable naming at initialization, exact reads or reported read errors, prefix preservation across append and repair, and the effects of successful file and directory sync. Process exit may leave cached bytes visible; power loss selects an admitted durable image of both file contents and directory entries. A native fixture can exercise selected Linux outcomes but cannot establish device power-loss behavior. See [filesystem assumptions](filesystem-assumptions.md) and the [DurableBlob guide](../../lean/Alvoki/Experiments/DurableBlob/README.md).
 
-## First vertical slice
+## Proof and verification paths
 
-1. Append A and return its ACK. Start B, then interrupt the append or its sync. Stop issuing writes on that session after an ambiguous outcome.
-2. Open the actual resulting image. In log-only mode an admissible torn final B, even at full declared file length, can be discarded. A valid B can be retained. A gap in required earlier history or an I/O read error fails open. In boundary mode inspect the selected marker first. If it covers B, damaged B must fail open. If it ends at A, discard the suffix.
-3. Stabilize the recovered end before exposing the recovered history as durable, including after process death with dirty bytes. Append and acknowledge C. Crash again. A second successful open must preserve A, C, and the decision about B that the first successful open exposed. Recovery interrupted during repair must itself be retryable.
+Keep framing, replay choice and the observable history contract explicit. Derive each filesystem premise from the operation and handle actually reached. Preserve failed and interrupted state so subsequent open attempts consume the real continuation. The segmented model and proofs compose rotation and release around the single-file recovery reasoning; see its [guide](../../lean/Alvoki/Experiments/WAL/Segmented/README.md).
 
-After this slice, rotate only between batches and settle the successor name before acknowledging writes to it. Collect whole closed segments only after a durable checkpoint releases them. Defer recycling until a fresh generation and every stale-tail outcome can be distinguished. Keep proofs of these operations local to the shared recovery invariant.
-
-## One algorithm, two ways to run it
-
-Keep framing, bounded decoding and the choice of replay end pure. Keep the order of append, sync, marker publication and repair in a single executable Lean function parameterized by the few operations it actually calls. A function of the shape `appendBatch [Monad m] (ops : WalOps m) ... : m Ack` can execute these calls in order and branch on their results. The type and signature here are illustrative. Start with ordinary function arguments if the slice only needs append and sync. Existing `commitBytesAt` and `Publication.run` already express schedules this way. [Publication interpreter](../../lean/Alvoki/Storage/Publication/DiskPublication.lean)
-
-- **Native interpreter.** Supply Lean IO and checked native primitives. Preserve actual descriptors, flushes, return values and failures, including effects that occurred before an error.
-- **Simulation interpreter.** Supply operations on a small model with volatile bytes, durable bytes, visible/durable names and a fault script. For example, `EStateM SimError SimState` carries the reached state on both success and failure. A scripted stop abandons the running call without invoking its ordinary error cleanup. Model exit or reboot explicitly and run the same real open schedule again on its successor state. Keep the driver's record of submissions and observed ACKs outside the simulated process.
-- **Independent test oracle.** Check the public observations against allowed histories from those submissions and ACKs. Never use the production scanner to compute the expected answer. For a small script, enumerate the reached primitive cuts and allowed persistence outcomes. Later, generate longer scripts deterministically and save failing scripts with their seed and minimized sequence.
-
-A discriminating fixture places A and B in one block and persists B's full length with only part of its payload. Enumerate this outcome only while the required data barrier for B has yet to succeed. Separately inject detectable damage *after* B's ACK to exercise the stronger policy with an intact marker. Also try a process exit with valid B visible only in cache, an error before and after an effective sync, and a read EIO. Assert the subsequent open result, repair effects and second-reboot history. A deliberately broken implementation that acknowledges before sync should fail under an allowed power-loss cut.
-
-## Evidence and cost
-
-Lean proofs should quantify over all admitted outcomes and establish the ACK, recovery and detection contracts per policy. Simulation executes representative and bounded-exhaustive scripts quickly, challenges the fault model and produces short regressions while the contracts change. Linux fault and process-death tests independently exercise native callback ordering, actual reads and error propagation. Neither a simulator nor a process kill establishes a device's power-loss behavior. [Native fixtures](../../lean/Alvoki/Checks/Tests/DiskTableChecks.lean) · [Process-death tests](../../scripts/check-disk-process-death.py)
-
-Measure performance empirically. Compare the two policies on the same device, filesystem, workload and durability settings. Record batch size, group size, segment size, ACK latency percentiles, throughput and syncs per acknowledged group. Report rotation separately and compare recycling on/off once it exists. Recycling saves work per rotation while a durable commit boundary adds ordered work per group. Published results should identify the workload where either cost matters. [Benchmark methodology](../performance/benchmarks.md)
-
-## Run the one-segment experiment
-
-Call `SingleFile.create dir policy` in an empty, durably named directory or `SingleFile.openExisting dir` for an existing WAL. The returned handle owns the exclusive writer lock. A successful `append h payload` adds one batch to the history returned by `scan h`. Scan reads the handle's in-memory history. After an append error, close the handle and reopen to reconstruct that history from disk. [Directory API](../../lean/Alvoki/Experiments/WAL/SingleFile.lean)
-
-Run `bash scripts/check-wal-recovery-slice.sh` on Linux with the pinned Lean toolchain and a C compiler. It runs the kernel and axiom checks, deterministic crash scripts and native fixtures. One native fixture forces the OS to accept 36 bytes of a 52-byte frame before returning a write error. Both policies reopen, recover all 19 preceding acknowledged batches and accept a replacement batch. [Protocol and scanner](../../lean/Alvoki/Experiments/WAL/Recovery.lean) · [Simulator](../../lean/Alvoki/Checks/Tests/WalRecoverySlice.lean) · [Linux fixtures](../../lean/Alvoki/Checks/Tests/WalRecoveryFiles.lean)
-
-### Two fixed files in boundary mode
-
-At creation, create `commit.0` and `commit.1` as distinct regular files, initialize both, sync both files and sync the directory. Each 14-byte record contains magic, format version, segment generation, last batch sequence, a two-byte end offset (high byte first), and an eight-byte hash over these six fields. Slot zero starts at the empty segment. Slot one starts as an empty file. During normal append, sync the segment, overwrite the inactive marker file in place, flush and sync that file, then acknowledge. The file names remain stable. In this one-segment format each batch advances the sequence by one, so parity chooses the destination and the next write preserves the previous accepted record.
-
-Open reads both files. A read error or oversized marker file fails open. From the valid records, choose the newest and verify its segment generation, last sequence and byte boundary against the selected WAL data. If those WAL bytes fail validation, report corruption. Before truncating the suffix or returning the recovered history, sync the selected marker and then the other slot. In the model a failed marker write can leave a short record visible in cache while its complete record is already durable. A process restart then selects the older end. Syncing its sibling prevents a later power loss from resurrecting a marker that points beyond the repaired WAL. Either barrier can fail independently and stops recovery before truncation.
-
-The crash contract assumes an incomplete overwrite of the inactive file preserves the settled active record and cannot forge a newer valid record. Separate files give each record its own inode and eliminate a shared logical file block. Filesystem allocation, controller behavior and physical placement remain external assumptions. Later corruption of the most recently synced marker can look like an interrupted update beside an older valid record. The detection guarantee for damaged WAL data therefore requires an intact authoritative marker. These two files provide no independent evidence against coherent rollback of both slots.
-
-### What the single-file proof establishes
-
-The on-disk batch has a four-byte header (magic, generation, sequence, payload length), an eight-byte header hash, the payload and an eight-byte hash over the header and payload. All three on-disk checks use the pinned Lean standard library’s `hash` for `List UInt8` and store the complete `UInt64` little-endian. The v3 policy file identifies this encoding. A future toolchain whose hash differs will require a format revision.
-
-Starting at the initialized empty files, every finite sequence of appends, scans, process exits, power losses and successful or interrupted open attempts satisfies the same rule. After a successful append of B to history H, the known history is H followed by B. An uncertain append leaves H and at most the whole B. A successful open exposes one permitted choice and establishes it for subsequent operations. Failed opens expose no history. When faults cease, a healthy open can return from every reachable offline state. The file format permits 255 batches of up to 32 bytes each. Over-limit submissions fail before the first filesystem action. [Client contract](../../lean/Alvoki/Experiments/WAL/Contract.lean) · [Trace refinement and healthy-open theorems](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean)
-
-#### Which guarantee depends on which assumption?
-
-Read the argument from the files up. The storage contract determines which bytes can be
-observed. The encoding contract maps those bytes to batches or an error. The client
-contract describes observations across successive calls, including a crash during recovery.
-
-| Layer and scope | Assumption | Guarantee that uses it |
-|---|---|---|
-| Storage, both | One writer owns initialized, durably named files. Reads return live bytes or an error. Process exit can retain cache, power loss selects durable bytes. | Recovery can distinguish a failed read from an empty log. Native ownership and initialization are entry assumptions. [Primitive interpreter](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L135) · [Native adapter](../../lean/Alvoki/Experiments/WAL/SingleFile.lean) |
-| Storage, both | Append preserves earlier synchronized bytes. Truncate preserves the bytes below its requested end. Successful sync fixes bytes and length. Background writeback can settle one whole file at a time. | An ACK survives later operations, including repair interrupted before its final barrier. [Physical write outcomes](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L76) · [Writeback schedule](../../lean/Alvoki/Experiments/WAL/Writeback.lean#L41) |
-| Encoding, log-only | A full-length torn final frame retains its first 12 bytes (header and header hash), the declared payload length, and a mismatching trailer. Genuine prefixes are also admitted. | The scanner can locate the uncertain frame and discard the checksum-invalid frame while preserving the known history. The physical shape and checksum mismatch are separate premises. [Residue bytes](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L163) · [Detection premise](../../lean/Alvoki/Experiments/WAL/CrashModel.lean#L175) · [Scanner theorem](../../lean/Alvoki/Experiments/WAL/Proofs/Scan.lean#L216) |
-| Publication, boundary | An interrupted write to the inactive slot preserves the active slot and cannot forge a newer valid marker. Detecting subsequent loss requires the authoritative marker to survive. | The selected marker excludes unpublished bytes without a suffix checksum premise. A scan error inside the published extent fails open before repair. [Admitted traces](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean#L24) · [Published scan error](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L84) |
-| Encoding, both | Within the replayed history, arbitrary substitution by another valid frame falls outside the fault model. | A returned batch comes from the submitted history. Length, sequence and the existing marker cannot authenticate a coherent replacement. [Substitution counterexample](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L126) |
-| Client, both | Safety quantifies over all admitted traces. Progress requires a healthy open attempt from a reachable offline state. | Every successful open retains the known history and resolves the outstanding batch as a whole. Once I/O succeeds, recovery can return. [Allowed histories](../../lean/Alvoki/Experiments/WAL/Contract.lean#L20) · [Safety and progress](../../lean/Alvoki/Experiments/WAL/Proofs/Execution.lean#L186) |
-
-For a stopped append, the model chooses visible and durable residues independently.
-Each may contain a genuine prefix, or the full expected header followed by an observed
-payload of the submitted length and an eight-byte trailer. Log-only recovery admits the
-latter as a damaged frame when its trailer disagrees with its observed payload and header.
-For a healthy modeled boundary open, a separate theorem admits arbitrary bytes after the selected
-marker, including a destroyed header or a complete frame copied from elsewhere. If the
-published prefix is intact, the call returns exactly that history and makes its byte end
-durable. This result describes recovery from the given image independently of how it arose.
-[Arbitrary unpublished suffix](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean#L48)
-
-The ordinary append model still covers the complete
-genuine frame. Marker overwrites admit old, new, short and full-length checksum-rejected
-slot images. The trace assumes an interrupted overwrite cannot forge a newer valid marker.
-
-At each reached primitive, background writeback can first settle any sequence of individual
-files, including their lengths. Suppose the live log is H plus a torn tail and the durable
-log is H. Writeback just before truncate can persist the tail. If recovery then truncates to
-H and stops before sync, power loss reveals the tail again. The proof accounts for both sides
-of that truncate. Each successful sync fences earlier writes to its file. Arbitrary
-sector-level persistence and stale writes crossing a successful fence remain outside the model.
-[Writeback proofs](../../lean/Alvoki/Experiments/WAL/Proofs/README.md)
-
-The trace starts after successful initialization under exclusive ownership. Native creation,
-locking, descriptor lifetimes, buffering and the correspondence between Linux calls and the
-modeled primitives remain separate obligations. [Native adapter](../../lean/Alvoki/Experiments/WAL/SingleFile.lean)
-
-### Where corruption detection ends
-
-- **Physical fault.** A stopped append can leave the full new file length while only part of
-  the batch reached storage. Its already synchronized prefix must survive, even if the old and
-  new batches share a block. Otherwise damage to the last acknowledged batch could look like
-  a disposable tail to log-only recovery.
-- **Wire evidence.** With an intact header, a complete observed payload and a mismatching
-  eight-byte trailer, the error is detectable. A torn marker with a bad checksum is likewise
-  detectable. Either check can accept a different internally consistent record. No collision
-  is needed to substitute an entirely valid frame of equal length with the expected sequence.
-  Recovery can refuse a damaged published frame. Reconstructing its original bytes requires independent redundancy.
-  A checksum-valid header with the wrong sequence produces a gap error. Admitting that image
-  after an ordinary crash would require revisiting the healthy-reopen claim.
-- **Protocol response.** Log-only recovery can discard that detectable final frame. A strict
-  scan through it fails. A selected marker ending before it lets recovery drop the unpublished
-  suffix. If a valid replacement fits the original published sequence and length, *both*
-  healthy openers can return the replacement. The independent client history rejects it.
-  [Scanner theorem](../../lean/Alvoki/Experiments/WAL/Proofs/Scan.lean) · [Substitution theorem](../../lean/Alvoki/Experiments/WAL/Proofs/Policy.lean) · [Simulation oracle](../../lean/Alvoki/Checks/Tests/WalRecoverySlice.lean)
+Run `bash scripts/check-wal-recovery-slice.sh` for the single-file proofs, torn-write and retry regressions, and native partial-write fixture. Run `bash scripts/check-segmented-wal.sh` for the segmented model, kernel, axiom, and native fixtures. The full retained suite is `bash scripts/reproduce.sh`.
