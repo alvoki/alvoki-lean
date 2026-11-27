@@ -50,12 +50,17 @@ the selected handle and the heap reached by the issued write. Given a
 live descriptor bound to the keeper, a filesystem effect preserving its
 old byte prefix and the protected files is enough for a reboot to select
 the old target. The interrupted request contributes no acknowledged rows.
-Before the first checkpoint, the sampled plan also feeds the literal WAL
-reader under its reset, enumeration and read assumptions.
+After a successful marked open, the selected manifest, run payloads,
+marker and bounded WAL replay determine the phase installed in the
+returned table. A latest snapshot lookup on that table agrees with the
+old history, including when the keeper had an uncommitted tail. This
+uses the held directory and read observations and phase allocation.
 [Write interruption](../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
+· [Returned table and lookup](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
-**Next obligation.** Connect the checkpoint-backed reader to this same
-append sample when the actual keeper can contain a partial batch. For layouts with extra files,
+**Next obligation.** Carry the interrupted request's ledger into the
+next write on this checkpoint-backed table, using the actual repair and
+durability effects at the keeper. For layouts with extra files,
 derive the next retry entry from a modifying failed repair, including an
 effective directory barrier that reports failure.
 

@@ -72,11 +72,10 @@ theorem _root_.Alvoki.Storage.DiskTable.LatestWalLookup.recordsRead
   · obtain rfl := List.mem_singleton.mp latest
     rfl
 
-/-- Acquire the latest pin from a reopened phase containing the complete
-WAL replay, then look up a key through that pin on the same table. The
-callbacks report only phase-cell effects and token equality after the
-pin update. The replay and the answer follow from the recovered bytes. -/
-theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalReplay
+/-- Acquire the latest pin and observe its lookup using the returned
+phase and token. The installed table may have been restored from a
+checkpoint as long as its latest entries agree with replay. -/
+theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterRepresentedHistory
     {db : DiskTable} {directory lock files phase token}
     (uses : db.UsesOpenReferences directory lock files phase token)
     {contents : heap → IO.Ref (Phase Installed) → Option (Phase Installed)}
@@ -84,29 +83,23 @@ theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalR
     {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
     (effects : OpenPhaseCellEffects contents get set) {entry : heap} {installed : Installed}
     (stored : contents entry phase = some (.ready installed)) {history : List WAL.Write}
-    (recovered : recoverSelected .empty (WAL.encode history) = .ok installed.table)
+    {model : SnapshotTable UInt64} (refined : installed.table.Refines model)
+    (represented : RepresentsWalHistory history model)
     (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
     (compares : ∀ {pinned : PackedTable} {after},
       set phase (.ready { installed with table := pinned }) entry = .ok () after →
       ptrEq token token after = .ok true after) (key : UInt64) :
     db.LatestWalLookup phase token get set ptrEq entry history key := by
-  obtain ⟨events, decoded, applied, _⟩ := recoverSelected_success recovered
-  have fullFrames : (WAL.encode history).size / WAL.frameSize * WAL.frameSize = (WAL.encode history).size := by
-    rw [WAL.encode_size, Nat.mul_div_cancel_left _ (by decide : 0 < WAL.frameSize), Nat.mul_comm]
-  have encoded := WAL.decodeOrdinals_reencode decoded
-  rw [fullFrames, ByteArray.extract_zero_size] at encoded
-  have sameEvents : events = history := Except.ok.inj ((WAL.decode_encode events).symm.trans
-    ((congrArg WAL.decode encoded).trans (WAL.decode_encode history)))
-  have played : replay .empty history = .ok installed.table := by
-    simpa only [show PackedTable.empty.committed.toNat = 0 from rfl, List.drop_zero, sameEvents] using applied
-  obtain ⟨reference, replayed, refined⟩ := replay_refines PackedTable.empty_refines played
+  obtain ⟨reference, replayed, clock, _, _, _⟩ := id represented
   have available : installed.table.pins.floor ≤ installed.table.committed := by
     rw [refined.pins, refined.committed]
-    exact reference.floor_committed
+    exact model.floor_committed
   have sameTable : installed.table.SameData installed.table := ⟨rfl, rfl, rfl, rfl⟩
   obtain ⟨pin, pinned, acquired, lookups, _⟩ := sameTable.acquireAt_reads available (UInt64.le_refl _)
   have answer : pinned.lookup pin.handle key = some (reference.table.lookup key reference.committed) := by
-    simpa only [refined.table, refined.committed] using lookups key
+    simp only [refined.table, refined.committed] at lookups
+    have agree := (represented.reads replayed model.floor_committed).1 key
+    exact (lookups key).trans (congrArg some (agree.trans (congrArg (reference.table.lookup key) clock)))
   obtain ⟨issue, owns, _, acquireSource⟩ := uses.snapshotAcquisitions
   obtain ⟨after, wrote, pinnedAt⟩ := effects.writes entry phase (.ready installed)
     (.ready { installed with table := pinned }) stored
@@ -114,10 +107,11 @@ theorem _root_.Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalR
   have loadedPin := effects.reads after phase (.ready { installed with table := pinned }) pinnedAt
   have localToken := compares wrote
   have sequence := (owns pin).2.2.trans (PackedTable.acquireAt_spec acquired).sequence
-  have count : installed.table.committed.toNat = history.length := by
-    simpa only [show PackedTable.empty.committed.toNat = 0 from rfl, Nat.zero_add] using replay_committed_count history played
-  refine ⟨reference, replayed, (congrArg UInt64.toNat refined.committed).symm.trans count,
-    issue, pin, after, owns pin, sequence.trans refined.committed,
+  have count : reference.committed.toNat = history.length := by
+    simpa only [show (SnapshotTable.empty : SnapshotTable UInt64).committed.toNat = 0 from rfl, Nat.zero_add]
+      using replayed.committed_count
+  refine ⟨reference, replayed, count, issue, pin, after, owns pin,
+    sequence.trans (refined.committed.trans clock),
     acquireSource, ?_, uses.lookupPin (owns pin) key, ?_⟩
   · simp only [acquireLatestWith, acquireSnapshotWith, Bind.bind, EStateM.bind, loaded, Phase.installed,
       Pure.pure, EStateM.pure, acquired, wrote]

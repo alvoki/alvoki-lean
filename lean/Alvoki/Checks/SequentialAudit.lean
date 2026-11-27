@@ -2165,7 +2165,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.releasePin
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.advanceFloor
 #check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.snapshotAcquisitions
-#check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterWalReplay
+#check_axioms Alvoki.Storage.DiskTable.UsesOpenReferences.lookupLatestAfterRepresentedHistory
 #check_axioms Alvoki.Storage.DiskTable.LatestWalLookup.recordsRead
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.runOnOpenPhase_rejectsPhase
 #check_axioms Alvoki.Storage.DiskSession.runCheckpointOnOpenPhase_rejectsPhase
@@ -4356,6 +4356,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.retainsLiteralLongerRepair
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.installsLiteralRepairedWriter
 #check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
+#check_axioms Alvoki.Storage.DiskSession.NativeReadPosition.SelectedWritePlan.readsClientHistoryAtOpen
 #check_axioms Alvoki.Storage.WalSegmentImage.NamespaceWindow.afterDirectorySync
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperStagedSyncHeap.preservesSelectedStage
 #check_axioms Alvoki.Storage.DiskSession.NativeLongKeeperRenameHeap.preservesSelectedReplacement

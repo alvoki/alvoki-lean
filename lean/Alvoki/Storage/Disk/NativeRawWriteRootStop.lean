@@ -434,17 +434,18 @@ theorem NativeOpenedPosition.stopsDuringWalAppend
       ∀ {rebooted : heap} (sample : RawWriteRebootEntry state view storage names visible cut rebooted),
         BatchRetryTarget (state).writer.history batch (state).writer.wal.active.first (state).writer.target ∧
         RawOpenRetryTrace.SelectedEntry view state (state).writer.target names visible rebooted ∧
-        (sample.DurableReset → current.WalWindowAt storage 0 horizon →
+        (current.WalWindowAt storage 0 horizon →
         ∃ plan : current.current.ready.SelectedWritePlan batch (state).writer.target (view.files rebooted).image,
-          current.current.SelectedWriteReboot view storage visible 0 request batch table (state).writer.target cut rebooted ∧
+          (sample.DurableReset →
+            current.current.SelectedWriteReboot view storage visible 0 request batch table (state).writer.target cut rebooted) ∧
           plan.history = current.current.history ∧
-          (∀ {origin : NativeExecutionPosition} {events : List NativeExecutionEvent},
+          ∀ {origin : NativeExecutionPosition} {events : List NativeExecutionEvent},
             origin.LedgerSuffix events current.current →
-              origin.InterruptedWriteLedger current.current events request batch [] plan.history) ∧
-          ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
-            (state).writer.target.pair.manifest = none →
-            opener.ReplaysWalBeforeCheckpointAtOpen view dir (state).writer.wal.active.first
-              storage visible rebooted namespaceView root plan.history) := by
+            origin.InterruptedWriteLedger current.current events request batch [] plan.history ∧
+            ∀ {stream : Type} (opener : RawMarkedOpenInterpreter heap stream) namespaceView root,
+              opener.ReadsClientHistoryAtOpen view dir storage visible rebooted namespaceView root
+                ((origin.submissions ++ events.flatMap NativeExecutionEvent.submissions) ++ [.uncertainBatch batch])
+                (origin.ready.reads ++ events.flatMap NativeExecutionEvent.reads) plan.history) := by
   have valid := current.current.ready.readPrefix.refines.1
   have loaded := opened.phaseEffects.reads current.reached opened.phase _
     (current.stored.trans (congrArg some valid.phase))
@@ -474,31 +475,27 @@ theorem NativeOpenedPosition.stopsDuringWalAppend
     reached.selectsPriorAtReboot («storage» := storage) (entry := current.reached) (cut := cut)
       valid batch initial atEntry sample
   refine ⟨admitted, chosen, ?_⟩
-  intro reset window
+  intro window
   have writerHistory := current.current.ready.readPrefix.refines.2.1
   have cutoff : (state).writer.target.range.through = current.current.history.length :=
     valid.retained.resumed.through.trans (congrArg List.length writerHistory)
-  have sampledWindow := sample.walNamespace (beforeWrite.2.trans namesEffect) window.2
-  have recovery := sample.startsRecoveryObservations reset chosen (cutoff.symm ▸ sampledWindow)
-  let handoff : current.current.SelectedWriteReboot view storage visible 0 request batch table
-      (state).writer.target cut rebooted :=
-    ⟨prepared, fits, fun _ _ => Nat.zero_le _, vacant, sample, admitted, chosen, recovery⟩
-  obtain ⟨plan, opens⟩ := handoff.sampledPlan
-  have sameLength : plan.history.length = current.current.history.length :=
-    plan.layout.through.symm.trans ((congrArg (fun target : Target => target.range.through) plan.targetEq).trans cutoff)
-  have oldHistory : plan.history = current.current.history := by
-    rcases plan.allowed with prior | complete
-    · exact prior
-    · have count := congrArg List.length complete
-      rw [List.length_append] at count
-      have empty : batch = [] := List.length_eq_zero_iff.mp (by omega)
-      simpa only [empty, List.append_nil] using complete
-  refine ⟨plan, handoff, oldHistory, ?_, @opens⟩
-  intro origin events prior
-  refine ⟨⟨table, prepared⟩, .inl rfl, ?_, ?_, ?_⟩
-  · simpa only [List.append_nil, ← prior.history] using oldHistory
-  · simpa only [← prior.submissions, ← prior.reads] using plan.pending
-  · simpa only [← prior.reads] using plan.bounded
+  have sampledWindow := cutoff.symm ▸ sample.walNamespace (beforeWrite.2.trans namesEffect) window.2
+  obtain ⟨plan⟩ := current.current.ready.preparesSelectedWrite prepared fits admitted chosen.valid chosen.manifest
+  have oldHistory := plan.oldHistory
+  have physical := plan.visibleWal names visible (fun _ _ => Nat.zero_le _) sampledWindow
+    chosen.protectedFiles chosen.keeper
+  refine ⟨plan, ?_, oldHistory, ?_⟩
+  · intro reset
+    exact ⟨prepared, fits, fun _ _ => Nat.zero_le _, vacant, sample, admitted, chosen,
+      sample.startsRecoveryObservations reset chosen sampledWindow⟩
+  · intro origin events prior
+    have ledger : origin.InterruptedWriteLedger current.current events request batch [] plan.history := by
+      refine ⟨⟨table, prepared⟩, .inl rfl, ?_, ?_, ?_⟩
+      · simpa only [List.append_nil, ← prior.history] using oldHistory
+      · simpa only [← prior.submissions, ← prior.reads] using plan.pending
+      · simpa only [← prior.reads] using plan.bounded
+    exact ⟨ledger, fun opener namespaceView root =>
+      plan.readsClientHistoryAtOpen (source := opener) storage visible namespaceView root chosen physical ledger.pending⟩
 
 end AppendStop
 

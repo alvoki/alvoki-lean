@@ -926,8 +926,11 @@ filesystem assumptions bind its live descriptor to the keeper, protect
 the other files and preserve the committed byte prefix at that inode.
 A reboot samples that prefix with a possibly empty tail. Replay stops
 at the previous marker and the ledger records a submission without a
-response. For a database without a manifest the sampled plan feeds the
-literal WAL reader.
+response. The marked reader observes the selected manifest and its exact
+run payloads, then replays the WAL up to that marker. The phase and token
+allocated by the same successful open support a latest lookup whose
+sequence and value agree with the recorded history. This read argument
+needs no proof that a future write can reach a durable acknowledgement.
 [Public write stop](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
 
 In the native
