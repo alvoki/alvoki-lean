@@ -45,6 +45,6 @@ bash scripts/fused-merge.sh --out /tmp/alvoki-fused-merge.csv
 python3 benchmarks/fused_merge.py --summarize /tmp/alvoki-fused-merge.csv
 ```
 
-- [Raw trials](../benchmarks/results/packed/fused-merge-trials.csv)
-- [Summary](../benchmarks/results/packed/fused-merge-summary.csv)
-- [VM environment](../benchmarks/results/packed/fused-merge-environment.txt)
+- [Raw trials](../../benchmarks/results/packed/fused-merge-trials.csv)
+- [Summary](../../benchmarks/results/packed/fused-merge-summary.csv)
+- [VM environment](../../benchmarks/results/packed/fused-merge-environment.txt)

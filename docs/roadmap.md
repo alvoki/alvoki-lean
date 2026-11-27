@@ -14,7 +14,7 @@ During pre-release development, keep one active encoding per artifact. Remove su
 
 ## Release performance
 
-The [first native baseline](performance-baseline.md) identifies durable write publication as the first bottleneck to investigate.
+The [first native baseline](performance/performance-baseline.md) identifies durable write publication as the first bottleneck to investigate.
 
 Make Alvoki a verified embedded LSM that is competitive with an established engine on sustained durable workloads with one foreground thread. Start with RocksDB. Fjall or another established engine is acceptable when it supports a simpler, like-for-like comparison. Pin the reference engine and version before collecting the baseline.
 
@@ -34,7 +34,7 @@ Use native release builds on the same Linux machine and storage. Match input, op
 4. Verify the affected contracts, differential fixtures and crash cases. Record the commit, hypothesis, before-and-after samples, tradeoffs and next experiment. Add a scenario when it answers an open diagnostic question or guards against an observed regression.
 5. Repeat while the target is unmet. When comparable, repeatable measurements satisfy the primary target and the recovery and correctness checks pass, record the final comparison and close the optimization loop.
 
-[YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall) · [Benchmark method](high-performance-lean.md#reproduce-before-generalizing) · [Proof and runtime performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
+[YCSB](https://github.com/brianfrankcooper/YCSB) · [RocksDB](https://github.com/facebook/rocksdb) · [Fjall](https://github.com/fjall-rs/fjall) · [Benchmark method](performance/high-performance-lean.md#reproduce-before-generalizing) · [Proof and runtime performance requirements](proof-roadmap.md#performance-requirements-for-verified-paths)
 
 ### Map the engine before choosing the next optimization
 
@@ -90,7 +90,7 @@ every acknowledged batch and admits only complete batches on recovery.
 
 Matched batch sizes 1, 8 and 32 keep a per-commit gap. Alvoki syncs the WAL, staged marker and directory for each batch, while the RocksDB control syncs its WAL once per batch. Keep size 1 as a separate target and distinguish batching gains from reducing the number of barriers for that same submission.
 
-Evaluate in-segment commit records as a candidate protocol. It could append the batch and its boundary together and sync the active file once, with directory barriers on segment creation or rotation. First specify crash cuts, including a visible commit record with missing or torn payload, incomplete final records, interrupted rotation and retries. Derive that every acknowledged batch survives, no strictly partial batch becomes visible, and previous acknowledged data survives rejected tails. Specify exact decoder and corruption assumptions. Compare a proof-backed candidate on the same small-batch cells and run the native fault suite before adoption. [Sampled sync counts](performance-baseline.md#durable-batch-experiment)
+Evaluate in-segment commit records as a candidate protocol. It could append the batch and its boundary together and sync the active file once, with directory barriers on segment creation or rotation. First specify crash cuts, including a visible commit record with missing or torn payload, incomplete final records, interrupted rotation and retries. Derive that every acknowledged batch survives, no strictly partial batch becomes visible, and previous acknowledged data survives rejected tails. Specify exact decoder and corruption assumptions. Compare a proof-backed candidate on the same small-batch cells and run the native fault suite before adoption. [Sampled sync counts](performance/performance-baseline.md#durable-batch-experiment)
 
 ### Striped reusable WAL experiment
 
@@ -115,7 +115,7 @@ batch sizes, and checkpoint distances.
 
 Use the baseline as the starting point for a performance map of Alvoki. Keep the three core scenarios stable for release comparisons. Add representative points as a use case or bottleneck calls for them. Vary read/write mix, uniform versus Zipfian access, working-set size, key and value size, batch size, snapshot lifetime, cache state and maintenance pressure. When diagnosing a difference, vary one dimension at a time. Retain an established-engine control where semantics match, and keep Alvoki's absolute timings and resource use for cases with a different contract.
 
-Profile the native engine before choosing a toolchain change. When the evidence points to a compiler or runtime limitation, compare the latest released Lean with the same revision plus one pinned patch, using identical Alvoki source, flags, inputs and release builds. Include the best available source-level alternative and inspect generated code to explain the difference. For a patch that introduces a new primitive, measure adoption separately from the toolchain upgrade. Use both the affected kernel and the end-to-end workload. Adopt a patched toolchain only when the end-to-end gain is material and the available stock-Lean alternative cannot capture it. Record patch provenance, correctness and proof checks, support cost and a route back to an upstream release. [Existing Lean experiments](high-performance-lean.md#reproduce-before-generalizing)
+Profile the native engine before choosing a toolchain change. When the evidence points to a compiler or runtime limitation, compare the latest released Lean with the same revision plus one pinned patch, using identical Alvoki source, flags, inputs and release builds. Include the best available source-level alternative and inspect generated code to explain the difference. For a patch that introduces a new primitive, measure adoption separately from the toolchain upgrade. Use both the affected kernel and the end-to-end workload. Adopt a patched toolchain only when the end-to-end gain is material and the available stock-Lean alternative cannot capture it. Record patch provenance, correctness and proof checks, support cost and a route back to an upstream release. [Existing Lean experiments](performance/high-performance-lean.md#reproduce-before-generalizing)
 
 ## Repository review follow-ups
 

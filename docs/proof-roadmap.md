@@ -39,11 +39,11 @@ Collection must preserve every selectable checkpoint, its required WAL and all s
 
 Keep histories, invariants and proof witnesses out of the runtime path. Executable validation, stored metadata and computations producing runtime values still have a cost. Refine existing packed or machine-indexed kernels. Use packed compaction for row retention and file metadata for file eligibility. Once a cheaper executable drop rule is proved, use exhaustive logical purge as the test oracle.
 
-For changes that alter runtime work, compare the affected native release reads, writes, compaction, checkpoint or replay on the same machine and inspect generated hot-loop code. For reclamation, measure retained bytes, replay work and foreground latency under sustained writes and checkpoints, during collection and with long-lived snapshots. Record the measured tradeoff before accepting a regression in a default path. [Performance baseline](performance-baseline.md) · [Benchmark workloads](benchmarks.md) · [Lean performance guide](high-performance-lean.md)
+For changes that alter runtime work, compare the affected native release reads, writes, compaction, checkpoint or replay on the same machine and inspect generated hot-loop code. For reclamation, measure retained bytes, replay work and foreground latency under sustained writes and checkpoints, during collection and with long-lived snapshots. Record the measured tradeoff before accepting a regression in a default path. [Performance baseline](performance/performance-baseline.md) · [Benchmark workloads](performance/benchmarks.md) · [Lean performance guide](performance/high-performance-lean.md)
 
 ## Codec guarantees we already have
 
-The stock v1 canonical codec, checked packed lookup and range, merge and writer equivalences give higher layers a shared executable contract. Use the verification inventory for exact entry points, machine-size assumptions and theorem names. [Storage and codec coverage](verification-status.md) · [Compaction and scans](compaction.md)
+The stock v1 canonical codec, checked packed lookup and range, merge and writer equivalences give higher layers a shared executable contract. Use the verification inventory for exact entry points, machine-size assumptions and theorem names. [Storage and codec coverage](verification-status.md) · [Compaction and scans](experiments/compaction.md)
 
 ## Versioned compaction and its codec
 
@@ -53,7 +53,7 @@ Snapshot reads use the latest eligible version and give the right input preceden
 
 ### Executable v3 format and kernels
 
-The checked compaction writers agree on the bytes of the retained rows. Snapshot scans over the encoded data must continue to agree with logical reads as new kernels are promoted. [Executable codec](../lean/CompactionCodec.lean) · [Compaction contract](compaction.md)
+The checked compaction writers agree on the bytes of the retained rows. Snapshot scans over the encoded data must continue to agree with logical reads as new kernels are promoted. [Executable codec](../lean/CompactionCodec.lean) · [Compaction contract](experiments/compaction.md)
 
 ## V1 API and codec contracts
 
@@ -69,7 +69,7 @@ A supported v2 columnar encoder needs full round trips, complete acceptance and 
 | Native fixed-width copy or scoped builder | Prove guard bounds, overlap and exclusivity, exact output and length, alias preservation, initialized bytes and stock fallback. State compiler, runtime and ABI premises. |
 | Shipped Rust kernels | Apply the shared format and snapshot specification to the shipped code. Connect packed operations to verified search and prove the semantics and safety of enabled unsafe kernels. |
 
-Benchmark-only paths retain exact-output differential tests and code-generation checks. [Fast-path refinement](fast-path-refinement.md) · [Scoped builder](scoped-builder.md) · [Rust search core](../verus/search.rs)
+Benchmark-only paths retain exact-output differential tests and code-generation checks. [Fast-path refinement](experiments/fast-path-refinement.md) · [Scoped builder](experiments/scoped-builder.md) · [Rust search core](../verus/search.rs)
 
 ## Carry the proofs into storage-engine features
 

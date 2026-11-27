@@ -10,4 +10,8 @@ Start with the question you have about the sequential Linux engine.
 | Which executions have been verified? | [Verification status](verification-status.md) | [Which premises come from Linux?](proofs/native-storage.md#premise-provenance) |
 | Which proof should I work on next? | [Current handoff](progress.md) | [Open proof milestones](proof-roadmap.md#completion-checklist-for-native-key-value-refinement) · [Reusable proof techniques](proof-index.md) |
 
-For engine features and priorities, see the [development roadmap](roadmap.md). For performance methodology and measurements, see [benchmarks](benchmarks.md) and the [Lean performance guide](high-performance-lean.md).
+For engine features and priorities, see the [development roadmap](roadmap.md). For performance methodology and measurements, see [benchmarks](performance/benchmarks.md) and the [Lean performance guide](performance/high-performance-lean.md).
+
+### Directory layout
+
+The top level contains the engine guides, specifications, development roadmaps and verification overview. [Proof boundaries](proofs/native-storage.md) and their contracts live in `proofs/`. In [performance/](performance/benchmarks.md) start with workloads, reproduction and the engine baseline. In [experiments/](experiments/README.md) follow the implementation investigations behind those measurements.

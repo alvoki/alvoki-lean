@@ -81,7 +81,7 @@ bash scripts/check-sequential.sh
 bash scripts/check.sh
 ```
 
-The reproduction script builds the baseline implementations and checks them against the Python reference. With `--out`, it also collects benchmark timings. Keep Python assertions enabled for the checks. The runtime option to `check.sh` runs the optional C and linkage experiments. [Benchmark workloads](benchmarks.md)
+The reproduction script builds the baseline implementations and checks them against the Python reference. With `--out`, it also collects benchmark timings. Keep Python assertions enabled for the checks. The runtime option to `check.sh` runs the optional C and linkage experiments. [Benchmark workloads](performance/benchmarks.md)
 
 ```bash
 bash scripts/reproduce.sh
@@ -91,7 +91,7 @@ bash scripts/environment.sh
 bash scripts/check.sh --runtime
 ```
 
-The disk replay benchmark measures native reopen with ascending, descending, and seeded shuffled insert orders. Use `--segments 1 8 32` with enough rows to compare segment layouts, and `--repair-tail` to exercise keeper repair. Compare medians on the same machine. Add `--max-slowdown 1.25` to fail a comparison if any median exceeds 125% of its baseline. [Disk replay benchmark](benchmarks.md#disk-replay)
+The disk replay benchmark measures native reopen with ascending, descending, and seeded shuffled insert orders. Use `--segments 1 8 32` with enough rows to compare segment layouts, and `--repair-tail` to exercise keeper repair. Compare medians on the same machine. Add `--max-slowdown 1.25` to fail a comparison if any median exceeds 125% of its baseline. [Disk replay benchmark](performance/benchmarks.md#disk-replay)
 
 ```bash
 bash scripts/disk-replay.sh --out /tmp/alvoki-replay-before.csv

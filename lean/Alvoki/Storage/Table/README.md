@@ -1,4 +1,16 @@
-# Follow a snapshot read
+# In-memory table and immutable runs
+
+`PackedTable` holds pending versioned rows in a memtable, checked immutable runs in order, a committed sequence and snapshot pins. A row contains a key, its sequence and an optional value. A deletion leaves a tombstone so that an older value stays hidden.
+
+```text
+write → memtable ── flush ──→ checked v3 run in memory
+                               two adjacent runs ── compact ──→ merged run
+checkpoint → write the current runs as files → publish their manifest
+```
+
+A flush encodes the pending history, appends one run and clears the memtable. Compaction replaces a pair of runs using the snapshot floor. The [disk adapter](../Disk/README.md) owns checkpoint I/O and WAL durability. See the [memtable backends](MemTable.lean), [packed table operations](PackedTable.lean) and [on-disk formats](../../../../docs/specifications.md).
+
+## Follow a snapshot read
 
 Start at `PackedTable.lookup`. The table resolves the snapshot handle to a pin and reads at that pin's sequence. An unknown handle returns outer `none`. For a known handle the result is `some value`, where the inner option records whether a value was visible. [Packed table](PackedTable.lean)
 

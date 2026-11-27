@@ -29,7 +29,7 @@ The getting-started guide shows how to write a value, close the database, reopen
 
 - See how `DiskTable` writes, checkpoints, and recovers data. [Architecture](docs/architecture.md#sequential-storage)
 - Follow the correctness argument and the remaining engine work. [Proof architecture](docs/proof-architecture.md) · [Proof roadmap](docs/proof-roadmap.md) · [Engine roadmap](docs/roadmap.md)
-- Explore the Lean and Rust performance experiments and the separately verified Verus search core. [Benchmarks](docs/benchmarks.md) · [Documentation index](docs/README.md)
+- Explore the Lean and Rust performance experiments and the separately verified Verus search core. [Benchmarks](docs/performance/benchmarks.md) · [Documentation index](docs/README.md)
 
 ## License
 

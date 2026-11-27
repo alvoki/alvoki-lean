@@ -20,7 +20,7 @@ Fixed-width copies and builders that fill a private buffer were measured in late
 
 ## Correctness and reproduction
 
-The Python sorted-union oracle creates the trace and expected output independently. The trace distinguishes left, right, and collision where the right value wins. Input parsing and trace validation happen outside the timer. The current trace checker verifies source keys, cursor bounds, and complete consumption. Lean proves that checked streaming replay emits the logical union. Prepared emission keeps its separate slice-plan contract. [Current proof coverage](verification-status.md#packed-output-and-merge)
+The Python sorted-union oracle creates the trace and expected output independently. The trace distinguishes left, right, and collision where the right value wins. Input parsing and trace validation happen outside the timer. The current trace checker verifies source keys, cursor bounds, and complete consumption. Lean proves that checked streaming replay emits the logical union. Prepared emission keeps its separate slice-plan contract. [Current proof coverage](../verification-status.md#packed-output-and-merge)
 
 Eleven fixtures check both checksums and exact output bytes, including empty inputs and full-width keys. Five malformed traces are rejected. Each measured workload at each size was also checked byte for byte in both writer modes before timing. The original reproduction and proof checks passed. Raw timings contain 648 samples across three sizes and three input patterns. Process RSS was not collected in this round.
 
@@ -29,6 +29,6 @@ bash scripts/merge-phases.sh --out /tmp/alvoki-merge-phases.csv
 python3 benchmarks/merge_phases.py --summarize /tmp/alvoki-merge-phases.csv
 ```
 
-- [Raw timings](../benchmarks/results/packed/merge-phases-trials.csv)
-- [Summary](../benchmarks/results/packed/merge-phases-summary.csv)
-- [VM environment](../benchmarks/results/packed/merge-phases-environment.txt)
+- [Raw timings](../../benchmarks/results/packed/merge-phases-trials.csv)
+- [Summary](../../benchmarks/results/packed/merge-phases-summary.csv)
+- [VM environment](../../benchmarks/results/packed/merge-phases-environment.txt)

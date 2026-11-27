@@ -44,7 +44,7 @@ rg -n 'lean_ctor_set_uint64|lean_byte_array_uget' lean/.lake/build/ir/Optimizati
 objdump -d --disassemble=lp_alvoki_Alvoki_Opt_View_readUnaligned lean/.lake/build/bin/alvoki-opt
 ```
 
-- [Raw measurements](../benchmarks/results/packed/optimization-trials.csv)
-- [Summary](../benchmarks/results/packed/optimization-summary.csv)
-- [VM environment](../benchmarks/results/packed/optimization-environment.txt)
-- [Verification scope](verification-status.md#optimized-reader-and-search)
+- [Raw measurements](../../benchmarks/results/packed/optimization-trials.csv)
+- [Summary](../../benchmarks/results/packed/optimization-summary.csv)
+- [VM environment](../../benchmarks/results/packed/optimization-environment.txt)
+- [Verification scope](../verification-status.md#optimized-reader-and-search)

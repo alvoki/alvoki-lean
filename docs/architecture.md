@@ -77,7 +77,7 @@ The Linux adapter calls `fsync` on open descriptors through a small C binding to
 | [`Alvoki.Storage.Table.PackedTable`](../lean/Alvoki/Storage/Table/PackedTable.lean) | Sequential table with a verified memtable backend and immutable packed v3 runs. | [`CompactionRead`](../lean/Alvoki/Storage/Table/CompactionRead.lean) for validated packed lookup, range folds, flush and compaction. [`SnapshotTable`](../lean/Alvoki/Storage/Table/SnapshotTable.lean) provides the logical API. |
 | [`Alvoki.Storage.Disk.DiskTable`](../lean/Alvoki/Storage/Disk/DiskTable.lean) | File-backed sequential table for Linux with a WAL and atomic checkpoint publication. | [`Recovery`](../lean/Alvoki/Storage/Disk/Recovery.lean), [`WriteAheadLog`](../lean/Alvoki/Storage/Disk/WriteAheadLog.lean), and [`ManifestIntegrity`](../lean/Alvoki/Storage/Disk/ManifestIntegrity.lean) for codecs and replay. |
 
-The build uses the standard Lean runtime, with small disk bindings for descriptor sync and checked Linux directory enumeration. The fixed-width copy and scoped fill experiments keep their C and link-time code in separate targets. [Lake build targets](../lean/lakefile.lean) · [Descriptor sync](../lean/native/fsync.c) · [Directory enumeration](../lean/native/read_dir_checked.c) · [Scoped runtime contract](scoped-builder.md#contract-and-checks)
+The build uses the standard Lean runtime, with small disk bindings for descriptor sync and checked Linux directory enumeration. The fixed-width copy and scoped fill experiments keep their C and link-time code in separate targets. [Lake build targets](../lean/lakefile.lean) · [Descriptor sync](../lean/native/fsync.c) · [Directory enumeration](../lean/native/read_dir_checked.c) · [Scoped runtime contract](experiments/scoped-builder.md#contract-and-checks)
 
 ## Comparisons and evidence
 
@@ -85,4 +85,4 @@ The build uses the standard Lean runtime, with small disk bindings for descripto
 - The Python fixture generator builds the little-endian binary data independently. Drivers share generation, oracles, subprocess and reporting helpers. The timed operations stay in each individual release executable. [Fixtures](../fixtures/generate.py) · [Shared benchmark support](../benchmarks/support.py)
 - The stock checks run the packed and sequential storage fixtures and proof audits. The optional runtime check exercises the separate prototypes. [Reproduction commands](getting-started.md#build-test-and-reproduce)
 
-[Performance technique guide](high-performance-lean.md) · [Benchmarks and experiment reports](benchmarks.md)
+[Performance technique guide](performance/high-performance-lean.md) · [Benchmarks and experiment reports](performance/benchmarks.md)
