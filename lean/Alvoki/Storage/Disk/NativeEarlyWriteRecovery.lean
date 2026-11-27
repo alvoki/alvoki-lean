@@ -53,6 +53,38 @@ theorem NativeReadyState.BeforeMarkerWriteFrame.trans {state : NativeReadyState}
     (last : state.BeforeMarkerWriteFrame keeper middle reached) : state.BeforeMarkerWriteFrame keeper entry reached :=
   ⟨first.1.trans last.1, first.2.trans last.2⟩
 
+/-- Reading the active cache or guarding the write can advance the heap
+while preserving both the marker and the named keeper's committed bytes. -/
+theorem NativeReadyState.BeforeMarkerWriteFrame.ofFileFrame
+    {state : NativeReadyState} {keeper : Nat} {entry reached : CheckpointStorageObservation}
+    (frame : entry.Frames state.crashPath reached)
+    (named : entry.files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some keeper) :
+    state.BeforeMarkerWriteFrame keeper entry reached :=
+  ⟨frame.weaken fun _ inside => NativeReadyState.crashPath_iff_write.mpr (inside.imp_right (fun keep => .inr keep)),
+   WalKeeperPrefixFrame.ofFileFrame
+     (frame.weaken fun _ inside => NativeReadyState.crashPath_iff_write.mpr (.inr (.inl inside))) named⟩
+
+/-- Before marker replacement, one crash map supplies the old cutoff and a
+keeper retaining its committed prefix, even when the append added bytes. -/
+theorem NativeReadyState.BeforeMarkerWriteFrame.selectsPriorAtReboot
+    {heap : Type} {state : NativeReadyState} {view : OpenCloseHeapView heap FileImage}
+    {storage : heap → CheckpointStorageObservation} {names : heap → FilePath → Option Nat}
+    {visible : heap → Nat → ByteArray} {entry cut rebooted : heap} {keeper : Nat}
+    (frame : state.BeforeMarkerWriteFrame keeper (storage entry) (storage cut))
+    (valid : state.Valid) (batch : List WAL.Write) (initial : NativeReadyStorage state (storage entry))
+    (named : (storage entry).files.names (state.session.directory.file (.walSegment state.writer.wal.active.first)) = some keeper)
+    (reboot : RawWriteRebootEntry state view storage names visible cut rebooted) :
+    BatchRetryTarget state.writer.history batch state.writer.wal.active.first state.writer.target ∧
+    RawOpenRetryTrace.SelectedEntry view state state.writer.target names visible rebooted ∧
+    TryLockObserves (view.files rebooted).owners state.session.directory (.ok true) ∧
+    (view.descriptors rebooted).slots = [] := by
+  have files := frame.1.weaken (scope := state.writeFramePath) fun _ inside => .inr inside
+  have marker := frame.1.weaken (scope := (· = state.session.directory.file .walBoundary)) fun _ inside => .inl inside
+  obtain ⟨admitted, pair, accepts⟩ := NativeReadyState.priorWriteTargetOfSample valid batch initial files marker
+    (fun _ bound => (Option.some.inj (named.symm.trans bound)) ▸ frame.2)
+    (names rebooted) reboot.chosen (visible rebooted) reboot.samplesWal
+  exact ⟨admitted, reboot.selectsRetry initial files admitted pair accepts⟩
+
 section
 
 variable {heap stream : Type} {opened : NativeOpenedHandle heap}
@@ -131,22 +163,15 @@ theorem NativeOpenedPosition.recoversEarlyWriteError
     (ready).ReopenedLedger current.current.history batch [] request input cause (source.openTable input reached) := by
   have valid := (ready).readPrefix.refines.1
   obtain ⟨keeper, named, _⟩ := initial.keeper
-  have keeperBefore := WalKeeperPrefixFrame.ofFileFrame
-    (prefixFrame.weaken fun _ member => NativeReadyState.crashPath_iff_write.mpr (.inr (.inl member))) named
-  have othersBefore := prefixFrame.weaken (scope := (state).selectedRetryPath) fun _ member =>
-    NativeReadyState.crashPath_iff_write.mpr (member.imp_right (fun keep => .inr keep))
   let frame (first last : heap) := (state).BeforeMarkerWriteFrame keeper (storage first) (storage last)
   have compose {first middle last : heap} (start : frame first middle) (finish : frame middle last) : frame first last :=
     start.trans finish
   obtain ⟨committed, kept⟩ := syncer.earlyErrorKeeps cache appender stager rename frame compose early
     (appendFrame keeper named) (stageFrame named)
-  have markerFrame := (othersBefore.trans kept.1).weaken (scope := (· = (dir).file .walBoundary)) fun _ member => .inl member
-  have protectedFrame := (othersBefore.trans kept.1).weaken (scope := (state).writeFramePath) fun _ member => .inr member
-  have keeperFrame := keeperBefore.trans kept.2
-  obtain ⟨admitted, pair, accepts⟩ := NativeReadyState.priorWriteTargetOfSample valid batch initial protectedFrame
-    markerFrame (fun selected bound => (Option.some.inj (named.symm.trans bound)) ▸ keeperFrame)
-    (names rebooted) reboot.chosen (visible rebooted) reboot.samplesWal
-  obtain ⟨selected, rebootVacant, slots⟩ := reboot.selectsRetry initial protectedFrame admitted pair accepts
+  have before : (state).BeforeMarkerWriteFrame keeper (storage current.reached) (storage poisoned) :=
+    NativeReadyState.BeforeMarkerWriteFrame.ofFileFrame prefixFrame named
+  obtain ⟨admitted, selected, rebootVacant, slots⟩ :=
+    (before.trans kept).selectsPriorAtReboot («storage» := storage) (entry := current.reached) (cut := failed) valid batch initial named reboot
   have loaded := opened.phaseEffects.reads current.reached opened.phase _ (current.stored.trans (congrArg some valid.phase))
   refine ⟨current.uses.writeSchedules, ?_, rebootVacant, slots, ?_⟩
   · rw [request.runOnRawOpenPhase_afterPreparation dir lookup append stage sync rename opened.phase opened.get opened.set

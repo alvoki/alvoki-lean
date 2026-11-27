@@ -44,9 +44,12 @@ actual client ledger, cache and unchanged manifest at the rotation entry.
 The same sampled-WAL proof then carries that ledger to the returned table.
 [Mixed rotation and retry](../lean/Alvoki/Storage/Disk/NativeRotationWalReplay.lean)
 
-**Next obligation.** An interrupted
-append can leave extra bytes in a bound keeper. Its repair requires a byte
-argument even when no higher name exists. For layouts with extra files,
+The stopped append interpreter identifies the active-cache read, the selected
+handle and the heap reached by the issued write. Its result leaves the
+number of bytes written open. [Append interpreter](../lean/Alvoki/Storage/Disk/NativeWalAppend.lean)
+
+**Next obligation.** Connect that issued write to the prior marker and the
+keeper bytes sampled on reboot. For layouts with extra files,
 derive the next retry entry from a modifying failed repair, including an
 effective directory barrier that reports failure.
 

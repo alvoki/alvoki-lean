@@ -920,7 +920,12 @@ the error heap. Local effect laws preserve the canonical marker and protected na
 and bytes. The keeper may grow, and each admitted durable byte choice still extends its
 previous committed prefix. Sampling one observed reboot derives the old history, an exact
 failed-call sequence and the successful table with the uncertain submission retained as zero
-writes. An interrupted callback that has yet to return is a separate case.
+writes. A stop inside the issued write gives no client response. In the native
+process-exit test the keeper can still be aligned, or contain a partial
+batch beyond the marker. The same reopen preserves the aligned inode or
+replaces the longer keeper with its committed prefix. Power loss additionally
+requires a sampled durable directory map and byte contents.
+[Native process-exit fixture](../../scripts/check-disk-process-death.py)
 [Early write recovery](../../lean/Alvoki/Storage/Disk/NativeEarlyWriteRecovery.lean)
 
 A marked repair that fails after changing files supplies its reached image through the same

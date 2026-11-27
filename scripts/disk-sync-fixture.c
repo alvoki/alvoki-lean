@@ -224,10 +224,10 @@ size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream) {
     char *end;
     errno = 0;
     unsigned long long bytes = strtoull(prefix, &end, 10);
-    if (errno != 0 || *end != '\0' || bytes == 0 || bytes >= count) _exit(125);
+    if (errno != 0 || end == prefix || *end != '\0' || bytes >= count) _exit(125);
 
-    // Make a strict prefix visible before the native append callback returns.
-    if (real_write(buffer, 1, (size_t)bytes, stream) != bytes || fflush(stream) != 0) _exit(125);
+    // Pause before the issued append takes effect, or flush a strict prefix first.
+    if (bytes != 0 && (real_write(buffer, 1, (size_t)bytes, stream) != bytes || fflush(stream) != 0)) _exit(125);
     hold_owner(ready, release);
     _exit(125);
 }

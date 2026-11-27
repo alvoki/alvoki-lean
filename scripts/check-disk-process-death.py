@@ -293,7 +293,7 @@ def check_fork_exec_lock(binary, shim, database, effective, poisoned):
         wait_for_child_success(child, "exec child")
 
 
-def check_batch_append_cut(binary, shim, root):
+def check_batch_append_cut(binary, shim, root, partial):
     database = root / "db"
     database.mkdir(parents=True)
     for operation in ("--write-once", "--rotate-wal-once", "--write-once", "--checkpoint-once"):
@@ -303,10 +303,17 @@ def check_batch_append_cut(binary, shim, root):
     wal = database / "WAL-segment-1"
     marker = database / "WAL.commit"
     staged_marker = database / "WAL.commit.next"
+    original_wal = wal.stat()
+    original_marker = marker.stat()
     acknowledged = wal.read_bytes()
     boundary = marker.read_bytes()
-    fixed_files = {database / name: (database / name).read_bytes()
-                   for name in ("MANIFEST", "run-1-0.v3", "WAL-segment-0")}
+    fixed_paths = (database / "MANIFEST", database / "run-1-0.v3", database / "WAL-segment-0")
+    fixed_files = {path: (path.stat(), path.read_bytes()) for path in fixed_paths}
+
+    def check_fixed_files():
+        for path, (inode, contents) in fixed_files.items():
+            require(os.path.samestat(path.stat(), inode) and path.read_bytes() == contents,
+                    f"batch append cut changed {path.name}")
 
     control = root / "control"
     shutil.copytree(database, control)
@@ -315,8 +322,9 @@ def check_batch_append_cut(binary, shim, root):
     appended = (control / wal.name).read_bytes()
     require(len(acknowledged) > 7 and len(appended) == 5 * len(acknowledged)
             and appended.startswith(acknowledged), "the control did not append four frames")
-    prefix = len(acknowledged) + 7  # One complete frame and part of the next.
-    partial = appended[:len(acknowledged) + prefix]
+    # The partial cut writes one complete frame and part of the next.
+    prefix = len(acknowledged) + 7 if partial else 0
+    reached = appended[:len(acknowledged) + prefix]
 
     ready = root / "append.pid"
     with native_process(binary, "--batch-write-once", database, env={
@@ -327,33 +335,39 @@ def check_batch_append_cut(binary, shim, root):
         "ALVOKI_CHECK_APPEND_PID": str(ready),
         "ALVOKI_CHECK_APPEND_RELEASE": str(root / "release-append"),
     }) as owner:
-        require(wait_for_cut(owner, ready, "the partial WAL append") == owner.pid,
-                "partial append paused in the wrong process")
-        require(wal.read_bytes() == partial, "paused append did not leave the exact partial batch")
-        require(marker.read_bytes() == boundary and not staged_marker.exists(),
-                "partial append reached marker publication")
+        require(wait_for_cut(owner, ready, "the issued WAL append") == owner.pid,
+                "append paused in the wrong process")
+        require(os.path.samestat(wal.stat(), original_wal) and wal.read_bytes() == reached,
+                "paused append did not leave the exact WAL bytes on the original keeper")
+        require(os.path.samestat(marker.stat(), original_marker) and marker.read_bytes() == boundary
+                and not staged_marker.exists(), "paused append reached marker publication")
+        check_fixed_files()
         status, stderr = run_probe(binary, "--open-once", database)
         require(status != 0 and f"database already open: {database}" in stderr,
                 f"open did not report the live append owner's lock: {stderr}")
         owner.kill()
         require(owner.wait(timeout=TIMEOUT) == -signal.SIGKILL, "append owner was not killed")
 
-    require(wal.read_bytes() == partial and marker.read_bytes() == boundary and not staged_marker.exists(),
-            "owner exit changed the live append cut")
+    require(os.path.samestat(wal.stat(), original_wal) and wal.read_bytes() == reached
+            and os.path.samestat(marker.stat(), original_marker) and marker.read_bytes() == boundary
+            and not staged_marker.exists(), "owner exit changed the live append cut")
     status, stderr = run_probe(binary, "--check-recovered-batch", database, "2", "old")
-    require(status == 0, f"open after the partial append changed the prior table: {stderr}")
-    require(wal.read_bytes() == acknowledged and marker.read_bytes() == boundary and not staged_marker.exists(),
-            "reopen did not discard the entire partial batch")
-    require(all(path.read_bytes() == data for path, data in fixed_files.items()),
-            "partial append recovery changed the checkpoint or sealed prefix")
+    require(status == 0, f"open after the interrupted append changed the prior table: {stderr}")
+    recovered_wal = wal.stat()
+    require(os.path.samestat(recovered_wal, original_wal) == (not partial),
+            "reopen did not preserve the aligned keeper or replace the partial keeper as expected")
+    require(wal.read_bytes() == acknowledged and os.path.samestat(marker.stat(), original_marker)
+            and marker.read_bytes() == boundary and not staged_marker.exists(),
+            "reopen did not restore the exact acknowledged WAL and marker")
+    check_fixed_files()
     status, stderr = run_probe(binary, "--batch-write-once", database)
     require(status == 0, f"could not append a fresh batch after recovery: {stderr}")
     status, stderr = run_probe(binary, "--check-recovered-batch", database, "2", "new")
     require(status == 0, f"reopen did not recover the fresh batch: {stderr}")
-    require(wal.read_bytes() == appended and marker.read_bytes() == (control / marker.name).read_bytes(),
+    require(os.path.samestat(wal.stat(), recovered_wal) and wal.read_bytes() == appended
+            and marker.read_bytes() == (control / marker.name).read_bytes(),
             "the fresh batch did not extend the recovered keeper and marker exactly")
-    require(all(path.read_bytes() == data for path, data in fixed_files.items()),
-            "the fresh batch changed the checkpoint or sealed prefix")
+    check_fixed_files()
 
 
 def check_process_death(binary, shim, root, after_rename, rotated, detached, batch):
@@ -519,7 +533,8 @@ if __name__ == "__main__":
             for poisoned in (False, True):
                 database = root / f"close-cut-{int(effective)}-{int(poisoned)}"
                 check_fork_exec_lock(binary, shim, database, effective, poisoned)
-        check_batch_append_cut(binary, shim, root / "batch-append-cut")
+        check_batch_append_cut(binary, shim, root / "batch-append-before-payload", partial=False)
+        check_batch_append_cut(binary, shim, root / "batch-append-partial-payload", partial=True)
         for batch in (False, True):
             for rotated in (False, True):
                 for after_rename in (False, True):
@@ -531,5 +546,5 @@ if __name__ == "__main__":
     print("Reopened a marker across short reads and rejected malformed lengths before repair within the read cap.")
     print("Read the manifest in two bounded phases and preserved its exact reopen and rejection outcomes.")
     print("Interrupted ready and poisoned close before or after LOCK_UN; an inherited alias blocked only the no-effect cut.")
-    print("Recovered the exact prior table after writer exit during a partial native batch append.")
+    print("Recovered the exact prior table after writer exit before or during native batch payload writes.")
     print("Recovered and extended zero and rotated WAL keepers after single and batch native sync cuts.")

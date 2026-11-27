@@ -31,6 +31,108 @@ abbrev run (calls : RawWalAppendCalls heap) (active : IO.Ref (Option (FilePath �
     (path : FilePath) (bytes : ByteArray) : EStateM IO.Error heap Unit :=
   appendWithActive (calls.getActive active) (calls.setActive active) calls.openAppend calls.write calls.flush path bytes
 
+private abbrev returnedForWriteStop {stop α : Type} (action : EStateM IO.Error heap α) :
+    ExceptT IO.Error (EStateM stop heap) α :=
+  fun entry => match action entry with
+    | .ok result reached => .ok (.ok result) reached
+    | .error cause reached => .ok (.error cause) reached
+
+/-- Interpret the actual append helper with a write that can stop before
+returning. Ordinary I/O errors stay inside `Except` and use the usual
+cleanup. An outer stop skips flush and the active-cell update. -/
+def runUntilWrite {stop : Type} (calls : RawWalAppendCalls heap)
+    (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit))
+    (path : FilePath) (bytes : ByteArray) : EStateM stop heap (Except IO.Error Unit) :=
+  (appendWithActive (returnedForWriteStop (calls.getActive active))
+    (fun value => returnedForWriteStop (calls.setActive active value))
+    (fun path => returnedForWriteStop (calls.openAppend path))
+    (fun file payload => ExceptT.mk (write file payload))
+    (fun file => returnedForWriteStop (calls.flush file)) path bytes).run
+
+private theorem selectAppendHandle_returnedForWriteStop {stop : Type} (calls : RawWalAppendCalls heap)
+    (cached : Option (FilePath × IO.FS.Handle)) (path : FilePath) (entry : heap) :
+    (selectAppendHandle cached (fun name => returnedForWriteStop (stop := stop) (calls.openAppend name)) path).run entry =
+      (returnedForWriteStop (selectAppendHandle cached calls.openAppend path)).run entry := by
+  cases cached with
+  | none => rfl
+  | some named =>
+    obtain ⟨name, file⟩ := named
+    cases hit : path == name <;>
+      simp [selectAppendHandle, hit, Pure.pure, ExceptT.pure, ExceptT.mk, EStateM.pure, ExceptT.run,
+        returnedForWriteStop]
+
+/-- The issued write's outer stop propagates through the actual append. -/
+theorem stopsAtWrite {stop : Type} (calls : RawWalAppendCalls heap)
+    {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit)}
+    {path : FilePath} {bytes : ByteArray} {entry loaded issued cut : heap}
+    {cached : Option (FilePath × IO.FS.Handle)} {handle : IO.FS.Handle} {token : stop}
+    (get : calls.getActive active entry = .ok cached loaded)
+    (choose : selectAppendHandle cached calls.openAppend path loaded = .ok handle issued)
+    (stopped : write handle bytes issued = .error token cut) :
+    calls.runUntilWrite active write path bytes entry = .error token cut := by
+  have selected := selectAppendHandle_returnedForWriteStop (stop := stop) calls cached path loaded
+  have getReturned : (returnedForWriteStop (stop := stop) (calls.getActive active)).run entry =
+      .ok (.ok cached) loaded := by simp [ExceptT.run, returnedForWriteStop, get]
+  simp only [ExceptT.run] at selected getReturned
+  simp only [runUntilWrite, appendWithActive, ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk,
+    EStateM.bind, getReturned]
+  rw [selected]
+  simp only [returnedForWriteStop, choose, MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch,
+    Bind.bind, ExceptT.mk, EStateM.bind, stopped]
+
+/-- Invert the stopped append at the exact loaded cache and selected
+handle. The stop leaves the reached heap of that write callback. -/
+theorem reachesStoppedWrite {stop : Type} (calls : RawWalAppendCalls heap)
+    {active : IO.Ref (Option (FilePath × IO.FS.Handle))}
+    {write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit)}
+    {path : FilePath} {bytes : ByteArray} {entry cut : heap} {token : stop}
+    (stopped : calls.runUntilWrite active write path bytes entry = .error token cut) :
+    ∃ (cached : Option (FilePath × IO.FS.Handle)) (loaded : heap) (handle : IO.FS.Handle) (issued : heap),
+      calls.getActive active entry = .ok cached loaded ∧
+      selectAppendHandle cached calls.openAppend path loaded = .ok handle issued ∧
+      write handle bytes issued = .error token cut := by
+  unfold runUntilWrite at stopped
+  cases get : calls.getActive active entry with
+  | error cause atError =>
+    simp [appendWithActive, ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk,
+      EStateM.bind, returnedForWriteStop, get, Pure.pure, EStateM.pure] at stopped
+  | ok cached loaded =>
+    have selected := selectAppendHandle_returnedForWriteStop (stop := stop) calls cached path loaded
+    have getReturned : (returnedForWriteStop (stop := stop) (calls.getActive active)).run entry =
+        .ok (.ok cached) loaded := by simp [ExceptT.run, returnedForWriteStop, get]
+    simp only [ExceptT.run] at selected getReturned
+    simp only [appendWithActive, ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk,
+      EStateM.bind, getReturned] at stopped
+    rw [selected] at stopped
+    cases choose : selectAppendHandle cached calls.openAppend path loaded with
+    | error cause atError =>
+      simp [returnedForWriteStop, choose, Pure.pure, EStateM.pure] at stopped
+    | ok handle issued =>
+      simp only [returnedForWriteStop, choose, MonadExcept.tryCatch, MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch,
+        Bind.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind] at stopped
+      cases outcome : write handle bytes issued with
+      | error actual reached =>
+        exact ⟨cached, loaded, handle, issued, rfl, choose, by simpa only [outcome] using stopped⟩
+      | ok result reached =>
+        cases result with
+        | error cause =>
+          cases cleared : calls.setActive active none reached <;>
+            simp [outcome, cleared, returnedForWriteStop, EStateM.bind, ExceptT.bindCont, Pure.pure, EStateM.pure,
+              throw, throwThe, MonadExceptOf.throw, ExceptT.mk] at stopped
+        | ok value =>
+          cases value
+          cases flushed : calls.flush handle reached with
+          | error cause failed =>
+            cases cleared : calls.setActive active none failed <;>
+              simp [outcome, flushed, cleared, returnedForWriteStop, EStateM.bind, ExceptT.bindCont, Pure.pure,
+                EStateM.pure, throw, throwThe, MonadExceptOf.throw, ExceptT.mk] at stopped
+          | ok value atFlush =>
+            cases value
+            cases kept : calls.setActive active (some (path, handle)) atFlush <;>
+              simp [outcome, flushed, kept, returnedForWriteStop, Pure.pure, EStateM.pure] at stopped
+
 /-- Compose a local file frame through the append callback, including a
 failed write or flush followed by the reached active-cell clear. A cache
 hit does not invoke the opener. -/

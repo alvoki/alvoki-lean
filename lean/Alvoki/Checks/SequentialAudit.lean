@@ -4072,6 +4072,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.SyncHandleRouting.runAppendWithCacheEffects_effect
 #check_axioms Alvoki.Storage.DiskTable.OpenSyncFiles.appendCacheSchedule
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.returned
+#check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.reachesStoppedWrite
+#check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.stopsAtWrite
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.retainsKeeper
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.appendsVisible
 #check_axioms Alvoki.Storage.DiskSession.RawWalAppendCalls.projects
@@ -4283,6 +4285,8 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.earlyErrorKeeps
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.refl
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.trans
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.ofFileFrame
+#check_axioms Alvoki.Storage.DiskSession.NativeReadyState.BeforeMarkerWriteFrame.selectsPriorAtReboot
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversEarlyWriteError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.selectsAfterGroupedError
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.recoversGroupedWriteError
