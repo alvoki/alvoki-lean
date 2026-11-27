@@ -45,10 +45,16 @@ installation. Frames apply to the staging and rename heaps reached by that open.
 [Worker observation](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
 [Retry and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Identify the cached directory handle and failed raw
-fsync inside the final sync group. A cache lookup can itself fail. The physical
-effect on surviving directory entries still needs a filesystem observation.
-[Final directory error](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncError.lean)
+The final sync group distinguishes an unreadable cache cell, a closed cell
+and an error from fsync on the selected handle. A truthful read of the
+attached directory cell supplies the handle allocated by this open and the
+heap reached by the read. The raw fsync result determines the worker’s
+path-wrapped error. Cleanup can replace that diagnostic if unlocking fails.
+[Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+
+**Next source boundary.** Derive preservation of that particular cache cell
+from allocation through the replacement rename on the actual worker path.
+The filesystem observation still supplies the physical effect of the failed fsync.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

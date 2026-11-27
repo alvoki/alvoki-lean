@@ -184,7 +184,43 @@ private theorem NativeReadyState.pruneRecoveryScope_excludesUnlinks {state : Nat
   · have sameStart := state.session.directory.walSegment_path_injective same
     exact (Nat.not_le_of_gt later) (sameStart.symm ▸ within)
 
-private theorem AlignedKeeperCacheCallbacks.rawPruneDirectoryError
+/-- A singleton directory group can fail while reading the cache cell, on
+an empty cell, or at fsync on the handle the cell returned. The last case
+exposes the original diagnostic before the group formats it for callers. -/
+theorem AlignedKeeperCacheCallbacks.directoryGroupError_iff
+    (calls : AlignedKeeperCacheCallbacks heap)
+    (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
+    (pending : IO.Ref (List (FilePath × IO.FS.Handle))) (before reached : heap) (reported : IO.Error) :
+    calls.syncPaths directory.path cached active pending #[directory.path] before = .error reported reached ↔
+      match calls.getDirectory cached before with
+      | .error diagnostic after => after = reached ∧ reported = IO.userError s!"sync failed for '{directory.path}': {diagnostic}"
+      | .ok none after => after = reached ∧
+          reported = IO.userError s!"sync failed for '{directory.path}': {IO.userError "database is closed"}"
+      | .ok (some handle) issued => ∃ diagnostic, calls.sync handle issued = .error diagnostic reached ∧
+          reported = IO.userError s!"sync failed for '{directory.path}': {diagnostic}" := by
+  rw [AlignedKeeperCacheCallbacks.syncPaths, SyncPathGroup.run_single]
+  cases read : calls.getDirectory cached before with
+  | error e after =>
+    simp [syncWithHandles, Bind.bind, EStateM.bind, read, eq_comm, and_comm]
+    exact fun _ => Iff.rfl
+  | ok cell issued =>
+    cases cell with
+    | none =>
+      simp [syncWithHandles, Bind.bind, EStateM.bind, read, throw, throwThe,
+        MonadExceptOf.throw, EStateM.throw, eq_comm, and_comm]
+      exact fun _ => Iff.rfl
+    | some handle =>
+      cases raw : calls.sync handle issued with
+      | ok value after => simp [syncWithHandles, Bind.bind, EStateM.bind, read, raw, Pure.pure, EStateM.pure]
+      | error diagnostic after =>
+        simp [syncWithHandles, Bind.bind, EStateM.bind, read, raw, Pure.pure, EStateM.pure]
+        constructor
+        · rintro ⟨rfl, rfl⟩
+          exact ⟨_, ⟨rfl, rfl⟩, rfl⟩
+        · rintro ⟨_, ⟨rfl, rfl⟩, rfl⟩
+          exact ⟨rfl, rfl⟩
+
+private theorem AlignedKeeperCacheCallbacks.rawDirectoryErrorAfterRead
     (calls : AlignedKeeperCacheCallbacks heap)
     (cached : IO.Ref (Option IO.FS.Handle)) (active : IO.Ref (Option (FilePath × IO.FS.Handle)))
     (pending : IO.Ref (List (FilePath × IO.FS.Handle)))
@@ -193,15 +229,7 @@ private theorem AlignedKeeperCacheCallbacks.rawPruneDirectoryError
     (returned : calls.syncPaths directory.path cached active pending #[directory.path] before = .error cause reached) :
     ∃ diagnostic, calls.sync handle issued = .error diagnostic reached ∧
       cause = IO.userError s!"sync failed for '{directory.path}': {diagnostic}" := by
-  rw [AlignedKeeperCacheCallbacks.syncPaths, SyncPathGroup.run_single] at returned
-  cases raw : calls.sync handle issued with
-  | ok value after =>
-    cases value
-    simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, raw, Pure.pure, EStateM.pure] at returned
-  | error diagnostic after =>
-    simp [syncWithHandles, Bind.bind, EStateM.bind, loaded, raw, Pure.pure, EStateM.pure] at returned
-    obtain ⟨sameCause, rfl⟩ := returned
-    exact ⟨diagnostic, rfl, sameCause.symm⟩
+  simpa only [loaded] using (calls.directoryGroupError_iff cached active pending before reached cause).mp returned
 
 /-- A reported root fsync error frames the selected files even if the
 directory's child bindings have settled. The literal cached handle
@@ -230,7 +258,7 @@ theorem AlignedKeeperCacheCallbacks.framesPruneDirectoryError
       cause = IO.userError s!"sync failed for '{directory.path}': {diagnostic}" ∧
       SampledCheckpointRetryFrame directory scope through storage visible before reached ∧
       WalRootSyncEffect directory effective (storage issued) (storage reached) := by
-  obtain ⟨diagnostic, failed, reported⟩ := calls.rawPruneDirectoryError cached active pending loaded returned
+  obtain ⟨diagnostic, failed, reported⟩ := calls.rawDirectoryErrorAfterRead cached active pending loaded returned
   obtain ⟨children, parent, live⟩ := observation diagnostic failed target.live bound
   have durable := children.framesScopedFiles parent managed
   have atSync : SampledCheckpointRetryFrame directory scope through storage visible issued reached :=
@@ -1115,7 +1143,7 @@ theorem MarkedWalExtentReports.extendsFailedPruneBlock
       obtain ⟨_, _, _, loaded, rootSlot, bound, loadImage, loadNames, loadKeeper, loadFrame, syncEffect⟩ :=
         barrierError unlinks failed
       obtain ⟨_, rawFault, _⟩ :=
-        (callbacks).rawPruneDirectoryError seed.directoryRef seed.activeRef seed.pendingRef loaded failed
+        (callbacks).rawDirectoryErrorAfterRead seed.directoryRef seed.activeRef seed.pendingRef loaded failed
       obtain ⟨rootEffect, parent, syncImage, syncVisible⟩ := syncEffect _ rawFault rootSlot.live bound
       have syncFrame := rootEffect.framesSelectedRetry parent (fun path selected => syncVisible path (.inl selected))
       exact LivePruneAt.afterBarrier folded loadImage loadNames loadKeeper rootEffect syncImage
@@ -1260,6 +1288,12 @@ private theorem laterWalOutsideRepairScope (ready : state.Valid) {ordinal : Nat}
 local notation "stagedFrom" => LongKeeperRepair.StagedFrom dir layout.boundedPlan source.remove
   stageWrite groupSync source.rename
 
+section FinalDirectorySync
+
+variable {renamedHeap : heap}
+
+local notation "finalIssue" => reachedState (AlignedKeeperCacheCallbacks.getDirectory callbacks seed.directoryRef renamedHeap)
+
 set_option maxHeartbeats 1200000 in
 /-- Feed the actual repair stopped by the final directory fsync into
 the same fixed opener's cleanup and failed-call prefix. With the
@@ -1297,23 +1331,24 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     (readerFrames : source.fileCalls.ScopeFrames retryFrame)
     (listingFrames : source.directoryCalls.ScopeFrames dir retryFrame)
     (keeperFrame : retryFrame beforeKeeper afterKeeper)
-    {renamedHeap issued : heap}
-    {handle : IO.FS.Handle} {cause : IO.Error} {effective : Bool}
+    {publicError : IO.Error} {effective : Bool}
     (startFiles : (view.files afterKeeper).image = (view.files entry).image)
     (measured : reads.wal.keeper.calls.metadata.byteSize.toNat = authorization.keeper.metadata.byteSize.toNat)
     (workerStopped : source.workerObservingRepairRename seed.directoryRef seed.activeRef seed.pendingRef dir raw.lock
       (RawMarkedOpenInterpreter.makeCache dir seed.directoryRef seed.activeRef seed.pendingRef) seed.afterPending =
-      .error (IO.userError s!"sync failed for '{(dir).path}': {cause}") (reached, some renamedHeap))
-    (loaded : (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some handle) issued)
-    (atIssue : view.handle issued handle = (issue.inventory, held.lifetime.directorySlot, 0))
-    (census : view.descriptors issued = issue.inventory)
-    (issuedFiles : view.files issued = issue.files)
-    (root : retryNames issued (dir).path = issue.bindings (dir).path)
-    (keeper : retryNames issued ((dir).file (.walSegment layout.keeper.first)) =
+      .error publicError (reached, some renamedHeap))
+    (attached : view.directory renamedHeap seed.directoryRef = view.directory seed.afterPending seed.directoryRef)
+    (readRef : ∃ after, (callbacks).getDirectory seed.directoryRef renamedHeap =
+      .ok (view.directory renamedHeap seed.directoryRef) after)
+    (atIssue : view.handle finalIssue seed.handle = (issue.inventory, held.lifetime.directorySlot, 0))
+    (census : view.descriptors finalIssue = issue.inventory)
+    (issuedFiles : view.files finalIssue = issue.files)
+    (root : retryNames finalIssue (dir).path = issue.bindings (dir).path)
+    (keeper : retryNames finalIssue ((dir).file (.walSegment layout.keeper.first)) =
       issue.bindings ((dir).file (.walSegment layout.keeper.first)))
-    (scratch : retryNames issued ((dir).file .stagedWal) = issue.bindings ((dir).file .stagedWal))
-    (keeperBytes : visible issued (staged.inventory.inode staged.slot.description) = layout.target.trimmed)
-    (keeperDurable : (storage issued).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed])
+    (scratch : retryNames finalIssue ((dir).file .stagedWal) = issue.bindings ((dir).file .stagedWal))
+    (keeperBytes : visible finalIssue (staged.inventory.inode staged.slot.description) = layout.target.trimmed)
+    (keeperDurable : (storage finalIssue).files.bytes (staged.inventory.inode staged.slot.description) = [layout.target.trimmed])
     (currentReady : state.Valid) (targetAtKeeper : layout.target.first = state.writer.wal.active.first)
     (unlinkFrame : ∀ {ordinal before after result}, ordinal ∈ layout.boundedPlan.newer →
       source.remove ((dir).file (.walSegment ordinal)) before = .ok result after →
@@ -1328,19 +1363,18 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       source.rename ((dir).file .stagedWal) ((dir).file (.walSegment layout.keeper.first))
         synced = .ok () renamedHeap →
       retryFrame synced renamedHeap ∧ walNameFrame synced renamedHeap)
-    (loadFrames : (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some handle) issued →
-      retryFrame renamedHeap issued ∧ walNameFrame renamedHeap issued)
-    (failed : (callbacks).sync handle issued = .error cause reached)
-    (effect : (callbacks).sync handle issued = .error cause reached →
-      (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
-      retryNames issued (dir).path =
-        some ((view.descriptors issued).inode (view.handle issued handle).2.1.description) →
-      view.files issued = issue.files →
+    (loadFrames : (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue →
+      retryFrame renamedHeap finalIssue ∧ walNameFrame renamedHeap finalIssue)
+    (effect : ∀ {diagnostic}, (callbacks).sync seed.handle finalIssue = .error diagnostic reached →
+      (view.handle finalIssue seed.handle).2.1 ∈ (view.descriptors finalIssue).slots →
+      retryNames finalIssue (dir).path =
+        some ((view.descriptors finalIssue).inode (view.handle finalIssue seed.handle).2.1.description) →
+      view.files finalIssue = issue.files →
       view.files reached = issue.stopped effective ∧
-      WalRootSyncEffect dir effective (storage issued) (storage reached) ∧
-      (storage issued).Frames (· = (dir).path) (storage reached) ∧
+      WalRootSyncEffect dir effective (storage finalIssue) (storage reached) ∧
+      (storage finalIssue).Frames (· = (dir).path) (storage reached) ∧
       ∀ path, state.selectedRetryPath path ∨ path = (dir).file (.walSegment layout.keeper.first) →
-        ∀ inode, retryNames issued path = some inode → visible reached inode = visible issued inode)
+        ∀ inode, retryNames finalIssue path = some inode → visible reached inode = visible finalIssue inode)
     (dispose : RawOpenCacheDisposal (admitted := raw) seed reached)
     (sameDisposal : source.dispose = dispose.dispose)
     (owner : (view.files reached).owners = admission.held.owners)
@@ -1367,7 +1401,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     (keeperStorage : (storage reached).files.Frames (· = (dir).file (.walSegment layout.keeper.first))
       (storage finalized.reached).files) :
     ∃ returned : source.openTable input entry =
-        .error (dispose.diagnostic (IO.userError s!"sync failed for '{(dir).path}': {cause}")) finalized.reached,
+        .error (dispose.diagnostic publicError) finalized.reached,
       RawOpenRetryTrace.SelectedEffects view source first target liveFiles state.selectedRetryPath selectedWal
         (prior.next input returned) ∧
       retryNames finalized.reached ((dir).file (.walSegment layout.keeper.first)) =
@@ -1405,7 +1439,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
           view.pending after seed.pendingRef = pushPending ((dir).file .stagedWal) file (view.pending before seed.pendingRef)) →
         (∀ {before entries loaded}, (callbacks).getPending seed.pendingRef before = .ok entries loaded →
           entries = view.pending before seed.pendingRef) →
-        (∀ {before result issued}, (callbacks).getDirectory seed.directoryRef before = .ok result issued →
+        (∀ {before result readHeap}, (callbacks).getDirectory seed.directoryRef before = .ok result readHeap →
           result = view.directory before seed.directoryRef) →
         (∀ {authorized pruned recorded synced replacement old},
           stagedFrom afterKeeper authorized pruned recorded synced →
@@ -1416,10 +1450,10 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
           replacement ≠ old →
           WalKeeperRenameEffect dir layout.keeper.first replacement true
             (storage synced) (storage renamedHeap) (visible synced) (visible renamedHeap)) →
-        ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some handle) issued →
+        ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue →
           (storage renamedHeap).CrashFileFrame
             (fun path => path = (dir).file (.walSegment layout.keeper.first) ∨
-              state.selectedRetryPath path ∧ path ≠ (dir).path) (storage issued)) →
+              state.selectedRetryPath path ∧ path ≠ (dir).path) (storage finalIssue)) →
         dispose.ScopeFrames finalized (fun before after =>
           (storage before).CrashFileFrame
             (fun path => path = (dir).file (.walSegment layout.keeper.first) ∨
@@ -1432,8 +1466,8 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
             TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
             ((∀ {authorized pruned recorded synced}, stagedFrom afterKeeper authorized pruned recorded synced →
                 WalNamePresenceFrame dir firstOffset through (storage pruned) (storage synced)) →
-              ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some handle) issued →
-                WalNamePresenceFrame dir firstOffset through (storage renamedHeap) (storage issued)) →
+              ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue →
+                WalNamePresenceFrame dir firstOffset through (storage renamedHeap) (storage finalIssue)) →
               dispose.ScopeFrames finalized (fun before after =>
                 WalNamePresenceFrame dir firstOffset through (storage before) (storage after)) →
               seen.DurableReset →
@@ -1452,9 +1486,16 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have bytes : layout.boundedPlan.keeperBytes.size = layout.boundedPlan.keeperSize := layout.target.trimmedSize
   have long : layout.boundedPlan.keeperSize < reads.wal.keeper.calls.metadata.byteSize.toNat :=
     bytes ▸ measured.symm ▸ pruning.longer
-  obtain ⟨authorized, pruned, recorded, synced, staging, moved, _⟩ :=
+  obtain ⟨authorized, pruned, recorded, synced, staging, moved, groupFailed⟩ :=
     (LongKeeperRepair.observeRename_error_iff dir layout.boundedPlan _ source.remove stageWrite groupSync source.rename
       (layout.boundedPlan_valid pruning.later) bytes long).mp observed
+  obtain ⟨afterRead, read⟩ := readRef
+  have loaded : (callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue := by
+    rw [read, attached.trans (seed.directoryKept.trans seed.directorySet)]
+    rfl
+  obtain ⟨diagnostic, failed, reported⟩ := (callbacks).rawDirectoryErrorAfterRead
+    seed.directoryRef seed.activeRef seed.pendingRef loaded groupFailed
+  subst publicError
   have ⟨authorize, prune, written, persisted⟩ := staging
   obtain ⟨stageFrame, stageNames⟩ := stageFrames staging
   obtain ⟨renameFrame, namesOfRename⟩ := renameFrames staging moved
@@ -1562,13 +1603,13 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have atRename : (storage renamedHeap).files.names keeperPath = some literalReplacement := by
     simpa [keeperPath, WalKeeperRenameEffect.rebind] using
       inodeMove.visible keeperPath (.inr ⟨.walSegment layout.keeper.first, rfl⟩)
-  have loadedFrame : (storage renamedHeap).CrashFileFrame crashScope (storage issued) := loadSurvivors loaded
-  have keeperAtIssue : retryNames issued keeperPath = some literalReplacement :=
+  have loadedFrame : (storage renamedHeap).CrashFileFrame crashScope (storage finalIssue) := loadSurvivors loaded
+  have keeperAtIssue : retryNames finalIssue keeperPath = some literalReplacement :=
     (loadedFrame.toFrames.visible keeperPath (.inl rfl)).1.trans atRename
-  have keeperAsReported : retryNames issued keeperPath = some replacement :=
+  have keeperAsReported : retryNames finalIssue keeperPath = some replacement :=
     (errorEffect.2.1.visible (.walSegment layout.keeper.first)).symm.trans named
   have sameReplacement : literalReplacement = replacement := Option.some.inj (keeperAtIssue.symm.trans keeperAsReported)
-  have atIssueSurvivors : RawOpenRetryTrace.KeeperCrashChoices dir layout.target (storage issued) :=
+  have atIssueSurvivors : RawOpenRetryTrace.KeeperCrashChoices dir layout.target (storage finalIssue) :=
     (inodeMove.acceptsKeeperSurvivors (target := layout.target) settled stagedAtSync oldPayload).frame loadedFrame (.inl rfl)
   have atErrorSurvivors : RawOpenRetryTrace.KeeperCrashChoices dir layout.target (storage reached) :=
     errorEffect.2.1.acceptsKeeperSurvivors atIssueSurvivors keeperAtIssue (sameReplacement.symm ▸ keeperDurable)
@@ -1587,9 +1628,9 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
       (protectedPath.imp id Or.inr))
   have immutableAtRename := inodeMove.keepsSelectedChildren currentReady targetAtKeeper immutableAtStage
   have loadChildren := loadedFrame.toFrames.weaken (scope := immutableChild) (fun _ child => .inr child)
-  have immutableAtIssue (names : FilePath → Option Nat) (possible : names ∈ (storage issued).crashNames)
+  have immutableAtIssue (names : FilePath → Option Nat) (possible : names ∈ (storage finalIssue).crashNames)
       (path : FilePath) (selectedPath : state.selectedRetryPath path) (notRoot : path ≠ (dir).path) :
-      names path = retryNames issued path :=
+      names path = retryNames finalIssue path :=
     loadChildren.settledFrom (fun prior possible path child => immutableAtRename prior possible path child.1 child.2)
       names possible path ⟨selectedPath, notRoot⟩
   have immutableAtError := errorEffect.2.1.keepsSelectedChildren immutableAtIssue
@@ -1611,6 +1652,8 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   have throughCleanup := throughError.trans (cleanupCatalog.afterWorker (fun earlier later => earlier.trans later))
   have window := (throughCleanup.preservesNamespaceWindow atPrune).2 _ seen.chosen
   exact seen.startsRecoveryObservations reset nextEntry window
+
+end FinalDirectorySync
 
 /-- The actual failed replacement rename, including a reported move
 before EIO, enters the shared failed-call fold with the original
