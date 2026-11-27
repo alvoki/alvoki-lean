@@ -1,4 +1,7 @@
 import Alvoki.Experiments.DurableBlob.Native
+import Std.WP
+import Std.Tactic.Do
+import Lean
 
 namespace DurableBlob
 
@@ -66,47 +69,175 @@ private theorem stable_admits {image : Image} (h : image.Stable known) : image.A
   obtain ⟨active, survivors⟩ := h
   simp [Image.Admits, active, survivors, Permitted]
 
-private theorem publish_outcome (report : Operation → Report) (image : Image)
-    (stable : image.Stable old) (proposed : ByteArray) :
-    match (model report true).backend.publish proposed image with
-    | .ok _ after => after.Stable proposed
-    | .error _ after => after.Admits old (some proposed) := by
-  obtain ⟨active, survivors⟩ := stable
-  cases rw : report .writeStaged <;> cases rs : report .syncStaged <;>
-    cases rr : report .renameStaged <;> cases rd : report .syncDirectory <;>
-    simp [Files.backend, model, perform,
-      rw, rs, rr, rd, Image.recordWrite, Image.syncWriter, Image.replace, Bind.bind, Pure.pure, EStateM.bind, Image.barrier, Image.Stable, Image.Admits,
-      active, survivors, Permitted]
+private abbrev M := EStateM Unit Image
 
-private theorem reopen_outcome (report : Operation → Report) (readOK : Bool)
-    (image : Image) (admitted : image.Admits old pending) :
-    match (model report readOK).backend.reopen image with
-    | .ok value after => Permitted old pending value ∧ after.Stable value
-    | .error _ after => after.Admits old pending := by
-  cases readOK <;> cases hr : report .syncDirectory <;>
-    simp [Files.backend, model, perform, hr, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure,
-      Image.barrier, Image.Stable] <;>
-    first | exact admitted | exact admitted.1 | simpa [Image.Admits, Image.barrier] using admitted.1
+/-- Exact outcomes in the existing disk projection. A late error keeps the
+effect and a pre-effect error keeps the input. -/
+private def Effect (result : EStateM.Result Unit Image α) (value : α)
+    (before after : Image) : Prop :=
+  match result with
+  | .ok returned reached => returned = value ∧ reached = after
+  | .error _ reached => reached = before ∨ reached = after
+
+private theorem perform_effect (report : Report) (change : Image → Image) (s : Image) :
+    Effect (perform report change s) () s (change s) := by
+  cases report <;> simp [perform, Effect]
+
+/-- Success returns the writer for this call. Sync is specified at that
+writer. Stable exclusive bindings justify interpreting rename on its bytes. -/
+structure FileEffects (files : Files M writer) (held : writer) : Prop where
+  write : ∀ bytes s, Effect (files.writeStaged bytes s) held s (s.recordWrite bytes)
+  sync : ∀ s, Effect (files.syncStaged held s) () s s.syncWriter
+  rename : ∀ s, Effect (files.renameStaged s) () s s.replace
+  barrier : ∀ s, Effect (files.syncDirectory s) () s s.barrier
+  read : ∀ s, Effect (files.readActive s) s.active s s
+
+private theorem modelEffects (report : Operation → Report) (readOK : Bool) :
+    FileEffects (model report readOK) () where
+  write _ _ := perform_effect _ _ _
+  sync _ := perform_effect _ _ _
+  rename _ := perform_effect _ _ _
+  barrier _ := perform_effect _ _ _
+  read _ := by cases readOK <;> simp [model, Effect]
+
+open Std.WP Lean.Order
+set_option experimental.vcgen true
+
+/-- Adequacy for the same EStateM result consumed by Run. -/
+private def Post (result : EStateM.Result Unit Image α) (ok : α → Image → Prop)
+    (failed : Image → Prop) : Prop :=
+  match result with
+  | .ok value reached => ok value reached
+  | .error _ reached => failed reached
+
+private theorem triple_iff (action : M α) (P : Image → Prop)
+    (Q : α → Image → Prop) (F : Image → Prop) :
+    (⦃P⦄ action ⦃Q; fun _ => F⦄) ↔ ∀ s, P s → Post (action s) Q F := by
+  constructor
+  · intro ⟨h⟩ s pre
+    have reached := h s pre
+    cases ran : action s <;> simpa [wp, WP.trans, ran, Post] using reached
+  · intro h
+    refine ⟨fun s pre => ?_⟩
+    have reached := h s pre
+    cases ran : action s <;> simpa [wp, WP.trans, ran, Post] using reached
+
+private theorem effectSpec {action : M α} {value : α}
+    (localEffect : Effect (action before) value before after) :
+    ⦃fun s => s = before⦄ action
+    ⦃fun v s => v = value ∧ s = after; fun _ s => s = before ∨ s = after⦄ := by
+  rw [triple_iff]
+  intro s same
+  subst s
+  cases ran : action before <;> simpa only [ran, Effect, Post] using localEffect
+
+private def PublishCut (before : Image) (bytes : ByteArray) (s : Image) : Prop :=
+  let staged := before.recordWrite bytes
+  let synced := staged.syncWriter
+  let renamed := synced.replace
+  s = before ∨ s = staged ∨ s = synced ∨ s = renamed ∨ s = renamed.barrier
+
+private theorem publish_spec (effects : FileEffects files held) (before : Image) (bytes : ByteArray) :
+    ⦃fun s => s = before⦄ files.backend.publish bytes
+    ⦃fun _ s => s = ((before.recordWrite bytes).syncWriter.replace).barrier;
+      fun _ => PublishCut before bytes⦄ := by
+  have write {s : Image} := effectSpec (effects.write bytes s)
+  have sync (writer : _) {s : Image} :
+      ⦃fun t => writer = held ∧ t = s⦄ files.syncStaged writer
+      ⦃fun _ t => t = s.syncWriter; fun _ t => t = s ∨ t = s.syncWriter⦄ := by
+    rw [triple_iff]
+    rintro t ⟨sameWriter, sameState⟩
+    subst writer
+    subst t
+    have localProof := effects.sync s
+    cases ran : files.syncStaged held s <;> simp [ran, Effect, Post] at localProof ⊢ <;> exact localProof
+  have rename {s : Image} := effectSpec (effects.rename s)
+  have barrier {s : Image} := effectSpec (effects.barrier s)
+  simp only [Files.backend]
+  vcgen [write, sync, rename, barrier] <;> grind [PublishCut]
+
+private theorem reopen_spec (effects : FileEffects files held) (before : Image) :
+    ⦃fun s => s = before⦄ files.backend.reopen
+    ⦃fun value s => value = before.active ∧ s = before.barrier;
+      fun _ s => s = before ∨ s = before.barrier⦄ := by
+  have read {s : Image} := effectSpec (effects.read s)
+  have barrier {s : Image} := effectSpec (effects.barrier s)
+  simp only [Files.backend]
+  vcgen [read, barrier] <;> grind
+
+theorem publish_stable (effects : FileEffects files held) (before : Image) (bytes : ByteArray) :
+    Post (files.backend.publish bytes before) (fun _ s => s.Stable bytes)
+      (PublishCut before bytes) := by
+  have post := (triple_iff _ _ _ _).mp (publish_spec effects before bytes) before rfl
+  cases ran : files.backend.publish bytes before with
+  | error => simpa only [ran, Post] using post
+  | ok _ s =>
+    simp only [ran, Post] at post ⊢
+    rw [post]
+    simp [Image.Stable, Image.recordWrite, Image.syncWriter, Image.replace, Image.barrier]
+
+private theorem publish_outcome (effects : FileEffects files held) (image : Image)
+    (stable : image.Stable old) (proposed : ByteArray) :
+    Post (files.backend.publish proposed image) (fun _ s => s.Stable proposed)
+      (fun s => s.Admits old (some proposed)) := by
+  have effect := publish_stable effects image proposed
+  cases ran : files.backend.publish proposed image with
+  | ok => simpa only [ran, Post] using effect
+  | error _ s =>
+    simp only [ran, Post] at effect ⊢
+    obtain ⟨active, survivors⟩ := stable
+    rcases (show PublishCut image proposed s from effect) with h | h | h | h | h <;>
+      rw [h] <;>
+      simp [Image.Admits, Permitted, Image.recordWrite, Image.syncWriter, Image.replace,
+        Image.barrier, active, survivors]
+
+theorem reopen_binding (effects : FileEffects files held) (before : Image) :
+    Post (files.backend.reopen before)
+      (fun bytes s => bytes = before.active ∧ s.Stable bytes)
+      (fun s => s = before ∨ s = before.barrier) := by
+  have post := (triple_iff _ _ _ _).mp (reopen_spec effects before) before rfl
+  cases ran : files.backend.reopen before with
+  | error => simpa only [ran, Post] using post
+  | ok value s =>
+    simp only [ran, Post] at post ⊢
+    obtain ⟨rfl, rfl⟩ := post
+    exact ⟨rfl, rfl, rfl⟩
+
+private theorem reopen_outcome (effects : FileEffects files held) (image : Image)
+    (admitted : image.Admits old pending) :
+    Post (files.backend.reopen image)
+      (fun value s => Permitted old pending value ∧ s.Stable value)
+      (fun s => s.Admits old pending) := by
+  have post := reopen_binding effects image
+  cases ran : files.backend.reopen image with
+  | error _ s =>
+    simp only [ran, Post] at post ⊢
+    rcases (show s = image ∨ s = image.barrier from post) with rfl | rfl
+    · exact admitted
+    · exact ⟨admitted.1, by simpa [Image.barrier] using admitted.1⟩
+  | ok value s =>
+    simp only [ran, Post] at post ⊢
+    exact ⟨post.1.symm ▸ admitted.1, post.2⟩
 
 /-- Executions of the shared protocol with primitive reports. A process stop
 leaves the live image; power loss independently selects an admitted image.
 Losing the reply of a completed publication is also an uncertain outcome. -/
 inductive Run (initial : ByteArray) : List (Event ByteArray) → Bool → Image → Prop where
   | initial : Run initial [] false (.settled initial)
-  | published : Run initial events true before →
-      (model report true).backend.publish bytes before = .ok () after →
+  | publishedWith : Run initial events true before → FileEffects files held →
+      files.backend.publish bytes before = .ok () after →
       Run initial (events ++ [.published bytes]) true after
-  | uncertain : Run initial events true before →
-      (model report true).backend.publish bytes before = result →
+  | uncertainWith : Run initial events true before → FileEffects files held →
+      files.backend.publish bytes before = result →
       Run initial (events ++ [.uncertain bytes]) false (match result with | .ok _ after | .error _ after => after)
-  | opened : Run initial events false before →
-      (model report readOK).backend.reopen before = .ok bytes after →
+  | openedWith : Run initial events false before → FileEffects files held →
+      files.backend.reopen before = .ok bytes after →
       Run initial (events ++ [.opened bytes]) true after
-  | openFailed : Run initial events false before →
-      (model report readOK).backend.reopen before = .error () after →
+  | openFailedWith : Run initial events false before → FileEffects files held →
+      files.backend.reopen before = .error () after →
       Run initial (events ++ [.openFailed]) false after
-  | reopenInterrupted : Run initial events false before →
-      (model report readOK).backend.reopen before = result →
+  | reopenInterruptedWith : Run initial events false before → FileEffects files held →
+      files.backend.reopen before = result →
       Run initial (events ++ [.stop]) false (match result with | .ok _ after | .error _ after => after)
   | stop : Run initial events online before →
       Run initial (events ++ [.stop]) false before
@@ -133,8 +264,6 @@ structure Reports where
   flush : Bool
   syncWriter : Report
   rename : Report
-
-private abbrev M := EStateM Unit Image
 
 private def checked (ok : Bool) (value : α) : M α :=
   fun image => if ok then .ok value image else .error () image
@@ -167,61 +296,22 @@ def primitives (directory : FilePath) (reports : Reports) : Primitives M Handle 
 def backend (directory : FilePath) (reports : Reports) : Backend M ByteArray :=
   (primitives directory reports).backend directory
 
-private def Reports.directoryEffect (reports : Reports) : Report :=
-  if reports.openDirectory then reports.syncDirectory else .beforeEffect
-
-private def Reports.publication (reports : Reports) : Operation → Report
-  | .writeStaged =>
-    if reports.openWriter && reports.write then
-      if reports.flush then .ok else .afterEffect
-    else .beforeEffect
-  | .syncStaged => reports.syncWriter
-  | .renameStaged => reports.rename
-  | .syncDirectory => reports.directoryEffect
-
-private theorem reopen_eq (directory : FilePath) (reports : Reports) (before : Image) :
-    (backend directory reports).reopen before =
-      (model (fun _ => reports.directoryEffect) reports.readActive).backend.reopen before := by
-  cases r : reports.readActive <;> cases o : reports.openDirectory <;>
-    cases d : reports.syncDirectory <;>
-      simp [r, o, d, backend, Primitives.backend, primitives, Primitives.files, Files.backend, checked,
-        Reports.directoryEffect, model, perform, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
-
-private theorem directory_eq (directory : FilePath) (reports : Reports) (before : Image) :
-    ((primitives directory reports).files directory (primitives directory reports).sync).syncDirectory
-      before = perform reports.directoryEffect Image.barrier before := by
-  cases o : reports.openDirectory <;>
-    simp [o, primitives, Primitives.files, checked, Reports.directoryEffect, perform,
-      Bind.bind, EStateM.bind]
-
-private theorem stage_eq (directory : FilePath) (reports : Reports) (before : Image)
-    (bytes : ByteArray) :
-    (((primitives directory reports).files directory (primitives directory reports).sync)
-      |>.writeStaged bytes before) =
-      match perform (reports.publication .writeStaged) (Image.recordWrite bytes) before with
-      | .ok _ after => .ok .writer after
-      | .error e after => .error e after := by
-  cases o : reports.openWriter <;> cases w : reports.write <;> cases f : reports.flush <;>
-    simp [o, w, f, primitives, Primitives.files, checked, Reports.publication, perform,
-      Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
-
-private theorem publish_eq (directory : FilePath) (reports : Reports) (before : Image)
-    (bytes : ByteArray) :
-    (backend directory reports).publish bytes before =
-      (model reports.publication true).backend.publish bytes before := by
-  simp only [backend, Primitives.backend, Files.backend, Bind.bind, EStateM.bind, stage_eq, model]
-  cases perform (reports.publication .writeStaged) (Image.recordWrite bytes) before with
-  | error => rfl
-  | ok _ staged =>
-    have rename_eq (image : Image) :
-        ((primitives directory reports).files directory
-          (primitives directory reports).sync).renameStaged image =
-            perform reports.rename Image.replace image := by simp [Primitives.files, primitives]
-    have sync_eq (image : Image) :
-        ((primitives directory reports).files directory
-          (primitives directory reports).sync).syncStaged .writer image =
-            perform reports.syncWriter Image.syncWriter image := rfl
-    simp only [sync_eq, rename_eq, directory_eq, Reports.publication]
+private theorem fileEffects (directory : FilePath) (reports : Reports) :
+    FileEffects ((primitives directory reports).files directory (primitives directory reports).sync) .writer where
+  write bytes s := by
+    cases o : reports.openWriter <;> cases w : reports.write <;> cases f : reports.flush <;>
+      simp [Primitives.files, primitives, checked, perform, Effect, o, w, f,
+        Bind.bind, EStateM.bind, Pure.pure, EStateM.pure]
+  sync s := perform_effect reports.syncWriter Image.syncWriter s
+  rename s := by
+    simpa [Primitives.files, primitives] using perform_effect reports.rename Image.replace s
+  barrier s := by
+    cases o : reports.openDirectory
+    · simp [Primitives.files, primitives, checked, Effect, o, Bind.bind, EStateM.bind]
+    · simpa [Primitives.files, primitives, checked, o, Bind.bind, EStateM.bind] using
+        perform_effect reports.syncDirectory Image.barrier s
+  read s := by
+    cases r : reports.readActive <;> simp [Primitives.files, primitives, checked, Effect, r]
 
 /-- Continue the public component trace with the result of the very same
 reopen body used by `native`, interpreted with Linux primitive effects. -/
@@ -230,10 +320,9 @@ theorem reopen (directory : FilePath) (reports : Reports)
     match (backend directory reports).reopen before with
     | .ok bytes after => Run initial (events ++ [.opened bytes]) true after
     | .error _ after => Run initial (events ++ [.openFailed]) false after := by
-  rw [reopen_eq]
   split
-  next eq => exact .opened prior eq
-  next eq => exact .openFailed prior eq
+  next eq => exact .openedWith prior (fileEffects directory reports) eq
+  next eq => exact .openFailedWith prior (fileEffects directory reports) eq
 
 /-- A reported success confirms the submitted bytes. Every returned error
 keeps the reached image and leaves exactly that proposal pending. -/
@@ -242,10 +331,9 @@ theorem publish (directory : FilePath) (reports : Reports) (bytes : ByteArray)
     match (backend directory reports).publish bytes before with
     | .ok _ after => Run initial (events ++ [.published bytes]) true after
     | .error _ after => Run initial (events ++ [.uncertain bytes]) false after := by
-  rw [publish_eq]
   split
-  next eq => exact .published prior eq
-  next eq => exact Run.uncertain prior eq
+  next eq => exact .publishedWith prior (fileEffects directory reports) eq
+  next eq => exact .uncertainWith prior (fileEffects directory reports) eq
 
 /-- Loss of the reply keeps the state reached by publication, regardless of
 whether the last reached primitive reports success or failure. -/
@@ -254,8 +342,7 @@ theorem publishUncertain (directory : FilePath) (reports : Reports) (bytes : Byt
     Run initial (events ++ [.uncertain bytes]) false
       (match (backend directory reports).publish bytes before with
        | .ok _ after | .error _ after => after) := by
-  rw [publish_eq]
-  exact .uncertain prior rfl
+  exact .uncertainWith prior (fileEffects directory reports) rfl
 
 /-- An interrupted reopen retains any directory-barrier effect but issues
 no ready session. A cutoff is encoded by an error at the first uncompleted
@@ -265,8 +352,7 @@ theorem reopenInterrupted (directory : FilePath) (reports : Reports)
     Run initial (events ++ [.stop]) false
       (match (backend directory reports).reopen before with
        | .ok _ after | .error _ after => after) := by
-  rw [reopen_eq]
-  exact .reopenInterrupted prior rfl
+  exact .reopenInterruptedWith prior (fileEffects directory reports) rfl
 
 theorem publishUncertainAdmits (directory : FilePath) (reports : Reports)
     (stable : before.Stable old) (proposed : ByteArray) :
@@ -274,9 +360,9 @@ theorem publishUncertainAdmits (directory : FilePath) (reports : Reports)
       | .ok _ after | .error _ after => after
     Step (.ready old) (.uncertain proposed) (.offline old (some proposed)) ∧
       after.Admits old (some proposed) := by
-  simp only [publish_eq]
-  have effect := publish_outcome reports.publication before stable proposed
-  cases result : (model reports.publication true).backend.publish proposed before with
+  have effect := publish_outcome (fileEffects directory reports) before stable proposed
+  change Post ((backend directory reports).publish proposed before) _ _ at effect
+  cases result : (backend directory reports).publish proposed before with
   | ok _ after =>
     rw [result] at effect
     obtain ⟨active, survivors⟩ := effect
@@ -285,12 +371,40 @@ theorem publishUncertainAdmits (directory : FilePath) (reports : Reports)
     rw [result] at effect
     exact ⟨.uncertain, effect⟩
 
+/-- Reopen leaves the live binding alone and settles a successful reply. -/
+theorem reopenBinding (directory : FilePath) (reports : Reports) (before : Image) :
+    match (backend directory reports).reopen before with
+    | .ok bytes after => bytes = before.active ∧ after.Stable bytes
+    | .error _ after => after.active = before.active := by
+  have reached := reopen_binding (fileEffects directory reports) before
+  change Post ((backend directory reports).reopen before) _ _ at reached
+  split
+  next ran => simpa only [ran, Post] using reached
+  next ran =>
+    simp only [ran, Post] at reached
+    rcases reached with rfl | rfl <;> rfl
+
+/-- Even on a reported error, the live binding is the old value or the proposal. -/
+theorem publishActive (directory : FilePath) (reports : Reports) (before : Image)
+    (proposed : ByteArray) :
+    match (backend directory reports).publish proposed before with
+    | .ok _ after => after.Stable proposed
+    | .error _ after => Permitted before.active (some proposed) after.active := by
+  have reached := publish_stable (fileEffects directory reports) before proposed
+  change Post ((backend directory reports).publish proposed before) _ _ at reached
+  split
+  next ran => simpa only [ran, Post] using reached
+  next after ran =>
+    simp only [ran, Post] at reached
+    rcases (show PublishCut before proposed after from reached) with h | h | h | h | h <;>
+      rw [h] <;> simp [Permitted, Image.recordWrite, Image.syncWriter, Image.replace, Image.barrier]
+
 theorem reopenFailedAdmits (directory : FilePath) (reports : Reports)
     (admitted : before.Admits old pending)
     (returned : (backend directory reports).reopen before = .error err after) :
     Step (.offline old pending) .openFailed (.offline old pending) ∧ after.Admits old pending := by
-  rw [reopen_eq] at returned
-  have outcome := reopen_outcome (fun _ => reports.directoryEffect) reports.readActive before admitted
+  have outcome := reopen_outcome (fileEffects directory reports) before admitted
+  change Post ((backend directory reports).reopen before) _ _ at outcome
   rw [returned] at outcome
   exact ⟨.openFailed, outcome⟩
 
@@ -298,8 +412,8 @@ theorem reopenSettles (directory : FilePath) (reports : Reports)
     (admitted : before.Admits old pending)
     (returned : (backend directory reports).reopen before = .ok bytes after) :
     Step (.offline old pending) (.opened bytes) (.ready bytes) ∧ after.Stable bytes := by
-  rw [reopen_eq] at returned
-  have outcome := reopen_outcome (fun _ => reports.directoryEffect) reports.readActive before admitted
+  have outcome := reopen_outcome (fileEffects directory reports) before admitted
+  change Post ((backend directory reports).reopen before) _ _ at outcome
   rw [returned] at outcome
   exact ⟨.opened outcome.1, outcome.2⟩
 
@@ -334,38 +448,38 @@ theorem Run.refines {initial : ByteArray} (run : Run initial events online image
     ∃ state, Allows initial events state ∧ Represents image online state := by
   induction run with
   | initial => exact ⟨_, .initial, rfl, stable_admits ⟨rfl, rfl⟩⟩
-  | @published _ before report bytes _ _ ran ih =>
+  | @publishedWith _ before _ files held bytes after prior effects ran ih =>
     obtain ⟨_ | _, trace, ⟨_, h⟩⟩ := ih
     all_goals try contradiction
-    have effect := publish_outcome report before h bytes
+    have effect := publish_outcome effects before h bytes
     rw [ran] at effect
     exact ⟨_, trace.next .published, rfl, effect⟩
-  | @uncertain _ before report bytes result _ ran ih =>
+  | @uncertainWith _ before _ files held bytes result prior effects ran ih =>
     obtain ⟨_ | _, trace, ⟨_, h⟩⟩ := ih
     all_goals try contradiction
-    have effect := publish_outcome report before h bytes
+    have effect := publish_outcome effects before h bytes
     rw [ran] at effect
     cases result with
     | ok value after =>
       obtain ⟨active, survivors⟩ := effect
       exact ⟨_, trace.next .uncertain, rfl, by simp [Image.Admits, active, survivors, Permitted]⟩
     | error error after => exact ⟨_, trace.next .uncertain, rfl, effect⟩
-  | @opened _ before report readOK _ _ _ ran ih =>
+  | openedWith prior effects ran ih =>
     obtain ⟨_ | _, trace, ⟨_, h⟩⟩ := ih
     all_goals try contradiction
-    have effect := reopen_outcome report readOK before h
+    have effect := reopen_outcome effects _ h
     rw [ran] at effect
     exact ⟨_, trace.next (.opened effect.1), rfl, effect.2⟩
-  | @openFailed _ before report readOK _ _ ran ih =>
+  | openFailedWith prior effects ran ih =>
     obtain ⟨_ | _, trace, ⟨_, h⟩⟩ := ih
     all_goals try contradiction
-    have effect := reopen_outcome report readOK before h
+    have effect := reopen_outcome effects _ h
     rw [ran] at effect
     exact ⟨_, trace.next .openFailed, rfl, effect⟩
-  | @reopenInterrupted _ before report readOK result _ ran ih =>
+  | @reopenInterruptedWith _ before _ files held result prior effects ran ih =>
     obtain ⟨_ | _, trace, ⟨_, h⟩⟩ := ih
     all_goals try contradiction
-    have effect := reopen_outcome report readOK before h
+    have effect := reopen_outcome effects _ h
     rw [ran] at effect
     cases result with
     | ok _ after =>
@@ -383,9 +497,16 @@ theorem Run.refines {initial : ByteArray} (run : Run initial events online image
     · exact ⟨_, trace.next .stopAgain, rfl, by
         simpa [Image.Admits, Image.settled] using h.2 _ survived⟩
 
+theorem Run.refinesReady {initial : ByteArray} (run : Run initial events true image) :
+    Allows initial events (.ready image.active) := by
+  obtain ⟨_ | _, allowed, represented⟩ := run.refines
+  · rw [represented.2.1]
+    exact allowed
+  · exact False.elim (Bool.noConfusion represented.1)
+
 theorem Run.healthy_open {initial : ByteArray} (run : Run initial events false image) :
     Run initial (events ++ [.opened image.active]) true image.barrier :=
-  .opened (report := fun _ => .ok) (readOK := true) run rfl
+  .openedWith run (modelEffects (fun _ => .ok) true) rfl
 
 /-- Process exit can expose a renamed but unsettled file. Recovery settles
 that binding, so a subsequent power loss cannot restore the previous one. -/

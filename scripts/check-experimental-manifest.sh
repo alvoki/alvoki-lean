@@ -32,15 +32,24 @@ for module in Contract Protocol Native; do
   compile "$blob/$module" native
 done
 compile "$blob/Proofs"
+compile "$blob/WPComparison"
 compile "$blob/Trace"
 compile "$manifest/Basic" native
 compile "$manifest/Proofs"
+compile "$manifest/RefinementExperiment"
 compile "$manifest/NativeTests" native
 compile Alvoki/Checks/Audit/AxiomPolicy
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.DurableBlob.Proofs
-import Alvoki.Experiments.Manifest.Proofs
+import Alvoki.Experiments.DurableBlob.WPComparison
+import Alvoki.Experiments.Manifest.RefinementExperiment
+#check_axioms DurableBlob.WPComparison.legacy
+#check_axioms DurableBlob.WPComparison.current
+#check_axioms DurableBlob.WPComparison.nested_result
+#check_axioms DurableBlob.WPComparison.nested_stop
+#check_axioms DurableBlob.publish_stable
+#check_axioms DurableBlob.reopen_binding
 #check_axioms DurableBlob.Run.refines
 #check_axioms DurableBlob.Run.healthy_open
 #check_axioms DurableBlob.LinuxEffects.reopen
@@ -51,6 +60,9 @@ import Alvoki.Experiments.Manifest.Proofs
 #check_axioms DurableBlob.LinuxEffects.publishUncertainAdmits
 #check_axioms DurableBlob.LinuxEffects.reopenFailedAdmits
 #check_axioms DurableBlob.LinuxEffects.reopenAgain
+#check_axioms L0Manifest.RefinementExperiment.typedRetry
+#check_axioms L0Manifest.RefinementExperiment.typedRetry_same
+#check_axioms L0Manifest.RefinementExperiment.lostSuccess
 #check_axioms L0Manifest.decode_encode
 #check_axioms L0Manifest.publish_valid
 #check_axioms L0Manifest.reopen_encoded
