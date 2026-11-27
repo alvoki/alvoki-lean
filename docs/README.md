@@ -15,3 +15,5 @@ For engine features and priorities, see the [development roadmap](roadmap.md). F
 ### Directory layout
 
 The top level contains the engine guides, specifications, development roadmaps and verification overview. [Proof boundaries](proofs/native-storage.md) and their contracts live in `proofs/`. In [performance/](performance/benchmarks.md) start with workloads, reproduction and the engine baseline. In [experiments/](experiments/README.md) follow the implementation investigations behind those measurements.
+
+For proposed storage changes, see the [WAL recovery policies and simulation design](design/wal-recovery.md).
