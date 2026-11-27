@@ -38,16 +38,19 @@ compile_proof Alvoki/Codec/ByteWords
 compile_proof "$table/Representation"
 for module in Reader Search Typed UnifiedMetadata UnifiedData UnifiedImage UnifiedSearch \
     UnifiedGroups UnifiedReads UnifiedOpen UnifiedBuilder UnifiedEndToEnd \
-    UnifiedNativeReader UnifiedReadErrors; do
+    UnifiedNativeReader UnifiedReadErrors NativeWrite UnifiedNativeEndToEnd; do
   compile_proof "$table/Proofs/$module"
 done
 compile_proof Alvoki/Checks/Audit/AxiomPolicy
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
-import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeReader
+import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
 import Alvoki.Experiments.SSTable.Proofs.UnifiedReadErrors
 import Alvoki.Experiments.SSTable.Proofs.Typed
 open ImmutableSSTable
+#check_axioms Unified.buildFileWith_refines
+#check_axioms Unified.buildFileWith_syncError
+#check_axioms Unified.buildFileWith_open_represents
 #check_axioms Unified.open_built_table
 #check_axioms Unified.openCheckedWith_built_table_at
 #check_axioms ReadSnapshot.readsExactly
