@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedRecoveryWork
 import Alvoki.Storage.Disk.NativeMarkedListingWork
 import Alvoki.Storage.Disk.NativeRejectedOpenLineage
 

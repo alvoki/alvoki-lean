@@ -622,8 +622,8 @@ import Alvoki.Storage.Disk.NamedMaintenanceBudget
 import Alvoki.Storage.Disk.WalSegmentCachedExtentReports
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
 import Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork
-import Alvoki.Storage.Disk.MetadataRecoveryChunkWork
-import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
+import Alvoki.Storage.Disk.Proofs.Recovery.MetadataRecoveryChunkWork
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedRecoveryWork
 import Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
 import Alvoki.Storage.Disk.NativeMarkedFirstBarrierRetries
 import Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen

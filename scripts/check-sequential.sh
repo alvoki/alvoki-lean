@@ -688,9 +688,9 @@ lake env leanchecker Alvoki.Storage.Disk.CachedCheckpointExtentRetry
 lake env leanchecker Alvoki.Storage.Disk.RecoveryRequestCount
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentCachedOpenWork
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.SelectedRecoveryChunkWork
-lake env leanchecker Alvoki.Storage.Disk.CheckpointHeldOpenWork
-lake env leanchecker Alvoki.Storage.Disk.MetadataRecoveryChunkWork
-lake env leanchecker Alvoki.Storage.Disk.NativeMarkedRecoveryWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.CheckpointHeldOpenWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.MetadataRecoveryChunkWork
+lake env leanchecker Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedRecoveryWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedFirstBarrierWork
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedFirstBarrierRetries
 lake env leanchecker Alvoki.Storage.Disk.NativeMarkedBarrierRetryReopen

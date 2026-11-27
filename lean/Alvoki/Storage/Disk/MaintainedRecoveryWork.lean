@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.CheckpointHeldOpenWork
+import Alvoki.Storage.Disk.Proofs.Recovery.CheckpointHeldOpenWork
 import Alvoki.Storage.Disk.DiskCleanReopenAdmission
 import Alvoki.Storage.Disk.NamedMaintenanceBudget
 

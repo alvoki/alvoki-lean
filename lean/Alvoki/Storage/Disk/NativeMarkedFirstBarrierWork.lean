@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.CapturedAlignedInstallation
-import Alvoki.Storage.Disk.NativeMarkedRecoveryWork
+import Alvoki.Storage.Disk.Proofs.Recovery.NativeMarkedRecoveryWork
 
 namespace Alvoki.Storage.DiskSession
 
