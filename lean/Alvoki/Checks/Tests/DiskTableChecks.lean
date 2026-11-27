@@ -4,7 +4,7 @@ import Alvoki.Storage.Disk.WAL.WalSegmentReadIO
 import Alvoki.Storage.Disk.WalSegmentRepair
 import Alvoki.Storage.Disk.WalSegmentRepairIO
 import Alvoki.Storage.Disk.WalSegmentRepairOpen
-import Alvoki.Storage.Disk.WalSegmentRotationIO
+import Alvoki.Storage.Disk.WAL.WalSegmentRotationIO
 import Alvoki.Storage.Disk.LegacyManifest
 import Alvoki.Storage.Publication.DiskPublicationModel
 

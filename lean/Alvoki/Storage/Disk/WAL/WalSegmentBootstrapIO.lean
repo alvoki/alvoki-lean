@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.WalSegmentRepairOpen
-import Alvoki.Storage.Disk.WalSegmentRotationIO
+import Alvoki.Storage.Disk.WAL.WalSegmentRotationIO
 import Alvoki.Storage.Disk.RunFileName
 
 namespace Alvoki.Storage.WalSegmentRepair

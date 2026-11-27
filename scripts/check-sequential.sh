@@ -604,7 +604,7 @@ lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentFileName
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentPathIdentity
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollection
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRecovery
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentRotationIO
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentRotationIO
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotation
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Rotation.WalSegmentRotationCommit
 lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentInventory

@@ -12,7 +12,7 @@ import Alvoki.Storage.Disk.WAL.WalBatch
 import Alvoki.Storage.Disk.WAL.WalSegmentCommit
 import Alvoki.Storage.Disk.WAL.WalSegmentBootstrapIO
 import Alvoki.Storage.Disk.WAL.CollectionPlan
-import Alvoki.Storage.Disk.WalSegmentRotationIO
+import Alvoki.Storage.Disk.WAL.WalSegmentRotationIO
 import Alvoki.Storage.Disk.WAL.WalSegmentCachedExtentOpen
 import Alvoki.Storage.Publication.CheckpointPublication
 import Alvoki.Storage.Publication.RunCollection

@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollection
 import Alvoki.Storage.Disk.WAL.WalSegmentFileName
-import Alvoki.Storage.Disk.WalSegmentRotationIO
+import Alvoki.Storage.Disk.WAL.WalSegmentRotationIO
 
 namespace Alvoki.Storage
 
