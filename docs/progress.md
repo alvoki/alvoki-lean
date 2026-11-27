@@ -45,17 +45,16 @@ installation. Frames apply to the staging and rename heaps reached by that open.
 [Worker observation](../lean/Alvoki/Storage/Disk/NativeMarkedOpenInterpreter.lean) ·
 [Retry and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-The marked reader's census shows the allocated directory slot survives the last
-seal. The keeper read, repair steps and final cache load preserve that slot and
-its inode under local descriptor conditions. The root name observed at cache
-allocation follows the storage frames to the same inode at fsync. Live retry
-and sampled reboot share the resulting facts.
+The marked open carries its allocated directory slot to the final fsync. The
+successful staging-file fsync makes the trimmed prefix durable on the fresh
+inode. Rename binds that inode at the keeper path, and the cache load preserves
+its live and durable bytes. This same staged inode feeds live retry and reboot.
+An observation at the staging-file fsync identifies it with the report’s inode.
 [Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Derive the keeper name and its live and durable
-replacement bytes at the issued fsync from the reached staging write, file sync
-and rename. The failed directory fsync's durability effect remains an explicit
-filesystem observation.
+**Next source boundary.** Derive the logical file image at the issued directory
+fsync from the reached prune, staging and rename operations. This is separate
+from observing whether the failed directory fsync persisted the new binding.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)

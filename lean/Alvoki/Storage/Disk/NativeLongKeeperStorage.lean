@@ -377,11 +377,10 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     (root : IO.FS.Handle)
     (effects : stage.ReplacementPrefixStorageEffects calls state view observe visible buffered cached pending root)
     (plan : Plan) (keeper : plan.keeper = state.writer.wal.active.first)
-    {entry authorized unlinked pruned staged synced : heap} {old : Nat}
+    {entry authorized unlinked pruned staged synced : heap}
     (heldRoot : CachedKeeperReplacementRoot state view cached root entry)
     (rootNamed : (observe entry).files.names state.session.directory.path =
       some (state.census.inode state.directorySlot.description))
-    (oldNamed : (observe entry).files.names (state.session.directory.file (.walSegment plan.keeper)) = some old)
     (laterOutside : ∀ ordinal ∈ plan.newer,
       ¬ state.crashPath (state.session.directory.file (.walSegment ordinal)))
     (unlink : ∀ {ordinal before after result}, ¬ state.crashPath (state.session.directory.file (.walSegment ordinal)) →
@@ -411,7 +410,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     CachedKeeperReplacementRoot state view cached root synced ∧
     SameLiveWalNames state.session.directory (observe entry) (observe authorized) ∧
     SameLiveWalNames state.session.directory (observe unlinked) (observe synced) ∧
-    (observe synced).files.names (state.session.directory.file (.walSegment plan.keeper)) = some old ∧
+    (observe synced).files.names (state.session.directory.file (.walSegment plan.keeper)) =
+      (observe entry).files.names (state.session.directory.file (.walSegment plan.keeper)) ∧
     (∀ names ∈ (observe synced).crashNames, ∀ file, state.crashPath (state.session.directory.file file) →
       names (state.session.directory.file file) = (observe synced).files.names (state.session.directory.file file)) ∧
     (SameLiveWalNames state.session.directory (observe unlinked) (observe pruned) ∧
@@ -419,7 +419,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
         names (state.session.directory.file file) = (observe pruned).files.names (state.session.directory.file file)) ∧
     ∃ (issued : heap) (file : IO.FS.Handle) (slot : DescriptorSlot) (replacement : Nat),
       calls.sync file issued = .ok () synced ∧
-      attachedReadSlot view file slot replacement issued ∧ replacement ≠ old ∧
+      attachedReadSlot view file slot replacement issued ∧
+      (observe synced).files.names (state.session.directory.file (.walSegment plan.keeper)) ≠ some replacement ∧
       (observe issued).files.names (state.session.directory.file .stagedWal) = some replacement ∧
       visible issued replacement = plan.keeperBytes.extract 0 plan.keeperSize ∧
       RegularFileSyncEffect replacement [visible issued replacement] (observe issued) (observe synced) ∧
@@ -481,15 +482,16 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     (flushFrame.root (writeFrame.root (acquiredRoot prunedRoot)))))
   have pendingFrames := writeFrame.storage.trans
     (flushFrame.storage.trans (recordFrame.storage.trans (loadFrame.storage.trans clearFrame.storage)))
-  have oldAtCreate := (acquireFrame.visible _ keepScope).1.trans ((prunedFootprint _ keepScope).1.trans oldNamed)
-  have distinct : replacement ≠ old := fun same => openedStage.2.2 _ keepScope (same.symm ▸ oldAtCreate)
   have noAlias (name : FilePath) (selected : state.crashPath name) (inode : Nat)
       (binding : (observe consumed).files.names name = some inode) : inode ≠ replacement := by
     intro equal
     exact syncedStage.2.2 name selected (equal ▸ binding)
   obtain ⟨fileSync, syncedVisible, keepSyncRoot⟩ := effects.fileSync stageSync syncedStage.1 stagedBinding
   have toSynced := acquireFrame.trans (pendingFrames.trans (fileSync.frames noAlias))
-  have oldAtRename := (toSynced.visible keeperPath keepScope).1.trans ((prunedFootprint keeperPath keepScope).1.trans oldNamed)
+  have keeperAtRename := (toSynced.visible keeperPath keepScope).1.trans (prunedFootprint keeperPath keepScope).1
+  have separate : (observe synced).files.names keeperPath ≠ some replacement := by
+    rw [fileSync.names]
+    exact syncedStage.2.2 _ keepScope
   have parentFrame := prunedParentFrame.trans
     (toSynced.weaken (scope := (· = dir.path)) (fun _ same => same.symm ▸ rootScope))
   have childrenSettled := (toSynced.weaken
@@ -503,8 +505,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       (loadFrame.walNames.trans (clearFrame.walNames.trans (fun start =>
         congrFun fileSync.names (dir.file (.walSegment start)))))))))
   refine ⟨prunedFootprint.trans toSynced.visible, parentFrame, keepSyncRoot atSyncRoot, authNames, stageNames,
-    oldAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
-    ⟨prunedNames, settled⟩, consumed, file, slot, replacement, stageSync, syncedStage.1, distinct, stagedBinding, stageBytes, fileSync,
+    keeperAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
+    ⟨prunedNames, settled⟩, consumed, file, slot, replacement, stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
     syncedVisible, ?_⟩
   intro liveEffects pendingAtEntry
   obtain ⟨authReadLive, authReadPending⟩ := liveEffects.loadRoot authLoaded
@@ -622,10 +624,11 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
     wroteStage, syncedStage, moved, finalGroup⟩ :=
     finishBoundedMarkedOpen_replacementReached dir plan physicalSize remove write group rename longer returned
   obtain ⟨atSync, parentAtSync, heldAtSync, authNames, stageNames, oldAtRename, _, _,
-    issued, _, _, replacement, _, _, distinct, stagedBinding, stagedBytes, fileSync, syncedVisible, _⟩ :=
+    issued, _, _, replacement, _, _, separate, stagedBinding, stagedBytes, fileSync, syncedVisible, _⟩ :=
     stage.prunedAndSyncedReplacement calls state view observe visible buffered cached active pending remove rename
-      root effects.toReplacementPrefixStorageEffects plan keeper heldRoot protectedFiles.directoryBound oldNamed laterOutside unlink records readsPending
+      root effects.toReplacementPrefixStorageEffects plan keeper heldRoot protectedFiles.directoryBound laterOutside unlink records readsPending
       readsDirectory firstRoot unlinks pruneRoot wroteStage syncedStage
+  have distinct : replacement ≠ old := fun same => separate (same.symm ▸ oldAtRename.trans oldNamed)
   have stageBytes : visible issued replacement = state.writer.wal.active.bytes := stagedBytes.trans prefixBytes
   have stageAtRename := (congrFun fileSync.names path).trans stagedBinding
   have rootScope : state.crashPath dir.path := .inl rfl
@@ -635,7 +638,7 @@ theorem LongKeeperStageCallbacks.readyStorageOfFinishedReplacement
     exact NativeReadyState.crashPath_iff_write.mpr (.inr (.inl rfl))
   rw [keeper] at moved
   have oldKeeper : (observe synced).files.names (dir.file (.walSegment state.writer.wal.active.first)) = some old := by
-    simpa only [keeperPath, keeper] using oldAtRename
+    simpa only [keeperPath, keeper] using oldAtRename.trans oldNamed
   obtain ⟨moveFrame, movedName, detached, movedBytes, movedVisible, keepMoveRoot, movedOtherWalNames⟩ :=
     effects.move moved stageAtRename oldKeeper distinct
   have included (name : FilePath) (selected : state.selectedRetryPath name) : state.crashPath name :=
