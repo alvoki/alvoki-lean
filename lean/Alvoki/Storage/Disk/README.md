@@ -1,16 +1,13 @@
 # Disk storage
 
-[DiskTable.lean](DiskTable.lean) implements the sequential disk API. Adjacent modules provide paths, checkpoint and WAL formats, native I/O, and recovery. [Proofs](Proofs/README.md) groups proof and observation modules by topic; some executable modules retain their local contracts and proofs.
+[DiskTable.lean](DiskTable.lean) implements the sequential disk API: opening a directory, reading and writing, checkpointing, and explicit maintenance. It connects the in-memory [table](../Table/README.md) to the segmented write-ahead log (WAL), checkpoint files and native filesystem operations.
 
-The [proof architecture](../../../../docs/proof-architecture.md) and [native storage invariant map](../../../../docs/proofs/native-storage.md) describe the refinement boundaries and remaining assumptions.
+A write prepares the next table state, appends a WAL frame and publishes a durable boundary before acknowledging success. On open, the engine reads the checkpoint and recovers the selected WAL history before installing a table. Follow the [WAL lifecycle](WAL/README.md) for publication, rotation, recovery and collection; the [sequential storage overview](../../../../docs/architecture.md#sequential-storage) puts these operations together.
 
-To follow a durable write, read the [write and acknowledgement sequence](../../../../docs/architecture.md#sequential-storage). For a maintenance operation, start at [WAL collection](WAL/README.md). For the value visible after open, follow a [snapshot read](../Table/README.md). Run the native examples and checks with the [getting-started guide](../../../../docs/getting-started.md).
+For other entry points:
 
-## Follow the segmented WAL
+- [DiskPaths.lean](DiskPaths.lean) identifies files in a database directory; [DiskSession.lean](DiskSession.lean) describes session operations and their state.
+- [Manifest.lean](Manifest.lean) describes a checkpoint manifest. [CheckpointRead.lean](CheckpointRead.lean) and [IntegrityCheckpointRead.lean](IntegrityCheckpointRead.lean) handle checkpoint reads; [Recovery.lean](Recovery.lean) connects recovered data to the table.
+- [Proofs](Proofs/README.md) groups proof and observation modules by operation. The [native storage invariant map](../../../../docs/proofs/native-storage.md) explains assumptions, proved cases and remaining refinement work.
 
-| Operation | Entry into the implementation |
-|---|---|
-| Initialize, append, rotate | [Empty bootstrap](WAL/WalSegmentBootstrapIO.lean), [commit a write](WAL/WalSegmentCommit.lean), [install the next segment](WAL/WalSegmentRotationIO.lean) |
-| Discover and replay | [Cached extent discovery and reads](WAL/WalSegmentCachedExtentOpen.lean), [segment read I/O](WAL/WalSegmentReadIO.lean), [replay](WAL/WalSegmentReplay.lean); [inventory](WAL/WalSegmentInventory.lean) and [read plan](WAL/WalSegmentReadPlan.lean) describe the corresponding model and proofs |
-| Repair on reopen | [Repair I/O](WAL/WalSegmentRepairIO.lean), [open and repair](WAL/WalSegmentRepairOpen.lean) |
-| Decide which segments to collect | [WAL collection](WAL/README.md). This subdirectory owns the collection plan and range checks. The old collection module names at this level forward existing imports. |
+The supported disk path uses a segmented WAL. The separate [single-file WAL experiment](../../Experiments/WAL/SingleFile.lean) explores recovery policies and is not the `DiskTable` implementation. Run native examples and checks using the [getting-started guide](../../../../docs/getting-started.md).
