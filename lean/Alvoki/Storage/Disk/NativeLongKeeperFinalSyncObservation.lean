@@ -1686,8 +1686,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
           target.pair.manifest = state.writer.target.pair.manifest →
           RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
             TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
-            ((∀ {authorized pruned recorded synced}, stagedFrom afterKeeper authorized pruned recorded synced →
-                WalNamePresenceFrame dir firstOffset through (storage pruned) (storage synced)) →
+            (source.stage.StagingWalNameFrames callbacks dir firstOffset through view storage seed.pendingRef →
               ((callbacks).getDirectory seed.directoryRef renamedHeap = .ok (some seed.handle) finalIssue →
                 WalNamePresenceFrame dir firstOffset through (storage renamedHeap) (storage finalIssue)) →
               dispose.ScopeFrames finalized (fun before after =>
@@ -1751,7 +1750,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
     rw [layout.boundedPlan_extractKeeper]
     exact written
   obtain ⟨durableFrame, _, syncedRoot, _, stageWalNames, keeperUnchanged, childrenSettled, ⟨prunedNames, prunedSettled⟩,
-    stageIssued, file, slot, replacement, ⟨created, acquired, attachedStage, boundStage⟩, stageSynced, stageSlot, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtFileSync, protects⟩ :=
+    stageIssued, file, slot, replacement, ⟨created, acquired, attachedStage, boundStage⟩, stageSynced, stageSlot, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtFileSync, stageNamesFrame, protects⟩ :=
     source.stage.prunedAndSyncedReplacement callbacks
       (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible buffered
       seed.directoryRef seed.activeRef seed.pendingRef source.remove source.rename seed.handle physical
@@ -1925,7 +1924,7 @@ theorem MarkedWalExtentReports.extendsFinalSyncError
   intro stageCatalog loadCatalog cleanupCatalog reset
   have atEntry := ((before.preserves initial).2.2.2 priorStorage).1
   have atPrune := settlesPrunedWindow (retainCatalog atEntry laterEmpty.1).2.2 prunedNames prunedSettled
-  have throughStage := stageCatalog staging
+  have throughStage := stageNamesFrame stageCatalog
   have throughRename := throughStage.trans (inodeMove.walNames oldNamed settled firstOffset through)
   have throughError := (throughRename.trans (loadCatalog loaded)).trans (WalNamePresenceFrame.ofRootSync children)
   have throughCleanup := throughError.trans (cleanupCatalog.afterWorker (fun earlier later => earlier.trans later))
@@ -2073,10 +2072,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
           target.pair.manifest = state.writer.target.pair.manifest →
           RawOpenRetryTrace.SelectedEntry view state target retryNames visible rebooted ∧
             TryLockObserves (view.files rebooted).owners dir (.ok true) ∧ (view.descriptors rebooted).slots = [] ∧
-            ((stageWrite ((dir).file .stagedWal) layout.keeper.bytes pruned = .ok () recorded →
-                WalNamePresenceFrame dir firstOffset through (storage pruned) (storage recorded)) →
-              (groupSync #[((dir).file .stagedWal)] recorded = .ok () synced →
-                WalNamePresenceFrame dir firstOffset through (storage recorded) (storage synced)) →
+            (source.stage.StagingWalNameFrames callbacks dir firstOffset through view storage seed.pendingRef →
               dispose.ScopeFrames finalized (fun before after =>
                 WalNamePresenceFrame dir firstOffset through (storage before) (storage after)) →
               seen.DurableReset →
@@ -2111,7 +2107,7 @@ theorem MarkedWalExtentReports.extendsLongRenameError
     rw [layout.boundedPlan_extractKeeper]
     exact written
   obtain ⟨durableFrame, _, _, authorizedScope, stageScope, oldAtRename, childrenSettled,
-    ⟨prunedNames, prunedSettled⟩, issued, file, slot, replacement, _, _, _, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, protects⟩ :=
+    ⟨prunedNames, prunedSettled⟩, issued, file, slot, replacement, _, _, _, separate, stageAtIssue, bytesAtIssue, fileSync, liveAtSync, stageNamesFrame, protects⟩ :=
     source.stage.prunedAndSyncedReplacement callbacks
       (state.repairDirectoryScope (view.descriptors afterKeeper) admission.cached) view storage visible buffered
       seed.directoryRef seed.activeRef seed.pendingRef source.remove source.rename seed.handle physical
@@ -2206,11 +2202,11 @@ theorem MarkedWalExtentReports.extendsLongRenameError
   obtain ⟨nextEntry, vacant, empty⟩ := seen.selectsRetryAfterRepair targetAtKeeper sameManifest durableAtEnd
     (immutableAfterCleanup _ seen.chosen) keeperAfterCleanup
   refine ⟨nextEntry, vacant, empty, ?_⟩
-  intro stageWriteCatalog stageSyncCatalog cleanupCatalog reset
+  intro stageCatalog cleanupCatalog reset
   have atEntry := ((before.preserves initial).2.2.2 priorStorage).1
   have gone : (view.files finalized.reached).image.later.visible = [] := finalImage.symm ▸ laterGone.1
   have atPrune := settlesPrunedWindow (retainCatalog atEntry gone).2.2 prunedNames prunedSettled
-  have throughStage := (stageWriteCatalog written).trans (stageSyncCatalog persisted)
+  have throughStage := stageNamesFrame stageCatalog
   have throughError := throughStage.trans (renameNames firstOffset through)
   have throughCleanup := throughError.trans (cleanupCatalog.afterWorker (fun earlier later => earlier.trans later))
   have window := (throughCleanup.preservesNamespaceWindow atPrune).2 _ seen.chosen

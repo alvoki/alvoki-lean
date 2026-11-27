@@ -258,6 +258,33 @@ theorem LongKeeperStageCallbacks.issuesStagedFile
   exact ⟨slot, inode, openedStage, writtenStage, loadedStage, carries clearFrame loadedStage, payload,
     writeFrame, flushFrame, recordFrame, loadFrame, clearFrame⟩
 
+/-- Filesystem and cache calls preceding the scratch fsync. The protected
+WAL interval is chosen by the reboot consumer. Writing or flushing concerns
+the descriptor currently attached to scratch; clearing pending uses the
+actual returned list, which may contain unrelated entries. -/
+structure LongKeeperStageCallbacks.StagingWalNameFrames
+    (stage : LongKeeperStageCallbacks heap) (calls : AlignedKeeperCacheCallbacks heap)
+    (dir : DiskDirectory) (first through : Nat) (view : OpenCloseHeapView heap image)
+    (observe : heap → CheckpointStorageObservation) (pending : IO.Ref (List (FilePath × IO.FS.Handle))) where
+  acquire : ∀ before, stage.AcquisitionFrames (dir.file .stagedWal) before
+    (fun a b => WalNamePresenceFrame dir first through (observe a) (observe b))
+  write : ∀ {file slot inode bytes before after}, attachedReadSlot view file slot inode before →
+    (observe before).files.names (dir.file .stagedWal) = some inode → stage.write file bytes before = .ok () after →
+    WalNamePresenceFrame dir first through (observe before) (observe after)
+  flush : ∀ {file slot inode before after}, attachedReadSlot view file slot inode before →
+    (observe before).files.names (dir.file .stagedWal) = some inode → stage.flush file before = .ok () after →
+    WalNamePresenceFrame dir first through (observe before) (observe after)
+  record : ∀ {file before after}, calls.modifyPending pending (pushPending (dir.file .stagedWal) file) before =
+    .ok () after → WalNamePresenceFrame dir first through (observe before) (observe after)
+  load : ∀ {before after entries file}, calls.getPending pending before = .ok entries after →
+    entries.find? (fun entry => entry.1 == dir.file .stagedWal) = some (dir.file .stagedWal, file) →
+    WalNamePresenceFrame dir first through (observe before) (observe after)
+  clear : ∀ {read before after entries file}, calls.getPending pending read = .ok entries before →
+    entries.find? (fun entry => entry.1 == dir.file .stagedWal) =
+    some (dir.file .stagedWal, file) →
+    calls.setPending pending (entries.filter (fun entry => entry.1 != dir.file .stagedWal)) before = .ok () after →
+    WalNamePresenceFrame dir first through (observe before) (observe after)
+
 /-- Local namespace, descriptor and byte laws through the synced
 replacement stage. Each premise is keyed to its own raw callback. -/
 structure LongKeeperStageCallbacks.ReplacementPrefixStorageEffects
@@ -492,6 +519,8 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
       visible issued replacement = plan.keeperBytes.extract 0 plan.keeperSize ∧
       RegularFileSyncEffect replacement [visible issued replacement] (observe issued) (observe synced) ∧
       visible synced replacement = visible issued replacement ∧
+      (∀ {first through}, stage.StagingWalNameFrames calls state.session.directory first through view observe pending →
+        WalNamePresenceFrame state.session.directory first through (observe pruned) (observe synced)) ∧
       (stage.ReplacementPrefixLiveEffects calls state view observe visible cached pending root remove →
         view.pending entry pending = [] →
         (replacementLiveFiles observe visible entry).Frames state.crashPath (replacementLiveFiles observe visible synced) ∧
@@ -566,7 +595,15 @@ theorem LongKeeperStageCallbacks.prunedAndSyncedReplacement
     keeperAtRename, fun names possible file selected => childrenSettled names possible _ ⟨selected, file, rfl⟩,
     ⟨prunedNames, settled⟩, consumed, file, slot, replacement, ⟨opened, acquired, openedStage.1, openedStage.2.1⟩,
     stageSync, syncedStage.1, separate, stagedBinding, stageBytes, fileSync,
-    syncedVisible, ?_⟩
+    syncedVisible, ?_, ?_⟩
+  · intro first through localFrames
+    have acquiredNames := (localFrames.acquire pruned).keeps (fun h => .refl (observe h))
+      (fun earlier later => earlier.trans later)
+    rw [show stage.acquire (dir.file .stagedWal) pruned = .ok file opened from acquired,
+      NativeFileEffectProjection.reached] at acquiredNames
+    exact acquiredNames.trans ((localFrames.write openedStage.1 openedStage.2.1 wrote).trans
+      ((localFrames.flush writtenStage.1 writtenStage.2.1 didFlush).trans ((localFrames.record recorded).trans
+        ((localFrames.load got chosenStage).trans ((localFrames.clear got chosenStage cleared).trans (.ofFileSync fileSync))))))
   intro liveEffects pendingAtEntry
   obtain ⟨authReadLive, authReadPending⟩ := liveEffects.loadRoot authLoaded
   obtain ⟨authSyncLive, authSyncPending⟩ := liveEffects.syncRoot authSynced
