@@ -427,7 +427,10 @@ local notation "state" => last.current.ready.state
 local notation "dir" => last.current.ready.state.session.directory
 
 /-- Given a selected reboot and the incoming ledger, interpret the actual
-successful public open following that reboot's own block of reported errors. -/
+successful public open following that reboot's own block of reported errors.
+Subsequent calls carry the same ledger from the returned handle and fresh pins.
+The native write interpreter supplies `fun h => (inodes h).visible` for
+`readBytes`, so the ready-entry byte equality is reflexive for those inodes. -/
 abbrev OpenContinuation (position : NativeOpenedPosition opened)
     (openView : OpenCloseHeapView heap FileImage) (observe : heap → CheckpointStorageObservation)
     (readBytes : heap → Nat → ByteArray) (firstOffset : Nat) (request : WriteRequest)
@@ -470,16 +473,20 @@ abbrev OpenContinuation (position : NativeOpenedPosition opened)
       (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
       (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
       (retained : List WAL.Write),
+      let resumed := events ++ [.uncertainWriteCrashRecovered request input cause batch retained]
       tableReturned = handle.table ∧ start.reached = returnedAt ∧
       start.current.history = plan.history ∧ target.range.through = plan.history.length ∧ (retained = [] ∨ retained = batch) ∧
-      origin.LedgerSuffix (events ++ [.uncertainWriteCrashRecovered request input cause batch retained]) start.current ∧
+      origin.LedgerSuffix resumed start.current ∧
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
       start.WriteStorageEntry openView nextCache (observe start.reached) (readBytes start.reached) ∧ start.pins = [] ∧
       start.current.ready.state.session.directory = directory ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
-      ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
-        start.current.ready.state.session.directory firstOffset through (observe start.reached)
+      (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
+        start.current.ready.state.session.directory firstOffset through (observe start.reached)) ∧
+      ∀ (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage),
+        readBytes start.reached = (inodes start.reached).visible →
+        start.ContinuesReadyCalls nextCache openView inodes runs observe origin resumed firstOffset
 
 private theorem openContinuation
     (handoff : last.current.SelectedWriteReboot view storage visible firstOffset request batch table target failed rebooted)
@@ -495,9 +502,13 @@ private theorem openContinuation
       openEffects alignedEffects replacementEffects phaseIdentity tokenIdentity phase ptrEq returned
   obtain ⟨retained, ledger⟩ := plan.ledgerAfterReopen start.current history submissions reads request input cause
   have endpoints := returned.symm.trans opened
-  exact ⟨plan, handle, start, nextCache, retained, (EStateM.Result.ok.inj endpoints).1, (EStateM.Result.ok.inj endpoints).2.symm,
+  have resumed := prior.append ledger
+  refine ⟨plan, handle, start, nextCache, retained, (EStateM.Result.ok.inj endpoints).1, (EStateM.Result.ok.inj endpoints).2.symm,
     history, (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through,
-    ledger.whole _ (List.mem_singleton_self _), prior.append ledger, replay, physical, pins, sameDirectory, covers, window⟩
+    ledger.whole _ (List.mem_singleton_self _), resumed, replay, physical, pins, sameDirectory, covers, window, ?_⟩
+  intro inodes runs sameBytes
+  exact start.continuesReadyCalls nextCache view inodes runs storage origin _ firstOffset pins resumed
+    (by rw [← sameBytes]; exact physical) window
 
 /-- The actual uncertain write returned at the heap sampled by this reboot. -/
 theorem opensReadyAfterRetries

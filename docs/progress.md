@@ -56,27 +56,21 @@ The cache allocations and reached marked reads carry the entry image through
 the keeper's release into both repair-error proofs.
 [Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-If the `WAL.next` fsync fails, the canonical keeper remains in place. The
-preceding prune barrier settled the directory. Frames through staging, fsync
-and cleanup carry those bindings to a sampled reboot: it sees the old keeper
-with an accepted payload, the selected immutable children, the bounded WAL
-inventory and the absence of every name actually pruned. The inventory interval
-ends at or before the commit cutoff. Scratch durability may take either outcome.
+If the `WAL.next` fsync fails, the reached descriptor identifies scratch
+and is distinct from the canonical keeper. The completed prune barrier and
+observed effects through cleanup preserve the keeper, selected files and
+pruned names on one reboot map. When the initial WAL window reaches the
+selected cutoff, the next successful public open returns the exact ready
+handle with no pins. Its ledger retains prior reads and records the original
+uncertain batch once. The common ready-call proof then extends that ledger
+with supported writes and snapshot responses on the returned handle, using
+the reached callback reports. The native write path uses one inode-byte
+projection for the initial write, recovery and subsequent calls.
+[Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean) ·
+[Returned handle and ready calls](../lean/Alvoki/Storage/Disk/NativeLateWriteRecovery.lean)
 
-Both fsync outcomes derive the issued scratch binding, its payload and its
-separation from the keeper from the same exclusive-create and cache prefix.
-The handle snapshot and descriptor census need agree only on the created
-slot’s inode at acquisition.
-
-When the initial WAL window covers the selected cutoff, the second reboot
-feeds the same public marked opener. The successful return supplies its exact
-table and ready storage. The client ledger adds the original uncertain batch
-once and retains the reads from before that write.
-
-**Next source boundary.** Use the returned handle in the mixed execution for
-subsequent writes and reads. The final-directory-error proof still needs to
-derive the staged inode from the reached create and cache operations.
-[Staged-file sync and reboot](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
+**Next source boundary.** Derive the staged inode in the final-directory-error
+proof from the reached create and cache operations.
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
 [Verification commands](../README.md#reproduce-on-linux-x86-64)
