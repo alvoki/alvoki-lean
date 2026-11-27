@@ -11,20 +11,15 @@ therefore change a selected file only in the active segment, where the
 single-segment recovery invariant admits that exact file's settlement. -/
 theorem Readable.writeback {control history pending disk} (readable : Readable control history pending disk)
     (id : Nat) (file : WalFile) : Readable control history pending (disk.writeback id file) := by
-  refine ⟨readable.layout.frame readable.layout.names ?_, readable.room, ?_, ?_⟩
+  refine ⟨readable.layout.frame readable.layout.names ?_, readable.room, ?_⟩
   · intro i selected sealed
     by_cases hit : i = id
-    · simpa [Disk.writeback, hit] using file.settle_clean (disk.segment i) (readable.layout.sealed i selected sealed).2
+    · simpa [Disk.writeback, hit] using (readable.layout.sealed i selected sealed).writeback file
     · simp [Disk.writeback, hit]
   · by_cases hit : control.active = id
     · simpa [Disk.writeback, hit] using
-        readable.active.writeback (file.writeback (disk.segment control.active))
+        readable.active.settle file
     · simpa [Disk.writeback, hit] using readable.active
-  · intro log
-    by_cases hit : control.active = id
-    · simpa [Disk.writeback, hit] using
-        (file.writeback (disk.segment control.active)).keepsMarkersSettled (readable.logMarkers log)
-    · simpa [Disk.writeback, hit] using readable.logMarkers log
 
 /-- Each authority keeps its own file-selection invariant across the same
 physical writeback, including when the two controls select different active IDs. -/

@@ -51,7 +51,11 @@ private theorem newLayout {d c history after} (entry : ReadyLayout c history d)
     ReadyLayout (successor (sessionOf c history)) history after := by
   have ready := oldLayout entry cut
   obtain ⟨ln, dn, empty, cursor⟩ := cut.successor_ready live durable chosen
-  exact ready.rotate full ready.layout.names (fun _ _ => rfl) ⟨ln, dn⟩ empty cursor
+  apply ready.rotate full ready.layout.names (fun _ _ => rfl) ⟨ln, dn⟩
+  change Child.Installed c.policy (after.segment (successor (sessionOf c history)).active)
+    (after.cursor (successor (sessionOf c history)).active) []
+  rw [empty, cursor]
+  exact Child.Installed.fresh _
 
 private theorem rotationStopped {s : State} {c history after} (batch : Bytes)
     (entry : ReadyLayout c history s.disk) (live : s.disk.liveControl = some c)

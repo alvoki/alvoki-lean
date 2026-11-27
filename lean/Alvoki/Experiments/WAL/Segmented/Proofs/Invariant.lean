@@ -1,13 +1,12 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.Model
 import Alvoki.Experiments.WAL.Segmented.Proofs.Layout
-import Alvoki.Experiments.WAL.Proofs.DirtyAppend
+import Alvoki.Experiments.WAL.Segmented.Proofs.SegmentRecovery
 
 /-! The file obligations of each selectable control record. -/
 
 namespace WalRecoverySlice.Segmented
 
 open Model (Disk State)
-open Persistence (Ready Dirty historyCursor)
 
 def Control.selects (control : Control) (id : Nat) : Prop :=
   control.firstNeeded ≤ id ∧ id ≤ control.active
@@ -38,14 +37,12 @@ structure Layout (control : Control) (history : List Bytes) (disk : Disk) : Prop
   bounded : ∀ p ∈ history, p.length ≤ 32
   names : ∀ id, control.selects id → id ∈ disk.liveNames ∧ id ∈ disk.durableNames
   sealed : ∀ id, control.selects id → id < control.active →
-    Ready control.policy (disk.segment id) (segmentHistory control.capacity id history) ∧
-      (disk.segment id).powerLoss = disk.segment id
+    Child.Settled control.policy (disk.segment id) (segmentHistory control.capacity id history)
 
 structure ReadyLayout (control : Control) (history : List Bytes) (disk : Disk) : Prop where
   layout : Layout control history disk
-  active : Ready control.policy (disk.segment control.active) (segmentHistory control.capacity control.active history)
-  clean : (disk.segment control.active).powerLoss = disk.segment control.active
-  cursor : disk.cursor control.active = historyCursor (segmentHistory control.capacity control.active history)
+  active : Child.Installed control.policy (disk.segment control.active) (disk.cursor control.active)
+    (segmentHistory control.capacity control.active history)
 
 /-- A returned table has the exact canonical client view and an active
 cursor ready for another append. Its control and needed names are durable. -/
@@ -57,8 +54,7 @@ def Installed (session : Session) (disk : Disk) : Prop :=
 structure Readable (control : Control) (history : List Bytes) (pending : Option Bytes) (disk : Disk) : Prop where
   layout : Layout control history disk
   room : pending.isSome → history.length < (control.active + 1) * control.capacity
-  active : Dirty control.policy (segmentHistory control.capacity control.active history) pending (disk.segment control.active)
-  logMarkers : control.policy = .logOnly → (disk.segment control.active).MarkersSettled
+  active : Child.Recoverable control.policy (segmentHistory control.capacity control.active history) pending (disk.segment control.active)
 
 def PermittedView (known : Contract.View) (request : Option Contract.Request) (observed : Contract.View) : Prop :=
   observed = known ∨ request.bind (fun req => req.apply known) = some observed
@@ -102,7 +98,7 @@ theorem ReadyLayout.frame {control history before after} (ready : ReadyLayout co
     ReadyLayout control history after := by
   have active := files control.active control.selectsActive
   exact ⟨ready.layout.frame names (fun id chosen _ => files id chosen),
-    active.symm ▸ ready.active, active.symm ▸ ready.clean, cursor.trans ready.cursor⟩
+    by rw [active, cursor]; exact ready.active⟩
 
 theorem Readable.frame {control history pending before after} (readable : Readable control history pending before)
     (names : ∀ id, control.selects id → id ∈ after.liveNames ∧ id ∈ after.durableNames)
@@ -110,23 +106,19 @@ theorem Readable.frame {control history pending before after} (readable : Readab
     Readable control history pending after := by
   have active := files control.active control.selectsActive
   exact ⟨readable.layout.frame names (fun id chosen _ => files id chosen), readable.room,
-    active.symm ▸ readable.active, fun branch => active.symm ▸ readable.logMarkers branch⟩
+    active.symm ▸ readable.active⟩
 
 theorem ReadyLayout.readable {control history disk} (ready : ReadyLayout control history disk) :
     Readable control history none disk := by
-  refine ⟨ready.layout, by simp, ?_, ?_⟩
-  · exact Persistence.ready_dirty control.policy _ _ ready.active ready.clean
-      (segmentHistory_bounded ready.layout control.active)
-      (Nat.le_trans (segmentHistory_fits _ _ _) ready.layout.capacityFits)
-  · intro _
-    rw [← ready.clean]
-    exact ⟨rfl, rfl⟩
+  exact ⟨ready.layout, by simp, ready.active.toSettled.recoverable
+    (segmentHistory_bounded ready.layout control.active)
+    (Nat.le_trans (segmentHistory_fits _ _ _) ready.layout.capacityFits)⟩
 
 theorem Readable.powerLoss {control history pending disk} (readable : Readable control history pending disk) :
     Readable control history pending disk.powerLoss := by
   refine ⟨readable.layout.frame (fun id chosen => ⟨(readable.layout.names id chosen).2,
-    (readable.layout.names id chosen).2⟩) (fun id chosen sealed => (readable.layout.sealed id chosen sealed).2),
-    readable.room, readable.active.powerLoss, fun _ => ⟨rfl, rfl⟩⟩
+    (readable.layout.names id chosen).2⟩) (fun id chosen sealed => (readable.layout.sealed id chosen sealed).clean),
+    readable.room, readable.active.powerLoss⟩
 
 theorem Recoverable.powerLoss {known request disk} (recoverable : Recoverable known request disk) :
     Recoverable known request disk.powerLoss := by
@@ -169,7 +161,7 @@ theorem ReadyLayout.release {control history disk} (ready : ReadyLayout control 
     ⟨Nat.le_trans first selected.1, selected.2⟩
   refine ⟨⟨ready.layout.capacityPositive, ready.layout.capacityFits, ready.layout.lower, ready.layout.upper,
     valid, ready.layout.bounded, fun id selected => ready.layout.names id (restrict selected), ?_⟩,
-    ready.active, ready.clean, ready.cursor⟩
+    ready.active⟩
   intro id selected sealed
   exact ready.layout.sealed id (restrict selected) sealed
 
@@ -208,8 +200,7 @@ theorem ReadyLayout.rotate {control history before after} (ready : ReadyLayout c
     (names : ∀ id, control.selects id → id ∈ after.liveNames ∧ id ∈ after.durableNames)
     (files : ∀ id, control.selects id → after.segment id = before.segment id)
     (nextNamed : control.active + 1 ∈ after.liveNames ∧ control.active + 1 ∈ after.durableNames)
-    (empty : after.segment (control.active + 1) = Persistence.freshImage)
-    (cursor : after.cursor (control.active + 1) = {}) :
+    (empty : Child.Installed control.policy (after.segment (control.active + 1)) (after.cursor (control.active + 1)) []) :
     ReadyLayout {control with active := control.active + 1} history after := by
   let next := {control with active := control.active + 1}
   have atTail : (control.active + 1) * control.capacity = history.length := by
@@ -223,7 +214,7 @@ theorem ReadyLayout.rotate {control history before after} (ready : ReadyLayout c
   have prior {id : Nat} (chosen : next.selects id) (sealed : id < next.active) : control.selects id :=
     ⟨Nat.le_trans first chosen.1, by dsimp [next] at sealed; omega⟩
   refine ⟨⟨ready.layout.capacityPositive, ready.layout.capacityFits, Nat.le_of_eq atTail, ?_,
-      ready.layout.discardedFits, ready.layout.bounded, ?_, ?_⟩, ?_, ?_, ?_⟩
+      ready.layout.discardedFits, ready.layout.bounded, ?_, ?_⟩, ?_⟩
   · rw [← atTail]
     exact Nat.mul_le_mul_right _ (by dsimp [next]; omega)
   · intro id chosen
@@ -236,15 +227,10 @@ theorem ReadyLayout.rotate {control history before after} (ready : ReadyLayout c
     rw [files id old]
     by_cases active : id = control.active
     · subst id
-      exact ⟨ready.active, ready.clean⟩
+      exact ready.active.toSettled
     · exact ready.layout.sealed id old (Nat.lt_of_le_of_ne old.2 active)
-  · change Ready control.policy (after.segment (control.active + 1)) (segmentHistory control.capacity (control.active + 1) history)
-    rw [empty, segmentHistory_next_empty ready.layout.upper]
-    exact Persistence.fresh_ready _
-  · rw [show next.active = control.active + 1 from rfl, empty]
-    rfl
-  · change after.cursor (control.active + 1) = historyCursor (segmentHistory control.capacity (control.active + 1) history)
-    rw [cursor, segmentHistory_next_empty ready.layout.upper]
-    rfl
+  · change Child.Installed control.policy (after.segment (control.active + 1)) (after.cursor (control.active + 1))
+      (segmentHistory control.capacity (control.active + 1) history)
+    rwa [segmentHistory_next_empty ready.layout.upper]
 
 end WalRecoverySlice.Segmented

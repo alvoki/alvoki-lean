@@ -5,7 +5,6 @@ import Alvoki.Experiments.WAL.Segmented.Proofs.Rotation
 namespace WalRecoverySlice.Segmented
 
 open Model (Disk State DiskPost)
-open Persistence (historyCursor)
 
 /-- Lift the reached active-file image into the directory invariant. Earlier
     sealed files keep their exact bytes and both control names keep their binding. -/
@@ -31,23 +30,17 @@ theorem appendActive_refines (effects : Model.Effects) (c : Control) (history : 
     rw [Nat.add_mul, Nat.one_mul] at room
     omega
   have bounded := segmentHistory_bounded ready.layout c.active
-  have child := Model.appendSegment_dirty effects named ready.active ready.clean ready.cursor bounded fits size
-  obtain ⟨dirty, markers, success⟩ := child
-  let fileRun := effects.appendRun s.step c.active c.policy (s.disk.cursor c.active) p
-  have frame := Model.child_reached named fileRun (fun x => x) (fun _ => ())
-  have hframe : after = s.disk.setSegment c.active
-      (Persistence.reached (fileRun.run (s.disk.segment c.active)))
-      ((Persistence.acknowledged (fileRun.run (s.disk.segment c.active))).getD (s.disk.cursor c.active)) := by
-    change (Model.reached (Model.child s c.active fileRun _ _)).disk = _
-    rw [frame]
-    simp
+  have child := Model.appendSegment_dirty effects named ready.active bounded fits size
+  obtain ⟨dirty, success⟩ := child
+  obtain ⟨image, cursor, hframe⟩ := Model.appendSegment_frame effects c.policy p named
+  change after = _ at hframe
   have layout : Layout c history after := ready.layout.frame
     (fun id selected => by rw [hframe]; exact ready.layout.names id selected)
     (fun id _ sealed => by rw [hframe, Model.Disk.setSegment_other _ _ _ (Nat.ne_of_lt sealed)])
   have authority : after.liveControl = some c ∧ after.durableControl = some c := by
     rw [hframe]; exact ⟨live, durable⟩
   have readable : Readable c history (some p) after :=
-    ⟨layout, fun _ => room, dirty, markers⟩
+    ⟨layout, fun _ => room, dirty⟩
   have choice : RecoveryChoice (historyView c history) (some (.append p)) c after := by
     refine ⟨history, some p, readable, ?_⟩
     intro selected permitted
@@ -57,9 +50,8 @@ theorem appendActive_refines (effects : Model.Effects) (c : Control) (history : 
   have stop : Recoverable (historyView c history) (some (.append p)) after :=
     ⟨⟨c, authority.1, choice⟩, ⟨c, authority.2, choice⟩⟩
   have ack (ok : Model.returned run = some ()) : ReadyLayout c (history ++ [p]) after := by
-    obtain ⟨cursor, installed, clean⟩ := success ok
     have endRows := segmentHistory_append p layout.lower room
-    exact ⟨layout.extend p size room, endRows.symm ▸ installed, clean, endRows.symm ▸ cursor⟩
+    exact ⟨layout.extend p size room, endRows.symm ▸ success ok⟩
   change DiskPost _ _ run
   cases h : run with
   | error _ => exact (by simpa [DiskPost, after, h, Model.reached] using stop)

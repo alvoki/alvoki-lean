@@ -59,14 +59,12 @@ private theorem sealed_step {c h p active} (e : Effects) {s : State} {id : Nat}
       (e = healthy → ∃ v, returned result = some v) := by
   have selects : c.selects id := ⟨low, Nat.le_of_lt lt⟩
   have named := (o.selected.layout.names id selects).1
-  obtain ⟨ready, clean⟩ := o.selected.layout.sealed id selects lt
+  have settled := o.selected.layout.sealed id selects lt
   have bs := segmentHistory_bounded o.selected.layout id
   have fits := Nat.le_trans (segmentHistory_fits c.capacity id h) o.selected.layout.capacityFits
-  have result := openSegment_settled e named ready clean bs fits
+  have result := openSegment_settled e named settled bs fits
   dsimp only at result ⊢
-  let call := openChild e s.step id c.policy
-  have frame := child_reached named call Decoded.cursor Decoded.batches
-  change reached (((ops e).openSegment c.policy id).run s) = _ at frame
+  obtain ⟨image, cursor, frame⟩ := openSegment_frame e c.policy named
   have files (i : Nat) : (reached (((ops e).openSegment c.policy id).run s)).disk.segment i = s.disk.segment i := by
     by_cases same : i = id
     · subst i; exact result.1
@@ -75,7 +73,7 @@ private theorem sealed_step {c h p active} (e : Effects) {s : State} {id : Nat}
     o.selected.frame (by rw [frame]; exact o.selected.layout.names) (fun i _ => files i),
     (files _).trans o.sameActive⟩, fun v ret => (result.2 v ret).1, ?_⟩
   intro eqn; subst e
-  exact openSegment_healthy named (Persistence.ready_dirty c.policy _ _ ready clean bs fits)
+  exact openSegment_healthy named (settled.recoverable bs fits)
 
 private structure Opened (c : Control) (history : List Bytes) (d : Disk) : Prop where
   ready : ReadyLayout c history d
@@ -90,9 +88,7 @@ private theorem active_step {c h p active final known req} (e : Effects) {s : St
     (o : Opening c h p active s.disk)
     (allow : ∀ v, WalRecoverySlice.Contract.Permitted h p v → PermittedView known req (historyView c v))
     (layout : ∀ disk, Layout c h disk → Layout c final disk)
-    (canonical : ∀ fx sched ret, Persistence.acknowledged
-        ((WalRecoverySlice.reopen (Persistence.scheduledOps (Persistence.ops fx) sched) c.policy).run active) = some ret →
-        ret.batches = segmentHistory c.capacity c.active final) :
+    (canonical : Child.Selects c.policy active (segmentHistory c.capacity c.active final)) :
     readOutcome (fun t => Opened c final t.disk)
       (fun t => Recoverable known req t.disk ∧ e ≠ healthy)
       (segmentHistory c.capacity c.active final) (((ops e).openSegment c.policy c.active).run s) := by
@@ -100,40 +96,30 @@ private theorem active_step {c h p active final known req} (e : Effects) {s : St
   let out := ((ops e).openSegment c.policy id).run s
   let later := (reached out).disk
   have named := (o.selected.layout.names id c.selectsActive).1
-  let run := openChild e s.step id c.policy
-  have frame := child_reached named run Decoded.cursor Decoded.batches
-  change reached out = _ at frame
-  have ret := child_returned named run Decoded.cursor Decoded.batches
-  change returned out = _ at ret
-  have ⟨retry, markers, success⟩ := openSegment_dirty e named o.selected.active
+  obtain ⟨image, cursor, frame⟩ := openSegment_frame e c.policy named
+  change later = _ at frame
+  have ⟨retry, success⟩ := openSegment_dirty e named o.selected.active
   have names : ∀ i, c.selects i → i ∈ later.liveNames ∧ i ∈ later.durableNames := by
-    dsimp only [later]; rw [frame]; exact o.selected.layout.names
+    rw [frame]; exact o.selected.layout.names
   have closed (i : Nat) (_ : c.selects i) (lt : i < id) : later.segment i = s.disk.segment i := by
-    dsimp only [later]; rw [frame]; exact Disk.setSegment_other _ _ _ (Nat.ne_of_lt lt)
+    rw [frame]; exact Disk.setSegment_other _ _ _ (Nat.ne_of_lt lt)
   have oldLayout := o.selected.layout.frame names closed
-  have lh : later.liveControl = some c := by dsimp only [later]; rw [frame]; exact o.live
-  have dh : later.durableControl = some c := by dsimp only [later]; rw [frame]; exact o.durable
+  have lh : later.liveControl = some c := by rw [frame]; exact o.live
+  have dh : later.durableControl = some c := by rw [frame]; exact o.durable
   apply outcome_reached
   · intro v ack
     change returned out = some v at ack
-    obtain ⟨_, cursor, ready, _, _, clean⟩ := success v ack
-    rw [ret] at ack
-    obtain ⟨d, inner, rfl⟩ := Option.map_eq_some_iff.mp ack
-    change Persistence.acknowledged ((WalRecoverySlice.reopen (Persistence.scheduledOps (Persistence.ops _) _) c.policy).run (s.disk.segment id)) = _ at inner
-    rw [o.sameActive] at inner
-    have chosen := canonical _ _ d inner
-    rw [chosen] at ready cursor
-    refine ⟨⟨⟨layout later oldLayout, ready, clean ?_, cursor⟩, lh, dh⟩, chosen⟩
-    cases hpolicy : c.policy with
-    | logOnly => exact .inr (o.selected.logMarkers hpolicy)
-    | boundary => exact .inl rfl
+    obtain ⟨_, installed⟩ := success v ack
+    have chosen := openSegment_selected e named (o.sameActive ▸ canonical) ack
+    rw [chosen] at installed
+    exact ⟨⟨⟨layout later oldLayout, installed⟩, lh, dh⟩, chosen⟩
   · intro no
     have available : e ≠ healthy := by
       intro he; subst e
       obtain ⟨v, ret⟩ := openSegment_healthy named o.selected.active
       rw [no] at ret
       contradiction
-    let r : Readable c h p later := ⟨oldLayout, o.selected.room, retry, fun branch => markers (o.selected.logMarkers branch)⟩
+    let r : Readable c h p later := ⟨oldLayout, o.selected.room, retry⟩
     have choice : RecoveryChoice known req c later := ⟨h, p, r, allow⟩
     exact ⟨⟨⟨c, lh, choice⟩, ⟨c, dh, choice⟩⟩, available⟩
 
@@ -167,13 +153,9 @@ private theorem reopen_source {k req} (e : Effects) (s : State) (prior : Recover
       readOutcome (fun t => Opened c final t.disk) (fun t => Recoverable k req t.disk ∧ e ≠ healthy)
         (sessionOf c final) ((Segmented.reopen (ops e)).run s) := by
   obtain ⟨c, found, h, p, r, allow⟩ := prior.live
-  obtain ⟨d, after, good⟩ := r.active.healthy_reopen
-  have ack : Persistence.acknowledged ((WalRecoverySlice.reopen (Persistence.ops Persistence.healthyReopen)
-      c.policy).run (s.disk.segment c.active)) = some d := by rw [good]; rfl
-  obtain ⟨choice, _, _, bounded, _⟩ := (r.active.reopen Persistence.healthyReopen).2.2 d ack
+  obtain ⟨_, choice, bounded, selected⟩ := r.active.selectedBatches
   obtain ⟨final, permitted, slice, earlier, lift⟩ := resolve_active r choice bounded
   have finish := lift _ r.layout
-  obtain ⟨marker, sel, _⟩ := Persistence.healthy_reopen_selection good
   refine ⟨c, final, allow final permitted, ?_⟩
   simp only [sessionOf, segmentHistory_active_length finish.upper, historyView]
   apply reopen_spec (ops e) c final s (fun t => t.disk = s.disk)
@@ -213,8 +195,7 @@ private theorem reopen_source {k req} (e : Effects) (s : State) (prior : Recover
       contradiction
   · intro t o
     apply active_step e o allow lift
-    intro fx sched ret ack
-    exact (congrArg Decoded.batches (scheduledReopen_selected sel fx sched ret ack)).trans slice.symm
+    exact slice.symm ▸ selected
   · exact fun t o => collect_step e t o (allow final permitted)
 
 /-- A successful source reopen installs the exact permitted view. Every reported

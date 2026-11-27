@@ -59,9 +59,9 @@ theorem create_returns_ready (effects : Effects) (policy : Policy) {capacity : N
     · intro id _ sealed
       exact False.elim (Nat.not_lt_zero id sealed)
   have empty : segmentHistory c.capacity c.active [] = [] := by simp [segmentHistory]
-  refine ⟨layout, ?_, rfl, ?_⟩ <;> rw [empty]
-  · exact Persistence.fresh_ready policy
-  · rfl
+  refine ⟨layout, ?_⟩
+  rw [empty]
+  exact Child.Installed.fresh policy
 
 /-- The healthy initialization path is inhabited for every supported capacity. -/
 theorem create_healthy (policy : Policy) {capacity : Nat} (positive : 0 < capacity) (fits : capacity ≤ 255) :

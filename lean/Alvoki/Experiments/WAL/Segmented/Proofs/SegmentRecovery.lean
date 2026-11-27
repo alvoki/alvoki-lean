@@ -1,4 +1,5 @@
 import Alvoki.Experiments.WAL.Proofs.DirtyAppend
+import Alvoki.Experiments.WAL.Proofs.Client
 import Alvoki.Experiments.WAL.Proofs.ReopenWriteback
 
 /-! Recovery of segments already sealed by the directory protocol. -/
@@ -6,6 +7,45 @@ import Alvoki.Experiments.WAL.Proofs.ReopenWriteback
 namespace WalRecoverySlice.Segmented
 
 open Persistence
+
+namespace Child
+
+/-- A child whose canonical batch sequence survives a reboot byte-for-byte. -/
+structure Settled (policy : Policy) (image : Image) (history : List Bytes) : Prop where
+  ready : Ready policy image history
+  clean : image.powerLoss = image
+
+/-- The live child handle is positioned exactly after the settled batches. -/
+structure Installed (policy : Policy) (image : Image) (cursor : Cursor) (history : List Bytes) : Prop
+    extends Settled policy image history where
+  position : cursor = historyCursor history
+
+/-- Every retry may recover the old sequence or the single pending batch.
+In log-only mode the unused marker files remain settled across repairs. -/
+structure Recoverable (policy : Policy) (history : List Bytes) (pending : Option Bytes) (image : Image) : Prop where
+  dirty : Dirty policy history pending image
+  markers : policy = .logOnly → image.MarkersSettled
+
+theorem Installed.fresh (policy : Policy) : Installed policy freshImage {} [] :=
+  ⟨⟨fresh_ready policy, rfl⟩, rfl⟩
+
+theorem Settled.recoverable {policy image history} (s : Settled policy image history)
+    (bounded : ∀ b ∈ history, b.length ≤ 32) (fits : history.length ≤ 255) :
+    Recoverable policy history none image := by
+  refine ⟨ready_dirty policy _ _ s.ready s.clean bounded fits, fun _ => ?_⟩
+  rw [← s.clean]; exact ⟨rfl, rfl⟩
+
+theorem Recoverable.powerLoss {policy history pending image} (r : Recoverable policy history pending image) :
+    Recoverable policy history pending image.powerLoss := ⟨r.dirty.powerLoss, fun _ => ⟨rfl, rfl⟩⟩
+
+theorem Recoverable.settle {policy history pending image} (r : Recoverable policy history pending image) (file : WalFile) :
+    Recoverable policy history pending (file.settle image) :=
+  ⟨r.dirty.writeback (file.writeback image), fun log => (file.writeback image).keepsMarkersSettled (r.markers log)⟩
+
+theorem Settled.writeback {policy image history} (s : Settled policy image history) (file : WalFile) :
+    file.settle image = image := file.settle_clean image s.clean
+
+end Child
 
 private theorem selectedUnchanged {image : Image}
     (clean : image.powerLoss = image) (marker : Option Marker) :
@@ -73,6 +113,21 @@ theorem scheduledReopen_selected {policy image marker decoded} (sel : ReopenSele
     cases policy <;> cases marker <;> cases file <;> exact prior
   rw [h, (writeback_result ..).2]
   exact fun ret ok => ((reopen_cuts effects same).2 ret ok).1
+
+/-- The batch sequence identified by the live bytes of one child. -/
+def Child.Selects (policy : Policy) (image : Image) (batches : List Bytes) : Prop :=
+  ∃ marker decoded, ReopenSelection policy image marker decoded ∧ decoded.batches = batches
+
+/-- Reopen selects the same batches from this child's live bytes for every
+successful fault/writeback schedule. A healthy execution supplies the witness. -/
+theorem Child.Recoverable.selectedBatches {policy history pending image} (r : Child.Recoverable policy history pending image) :
+    ∃ batches, WalRecoverySlice.Contract.Permitted history pending batches ∧ (∀ b ∈ batches, b.length ≤ 32) ∧
+      Child.Selects policy image batches := by
+  obtain ⟨d, after, good⟩ := r.dirty.healthy_reopen
+  have ack : acknowledged ((reopen (ops healthyReopen) policy).run image) = some d := by rw [good]; rfl
+  obtain ⟨choice, _, _, bounded, _⟩ := (r.dirty.reopen healthyReopen).2.2 d ack
+  obtain ⟨marker, sel, _⟩ := healthy_reopen_selection good
+  exact ⟨_, choice, bounded, marker, d, sel, rfl⟩
 
 theorem reopensSettledSegmentScheduled {policy image history}
     (ready : Ready policy image history) (clean : image.powerLoss = image)
