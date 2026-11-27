@@ -147,13 +147,15 @@ theorem NativeOpenedPosition.reopensAfterGroupedError
       nonempty returned nameEffects
     have window := reboot.walNamespace nameFrame initialWindow.2
     have cutoff := current.current.ready.retryThrough_le prepared admitted
-    obtain ⟨plan, handle, start, nextCache, retained, opened, history, recoveredLedger, _, physical, sameDirectory, coversNext,
+    obtain ⟨plan, handle, start, nextCache, opened, history, submissions, reads, _, physical, _, sameDirectory, coversNext,
       retainedKeeper, nextWindow⟩ :=
-      (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause prepared fits admitted
+      (ready).opensLiteralRepairedAfterWriteRetries storage visible prepared fits admitted
         initialWindow.1 selected (reboot.startsRecoveryObservations reset selected (window.restrict (Nat.le_refl _) cutoff))
         retryEffects
         admission namespaceView root rootBinding (openEffects prepared) (alignedEffects prepared)
         (replacementEffects prepared) phaseIdentity tokenIdentity phase ptrEq openedTable
+    obtain ⟨retained, recoveredLedger⟩ :=
+      plan.ledgerAfterReopen start.current history submissions reads request input cause
     have old := history.trans plan.oldHistory
     have appended : start.current.history = current.current.history ++ retained := by
       simpa only [List.flatMap_cons, List.flatMap_nil, List.append_nil, NativeExecutionEvent.writes] using

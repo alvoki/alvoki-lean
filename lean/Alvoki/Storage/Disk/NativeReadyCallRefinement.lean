@@ -669,6 +669,57 @@ theorem NativeReturnedCalls.refinesReadyFramed
       simp only [List.map_cons, List.sum_cons]
       omega
 
+/-- The client sequence that can follow a newly installed writer. Its observations
+start at the returned heap with fresh pins and extend the incoming ledger. -/
+abbrev NativeOpenedPosition.ContinuesReadyCalls (start : NativeOpenedPosition opened)
+    (refs : OpenSyncCacheRefs opened.files start.current.ready.state.session.directory.path)
+    (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation) (origin : NativeExecutionPosition)
+    (earlier : List NativeExecutionEvent) (lower : Nat) : Prop :=
+    ∀ (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+      (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+      (rename : FilePath → FilePath → EStateM IO.Error heap Unit),
+      let writes := start.readyWriteCalls refs appender stager syncer lookup rename
+      ∀ (issuer : opened.LatestIssuer) (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
+        (_reported : writes.ReturnEffects view inodes runs observe inode buffered)
+        {calls : List (NativeReturnedCall opened)} {reached : heap},
+        NativeReturnedCalls writes issuer start.reached [] calls reached →
+        NativeReturnedCalls.ReadyResponses calls →
+        ∃ (last : NativeOpenedPosition opened) (events : List NativeExecutionEvent),
+          last.reached = reached ∧
+          last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins call => call.pinsAfter pins) [] ∧
+          writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) last ∧
+          events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
+          origin.LedgerSuffix (earlier ++ events) last.current ∧
+          InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
+            last.current.ready.state.writer.installed last.current.ready.state.session ∧
+          ∀ extra, (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, lower ≤ offset) →
+            writes.WalWindowEffects observe lower
+              (start.current.history.length + (calls.map NativeReturnedCall.requestedRows).sum + extra) →
+            last.WalWindowAt observe lower (last.current.history.length + extra)
+
+/-- Any installer that supplies the fresh pins, storage entry and settled
+namespace can use the same ready dispatcher for subsequent calls. -/
+theorem NativeOpenedPosition.continuesReadyCalls (start : NativeOpenedPosition opened)
+    (refs : OpenSyncCacheRefs opened.files start.current.ready.state.session.directory.path)
+    (view : OpenCloseHeapView heap image) (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+    (observe : heap → CheckpointStorageObservation) (origin : NativeExecutionPosition)
+    (earlier : List NativeExecutionEvent) (lower : Nat) (emptyPins : start.pins = [])
+    (across : origin.LedgerSuffix earlier start.current)
+    (entry : start.WriteStorageEntry view refs (observe start.reached) (inodes start.reached).visible)
+    (settled : ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
+      start.current.ready.state.session.directory lower through (observe start.reached)) :
+    start.ContinuesReadyCalls refs view inodes runs observe origin earlier lower := by
+  intro appender stager syncer lookup rename writes issuer inode buffered reported calls reached executed covered
+  have initial : writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) start := entry
+  obtain ⟨last, events, atHeap, pins, physical, length, records, ledger, budget, _, frames⟩ :=
+    executed.refinesReadyFramed covered view inodes runs observe inode buffered reported start rfl
+      (by rw [emptyPins]; rfl) initial
+  refine ⟨last, events, atHeap, pins, physical, length, records, across.append ledger,
+    last.current.ready.readPrefix.guardedReplay, ?_⟩
+  intro extra covers names
+  exact (frames names ⟨covers, settled _⟩).restrictUpper (Nat.add_le_add_right budget extra)
+
 /-- The ready proof alone does not need namespace observations. -/
 theorem NativeReturnedCalls.refinesReady
     {writes : NativeReadyWriteCalls opened} {issuer : opened.LatestIssuer}

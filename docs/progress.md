@@ -58,11 +58,18 @@ uses the held directory and read observations and phase allocation.
 [Write interruption](../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
 · [Returned table and lookup](../lean/Alvoki/Storage/Disk/NativeAlignedWriteRecovery.lean)
 
-**Next obligation.** Carry the interrupted request's ledger into the
-next write on this checkpoint-backed table, using the actual repair and
-durability effects at the keeper. For layouts with extra files,
-derive the next retry entry from a modifying failed repair, including an
-effective directory barrier that reports failure.
+The writable continuation also needs evidence for the repair. With an
+aligned keeper the opener syncs the existing file. With an uncommitted
+tail it installs a trimmed replacement. The returned writer and its fresh
+pins start the same write and snapshot proof in both cases. The ledger
+carries the interrupted batch as one unanswered submission.
+
+**Next obligation.** Connect a failed repair to the next live open when
+the directory contained extra WAL names. Start with a directory sync that
+reports failure after all suffix unlinks returned. The next live open
+must see the removals. What survives another reboot depends on whether
+the directory barrier took effect.
+[Failed repair effects](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
 [Filesystem premises](proofs/native-storage.md#premise-provenance)
 · [Verification commands](../README.md#reproduce-on-linux-x86-64)

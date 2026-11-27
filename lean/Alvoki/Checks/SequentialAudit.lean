@@ -4124,6 +4124,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.WriteRequest.stopsDuringPublication
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsAtRootFsync
 #check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.stopsDuringWalAppend
+#check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.SelectedWriteReboot.opensReadyAfterInterruptedAppend
 #check_axioms Alvoki.Storage.DiskSession.NativeExecutionPosition.SelectedWriteReboot.interruptedPlan
 #check_axioms Alvoki.Storage.DiskSession.RawMarkedOpenInterpreter.ReplaysWalBeforeCheckpointAtOpen.recordsReads
 #check_axioms Alvoki.Storage.DiskSession.RawSyncCalls.publishedStorage
@@ -4158,6 +4159,7 @@ import Alvoki.Storage.Publication.DirectoryPublicationModel
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.readyResponsesOfNotPoisoned
 #check_axioms Alvoki.Storage.DiskSession.NativeReadyWriteCalls.commitUnknownPoisons
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReadyFramed
+#check_axioms Alvoki.Storage.DiskSession.NativeOpenedPosition.continuesReadyCalls
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCallsFramed
 #check_axioms Alvoki.Storage.DiskSession.NativeReturnedCalls.refinesReady
 #check_axioms Alvoki.Storage.DiskSession.FreshBootstrapOpenHeap.Returned.refinesReadyCalls

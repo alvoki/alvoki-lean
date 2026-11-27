@@ -604,7 +604,6 @@ local notation "readyState" => allocation.readyState writer dir owner directoryS
 allocations. The recovery mode has already supplied the ready storage. -/
 theorem NativeReadPosition.SelectedWritePlan.installsLiteralRepairedWriter
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
-    (request : WriteRequest) (cause : IO.Error)
     (constructor : DiskTable.OpenReferenceAssembly dir lock syncFiles assemble)
     (stateValid : (readyState).Valid)
     (sameHistory : writer.history = plan.history)
@@ -627,34 +626,30 @@ theorem NativeReadPosition.SelectedWritePlan.installsLiteralRepairedWriter
     (tokenKeeper : ∀ inode, (observe allocation.afterPhase).files.names ((dir).file (.walSegment writer.wal.active.first)) = some inode →
       visible allocation.afterToken inode = visible allocation.afterPhase inode) :
     ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
-      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
-      (keptBatch : List WAL.Write),
+      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
       source.openTable input reached = .ok handle.table start.reached ∧
       start.current.history = plan.history ∧
-      (⟨prior, log, current⟩ : NativeExecutionPosition).LedgerSuffix
-        [.uncertainWriteCrashRecovered request input cause batch keptBatch] start.current ∧
+      start.current.submissions = log ++ [.uncertainBatch batch] ∧ start.current.ready.reads = current.reads ∧
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
-      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧
+      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧ start.pins = [] ∧
       start.current.ready.state = readyState ∧ start.reached = allocation.afterToken := by
   have init : PendingClientReplay (log ++ [.uncertainBatch batch]) current.reads (readyState).writer.history :=
     sameHistory.symm ▸ plan.pending
   have bounded : ∀ read ∈ current.reads, read.BoundedBy (readyState).writer.history.length :=
     sameHistory.symm ▸ plan.bounded
-  obtain ⟨handle, start, nextCache, opened, reachedEq, _, _, history, submissions, stateEq, reads, _, writeEntry, _⟩ :=
+  obtain ⟨handle, start, nextCache, opened, reachedEq, _, _, history, submissions, stateEq, reads, _, writeEntry, pins⟩ :=
     allocation.opensReadyWriter stateValid constructor cache returned phaseEffects tokenEqual init bounded observe visible settled live
       rfl ownsSlot rfl cachePhase cacheToken rootCache phaseFrame tokenFrame phaseKeeper tokenKeeper
   have selectedHistory := history.trans sameHistory
-  obtain ⟨keptBatch, ledger⟩ := plan.ledgerAfterReopen start.current selectedHistory submissions reads request input cause
-  exact ⟨handle, start, nextCache, keptBatch, opened, selectedHistory, ledger,
-    start.current.ready.readPrefix.guardedReplay, writeEntry, stateEq, reachedEq⟩
+  exact ⟨handle, start, nextCache, opened, selectedHistory, submissions, reads,
+    start.current.ready.readPrefix.guardedReplay, writeEntry, pins, stateEq, reachedEq⟩
 
 /-- Transport the settled storage and client ledger from the actual
 aligned repair through the two allocations of the literal returned
 table. The retained writer is the replay at this repair's reached heap. -/
 theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
-    (request : WriteRequest) (cause : IO.Error)
     (constructor : DiskTable.OpenReferenceAssembly dir lock syncFiles assemble)
     (retained : writer.RetainedReady dir owner.description)
     (sameHistory : writer.history = plan.history)
@@ -736,15 +731,13 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
     (tokenKeeper : ∀ inode, (observe allocation.afterPhase).files.names ((dir).file (.walSegment writer.wal.active.first)) = some inode →
       visible allocation.afterToken inode = visible allocation.afterPhase inode) :
     ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
-      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
-      (keptBatch : List WAL.Write),
+      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
       source.openTable input reached = .ok handle.table start.reached ∧
       start.current.history = plan.history ∧
-      (⟨prior, log, current⟩ : NativeExecutionPosition).LedgerSuffix
-        [.uncertainWriteCrashRecovered request input cause batch keptBatch] start.current ∧
+      start.current.submissions = log ++ [.uncertainBatch batch] ∧ start.current.ready.reads = current.reads ∧
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
-      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧
+      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧ start.pins = [] ∧
       start.current.ready.state.session.directory = dir ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       (∀ {inode}, (observe reached).files.names ((dir).file (.walSegment target.first)) = some inode →
@@ -763,8 +756,8 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
     keepRootOnSync unlinkSlots unlinkStorage getRoot syncRoot pruned getPending findKeeper clear syncKeeper
     protectedFiles marker rootSettled keeperBound keeperBytes apart selectedWindow boundedStarts
     later beyond listed walEffects
-  obtain ⟨handle, start, nextCache, keptBatch, opened, history, ledger, replay, writeEntry, stateEq, reachedEq⟩ :=
-    plan.installsLiteralRepairedWriter request cause constructor stateValid sameHistory ownsSlot cachePhase cacheToken
+  obtain ⟨handle, start, nextCache, opened, history, submissions, reads, replay, writeEntry, pins, stateEq, reachedEq⟩ :=
+    plan.installsLiteralRepairedWriter constructor stateValid sameHistory ownsSlot cachePhase cacheToken
       rootCache phaseEffects tokenEqual returned observe visible settled live phaseFrame tokenFrame phaseKeeper tokenKeeper
   let keeperPath := (dir).file (.walSegment writer.wal.active.first)
   have keeperSelected : (readyState).crashPath keeperPath :=
@@ -773,7 +766,7 @@ theorem NativeReadPosition.SelectedWritePlan.continuesLiteralAligned
   have atToken := (tokenFrame.visible keeperPath keeperSelected).1.trans atPhase
   have bytesAtReturn := (tokenKeeper keeperInode atPhase).trans
     ((phaseKeeper keeperInode repairedKeeper).trans (live keeperInode repairedKeeper))
-  refine ⟨handle, start, nextCache, keptBatch, opened, history, ledger, replay, writeEntry, ?_, ?_, ?_, ?_⟩
+  refine ⟨handle, start, nextCache, opened, history, submissions, reads, replay, writeEntry, pins, ?_, ?_, ?_, ?_⟩
   · rw [stateEq]
     rfl
   · rw [stateEq]
@@ -1422,7 +1415,6 @@ history, next write entry, and canonical WAL namespace. -/
 theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
     (plan : current.SelectedWritePlan batch target (view.files reached).image)
     (cache : HeldOpenCache heap) (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
-    (request : WriteRequest) (cause : IO.Error)
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
     (shared : source.LiteralOpenEffects cache namespaceView root plan observe visible)
     (aligns : plan.layout.tail.size = 0 → source.LiteralAlignedRepairEffects cache plan observe visible)
@@ -1448,15 +1440,13 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       (RawMarkedOpenInterpreter.makeCache dir cache.directoryRef cache.activeRef cache.pendingRef) cache.ready =
       .ok table returnedAt) :
     ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
-      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
-      (keptBatch : List WAL.Write),
+      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
       source.openTable input reached = .ok handle.table start.reached ∧
       start.current.history = plan.history ∧
-      (⟨prior, log, current⟩ : NativeExecutionPosition).LedgerSuffix
-        [.uncertainWriteCrashRecovered request input cause batch keptBatch] start.current ∧
+      start.current.submissions = log ++ [.uncertainBatch batch] ∧ start.current.ready.reads = current.reads ∧
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
-      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧
+      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧ start.pins = [] ∧
       start.current.ready.state.session.directory = dir ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       (∀ {inode}, (observe reached).files.names ((dir).file (.walSegment target.first)) = some inode →
@@ -1575,8 +1565,8 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       rw [keeperEq] at namedAfter
       have same := Option.some.inj (namedAfter.symm.trans replacementNamed)
       exact same.symm ▸ replacementBytes
-    obtain ⟨handle, start, nextCache, keptBatch, opened, history, ledger, replay, nextStorage, stateEq, afterToken⟩ :=
-      plan.installsLiteralRepairedWriter (allocation := allocation) (cache := refs) request cause
+    obtain ⟨handle, start, nextCache, opened, history, submissions, reads, replay, nextStorage, pins, stateEq, afterToken⟩ :=
+      plan.installsLiteralRepairedWriter (allocation := allocation) (cache := refs)
         (RawMarkedOpenInterpreter.assembles dir cache.lock files) valid rfl repairedAuthority.ownerAttached.1 phaseCache tokenCache
         ⟨cache.captured, repairedAuthority.cacheRoot⟩ phaseEffects tokenEqual exactReturn observe visible settled live
         (phaseStorage.weaken fun _ selected => NativeReadyState.crashPath_rootOrChild (state := state) selected)
@@ -1594,7 +1584,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       exact allocation.walWindowAfterAllocations observe state.writer.wal dir window.1 window.2
         (fun _ => WalNamePresenceFrame.ofStorageFrame phaseStorage (fun start _ _ => .inr ⟨.walSegment start, rfl⟩))
         (fun _ => WalNamePresenceFrame.ofStorageFrame tokenStorage (fun start _ _ => .inr ⟨.walSegment start, rfl⟩))
-    refine ⟨handle, start, nextCache, keptBatch, opened, history, ledger, replay, nextStorage, sameDirectory,
+    refine ⟨handle, start, nextCache, opened, history, submissions, reads, replay, nextStorage, pins, sameDirectory,
       stateEq.symm ▸ lowerBound, ?_, stateEq.symm ▸ afterToken.symm ▸ names⟩
     -- A marker-aligned live keeper cannot select the replacement branch.
     intro existing namedAtEntry bytesAtEntry
@@ -1663,7 +1653,7 @@ theorem NativeReadPosition.SelectedWritePlan.returnsLiteralRepairedWriter
       exact named
     exact plan.continuesLiteralAligned (allocation := allocation) (cache := refs)
       (phaseIdentity := phaseIdentity) (tokenIdentity := tokenIdentity)
-      request cause (RawMarkedOpenInterpreter.assembles dir cache.lock files) retained rfl plan.targetEq entry.manifest rfl
+      (RawMarkedOpenInterpreter.assembles dir cache.lock files) retained rfl plan.targetEq entry.manifest rfl
       keepsSeals repairedAuthority.ownerAttached.1 repairedAuthority.ownerAttached.2.1 repairedAuthority.rootAttached.2.1
       phaseCache tokenCache ⟨cache.captured, repairedAuthority.cacheRoot⟩ phaseEffects tokenEqual exactReturn observe visible
       preparedDurability (atRoot repairedAuthority) (atLock repairedAuthority) (keeperInode := inode)
@@ -1699,9 +1689,9 @@ interpret one literal successful open at the resulting heap. An earlier
 write can select either marker independently of these recovery calls. -/
 theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
     (observe : heap → CheckpointStorageObservation) (visible : heap → Nat → ByteArray)
-    (request : WriteRequest) (cause : IO.Error) {table : PackedTable}
-    (prepared : prepareBatch current.state.writer.installed.table request.rows = some (batch, table))
-    (fits : current.state.writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size)
+    {rows : List (UInt64 × Option UInt64)} {table : PackedTable}
+    (prepared : prepareBatch current.state.writer.installed.table rows = some (batch, table))
+    (fits : current.state.writer.installed.walBytes + WAL.frameSize * rows.length < UInt64.size)
     (admitted : BatchRetryTarget current.state.writer.history batch current.state.writer.wal.active.first target)
     {firstOffset : Nat} (covers : ∀ offset ∈ current.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset)
     (initial : RawOpenRetryTrace.SelectedEntry view current.state target (fun atHeap => (observe atHeap).files.names) visible first)
@@ -1738,15 +1728,13 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
     (returned : source.openTable input reached = .ok returnedTable returnedAt) :
     ∃ (plan : current.SelectedWritePlan batch target (view.files reached).image)
       (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
-      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path)
-      (keptBatch : List WAL.Write),
+      (nextCache : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
       source.openTable input reached = .ok handle.table start.reached ∧
       start.current.history = plan.history ∧
-      (⟨prior, log, current⟩ : NativeExecutionPosition).LedgerSuffix
-        [.uncertainWriteCrashRecovered request input cause batch keptBatch] start.current ∧
+      start.current.submissions = log ++ [.uncertainBatch batch] ∧ start.current.ready.reads = current.reads ∧
       InstalledClientReplay start.current.submissions start.current.ready.reads start.current.history
         start.current.ready.state.writer.installed start.current.ready.state.session ∧
-      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧
+      start.WriteStorageEntry view nextCache (observe start.reached) (visible start.reached) ∧ start.pins = [] ∧
       start.current.ready.state.session.directory = dir ∧
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       (∀ {inode}, (observe reached).files.names ((dir).file (.walSegment target.first)) = some inode →
@@ -1760,12 +1748,12 @@ theorem NativeReadPosition.opensLiteralRepairedAfterWriteRetries
   obtain ⟨held, framed, authority, rootNamed, lockNamed, _, _, worker⟩ :=
     RawMarkedOpenInterpreter.reachesAlignedCache admission settled.protectedFiles.lockBound returned
   have rootObject := Option.some.inj (rootBinding.symm.trans rootNamed)
-  obtain ⟨handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry, sameDirectory, covered,
+  obtain ⟨handle, start, cache, opened, history, submissions, reads, replay, writeEntry, pins, sameDirectory, covered,
     retainedKeeper, settledNames⟩ :=
-    plan.returnsLiteralRepairedWriter held namespaceView root request cause observe visible
+    plan.returnsLiteralRepairedWriter held namespaceView root observe visible
       (shared held plan authority rootObject) (aligns held plan authority rootObject) framed authority rootNamed lockNamed entry physical covers namesAtReached
       (replaces held plan authority rootObject) suffix settled phaseIdentity tokenIdentity phaseEffects tokenEqual returned worker
-  exact ⟨plan, handle, start, cache, keptBatch, opened, history, ledger, replay, writeEntry, sameDirectory, covered,
+  exact ⟨plan, handle, start, cache, opened, history, submissions, reads, replay, writeEntry, pins, sameDirectory, covered,
     retainedKeeper, settledNames⟩
 
 end LiteralContinuation

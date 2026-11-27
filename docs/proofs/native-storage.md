@@ -930,8 +930,13 @@ response. The marked reader observes the selected manifest and its exact
 run payloads, then replays the WAL up to that marker. The phase and token
 allocated by the same successful open support a latest lookup whose
 sequence and value agree with the recorded history. This read argument
-needs no proof that a future write can reach a durable acknowledgement.
-[Public write stop](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
+uses the selected bytes and fresh references. Reusing the table for writes
+also consumes the observed repair effects. The keeper extent chooses between
+syncing the existing inode and publishing a trimmed replacement. Each supplies
+the same write entry on the returned handle. Subsequent writes and snapshots
+extend its incoming ledger through the common ready-call induction.
+[Ready-call induction](../../lean/Alvoki/Storage/Disk/NativeReadyCallRefinement.lean)
+· [Public write stop](../../lean/Alvoki/Storage/Disk/NativeRawWriteRootStop.lean)
 
 In the native
 process-exit test the keeper can still be aligned, or contain a partial

@@ -477,11 +477,12 @@ theorem opensReadyAfterRetries
       (∀ offset ∈ start.current.ready.state.writer.wal.segments.map WalSegment.first, firstOffset ≤ offset) ∧
       ∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow
         start.current.ready.state.session.directory firstOffset through (storage start.reached) := by
-  obtain ⟨plan, handle, start, nextCache, retained, opened, history, ledger, replay, physical, sameDirectory, covers,
+  obtain ⟨plan, handle, start, nextCache, opened, history, submissions, reads, replay, physical, _, sameDirectory, covers,
     _, window⟩ :=
-    (ready).opensLiteralRepairedAfterWriteRetries storage visible request cause handoff.prepared handoff.fits
+    (ready).opensLiteralRepairedAfterWriteRetries storage visible handoff.prepared handoff.fits
       handoff.admitted handoff.covers handoff.selected handoff.recovery retryEffects admission namespaceView root rootBinding
       openEffects alignedEffects replacementEffects phaseIdentity tokenIdentity phase ptrEq returned
+  obtain ⟨retained, ledger⟩ := plan.ledgerAfterReopen start.current history submissions reads request input cause
   have endpoints := returned.symm.trans opened
   exact ⟨plan, handle, start, nextCache, retained, (EStateM.Result.ok.inj endpoints).1, (EStateM.Result.ok.inj endpoints).2.symm,
     history, (congrArg (fun target : Target => target.range.through) plan.targetEq).symm.trans plan.layout.through,

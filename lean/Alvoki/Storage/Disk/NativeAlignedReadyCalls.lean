@@ -34,27 +34,7 @@ abbrev RawMarkedOpenInterpreter.AlignedReadyCalls
       start.WriteStorageEntry view refs (observe returnedAt) (inodes returnedAt).visible ∧
       (∀ through, start.current.ready.state.writer.wal.SettledNamespaceWindow start.current.ready.state.session.directory
         lower through (observe returnedAt)) ∧
-      ∀ (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
-        (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
-        (rename : FilePath → FilePath → EStateM IO.Error heap Unit),
-        let writes := start.readyWriteCalls refs appender stager syncer lookup rename
-        ∀ (issuer : handle.LatestIssuer) (inode : IO.FS.Handle → Nat) (buffered : heap → IO.FS.Handle → ByteArray)
-          (_reported : writes.ReturnEffects view inodes runs observe inode buffered)
-          {calls : List (NativeReturnedCall handle)} {reached : heap},
-          NativeReturnedCalls writes issuer returnedAt [] calls reached →
-          NativeReturnedCalls.ReadyResponses calls →
-          ∃ (last : NativeOpenedPosition handle) (events : List NativeExecutionEvent),
-            last.reached = reached ∧
-            last.pins.map NativeOpenedPin.raw = calls.foldl (fun pins call => call.pinsAfter pins) [] ∧
-            writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) last ∧
-            events.length = calls.length ∧ (∀ pair ∈ calls.zip events, pair.1.Records pair.2) ∧
-            origin.LedgerSuffix (earlier ++ events) last.current ∧
-            InstalledClientReplay last.current.submissions last.current.ready.reads last.current.history
-              last.current.ready.state.writer.installed last.current.ready.state.session ∧
-            ∀ extra, (∀ offset ∈ writer.wal.segments.map WalSegment.first, lower ≤ offset) →
-              writes.WalWindowEffects observe lower
-                (writer.history.length + (calls.map NativeReturnedCall.requestedRows).sum + extra) →
-              last.WalWindowAt observe lower (last.current.history.length + extra)
+      start.ContinuesReadyCalls refs view inodes runs observe origin earlier lower
 
 /-- Start the common ready-call induction on the exact table returned by
 an aligned open. The previous client ledger survives the reopen, while
@@ -157,23 +137,8 @@ theorem RawMarkedOpenInterpreter.LiteralAlignedReturn.refinesReadyCalls
   refine ⟨handle, start, nextCache, opened, sameTable, sameHeap, references, emptyPins, cacheRefs, stateEq,
     across, ?_, installedWindow, ?_⟩
   · simpa only [← sameHeap] using writeEntry
-  · intro appender stager syncer lookup rename writes issuer inode buffered reported calls reached executed covered
-    have initial : writes.StorageAt view observe (fun atHeap => (inodes atHeap).visible) start := writeEntry
-    obtain ⟨last, events, heap, pins, physical, length, records, ledger, budget, _, frames⟩ :=
-      executed.refinesReadyFramed covered view inodes runs observe inode buffered reported start sameHeap
-        (by rw [emptyPins]; rfl) initial
-    refine ⟨last, events, heap, pins, physical, length, records, across.append ledger,
-      last.current.ready.readPrefix.guardedReplay, ?_⟩
-    intro extra covers names
-    have fromOpen : start.WalWindowAt observe lower
-        (writer.history.length + (calls.map NativeReturnedCall.requestedRows).sum + extra) := by
-      constructor
-      · rw [stateEq]
-        exact covers
-      · rw [sameHeap]
-        exact installedWindow _
-    exact (frames names fromOpen).restrictUpper
-      (by simpa only [startHistory, OpenReferenceAllocations.readyState] using Nat.add_le_add_right budget extra)
+  · apply start.continuesReadyCalls nextCache view inodes runs observe origin earlier lower emptyPins across writeEntry
+    simpa only [sameHeap] using installedWindow
 
 /-- Repair can unlink canonical names from the captured listing. Looking up
 each candidate again at the reached heap reflects an accepted removal. -/

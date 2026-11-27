@@ -499,4 +499,89 @@ theorem NativeOpenedPosition.stopsDuringWalAppend
 
 end AppendStop
 
+section AppendReopen
+
+variable {heap stream stop : Type} {opened : NativeOpenedHandle heap}
+  {last : NativeOpenedPosition opened} {source : RawMarkedOpenInterpreter heap stream}
+  {view : OpenCloseHeapView heap FileImage}
+  (inodes : heap → WalInodeImage) (runs : heap → RunUnlinkImage)
+  (storage : heap → CheckpointStorageObservation)
+
+local notation "ready" => last.current.ready
+local notation "state" => last.current.ready.state
+local notation "dir" => last.current.ready.state.session.directory
+local notation "target" => last.current.ready.state.writer.target
+local notation "names" => fun h => CheckpointSurvivingFiles.names (CheckpointStorageObservation.files (storage h))
+local notation "visible" => fun h => WalInodeImage.visible (inodes h)
+
+/-- Reopen the old target of an unanswered append. The exact same
+repair and installer are used after any admitted failed opens. The
+returned handle starts the ordinary ready-call proof with fresh pins. -/
+theorem NativeExecutionPosition.SelectedWriteReboot.opensReadyAfterInterruptedAppend
+    {firstOffset : Nat} {request : WriteRequest} {batch : List WAL.Write} {preparedTable : PackedTable}
+    {cut rebooted : heap} {tag : stop}
+    (handoff : last.current.SelectedWriteReboot view storage visible firstOffset request batch preparedTable target cut rebooted)
+    (cache : OpenSyncCacheRefs opened.files (dir).path)
+    (appender : RawWalAppendCalls heap) (stager : RawWalStageCalls heap) (syncer : RawSyncCalls heap)
+    (lookup : FilePath → EStateM IO.Error heap IO.FS.Metadata)
+    (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
+    (write : IO.FS.Handle → ByteArray → EStateM stop heap (Except IO.Error Unit))
+    (_stopped : request.runUntilPublicationStop dir lookup
+      (appender.commitUntilWrite dir cache write stager syncer rename) opened.phase opened.get opened.set
+      last.reached = .error tag cut)
+    {origin : NativeExecutionPosition} {events : List NativeExecutionEvent}
+    (prior : origin.LedgerSuffix events last.current)
+    {returns : List (FilePath × IO.Error)} {reached : heap} {attempts : source.FailedCalls rebooted returns reached}
+    (retryEffects : RawOpenRetryTrace.SelectedEffects view source rebooted target
+      (fun h => ⟨names h, fun inode => [visible h inode]⟩) (state).selectedRetryPath
+      (RawOpenRetryTrace.RecoveryObservations view state target storage visible firstOffset (target).range.through) attempts)
+    {input : FilePath} (admission : source.AlignedAdmissionEffects view state input reached storage visible)
+    (namespaceView : DirectoryReadNamespace) (root : DeviceInode)
+    (rootBinding : names reached (dir).path = some (namespaceView.modelObject root))
+    (openEffects : ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
+      LiteralOpenAuthority view dir cache cache.ready →
+      namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+      source.LiteralOpenEffects cache namespaceView root plan storage visible)
+    (alignedEffects : ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
+      LiteralOpenAuthority view dir cache cache.ready →
+      namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+      plan.layout.tail.size = 0 → source.LiteralAlignedRepairEffects cache plan storage visible)
+    (replacementEffects : ∀ (cache : HeldOpenCache heap) (plan : (ready).SelectedWritePlan batch target (view.files reached).image),
+      LiteralOpenAuthority view dir cache cache.ready →
+      namespaceView.modelObject root = cache.captured.inode cache.rootSlot.description →
+      0 < plan.layout.tail.size → source.LiteralKeeperReplacementEffects cache plan storage visible)
+    (phaseIdentity : IO.Ref (Phase Installed) → Nat) (tokenIdentity : IO.Ref Unit → Nat)
+    {get : IO.Ref (Phase Installed) → EStateM IO.Error heap (Phase Installed)}
+    {set : IO.Ref (Phase Installed) → Phase Installed → EStateM IO.Error heap Unit}
+    (phase : OpenPhaseCellEffects view.phase get set)
+    (ptrEq : IO.Ref Unit → IO.Ref Unit → EStateM IO.Error heap Bool)
+    {returnedAt : heap} {table : DiskTable}
+    (returned : source.openTable input reached = .ok table returnedAt) :
+    ∃ (handle : NativeOpenedHandle heap) (start : NativeOpenedPosition handle)
+      (refs : OpenSyncCacheRefs handle.files start.current.ready.state.session.directory.path),
+      table = handle.table ∧ start.reached = returnedAt ∧
+      start.current.history = last.current.history ∧
+      origin.LedgerSuffix (events ++ [.interruptedAppendCrashRecovered request input batch]) start.current ∧
+      start.WriteStorageEntry view refs (storage start.reached) (visible start.reached) ∧
+      start.ContinuesReadyCalls refs view inodes runs storage origin
+        (events ++ [.interruptedAppendCrashRecovered request input batch]) firstOffset := by
+  obtain ⟨plan, handle, start, refs, opened, history, submissions, reads, _, writeEntry, pins, _, _, _, window⟩ :=
+    (ready).opensLiteralRepairedAfterWriteRetries storage visible handoff.prepared handoff.fits
+      handoff.admitted handoff.covers handoff.selected handoff.recovery retryEffects admission namespaceView root rootBinding
+      openEffects alignedEffects replacementEffects phaseIdentity tokenIdentity phase ptrEq returned
+  have old := history.trans plan.oldHistory
+  have recovered : last.current.LedgerSuffix [.interruptedAppendCrashRecovered request input batch] start.current := by
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · simpa [NativeExecutionEvent.writes] using old
+    · simpa [NativeExecutionEvent.submissions] using submissions
+    · simpa [NativeExecutionEvent.reads] using reads
+    · simp [NativeExecutionEvent.uncertainBatchWhole]
+  have throughRecovery := prior.append recovered
+  have endpoints := EStateM.Result.ok.inj (returned.symm.trans opened)
+  exact ⟨handle, start, refs, endpoints.1, endpoints.2.symm, old, throughRecovery, writeEntry,
+    start.continuesReadyCalls refs view inodes runs storage origin
+      (events ++ [.interruptedAppendCrashRecovered request input batch]) firstOffset pins throughRecovery writeEntry window⟩
+
+end AppendReopen
+
 end Alvoki.Storage.DiskSession
