@@ -15,9 +15,11 @@ determine the selected seals, keeper and any names to prune.
 
 **Which writes survive.** An append interrupted before marker publication retains
 the previous history under the descriptor and byte-prefix assumptions. A late
-publication error may instead retain the whole batch. A successful marked open
-reads the selected checkpoint files and bounded WAL and returns a table whose
-latest lookup agrees with that history. For an aligned keeper with no later
+publication error may instead retain the whole batch. For the fresh writer's
+second batch, the public stop and successful publication prefix identify the
+issued directory fsync before reboot. A successful marked open reads the
+selected checkpoint files and bounded WAL and returns a table whose latest
+lookup agrees with that history. For an aligned keeper with no later
 WAL files, the selected checkpoint, marker, listing and WAL read callbacks
 determine the actual prepared replay and measured keeper extent. With the
 reached admission, two syncs and phase and token allocations, this gives

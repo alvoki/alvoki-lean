@@ -60,23 +60,26 @@ noncomputable def RawSyncCalls.commitUntilRootFsync {heap : Type} (calls : RawSy
       else asPublicationReturn (calls.group directory.path cache.directory cache.active cache.pending paths))
     (fun source target => asPublicationReturn (rename source target))).run
 
-theorem RawSyncCalls.stopsAtRootFsync {heap : Type} (calls : RawSyncCalls heap)
+/-- On this exact successful prefix, an outer stop is equivalent to a
+stop at the selected directory fsync. An ordinary fsync error remains an
+inner error, even when the publication schedule reports it to the caller. -/
+theorem RawSyncCalls.stopsAtRootFsync_iff {heap : Type} (calls : RawSyncCalls heap)
     (directory : DiskDirectory) {files : DiskTable.OpenSyncFiles}
     (cache : OpenSyncCacheRefs files directory.path)
     (append : RawWalAppendCalls heap) (stage : RawWalStageCalls heap)
     (rename : FilePath → FilePath → EStateM IO.Error heap Unit)
     (fsync : IO.FS.Handle → EStateM IO.FS.Handle heap (Except IO.Error Unit))
     {first count : Nat} {bytes : ByteArray} {entry appended staged grouped renamed issued reached : heap}
-    {handle : IO.FS.Handle}
+    {handle tag : IO.FS.Handle}
     (wrote : append.run cache.active (directory.file (.walSegment first)) bytes entry = .ok () appended)
     (remembered : stage.run cache.pending (directory.file .stagedWalBoundary) (WAL.Boundary.encode count.toUInt64)
       appended = .ok () staged)
     (synced : calls.group directory.path cache.directory cache.active cache.pending
       #[directory.file (.walSegment first), directory.file .stagedWalBoundary] staged = .ok () grouped)
     (moved : rename (directory.file .stagedWalBoundary) (directory.file .walBoundary) grouped = .ok () renamed)
-    (loaded : calls.readDirectory cache.directory renamed = .ok (some handle) issued)
-    (stopped : fsync handle issued = .error handle reached) :
-    calls.commitUntilRootFsync directory cache append stage rename fsync first count bytes entry = .error handle reached := by
+    (loaded : calls.readDirectory cache.directory renamed = .ok (some handle) issued) :
+    calls.commitUntilRootFsync directory cache append stage rename fsync first count bytes entry = .error tag reached ↔
+      fsync handle issued = .error tag reached := by
   have groupByFiles : #[directory.file (.walSegment first), directory.file .stagedWalBoundary] ≠ #[directory.path] := by
     intro same
     have impossible : (2 : Nat) = 1 := congrArg Array.size same
@@ -84,18 +87,32 @@ theorem RawSyncCalls.stopsAtRootFsync {heap : Type} (calls : RawSyncCalls heap)
   let syncRoot := fun path => calls.toRawSyncCacheCalls.syncPath asPublicationReturn
     (m := RootStopM heap IO.Error) fsync
     directory.path path cache.directory cache.active cache.pending
-  have chosen : syncRoot directory.path renamed = .error handle reached := by
+  have chosen : syncRoot directory.path renamed = fsync handle issued := by
     simp [syncRoot, RawSyncCacheCalls.syncPath, syncWithHandles, Bind.bind, ExceptT.bind,
-      ExceptT.bindCont, ExceptT.mk, EStateM.bind, asPublicationReturn, loaded, Pure.pure, ExceptT.pure, EStateM.pure, stopped]
-  have rootIssued : calls.rootWithFsync directory cache fsync renamed = .error handle reached := by
-    change (SyncPathGroup.run syncRoot #[directory.path]) renamed = _
-    simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch,
-      MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind, ExceptT.mk,
-      EStateM.bind, StateT.pure, Pure.pure, ExceptT.pure, chosen]
+      ExceptT.bindCont, ExceptT.mk, EStateM.bind, asPublicationReturn, loaded, Pure.pure, ExceptT.pure, EStateM.pure]
+  have rootIff : calls.rootWithFsync directory cache fsync renamed = .error tag reached ↔
+      fsync handle issued = .error tag reached := by
+    change (SyncPathGroup.run syncRoot #[directory.path]) renamed = .error tag reached ↔ _
+    cases result : fsync handle issued with
+    | error stopped stoppedAt =>
+      simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch,
+        MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind, ExceptT.mk,
+        EStateM.bind, StateT.pure, Pure.pure, ExceptT.pure, chosen, result]
+    | ok response returnedAt =>
+      cases response <;>
+        simp [SyncPathGroup.run, ← Array.forIn_toList, List.forIn_cons, List.forIn_nil, MonadExcept.tryCatch,
+          MonadExceptOf.tryCatch, tryCatchThe, ExceptT.tryCatch, Bind.bind, ExceptT.bind, ExceptT.bindCont,
+          ExceptT.mk, EStateM.bind, StateT.pure, Pure.pure, ExceptT.pure, chosen, result] <;>
+        intro impossible <;> cases impossible
+  rw [← rootIff]
   unfold commitUntilRootFsync
   rw [commitBytesAt_fileEffects]
   simp only [WAL.Boundary.commit, ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind,
-    asPublicationReturn, wrote, remembered, groupByFiles, ↓reduceIte, synced, moved, rootIssued]
+    asPublicationReturn, wrote, remembered, groupByFiles, ↓reduceIte, synced, moved]
+  cases root : calls.rootWithFsync directory cache fsync renamed with
+  | error stopped stoppedAt => simp
+  | ok response returnedAt =>
+    cases response <;> simp [Pure.pure, ExceptT.pure, EStateM.pure] <;> intro impossible <;> cases impossible
 
 /-- Interpret an unresolved publication callback through the public
 dispatcher on the same heap as the original phase and metadata callbacks. -/
@@ -364,9 +381,7 @@ structure NativeOpenedPosition.RootFsyncStop
   reached : heap
   handle : IO.FS.Handle
   effective : Bool
-  nonempty : request.rows ≠ []
   prepared : prepareBatch (state).writer.installed.table request.rows = some (batch, table)
-  fits : (state).writer.installed.walBytes + WAL.frameSize * request.rows.length < UInt64.size
   checked : checkActiveSegmentWith dir (state).writer.installed lookup current.reached = .ok () guarded
   assigned : opened.set opened.phase .poisoned guarded = .ok () poisoned
   preface : (storage current.reached).Frames (state).crashPath (storage poisoned)
@@ -387,7 +402,8 @@ structure NativeOpenedPosition.RootFsyncStop
   target : RawFsyncTarget view renamed issued handle
   root : (storage issued).files.names (dir).path =
     some ((view.descriptors issued).inode (view.handle issued handle).2.1.description)
-  noResponse : stopped handle issued = .error handle reached
+  publicStop : request.runUntilRootFsync dir cache lookup append stage calls rename stopped opened.phase opened.get
+    opened.set current.reached = .error handle reached
   effect : stopped handle issued = .error handle reached →
     (view.handle issued handle).2.1 ∈ (view.descriptors issued).slots →
     (storage issued).files.names (dir).path =
@@ -439,17 +455,24 @@ theorem NativeOpenedPosition.stopsAtRootFsync
             storage (fun h => (inodes h).visible)
             rebooted namespaceView root plan.history := by
   obtain ⟨batch, table, guarded, poisoned, appended, staged, grouped, renamed, issued, reached, handle, effective,
-    nonempty, prepared, fits, checked, assigned, preface, wrote, remembered, synced, groupEffects, moved, renameEffect,
-    loaded, readFrame, target, root, noResponse, effect, frames⟩ := stop
+    prepared, checked, assigned, preface, wrote, remembered, synced, groupEffects, moved, renameEffect,
+    loaded, readFrame, target, root, stopWrite, effect, frames⟩ := stop
   have valid := current.current.ready.readPrefix.refines.1
   have stored := current.stored.trans (congrArg some valid.phase)
   have loadedPhase := opened.phaseEffects.reads current.reached opened.phase _ stored
-  have stopCommit :=
-    calls.stopsAtRootFsync dir cache append stage rename stopped wrote remembered synced moved loaded noResponse
-  have stopWrite := request.stopsDuringPublication dir lookup
-    (fun installed bytes count => calls.commitUntilRootFsync dir cache append stage rename stopped
-      installed.activeFirst count bytes) opened.phase opened.get opened.set nonempty prepared fits
-    loadedPhase checked assigned stopCommit
+  obtain ⟨actualBatch, actualTable, actualGuard, actualPoison, _, issuedPreparation, fits, issuedGuard,
+    issuedPoison, commit⟩ :=
+    request.reachesPublicationStop dir lookup
+      (fun installed bytes count => calls.commitUntilRootFsync dir cache append stage rename stopped
+        installed.activeFirst count bytes) opened.phase opened.get opened.set loadedPhase stopWrite
+  have ⟨sameBatch, sameTable⟩ := Prod.mk.inj (Option.some.inj (issuedPreparation.symm.trans prepared))
+  subst actualBatch
+  subst actualTable
+  have sameGuard := (EStateM.Result.ok.inj (issuedGuard.symm.trans checked)).2
+  subst actualGuard
+  have samePoison := (EStateM.Result.ok.inj (issuedPoison.symm.trans assigned)).2
+  subst actualPoison
+  have noResponse := (calls.stopsAtRootFsync_iff dir cache append stage rename stopped wrote remembered synced moved loaded).mp commit
   obtain ⟨payloads, grouped, keeper, oldMarker, newMarker⟩ :=
     calls.groupedWalPayloadsFromPublication cache view append stage inodes observe inode buffered
       (rows := request.rows) valid (old.frame preface) wrote remembered synced groupEffects
