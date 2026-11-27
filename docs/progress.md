@@ -56,11 +56,16 @@ The cache allocations and reached marked reads carry the entry image through
 the keeper's release into both repair-error proofs.
 [Final sync and retry](../lean/Alvoki/Storage/Disk/NativeLongKeeperFinalSyncObservation.lean)
 
-**Next source boundary.** Connect an error from the staged `WAL.next` fsync
-to the public open's cleanup and the next retry. The local proof already
-describes the scratch effect before rename, including durability despite an
-error. The staging inode still needs an explicit identity observation at the
-staged-file fsync.
+If the staged `WAL.next` fsync reports an error, the open consumes the matching
+pending entries and syncs the descriptor it just wrote. The canonical keeper
+retains its binding and bytes through cleanup. The live retry ledger covers a
+WAL window ending at or before the committed cutoff. Scratch durability follows
+the observed effect even when both outcomes return the same error.
+
+**Next source boundary.** Carry this staged-file error across a sampled reboot.
+Connect the pruned directory map and durable choices for the old keeper to the
+next open. The staging inode in the final-directory-error report still needs a
+separate identity observation.
 [Staged-file sync error](../lean/Alvoki/Storage/Disk/NativeLongKeeperStageSyncError.lean)
 
 [Filesystem assumptions](proofs/native-storage.md#premise-provenance) ·
