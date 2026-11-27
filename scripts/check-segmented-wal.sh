@@ -114,6 +114,8 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.close_ready
 #check_axioms Native.release_reached
 #check_axioms Native.openRootDirectory_usesCanonicalPath
+#check_axioms Native.segmentId_sound
+#check_axioms Native.listedIds_exact
 #check_axioms Native.installPhase_reached
 #check_axioms Model.reopenPhase_nativeChild
 #check_axioms Model.repeatOpenAfterFailedDiscard

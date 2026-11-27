@@ -2,6 +2,8 @@ import Alvoki.Experiments.WAL.Segmented.Native
 import Alvoki.Experiments.WAL.Segmented.Proofs.Reopen
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCodec
 import Alvoki.Experiments.WAL.Segmented.Proofs.Discard
+import Std.Data.String.ToNat
+import Init.Data.String.Lemmas.TakeDrop
 
 namespace WalRecoverySlice.Segmented.Native
 
@@ -75,6 +77,62 @@ theorem release_reached (close unlock : EStateM error state Unit) (before : stat
     | ok value _ => cases value; rfl
     | error => rfl
 
+/-- Only canonical segment names can supply a reclamation ID. -/
+theorem segmentId_sound {name : String} {id : Nat} (parsed : segmentId name = .ok (some id)) :
+    name = segmentName id := by
+  unfold segmentId at parsed
+  split at parsed
+  · cases parsed
+  · split at parsed
+    · contradiction
+    · split at parsed
+      · rename_i same
+        cases parsed
+        exact beq_iff_eq.mp same
+      · contradiction
+
+theorem segmentId_canonical (id : Nat) : segmentId (segmentName id) = .ok (some id) := by
+  have suffix : ((segmentName id).drop "segment-".length).toString = id.repr := by
+    apply String.toList_inj.mp
+    rw [String.Slice.toString_eq, String.toList_copy_drop]
+    simp [segmentName, String.toList_append] <;> rfl
+  have read := Nat.toNat?_repr id
+  have ordinary : ["lock", "CONTROL", "CONTROL.next"].contains (segmentName id) = false := by
+    simp only [List.contains_cons, List.contains_nil, Bool.or_false, Bool.or_eq_false_iff]
+    refine ⟨?_, ?_, ?_⟩ <;> apply beq_eq_false_iff_ne.mpr <;> intro eq <;>
+      have wrong := congrArg (fun name : String => name.toList.head?) eq <;>
+      simp [segmentName, String.toList_append] at wrong
+  unfold segmentId
+  rw [ordinary]
+  simp only [Bool.false_eq_true, ↓reduceIte, suffix, read, beq_self_eq_true]
+
+/-- The pure part of native enumeration recovers exactly the represented
+IDs from one listing. Reserved root entries are ignored. -/
+theorem listedIds_exact (name : entry → String) (items : Array entry)
+    (contents : List (Option Nat))
+    (parsed : items.toList.map (segmentId ∘ name) = contents.map Except.ok) :
+    listedIds name items = .ok (contents.filterMap id).reverse := by
+  have fold (entries : List entry) (contents : List (Option Nat))
+      (parsed : entries.map (segmentId ∘ name) = contents.map Except.ok)
+      (acc : List Nat) :
+      entries.foldlM (fun ids item => collectId ids (name item)) acc =
+        .ok ((contents.filterMap id).reverse ++ acc) := by
+    induction entries generalizing contents acc with
+    | nil => cases contents with
+      | nil => rfl
+      | cons => cases parsed
+    | cons item rest ih =>
+      cases contents with
+      | nil => cases parsed
+      | cons value contents =>
+        obtain ⟨head, tail⟩ := List.cons.inj parsed
+        change segmentId (name item) = .ok value at head
+        cases value <;> simp [List.foldlM, collectId, head, Except.map, Bind.bind, Except.bind,
+          List.reverse_cons, List.append_assoc] <;> exact ih contents tail _
+  unfold listedIds
+  rw [← Array.foldlM_toList, fold _ _ parsed]
+  simp
+
 /-- The retained descriptor is opened read-only on the resolved root. -/
 theorem openRootDirectory_usesCanonicalPath (dir root : FilePath) (held : descriptor)
     (resolve : FilePath → Except String FilePath)
@@ -127,18 +185,18 @@ selected path and scans exactly the handle it stores under the selected ID. -/
 theorem openChild_dispatch (root : FilePath) (p : Policy) (id : Nat) (returned : child)
     (scan : child → Except String (List Bytes)) :
     openChildWith (.ok ()) (fun path =>
-      if path = root / s!"segment-{id}" then .ok #["policy", "segment", "commit.0", "commit.1"]
+      if path = segmentPath root id then .ok #["policy", "segment", "commit.0", "commit.1"]
       else .error "wrong child listing")
-      (fun path => if path = (root / s!"segment-{id}") / "policy" then
+      (fun path => if path = (segmentPath root id) / "policy" then
         .ok (policyStamp p).utf8ByteSize else .error "wrong policy size path")
-      (fun path => if path = (root / s!"segment-{id}") / "policy" then
+      (fun path => if path = (segmentPath root id) / "policy" then
         .ok (policyStamp p) else .error "wrong policy read path")
-      (fun path => if path = root / s!"segment-{id}" then .ok returned else .error "wrong child open")
+      (fun path => if path = segmentPath root id then .ok returned else .error "wrong child open")
       (fun index _ => if index = id then .ok () else .error "wrong child ID")
       scan root p id = scan returned := by
   have log : (Policy.logOnly == .boundary) = false := rfl
   have marked : (Policy.boundary == .boundary) = true := rfl
-  cases p <;> simp [openChildWith, segmentPath, policyStamp, Bind.bind,
+  cases p <;> simp [openChildWith, policyStamp, Bind.bind,
     Except.bind, Array.contains, log, marked] <;> rfl
 
 end WalRecoverySlice.Segmented.Native

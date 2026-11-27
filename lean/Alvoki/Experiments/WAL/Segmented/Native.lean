@@ -30,7 +30,9 @@ private def removeRegular (path : FilePath) : IO Unit := do
     regular path md
     IO.FS.removeFile path
 
-def segmentPath (root : FilePath) (id : Nat) := root / s!"segment-{id}"
+def segmentName (id : Nat) : String := "segment-" ++ id.repr
+
+def segmentPath (root : FilePath) (id : Nat) := root / segmentName id
 
 def policyStamp (p : Policy) := if p == .boundary then "v3 boundary" else "v3 log"
 
@@ -137,15 +139,23 @@ private def Store.openChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes
     (fun index child => s.active.set (some (index, child)))
     (fun child => SingleFile.scan child) s.root p id
 
-private def Store.listIds (s : Store) : IO (List Nat) := do
-  let mut ids := []
-  for item in ← entries s.root do
-    if !["lock", "CONTROL", "CONTROL.next"].contains item.fileName then
-      let some id := (item.fileName.drop "segment-".length).toString.toNat?
-        | throw <| IO.userError s!"unexpected segmented WAL entry {item.fileName}"
-      unless item.fileName == s!"segment-{id}" do throw <| IO.userError s!"invalid segment name {item.fileName}"
-      ids := id :: ids
-  return ids
+def segmentId (name : String) : Except String (Option Nat) :=
+  if ["lock", "CONTROL", "CONTROL.next"].contains name then .ok none
+  else match (name.drop "segment-".length).toString.toNat? with
+    | none => .error s!"unexpected segmented WAL entry {name}"
+    | some id => if name == segmentName id then .ok (some id)
+      else .error s!"invalid segment name {name}"
+
+def collectId (ids : List Nat) (name : String) : Except String (List Nat) :=
+  (segmentId name).map fun id => id.elim ids (· :: ids)
+
+@[inline] def listedIds (name : entry → String) (items : Array entry) : Except String (List Nat) :=
+  items.foldlM (fun ids item => collectId ids (name item)) []
+
+private def Store.listIds (s : Store) : FileM (List Nat) := do
+  match listedIds (·.fileName) (← entries s.root) with
+  | .ok ids => return ids
+  | .error err => throw err
 
 /-- The CONTROL read uses the reached no-follow metadata and whole-file
 read of the same protected path. Its decode and checks are shared. -/
