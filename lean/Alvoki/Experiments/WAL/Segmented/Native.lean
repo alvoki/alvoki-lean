@@ -51,18 +51,17 @@ private def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) := do
 /-- Reclaim only recognized names after the shared protocol has established
 the ID is retired or was never published. A partial deletion is retryable. -/
 @[inline] def removeSegmentWith [Monad m] (present : FilePath → m Bool)
-    (inspect : FilePath → m (Array String)) (unlink rmdir : FilePath → m Unit)
-    (root : FilePath) (id : Nat) : m Unit := do
+    (inspect : FilePath → m (Array entry)) (name : entry → String)
+    (unlink rmdir : FilePath → m Unit) (root : FilePath) (id : Nat) : m Unit := do
   let dir := segmentPath root id
   if ← present dir then
     let members ← inspect dir
-    members.forM fun (name : String) => unlink (dir / name)
+    members.forM fun item => unlink (dir / name item)
     rmdir dir
 
 private def removeSegment (root : FilePath) (id : Nat) : IO Unit :=
   removeSegmentWith (fun dir => return (← metadata? dir).isSome)
-    (fun dir => return (← inspectChild dir).map (·.fileName))
-    IO.FS.removeFile IO.FS.removeDir root id
+    inspectChild (·.fileName) IO.FS.removeFile IO.FS.removeDir root id
 
 private abbrev FileM := ExceptT String IO
 

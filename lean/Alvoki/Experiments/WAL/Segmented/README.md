@@ -159,7 +159,7 @@ exact reached disk. The install theorem interprets reference and mutex
 creation by retaining the phase value and erasing resource identity.
 The close schedules show that the phase and child reference are cleared
 before release, then root unlock follows child close even on a reported
-error. The child dispatch proof runs the validated path and policy checks and
+error. The child dispatch proof models successful path and policy checks and
 uses the same returned child value for installation and scan. Its disk
 interpreter erases reference and close effects. The remaining lifecycle proof
 must track actual child reference ownership, root acquisition and cleanup

@@ -468,7 +468,7 @@ theorem nativeRemoveSegment (root : FilePath) (id : Nat)
       (fun after => after = s.disk ∨ ∃ persist, after = s.disk.remove id persist)
       ((Native.removeSegmentWith (m := M)
         (fun path => observe (if path = dir then present else .error "wrong metadata path"))
-        (fun path => observe (if path = dir then members else .error "wrong listing path"))
+        (fun path => observe (if path = dir then members else .error "wrong listing path")) _root_.id
         (fun path t => read (unlinkFailure path) (.ok ()) t)
         (fun path t => if path = dir then namespaceChange removeEffect (fun d p => d.remove id p) t
           else .ok (.error "wrong rmdir path") t) root id).run s) := by
@@ -576,7 +576,7 @@ private def rootRemove (root : FilePath) (r : RootReports) (id : Nat) : M Unit :
   let dir := Native.segmentPath root id
   (Native.removeSegmentWith (m := M)
     (fun path t => read none (if path = dir then rootPresent r s id else .error "wrong metadata path") t)
-    (fun path t => read none (if path = dir then r.members s.step id else .error "wrong listing path") t)
+    (fun path t => read none (if path = dir then r.members s.step id else .error "wrong listing path") t) _root_.id
     (fun path t => read (r.unlinkFault s.step path) (.ok ()) t)
     (fun path t => if path = dir then namespaceChange (r.rmdir s.step id) (fun d p => d.remove id p) t
       else .ok (.error "wrong rmdir path") t) root id).run s
