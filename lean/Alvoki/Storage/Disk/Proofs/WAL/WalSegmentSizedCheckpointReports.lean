@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentBoundedOpenReports
-import Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
+import Alvoki.Storage.Disk.WAL.WalSegmentSizedCheckpointOpen
 import Alvoki.Storage.Disk.Proofs.Append.AppendCutSession
 
 namespace Alvoki.Storage.WalSegmentRepair

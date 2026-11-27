@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.Filesystem.SyncHandleCustody
-import Alvoki.Storage.Disk.WalSegmentRepairIO
+import Alvoki.Storage.Disk.WAL.WalSegmentRepairIO
 
 namespace Alvoki.Storage.SyncHandleRouting
 

@@ -1,4 +1,4 @@
-import Alvoki.Storage.Disk.WalSegmentOpenFast
+import Alvoki.Storage.Disk.WAL.WalSegmentOpenFast
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentReopenEffects
 
 namespace Alvoki.Storage.WalSegmentRepair

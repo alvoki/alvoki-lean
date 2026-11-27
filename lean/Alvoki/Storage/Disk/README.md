@@ -12,5 +12,5 @@ To follow a durable write, read the [write and acknowledgement sequence](../../.
 |---|---|
 | Initialize, append, rotate | [Empty bootstrap](WAL/WalSegmentBootstrapIO.lean), [commit a write](WAL/WalSegmentCommit.lean), [install the next segment](WAL/WalSegmentRotationIO.lean) |
 | Discover and replay | [Cached extent discovery and reads](WAL/WalSegmentCachedExtentOpen.lean), [segment read I/O](WAL/WalSegmentReadIO.lean), [replay](WAL/WalSegmentReplay.lean); [inventory](WAL/WalSegmentInventory.lean) and [read plan](WAL/WalSegmentReadPlan.lean) describe the corresponding model and proofs |
-| Repair on reopen | [Repair I/O](WalSegmentRepairIO.lean), [open and repair](WalSegmentRepairOpen.lean) |
+| Repair on reopen | [Repair I/O](WAL/WalSegmentRepairIO.lean), [open and repair](WAL/WalSegmentRepairOpen.lean) |
 | Decide which segments to collect | [WAL collection](WAL/README.md). This subdirectory owns the collection plan and range checks. The old collection module names at this level forward existing imports. |

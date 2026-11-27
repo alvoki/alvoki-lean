@@ -614,14 +614,14 @@ lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentReadIO
 lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentReplay
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalReplayWork
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentMarkerRead
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairIO
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentRepairOpen
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentRepairIO
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentRepairOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRepairEffects
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentReopenEffects
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentReplayStability
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRetryReads
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRetryReadEffects
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentOpenFast
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentOpenFast
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentOpenFastEffects
 lake env leanchecker Alvoki.Storage.Disk.WAL.WalBatch
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalBatchCommitEffects
@@ -652,7 +652,7 @@ lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentBootstrapIO
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Bootstrap.WalSegmentBootstrapEffects
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentBoundedOpenEffects
 lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentBoundedOpen
-lake env leanchecker Alvoki.Storage.Disk.WalSegmentSizedCheckpointOpen
+lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentSizedCheckpointOpen
 lake env leanchecker Alvoki.Storage.Disk.Proofs.WAL.WalSegmentSizedCheckpointReports
 lake env leanchecker Alvoki.Storage.Disk.Proofs.Checkpoint.CheckpointRunChunkReports
 lake env leanchecker Alvoki.Storage.Disk.WAL.WalSegmentCachedExtentOpen

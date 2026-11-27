@@ -1,6 +1,6 @@
 import Alvoki.Storage.Disk.Proofs.WAL.RetainedWalBoundary
 import Alvoki.Storage.Disk.Proofs.Collection.WalSegmentCollection
-import Alvoki.Storage.Disk.WalSegmentRepairIO
+import Alvoki.Storage.Disk.WAL.WalSegmentRepairIO
 
 namespace Alvoki.Storage.WalSegmentRepair
 

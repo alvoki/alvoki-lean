@@ -1,5 +1,5 @@
 import Alvoki.Storage.Disk.Proofs.WAL.WalSegmentRepairEffects
-import Alvoki.Storage.Disk.WalSegmentRepairOpen
+import Alvoki.Storage.Disk.WAL.WalSegmentRepairOpen
 
 namespace Alvoki.Storage.WalSegmentRepair
 
