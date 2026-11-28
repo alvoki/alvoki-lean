@@ -60,25 +60,13 @@ theorem Prefix.withOpen (p : Prefix path root start) (use : Native.Handle → IO
   dsimp only [Prefix.ref] at recover published
   simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, recover, published]
 
-theorem Prefix.issued (p : Prefix path root start)
+theorem Prefix.online (p : Prefix path root start)
     (entry : NativeReadScope.Entry physical path root image)
     (files : NativeReadScope.Files physical root image start)
     (heap : PhaseMemory) (ops : WithOpenReads.Runtime physical root p.lock p.ref image life heap)
-    (prior : Execution.Run before none image) (change : Change)
-    (scans : ∀ history w, SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) →
-      NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
-    (fits : image.view.tail + 1 < UInt64.size) :
+    (prior : Execution.Run before none image) :
     Execution.Run (before ++ [.reopened]) (some p.session) image ∧
-      ∃ history, SessionAt physical root p.lock p.ref p.wal p.session image history p.issue (.updating p.wal) ∧
-        ∃ handle, handle.AtRoot root p.ref ∧
-          Native.withOpen path (fun h => Native.mutation h change) start =
-            finish (ε := IO.Error) (Native.mutation handle change)
-              (finish (ε := IO.Error) ((Native.phaseCell p.ref).close WalRecoverySlice.Segmented.Native.close)
-                p.lock.unlock) p.callback ∧
-          Native.mutation handle change p.callback = NativeWrite.afterWrite p.ref
-            (match WalRecoverySlice.Segmented.Native.append p.wal (encode change) p.issue with
-             | .ok _ t => .ok {p.session with mem := insert p.session.mem change} t
-             | .error e t => .error e t) := by
+      ∃ history, Online physical root p.lock p.ref p.wal p.session image history p.callback := by
   have validated := validatedRoot_rule path (entry.resolve start files)
     (fun r w hr file => (entry.stat file w hr.2).weaken
       (fun _ _ f => ⟨hr.1, f⟩) (fun _ _ f => ⟨hr.1, f⟩))
@@ -116,6 +104,28 @@ theorem Prefix.issued (p : Prefix path root start)
   have mid := beforePublish.advance frame
   have online : Online physical root p.lock p.ref p.wal p.session image history p.callback :=
     mid.advance (ops.phase.refSwap p.wal _ mid.owned (.online p.wal p.session)).2
+  exact ⟨reopened, history, online⟩
+
+theorem Prefix.issued (p : Prefix path root start)
+    (entry : NativeReadScope.Entry physical path root image)
+    (files : NativeReadScope.Files physical root image start)
+    (heap : PhaseMemory) (ops : WithOpenReads.Runtime physical root p.lock p.ref image life heap)
+    (prior : Execution.Run before none image) (change : Change)
+    (scans : ∀ history w, SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) →
+      NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
+    (fits : image.view.tail + 1 < UInt64.size) :
+    Execution.Run (before ++ [.reopened]) (some p.session) image ∧
+      ∃ history, SessionAt physical root p.lock p.ref p.wal p.session image history p.issue (.updating p.wal) ∧
+        ∃ handle, handle.AtRoot root p.ref ∧
+          Native.withOpen path (fun h => Native.mutation h change) start =
+            finish (ε := IO.Error) (Native.mutation handle change)
+              (finish (ε := IO.Error) ((Native.phaseCell p.ref).close WalRecoverySlice.Segmented.Native.close)
+                p.lock.unlock) p.callback ∧
+          Native.mutation handle change p.callback = NativeWrite.afterWrite p.ref
+            (match WalRecoverySlice.Segmented.Native.append p.wal (encode change) p.issue with
+             | .ok _ t => .ok {p.session with mem := insert p.session.mem change} t
+             | .error e t => .error e t) := by
+  obtain ⟨reopened, history, online⟩ := p.online entry files heap ops prior
   obtain ⟨handle, binding, invoked⟩ := p.withOpen (fun h => Native.mutation h change)
   have atIssue := NativeWrite.dispatchAt online binding heap ops.cleanup.cached ops.phase (scans history) change
   simp only [fits, ↓reduceIte] at atIssue

@@ -115,11 +115,14 @@ private theorem borrow_run (f : Wal → IO α)
   simp [borrow, Bind.bind, instMonadEIO._aux_13, EST.bind, read, Phase.wal]
 
 /-- World at the append borrow after reserving the L0 reference and scanning the cached WAL. -/
-def issueWorld (ref : Ref) (wal : Wal) (start : W) : W :=
+def guardWorld (ref : Ref) (wal : Wal) (start : W) : W :=
   let entered := ((ref.get : BaseIO _) start).state
   let hidden := ((ref.swap (.updating wal) : BaseIO _) entered).state
   let scanning := ((ref.get : BaseIO _) hidden).state
-  ((ref.get : BaseIO _) (scanWorld wal scanning)).state
+  scanWorld wal scanning
+
+def issueWorld (ref : Ref) (wal : Wal) (start : W) : W :=
+  ((ref.get : BaseIO _) (guardWorld ref wal start)).state
 
 /-- The position guard keeps its pre-append disk. Otherwise the public
 operation calls append once, using precisely the registration and world
@@ -140,7 +143,8 @@ theorem dispatchAt {physical : W → Footprint inode}
            | .ok _ t => .ok {s with mem := insert s.mem change} t
            | .error e t => .error e t)
     else
-      ∃ rejected, SessionAt physical root lock ref wal s image history rejected (.updating wal) ∧
+      let rejected := guardWorld ref wal start
+      SessionAt physical root lock ref wal s image history rejected (.updating wal) ∧
         Native.mutation handle change start = afterWrite ref (.error (IO.userError "absolute WAL position exhausted") rejected) := by
   have readAt {w stage} (entry : SessionAt physical root lock ref wal s image history w stage)
       (ownsWal : stage.wal = some wal) :
@@ -164,7 +168,7 @@ theorem dispatchAt {physical : W → Footprint inode}
   · rename_i fits
     obtain ⟨issued, borrowAppend, ready⟩ := readAt afterScan rfl
     have atIssue : issueWorld ref wal start = issued := by
-      unfold issueWorld
+      unfold issueWorld guardWorld
       dsimp only
       rw [read_io] at read borrowScan borrowAppend
       rw [swap_io] at swapped
@@ -178,7 +182,15 @@ theorem dispatchAt {physical : W → Footprint inode}
     simp only [borrow, Bind.bind, instMonadEIO._aux_13, EST.bind, borrowAppend, Phase.wal]
     cases WalRecoverySlice.Segmented.Native.append wal (encode change) issued <;> rfl
   · rename_i full
-    refine ⟨_, afterScan, run.trans ?_⟩
+    have atGuard : guardWorld ref wal start = scanWorld wal scanStart := by
+      unfold guardWorld
+      dsimp only
+      rw [read_io] at read borrowScan
+      rw [swap_io] at swapped
+      rw [(EST.Out.ok.inj read).2, (EST.Out.ok.inj swapped).2, (EST.Out.ok.inj borrowScan).2]
+    dsimp only
+    rw [atGuard]
+    refine ⟨afterScan, run.trans ?_⟩
     apply congrArg (afterWrite ref)
     simp [Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, full]
     rfl
@@ -206,6 +218,6 @@ theorem dispatch {physical : W → Footprint inode}
   have issued := dispatchAt online binding heap cached phase scan change
   split <;> rename_i fits <;> simp only [fits, ↓reduceIte] at issued
   · exact ⟨_, issued⟩
-  · exact issued
+  · exact ⟨_, issued⟩
 
 end ExperimentalL0.NativeWrite
