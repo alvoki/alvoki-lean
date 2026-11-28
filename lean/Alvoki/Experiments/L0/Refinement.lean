@@ -71,7 +71,7 @@ theorem Durable.replay_pending (d : Durable image history) :
 
 variable {ops : Components (StorageM σ)} {selected : σ → Selected}
 
-private theorem check_frame (laws : ComponentEffects ops selected) (ids : List UInt64) (s : σ) :
+private theorem check_frame (laws : RecoveryEffects ops selected) (ids : List UInt64) (s : σ) :
     match checkTables ops.tables ids s with
     | .ok _ after | .error _ after => selected after = selected s := by
   induction ids generalizing s with
@@ -86,7 +86,7 @@ private theorem check_frame (laws : ComponentEffects ops selected) (ids : List U
       cases rest : checkTables ops.tables ids after <;>
         simp_all [checkTables, Bind.bind, EStateM.bind]
 
-theorem recover_refines (laws : ComponentEffects ops selected) (s : σ)
+theorem recover_refines (laws : RecoveryEffects ops selected) (s : σ)
     (d : Durable (selected s) history) :
     match recover ops s with
     | .ok session after => selected after = selected s ∧ Installed session (selected after) history
@@ -124,7 +124,7 @@ theorem recover_refines (laws : ComponentEffects ops selected) (s : σ)
 
 /-- Healthy recovery has no additional rejection once the reached
 manifest, WAL and required table checks report success. -/
-theorem recover_progress (laws : ComponentEffects ops selected)
+theorem recover_progress (laws : RecoveryEffects ops selected)
     (d : Durable (selected s) history)
     (opened : ops.manifest.reopen s = .ok version middle)
     (wal : ops.reopenWal middle = .ok view checked)
@@ -283,7 +283,7 @@ def flushPublicationChoices {id : UInt64} (prior : Durable before history)
   let old := prior.frame view version created.2.2
   exact ⟨old, prior.flush old id rows created.1 created.2.1 version contents ordered fits⟩
 
-theorem flush_refines (laws : ComponentEffects ops selected) (s : σ) (session : Session)
+theorem flush_refines (laws : FlushEffects ops selected) (s : σ) (session : Session)
     (prior : Installed session (selected s) history) :
     match flush ops session s with
     | .ok next after => Installed next (selected after) history

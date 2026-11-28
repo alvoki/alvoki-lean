@@ -1,4 +1,3 @@
-import Alvoki.Experiments.L0.NativeFacts
 import Alvoki.Experiments.L0.WalRecovery
 import Alvoki.Experiments.L0.Refinement
 import Alvoki.Experiments.L0.ManifestComposition
@@ -8,23 +7,6 @@ import Alvoki.Experiments.L0.NativeTableReads
 namespace ExperimentalL0.NativeBridge
 open WalRecoverySlice.Segmented
 open ImmutableSSTable Unified
-
-/-- Records the actual before and returned WAL sessions for a successful
-native append at the boundary of the segmented effects model. -/
-inductive WalReceipt (before after : Contract.View) (batch : Contract.Batch) : Prop where
-  | issued
-      (prior : Run events (.online priorSession state))
-      (completed : (requestCall effects priorSession (.append batch)).run state =
-        .ok (.ok nextSession) reached)
-      (old : priorSession.view = before) (new : nextSession.view = after) :
-      WalReceipt before after batch
-
-theorem WalReceipt.effect (receipt : WalReceipt before after batch) :
-    after = before.append batch := by
-  cases receipt with
-  | issued prior completed old new =>
-    rw [← old, ← new]
-    exact wal_append prior completed
 
 /-- Primitive effects on table names and the synced build artifact. The
 directory barrier turns that artifact into a durable catalog binding. -/
@@ -205,44 +187,26 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
     (namespaceState : TableNamespace σ) : Prop where
   walRecovery : Nonempty (WalRecovery.Interpretation ops selected)
   manifest : Nonempty (ManifestComposition.Interpretation ops.manifest selected)
-  append : ∀ s batch, match ops.append batch s with
-    | .ok _ after => WalReceipt (selected s).view (selected after).view batch ∧
-        (selected after).version = (selected s).version ∧ (selected after).tables = (selected s).tables
-    | .error _ after => selected after = selected s ∨
-        (RecoveryChoices.Retry (.offline (selected s).view (some (.append batch)))
-          (.ready (selected s).version) (.online (selected after).view) (.ready (selected after).version) ∧
-          (selected after).tables = (selected s).tables)
   create : Nonempty (TableCreationEvidence ops.tables.create selected namespaceState)
   checks : Nonempty (NativeTableReads.Interpretation ops.tables selected namespaceState)
 
-private theorem selected_eq {a b : Selected}
-    (view : a.view = b.view) (version : a.version = b.version) (tables : a.tables = b.tables) :
-    a = b := by cases a; cases b; simp_all
-
-theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected namespaceState) :
-    ComponentEffects ops selected where
-  scan s := by
-    obtain ⟨wal⟩ := evidence.walRecovery
-    exact wal.scanEffect s
+theorem CallbackEvidence.recoveryEffects (evidence : CallbackEvidence ops selected namespaceState) :
+    RecoveryEffects ops selected where
   reopenWal s := by
     obtain ⟨wal⟩ := evidence.walRecovery
     exact wal.reopenEffect s
   reopenManifest s := by
     obtain ⟨manifest⟩ := evidence.manifest
     exact manifest.reopenEffect s
-  append s batch := by
-    have receipt := evidence.append s batch
-    cases ran : ops.append batch s with
-    | ok value after =>
-      rw [ran] at receipt
-      exact selected_eq receipt.1.effect receipt.2.1 receipt.2.2
-    | error error after =>
-      rw [ran] at receipt
-      rcases receipt with same | ⟨retry, tables⟩
-      · exact Or.inl same
-      · obtain ⟨old | new, version⟩ := retry.afterAppend
-        · exact Or.inl (selected_eq old version tables)
-        · exact Or.inr (selected_eq new version tables)
+  check s id := by
+    obtain ⟨reads⟩ := evidence.checks
+    exact reads.checkEffect s id
+
+theorem CallbackEvidence.flushEffects (evidence : CallbackEvidence ops selected namespaceState) :
+    FlushEffects ops selected where
+  scan s := by
+    obtain ⟨wal⟩ := evidence.walRecovery
+    exact wal.scanEffect s
   create s rows _ := by
     obtain ⟨creation⟩ := evidence.create
     have made := creation.effect rows s
@@ -250,48 +214,6 @@ theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected names
   publish s proposal valid := by
     obtain ⟨manifest⟩ := evidence.manifest
     exact manifest.publishEffect s proposal valid
-  check s id := by
-    obtain ⟨reads⟩ := evidence.checks
-    exact reads.checkEffect s id
-
-/-- WAL mutation uses the supplied namespace frames on the reached scan
-and append calls, including when either call reports an error. -/
-theorem CallbackEvidence.writeCatalog {ops : Components (StorageM σ)}
-    (evidence : CallbackEvidence ops selected ns)
-    (prior : ns.Represents s (selected s).tables)
-    (scan : ∀ s, match ops.scan s with
-      | .ok _ after | .error _ after => ns.Keeps s after (selected s).tables)
-    (append : ∀ s batch, match ops.append batch s with
-      | .ok _ after | .error _ after => ns.Keeps s after (selected s).tables)
-    (session : Session) (change : Change) :
-    match write ops session change s with
-    | .ok _ after | .error _ after => ns.Represents after (selected after).tables := by
-  have scanLogical := evidence.effects.scan s
-  have scanPhysical := scan s
-  cases scanned : ops.scan s with
-  | error error after =>
-    rw [scanned] at scanLogical scanPhysical
-    simpa [write, Bind.bind, EStateM.bind, scanned, scanLogical] using prior.frame scanPhysical
-  | ok view middle =>
-    rw [scanned] at scanLogical scanPhysical
-    have ready : ns.Represents middle (selected middle).tables :=
-      scanLogical.2.symm ▸ prior.frame scanPhysical
-    by_cases fits : view.tail + 1 < UInt64.size
-    · have logical := evidence.effects.append middle (encode change)
-      have physical := append middle (encode change)
-      cases sent : ops.append (encode change) middle with
-      | ok value after =>
-        rw [sent] at logical physical
-        simpa [write, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, scanned, fits,
-          sent, logical, Selected.append] using ready.frame physical
-      | error error after =>
-        rw [sent] at logical physical
-        rcases logical with old | new
-        · simpa [write, Bind.bind, EStateM.bind, scanned, fits, sent, old] using ready.frame physical
-        · simpa [write, Bind.bind, EStateM.bind, scanned, fits, sent, new, Selected.append]
-            using ready.frame physical
-    · simp only [write, Bind.bind, EStateM.bind, scanned, fits, ite_false]
-      exact ready
 
 /-- The normal flush schedule carries the exact durable catalog through
 scan, creation and manifest publication. Failed creation leaves only
@@ -311,7 +233,7 @@ theorem CallbackEvidence.flushCatalog {ops : Components (StorageM σ)}
     | .ok _ after | .error _ after => ns.Represents after (selected after).tables := by
   by_cases empty : session.mem.isEmpty = true
   · simpa [flush, empty, Pure.pure, EStateM.pure] using prior
-  have scanLogical := evidence.effects.scan s
+  have scanLogical := evidence.flushEffects.scan s
   have scanPhysical := scan s
   cases scanned : ops.scan s with
   | error error after =>

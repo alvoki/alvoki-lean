@@ -36,6 +36,7 @@ cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,
   .lake/build/native/libalvoki_crc32c.a -lstdc++ -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
 cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixture.so"
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
+compile "$l0/NativeFacts" proof
 compile "$l0/NativeBridge" proof
 compile "$l0/WalProducerHandoff" proof
 leanchecker Alvoki.Experiments.L0.WalProducerHandoff
@@ -63,6 +64,7 @@ for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.N
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
+import Alvoki.Experiments.L0.NativeFacts
 import Alvoki.Experiments.L0.NativeBridge
 import Alvoki.Experiments.L0.Native
 import Alvoki.Experiments.L0.RestartRefinement
@@ -187,8 +189,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.Interpretation.reopenEffect
 #check_axioms ManifestComposition.Interpretation.reopenHealthy
 #check_axioms ManifestComposition.Interpretation.publishEffect
-#check_axioms CallbackEvidence.effects
-#check_axioms CallbackEvidence.writeCatalog
+#check_axioms CallbackEvidence.recoveryEffects
+#check_axioms CallbackEvidence.flushEffects
 #check_axioms CallbackEvidence.flushCatalog
 #check_axioms get_refines_from
 #check_axioms Execution.Run.flushObserved
@@ -218,9 +220,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms retainRecoverySelection
 #check_axioms Lifecycle.recovery_online
 #check_axioms Lifecycle.recovery_offline
-#check_axioms Lifecycle.write_online
 #check_axioms Lifecycle.flush_online
-#check_axioms Lifecycle.write_offline
 #check_axioms Lifecycle.flush_offline
 #check_axioms Lifecycle.Proof.useSession_offline
 #check_axioms native_table_check

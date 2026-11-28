@@ -138,8 +138,10 @@ selection and read effects. It carries the catalog forward across each
 successful miss using the read's namespace frame. The public result
 supplies the invariant on success and on a read error. Write, flush and
 recovery also return the reached invariant under their local namespace
-frames. The caller supplies the invariant at the reached entry state. Recovery and mutation use
-`ComponentEffects` and have no dependency on a lookup law. `table_open_published_inode` checks the typed producer-to-reader
+frames. The caller supplies the invariant at the reached entry state.
+`RecoveryEffects` supplies the manifest, WAL reopen and table-check laws.
+`FlushEffects` supplies the WAL scan, table creation and manifest publication
+laws. The component write model additionally interprets append. `table_open_published_inode` checks the typed producer-to-reader
 handoff with `buildFileWith_open_represents`. Checked open validates metadata.
 Row validation occurs on demand.
 
@@ -215,8 +217,8 @@ operation preserves the pending request via the existing offline stop step.
 If a component opened successfully and a later L0 callback failed, record
 the successful component open followed by stop. A scan failure after a
 successful WAL open follows this rule too. The integrated callback interpretation executes the typed manifest
-schedule over DurableBlob's Linux primitive reports. `CallbackEvidence.effects`
-derives its manifest fields from that execution. Reopen preserves the live
+schedule over DurableBlob's Linux primitive reports. `CallbackEvidence.recoveryEffects` and
+`CallbackEvidence.flushEffects` derive their manifest fields from that execution. Reopen preserves the live
 binding on either outcome, including a sync error after the barrier.
 Publication success installs the proposal. A returned error can retain
 the old live binding or expose the proposal. The reached image is kept

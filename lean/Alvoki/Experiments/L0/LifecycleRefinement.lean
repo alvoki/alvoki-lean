@@ -52,7 +52,7 @@ theorem recovery_online
         finish (ε := String) use (finish (ε := String) (Cell.close stateCell closeWal) unlock)
           (.online handle session, after.2) := by
   obtain ⟨_, ⟨durable⟩⟩ := offlineDurable prior
-  have kept := recoverCatalog (ns := tns) evidence.effects (s := (Phase.opening, before)) durable catalog
+  have kept := recoverCatalog (ns := tns) evidence.recoveryEffects (s := (Phase.opening, before)) durable catalog
     (by
       intro s
       have frame := manifestFrame s
@@ -71,7 +71,7 @@ theorem recovery_online
   change phase = .recovering handle at attached
   subst phase
   exact ⟨handle, rfl,
-    Execution.Run.recoverOk (s := (.opening, before)) prior evidence.effects ran, kept,
+    Execution.Run.recoverOk (s := (.opening, before)) prior evidence.recoveryEffects ran, kept,
     successful_recovery_publishes (recover ops) use invalid closeWal unlock handle session
       before storage ran⟩
 
@@ -145,9 +145,9 @@ theorem recovery_progress
   have healthyManifest := blob.reopenHealthy (Phase.opening, before) readActive openDirectory syncDirectory
   have manifest : (ops).manifest.reopen (Phase.opening, before) = .ok (selected before).version middle :=
     middleInstalled.symm ▸ healthyManifest.1
-  have manifestEffect := evidence.effects.reopenManifest (Phase.opening, before)
+  have manifestEffect := evidence.recoveryEffects.reopenManifest (Phase.opening, before)
   rw [manifest] at manifestEffect
-  have walEffect := evidence.effects.reopenWal middle
+  have walEffect := evidence.recoveryEffects.reopenWal middle
   rw [opened] at walEffect
   have selectedChecked : selected checked.2 = selected before := walEffect.2.trans manifestEffect.2
   have boundCatalog : (tns).Represents checked (selected before).tables := by
@@ -184,7 +184,7 @@ theorem recovery_progress
         selectedAfter, catalogAfter, imageAfter.trans imageFrame, phaseAfter.trans phaseFrame, diskAfter.trans diskFrame⟩
   obtain ⟨after, tables, selectedAfter, catalogAfter, imageAfter, phaseAfter, diskAfter⟩ := healthy (selected before).version.tables (fun _ member => member) checked
     selectedChecked boundCatalog
-  obtain ⟨session, ran, ready⟩ := recover_progress (s := (Phase.opening, before)) evidence.effects durable manifest opened tables
+  obtain ⟨session, ran, ready⟩ := recover_progress (s := (Phase.opening, before)) evidence.recoveryEffects durable manifest opened tables
   refine ⟨session, after, ran, ready, ?_, ?_, ?_⟩
   · rw [selectedAfter]
     exact catalogAfter
@@ -228,7 +228,7 @@ theorem recovery_offline
             WalRecoverySlice.Segmented.Model.ScopedFailureReleased owned.root (wal.reports middle)
               (wal.childReports middle) (wal.closeError middle) (wal.diskState middle) disk error) := by
   obtain ⟨_, ⟨durable⟩⟩ := offlineDurable prior
-  have kept := recoverCatalog (ns := tns) evidence.effects (s := (Phase.opening, before)) durable catalog
+  have kept := recoverCatalog (ns := tns) evidence.recoveryEffects (s := (Phase.opening, before)) durable catalog
     (by
       intro s
       have frame := manifestFrame s
@@ -242,7 +242,7 @@ theorem recovery_offline
       have frame := checkFrame s id
       cases reached : (ops).tables.check id s <;> simpa [reached] using frame)
   rw [ran] at kept
-  refine ⟨Execution.Run.recoverError (s := (.opening, before)) prior evidence.effects ran, kept,
+  refine ⟨Execution.Run.recoverError (s := (.opening, before)) prior evidence.recoveryEffects ran, kept,
     failed_recovery_closes (recover ops) use invalid error closeWal unlock before after ran
       closeFrame unlockFrame, ?_⟩
   intro wal version middle disk held manifest opened
@@ -252,70 +252,6 @@ theorem recovery_offline
   have same := (EStateM.Result.error.inj (ran.symm.trans actual)).2
   have installed := wal.installReached middle disk .closed recoverable trivial
   exact ⟨released, same ▸ installed.2.2, childReleased⟩
-
-/-- Put and delete use this same write schedule. Publication changes only
-phase custody, as does hiding the previous session before the call. -/
-theorem write_online
-    (prior : Execution.Run events (some old) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
-    (catalog : namespaceState.Represents before (selected before).tables)
-    (scanFrame : ∀ s, match (ops).scan s with
-      | .ok _ after | .error _ after => (tns).Keeps s after ((selected ∘ Prod.snd) s).tables)
-    (appendFrame : ∀ s batch, match (ops).append batch s with
-      | .ok _ after | .error _ after => (tns).Keeps s after ((selected ∘ Prod.snd) s).tables)
-    (change : Change)
-    (ran : write ops old change (.updating handle, before) = .ok next after)
-    (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit) :
-    Execution.Run (events ++ [.written change]) (some next) (selected after.2) ∧
-      namespaceState.Represents after.2 (selected after.2).tables ∧
-      Cell.update stateCell invalid (fun session => write ops session change) closeWal
-        (.online handle old, before) = .ok () (.online handle next, after.2) := by
-  have kept := evidence.writeCatalog (s := (Phase.updating handle, before)) catalog
-    (by
-      intro s
-      have frame := scanFrame s
-      cases reached : (ops).scan s <;> simpa [reached] using frame)
-    (by
-      intro s batch
-      have frame := appendFrame s batch
-      cases reached : (ops).append batch s <;> simpa [reached] using frame) old change
-  rw [ran] at kept
-  have frame := write_keepsPhase callbacks unavailable old change (.updating handle, before)
-  rw [ran] at frame
-  rcases after with ⟨phase, storage⟩
-  change phase = .updating handle at frame
-  subst phase
-  exact ⟨Execution.Run.writeOk (s := (.updating handle, before)) prior evidence.effects ran, kept,
-    update_success _ invalid closeWal handle old next before storage ran⟩
-
-theorem write_offline
-    (prior : Execution.Run events (some old) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
-    (catalog : namespaceState.Represents before (selected before).tables)
-    (scanFrame : ∀ s, match (ops).scan s with
-      | .ok _ after | .error _ after => (tns).Keeps s after ((selected ∘ Prod.snd) s).tables)
-    (appendFrame : ∀ s batch, match (ops).append batch s with
-      | .ok _ after | .error _ after => (tns).Keeps s after ((selected ∘ Prod.snd) s).tables)
-    (change : Change)
-    (ran : write ops old change (.updating handle, before) = .error error after)
-    (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit)
-    (closeFrame : ∀ handle storage, reached (closeWal handle (.offline, storage)) = (.offline, storage)) :
-    Execution.Run (events ++ [.writeUncertain change]) none (selected after.2) ∧
-      namespaceState.Represents after.2 (selected after.2).tables ∧
-      Cell.update stateCell invalid (fun session => write ops session change) closeWal
-        (.online handle old, before) = .error error (.offline, after.2) := by
-  have kept := evidence.writeCatalog (s := (Phase.updating handle, before)) catalog
-    (by
-      intro s
-      have frame := scanFrame s
-      cases reached : (ops).scan s <;> simpa [reached] using frame)
-    (by
-      intro s batch
-      have frame := appendFrame s batch
-      cases reached : (ops).append batch s <;> simpa [reached] using frame) old change
-  rw [ran] at kept
-  exact ⟨Execution.Run.writeInterrupted (s := (.updating handle, before)) prior evidence.effects ran, kept,
-    update_error _ invalid error closeWal handle old before after ran closeFrame⟩
 
 theorem flush_online
     (prior : Execution.Run events (some old) (selected before))
@@ -354,7 +290,7 @@ theorem flush_online
   rcases after with ⟨phase, storage⟩
   change phase = .updating handle at frame
   subst phase
-  exact ⟨Execution.Run.flushObserved (s := (.updating handle, before)) prior evidence.effects ran .delivered, kept,
+  exact ⟨Execution.Run.flushObserved (s := (.updating handle, before)) prior evidence.flushEffects ran .delivered, kept,
     update_success _ invalid closeWal handle old next before storage ran⟩
 
 theorem flush_offline
@@ -390,7 +326,7 @@ theorem flush_offline
       have frame := publishFrame s version
       cases reached : (ops).manifest.publish version s <;> simpa [reached] using frame) old
   rw [ran] at kept
-  exact ⟨Execution.Run.flushObserved (s := (.updating handle, before)) prior evidence.effects ran .reportedError, kept,
+  exact ⟨Execution.Run.flushObserved (s := (.updating handle, before)) prior evidence.flushEffects ran .reportedError, kept,
     update_error _ invalid error closeWal handle old before after ran closeFrame⟩
 
 

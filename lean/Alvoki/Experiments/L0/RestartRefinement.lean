@@ -33,10 +33,10 @@ theorem flushChoicesAtCreate {tableId : UInt64}
     Nonempty (Durable (selected stored) history) ∧
     Nonempty (Durable ((selected stored).publish proposal) history) := by
   obtain ⟨prior, version, mem⟩ := installed
-  have scan := evidence.effects.scan start
+  have scan := evidence.flushEffects.scan start
   rw [scanned] at scan
   obtain ⟨rfl, equal⟩ := scan
-  have creation := evidence.effects.create scannedState session.mem.toList (rows_ordered session.mem)
+  have creation := evidence.flushEffects.create scannedState session.mem.toList (rows_ordered session.mem)
   rw [created, equal] at creation
   obtain ⟨sameWal, sameVersion, added⟩ := creation
   have contents (key : UInt64) : lookupRows session.mem.toList key = latest prior.pending key := by
@@ -107,7 +107,7 @@ theorem recoverKeepsCatalog {ops : Components (StorageM σ)} {ns : TableNamespac
 /-- Supply the reached catalog on either public recovery outcome. -/
 theorem recoverCatalog
     {ops : Components (StorageM σ)} {selected : σ → Selected} {ns : TableNamespace σ}
-    (laws : ComponentEffects ops selected) (d : Durable (selected s) history)
+    (laws : RecoveryEffects ops selected) (d : Durable (selected s) history)
     (prior : ns.Represents s (selected s).tables)
     (manifest : ∀ state, match ops.manifest.reopen state with
       | .ok _ after | .error _ after => ns.Keeps state after (selected s).tables)
@@ -200,8 +200,8 @@ theorem recoverTwiceTrace
     Execution.Run (((events ++ [observation.event]) ++ [.openFailed]) ++
       [.reopened] ++ [.stop] ++ [.reopened]) (some second) (selected afterSecond) ∧ ns.Represents afterSecond tables := by
   have stopped := Execution.Run.flushUncertain prior durable
-  have offline := stopped.recoverError evidence.effects failed
-  have online := offline.recoverOk evidence.effects opened
+  have offline := stopped.recoverError evidence.recoveryEffects failed
+  have online := offline.recoverOk evidence.recoveryEffects opened
   have again := Execution.Run.stop online
   rw [← same] at again
   have keptFailure := recoverKeepsCatalog manifestFrame walFrame checkFrame restarted
@@ -211,7 +211,7 @@ theorem recoverTwiceTrace
   rw [opened] at keptFirst
   rw [reopened] at keptSecond
   rw [uncertain]
-  exact ⟨again.recoverOk evidence.effects reopened,
+  exact ⟨again.recoverOk evidence.recoveryEffects reopened,
     catalog.frame (keptFailure.trans (keptFirst.trans (survives.trans keptSecond)))⟩
 
 /-- Reindex the restart model's namespace by the IO world reached inside a read. -/
@@ -418,9 +418,9 @@ theorem recoverReachedFlush {tableId : UInt64}
     checkKeepsManifest secondRecovery
   rw [manifest.imageInstalled _ _ ⟨version, chosenValid, openedAgain.2.1⟩] at exactSecond
   have firstDurable : Durable (selected recoveryState) history := picked.symm ▸ durable
-  have firstFailure := recover_refines evidence.effects recoveryState firstDurable
+  have firstFailure := recover_refines evidence.recoveryEffects recoveryState firstDurable
   rw [failedRecovery] at firstFailure
-  have firstOpened := recover_refines evidence.effects failedState (firstFailure.symm ▸ firstDurable)
+  have firstOpened := recover_refines evidence.recoveryEffects failedState (firstFailure.symm ▸ firstDurable)
   rw [firstRecovery] at firstOpened
   have selectedFirst := firstOpened.1.trans (firstFailure.trans picked)
   have firstWal := congrArg Selected.view selectedFirst
@@ -452,7 +452,7 @@ theorem recoverReachedFlush {tableId : UInt64}
     failedRecovery firstRecovery sameSelection survivesAgain secondRecovery
   have secondDurable : Durable (selected secondBoot) history :=
     (fields (b := (selected stored).publish version) secondBootWal secondVersion secondBootCatalog).symm ▸ durable
-  have secondOpened := recover_refines evidence.effects secondBoot secondDurable
+  have secondOpened := recover_refines evidence.recoveryEffects secondBoot secondDurable
   rw [secondRecovery] at secondOpened
   have finalCatalog : (selected finalState).tables = (selected stored).tables :=
     (congrArg Selected.tables secondOpened.1).trans secondBootCatalog

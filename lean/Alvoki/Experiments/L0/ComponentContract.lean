@@ -18,22 +18,22 @@ def Selected.publish (s : Selected) (version : L0Manifest.Version) : Selected :=
 
 abbrev StorageM (σ : Type) := EStateM String σ
 
-/-- Local effects used by write, flush and recover, with success and error frames.
-The selected image is fixed during a recovery attempt and its retries.
-RecoveryChoices justifies this abstraction at the public trace boundary. -/
-structure ComponentEffects (ops : Components (StorageM σ)) (selected : σ → Selected) : Prop where
-  scan : ∀ s, match ops.scan s with
-    | .ok view after => view = (selected s).view ∧ selected after = selected s
-    | .error _ after => selected after = selected s
+/-- Recovery reads one WAL view, one manifest, and the manifest's tables. -/
+structure RecoveryEffects (ops : Components (StorageM σ)) (selected : σ → Selected) : Prop where
   reopenWal : ∀ s, match ops.reopenWal s with
     | .ok view after => view = (selected s).view ∧ selected after = selected s
     | .error _ after => selected after = selected s
   reopenManifest : ∀ s, match ops.manifest.reopen s with
     | .ok version after => version = (selected s).version ∧ selected after = selected s
     | .error _ after => selected after = selected s
-  append : ∀ s batch, match ops.append batch s with
-    | .ok _ after => selected after = (selected s).append batch
-    | .error _ after => selected after = selected s ∨ selected after = (selected s).append batch
+  check : ∀ s id, match ops.tables.check id s with
+    | .ok _ after | .error _ after => selected after = selected s
+
+/-- Flush scans the WAL, creates a table, and publishes the new manifest. -/
+structure FlushEffects (ops : Components (StorageM σ)) (selected : σ → Selected) : Prop where
+  scan : ∀ s, match ops.scan s with
+    | .ok view after => view = (selected s).view ∧ selected after = selected s
+    | .error _ after => selected after = selected s
   create : ∀ s rows, Rows.Ordered rows →
     match ops.tables.create rows s with
     | .ok id after => (selected after).view = (selected s).view ∧
@@ -45,8 +45,14 @@ structure ComponentEffects (ops : Components (StorageM σ)) (selected : σ → S
   publish : ∀ s version, version.Valid → match ops.manifest.publish version s with
     | .ok _ after => selected after = (selected s).publish version
     | .error _ after => selected after = selected s ∨ selected after = (selected s).publish version
-  check : ∀ s id, match ops.tables.check id s with
-    | .ok _ after | .error _ after => selected after = selected s
+
+/-- The component model also interprets successful and uncertain appends. -/
+structure ComponentEffects (ops : Components (StorageM σ)) (selected : σ → Selected)
+    : Prop extends RecoveryEffects ops selected, FlushEffects ops selected where
+  append : ∀ s batch, match ops.append batch s with
+    | .ok _ after => selected after = (selected s).append batch
+    | .error _ after => selected after = selected s ∨ selected after = (selected s).append batch
+
 /-- Reads add the table lookup law. Recovery and mutation do not require it. -/
 structure ComponentLaws (ops : Components (StorageM σ)) (selected : σ → Selected)
     : Prop extends ComponentEffects ops selected where

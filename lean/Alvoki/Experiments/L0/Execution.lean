@@ -51,13 +51,13 @@ theorem Run.projects (run : Run events session image) :
   | @got _ _ _ faults _ _ _ ran ih =>
     exact ih.getOk (fun _ installed => get_refines (componentLaws faults) _ _ installed _) ran
   | @flushed _ _ _ faults _ _ _ ran ih =>
-    exact ih.flushObserved (componentLaws faults).toComponentEffects ran .delivered
+    exact ih.flushObserved (componentLaws faults).toFlushEffects ran .delivered
   | @flushObserved _ _ _ faults result _ ran observed ih =>
-    cases result <;> exact ih.flushObserved (componentLaws faults).toComponentEffects ran observed
+    cases result <;> exact ih.flushObserved (componentLaws faults).toFlushEffects ran observed
   | @reopened _ _ faults _ _ _ ran ih =>
-    exact ih.recoverOk (componentLaws faults).toComponentEffects ran
+    exact ih.recoverOk (componentLaws faults).toRecoveryEffects ran
   | @openFailed _ _ faults _ _ _ ran ih =>
-    exact ih.recoverError (componentLaws faults).toComponentEffects ran
+    exact ih.recoverError (componentLaws faults).toRecoveryEffects ran
   | stop _ ih => exact .stop ih
 
 theorem Run.refines (run : Run events session image) :
