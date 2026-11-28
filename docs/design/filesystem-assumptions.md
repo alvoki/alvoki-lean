@@ -23,7 +23,11 @@ errors with a cursor per open file description. A previously observed error
 can be absent from a later `fsync`, including on a newly opened descriptor.
 Recovery therefore needs the premise that its selected bytes remain
 available for successful persistence. A later successful call alone gives
-no evidence that bytes lost in a failed writeback were repaired.
+no evidence that bytes lost in a failed writeback were repaired. Lost
+writeback that leaves misleading clean cache bytes is outside the current
+proved fault model. A reproducible ext4 and XFS block-fault experiment records
+that case and its consequences for recovery.
+[Linux writeback experiment](linux-writeback/README.md)
 [Linux VFS writeback errors](https://github.com/torvalds/linux/blob/v6.18/Documentation/filesystems/vfs.rst#handling-errors-during-writeback)
 
 Live atomic rename and crash persistence are distinct effects. DurableBlob

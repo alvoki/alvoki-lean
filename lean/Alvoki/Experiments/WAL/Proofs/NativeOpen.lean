@@ -600,7 +600,7 @@ private theorem openAttempt_refines (dir : FilePath) (policy : Policy) (r : Open
         | ok ready => exact installed
         | error err =>
           cases un : r.unlockError <;>
-            simpa [runBind, unlock_run, finish, un, run_throw, OpenGuarantee, workerProvenance, postState] using installed
+            simpa [runBind, attempt_run, unlock_run, finish, un, run_throw, OpenGuarantee, workerProvenance, postState] using installed
 
 private def settleImage (files : List WalFile) (state : OpenImage) : OpenImage :=
   {state with image := settleFiles files state.image}
@@ -782,12 +782,8 @@ theorem openExisting_scanPhase (dir : FilePath) (policy : Policy) (r : OpenRepor
         rw [installed] at ran
         cases response with
         | error =>
-          simp only [runBind, run_throw] at ran
-          cases unlocked : ((openEffects policy r).unlock .lock).run reached with
-          | error => rw [unlocked] at ran; cases ran
-          | ok result _ =>
-            rw [unlocked] at ran
-            cases result <;> cases ran
+          cases un : r.unlockError <;>
+            simp [runBind, attempt_run, unlock_run, finish, un, run_throw, settleResult] at ran
         | ok child =>
           cases ran
           exact installWith_scanPhase dir policy r .lock next installed

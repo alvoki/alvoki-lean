@@ -207,7 +207,7 @@ structure OpenFiles (handle : Type) where
   return ⟨lock, files.policy, files.reader, files.writer, files.markers, recovered, phase⟩
 
 @[inline] def openExistingWith [Monad m] [MonadExceptOf String m]
-    (io : OpenIO m handle) (attempt : m ready → m (Except error ready))
+    (io : OpenIO m handle) (attempt : {α : Type} → m α → m (Except error α))
     (rethrow : error → m ready)
     (recover : Policy → handle → handle → Option (handle × handle) → m Decoded)
     (stored : handle → handle → Option (handle × handle) → payload)
@@ -216,7 +216,7 @@ structure OpenFiles (handle : Type) where
   match ← attempt (installWith io recover stored dir lock >>= makeReady) with
   | .ok ready => return ready
   | .error err =>
-    io.unlock lock
+    let _ ← attempt (io.unlock lock)
     rethrow err
 
 private def nativeOpen : OpenIO FileM IO.FS.Handle where
