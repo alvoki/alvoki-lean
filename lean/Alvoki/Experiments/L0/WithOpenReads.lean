@@ -37,7 +37,7 @@ structure Finished (physical : W → Footprint inode) (root : FilePath) (image :
   trace : Execution.Run (eventsAfter events call.keys replies) none image
   client : ∃ state, Client.Allows (eventsAfter events call.keys replies) state ∧ Execution.Represents none image state
   callback : ∃ lock ref, NativeReadRelease.Closed physical root lock ref image w ∧
-    ∃ wal session history handle entered opening recovered,
+    ∃ wal session history handle opening recovered,
       Native.recoverAt root ref opening = .ok session recovered ∧
       NativeRecoverAt.CheckReceipt root ref image life opening recovered true ∧
       Native.Handle.AtRoot handle root ref ∧ Online physical root lock ref wal session image history entered ∧
@@ -80,10 +80,46 @@ theorem Failure.refines (failure : Failure physical root image life events call 
     obtain ⟨_, _, closed, _⟩ := finished.callback
     exact ⟨closed.files, _, state, .inr ⟨_, rfl⟩, allowed, off⟩
 
-/-- Common acquisition, recovery and publication for the public read and
-mutation clients. The callback starts in the world of the publication
-swap and must account for the cleanup at its own reached world. -/
-theorem withOnline {physical : W → Footprint inode} {ok : α → W → Prop} {err : IO.Error → W → Prop}
+/-- From concrete recovery publication to the callback, table descriptor
+release, and outer cleanup. A pending restart uses the same consumer after
+its WAL selects a survivor. -/
+theorem finishRecovery (call : RootCall) (rootLife : RootLifetime)
+    (grant : NativeReadScope.Grant root lock ref)
+    (binding : Native.Handle.AtRoot handle root ref)
+    (recovery : Native.recoverAt root ref w = .ok session t)
+    (valid : Installed session image history)
+    (attached : NativeRecoverAt.Attached physical root lock ref image wal t)
+    (checkedTables : NativeRecoverAt.CheckReceipt root ref image life w t true)
+    (read : RefRead physical root lock ref wal image.tables)
+    (swap : RefSwap physical root lock ref wal image.tables)
+    (tables : ∀ entered, Owned (physical entered) root lock ref →
+      Primitives (tableNamespace physical root) life (Frame physical root wal image.tables entered))
+    (cleanup : NativeReadRelease.Laws heap physical root lock ref image)
+    (reopened : Execution.Run (events ++ [.reopened]) (some session) image)
+    (success : ∀ replies u, Finished physical root image life events call rootLife replies u → ok replies u)
+    (failure : ∀ e u {replies}, Finished physical root image life events call rootLife replies u → err e u) :
+    NativeScope.Publish ref lock (readMany handle call.keys : IO (List Reply)) session t ok err := by
+  apply publishOnline (attached.sessionAt valid) read swap
+  intro entered online
+  let result := readMany handle call.keys entered
+  have read := readMany_run online binding read (tables entered online.owned) Frame.refl reopened call.keys
+  obtain ⟨trace, frame, reached, released⟩ := read
+  have stopped := trace.stop
+  have finish (u) (closed : NativeReadRelease.Closed physical root lock ref image u) :
+      Finished physical root image life events call rootLife result.val u :=
+    ⟨call.released rootLife, stopped, stopped.refines, lock, ref, closed, wal, session, history, handle, entered, w, t,
+      recovery, checkedTables, binding, online, rfl, frame, reached, released⟩
+  have release := NativeReadRelease.onlineTo cleanup grant reached (fun u h => success _ u (finish u h)) (fun e u h => failure e u (finish u h))
+  unfold NativeScope.Callback Post
+  change (match readMany handle call.keys entered with | ⟨xs, v⟩ => _)
+  dsimp only [result] at release
+  generalize eq : readMany handle call.keys entered = r at *
+  cases r
+  exact release
+
+/-- Common acquisition and recovery for the public read and
+mutation clients. Publication consumes the actual attached WAL and validated session. -/
+theorem withRecovered {physical : W → Footprint inode} {ok : α → W → Prop} {err : IO.Error → W → Prop}
     (entry : Entry physical path root image) (files : Files physical root image start)
     (heap : Heap) (runtime : ∀ lock ref, Runtime physical root lock ref image life heap)
     (prior : Execution.Run events none image) (use : Native.Handle → IO α)
@@ -93,12 +129,13 @@ theorem withOnline {physical : W → Footprint inode} {ok : α → W → Prop} {
       Native.recoverAt root ref opening = .error e reached →
       (NativeRecoverAt.NoChecks root ref image opening ∨ NativeRecoverAt.CheckReceipt root ref image life opening reached false) →
       Execution.Run (events ++ [.openFailed]) none image → err e t)
-    (consume : ∀ lock ref wal session history handle entered opening recovered,
+    (consume : ∀ lock ref wal session history handle opening recovered,
       NativeReadScope.Grant root lock ref → Native.recoverAt root ref opening = .ok session recovered →
       NativeRecoverAt.CheckReceipt root ref image life opening recovered true →
-      Native.Handle.AtRoot handle root ref → Online physical root lock ref wal session image history entered →
+      Native.Handle.AtRoot handle root ref → Installed session image history →
+      NativeRecoverAt.Attached physical root lock ref image wal recovered →
       Execution.Run (events ++ [.reopened]) (some session) image →
-      NativeScope.Callback ref lock (use handle) entered ok err) :
+      NativeScope.Publish ref lock (use handle) session recovered ok err) :
     Post (Native.withOpen path use) start ok err := by
   have failedTrace := prior.openFailed (fun _ h => ⟨h⟩)
   obtain ⟨state, _, represented⟩ := prior.refines
@@ -129,9 +166,7 @@ theorem withOnline {physical : W → Footprint inode} {ok : α → W → Prop} {
       exact r
     obtain ⟨⟨valid, wal, attached⟩, checkedTables⟩ := installed history d
     have reopened := prior.reopened (fun actual D => (installed actual D).1.1)
-    apply publishOnline (attached.sessionAt valid) (ops.phase.refRead wal) (ops.phase.refSwap wal)
-    intro entered online
-    exact consume lock ref wal session history handle entered w t grant recovery checkedTables binding online reopened
+    exact consume lock ref wal session history handle w t grant recovery checkedTables binding valid attached reopened
 
 theorem withOpen (entry : Entry physical path root image) (files : Files physical root image start)
     (heap : Heap) (runtime : ∀ lock ref, Runtime physical root lock ref image life heap)
@@ -141,26 +176,14 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
       (Failure physical root image life events ⟨path, keys, start⟩ rootLife) := by
   let call : RootCall := ⟨path, keys, start⟩
   have releasedRoot := call.released rootLife
-  apply withOnline entry files heap runtime prior
+  apply withRecovered entry files heap runtime prior
   · exact fun _ _ before trace => .before releasedRoot before trace
   · exact fun _ _ _ _ _ _ closed recovery receipt trace => .recovery releasedRoot closed recovery receipt trace
-  intro lock ref wal session history handle entered w t grant recovery checkedTables binding online reopened
+  intro lock ref wal session history handle w t grant recovery checkedTables binding valid attached reopened
   let ops := runtime lock ref
-  let result := readMany handle keys entered
-  have read := readMany_run online binding (ops.phase.refRead wal) (ops.tables wal entered online.owned) Frame.refl reopened keys
-  obtain ⟨trace, frame, reached, released⟩ := read
-  have stopped := trace.stop
-  have finish (u) (closed : NativeReadRelease.Closed physical root lock ref image u) :
-      Finished physical root image life events call rootLife result.val u :=
-    ⟨releasedRoot, stopped, stopped.refines, lock, ref, closed, wal, session, history, handle, entered, w, t,
-      recovery, checkedTables, binding, online, rfl, frame, reached, released⟩
-  have release := NativeReadRelease.onlineTo ops.cleanup grant reached finish (fun e u h => Failure.cleanup (err := e) (finish u h))
-  unfold NativeScope.Callback Post
-  change (match readMany handle keys entered with | ⟨xs, v⟩ => _)
-  dsimp only [result] at release
-  generalize eq : readMany handle keys entered = r at *
-  cases r
-  exact release
+  exact finishRecovery call rootLife grant binding recovery valid attached checkedTables
+    (ops.phase.refRead wal) (ops.phase.refSwap wal) (ops.tables wal) ops.cleanup reopened
+    (fun _ _ h => h) (fun _ _ {_} h => .cleanup h)
 
 /-- The two-read callback used in the fault witness is the two-element
 instance of the public client, including the world after the second get. -/
