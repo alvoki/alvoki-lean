@@ -1,5 +1,7 @@
 # What it took to connect native L0 to its client contract
 
+**Independent audit correction.** The required PhaseMemory has no inhabitant. The native theorems that assume it are vacuous, including the healthy examples described below. The [counterexample, design and validation gates](l0-phase-memory-audit.md) supersede the earlier native acceptance assessment.
+
 This is an implementation retrospective for the read, mutation and flush milestones. The [review inventory](l0-native-review.md) gives the producer graph. The [acceptance boundary](l0-native-acceptance.md) identifies the quantifiers and external assumptions. An independent reviewer can start from the public theorems in those two documents before reading this account.
 
 ## The problem that survived every change of proof architecture

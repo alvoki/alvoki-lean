@@ -1,5 +1,7 @@
 # Reviewing the native L0 refinement
 
+**Independent audit correction.** The required PhaseMemory has no inhabitant. The native theorems that assume it are vacuous, including the healthy examples described below. The [counterexample, design and validation gates](l0-phase-memory-audit.md) supersede the earlier native acceptance assessment.
+
 PR #5 has one integrated executable candidate. The starting points for
 review are the [flush scope](../../lean/Alvoki/Experiments/L0/NativeFlushPublic.lean),
 the [interrupted flush](../../lean/Alvoki/Experiments/L0/NativeFlushObserver.lean)
