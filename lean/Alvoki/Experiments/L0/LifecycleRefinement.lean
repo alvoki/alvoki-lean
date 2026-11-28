@@ -120,6 +120,7 @@ theorem get_online
     (ran : get ops session key (.online handle session, before) =
       .ok value after) (invalid : String) :
     Execution.Run (events ++ [.got key value]) (some session) (selected after.2) ∧
+      namespaceState.Represents after (selected after.2).tables ∧
       Cell.useSession stateCell invalid (fun live => get ops live key)
         (.online handle session, before) = .ok value (.online handle session, after.2) := by
   have frame := get_keepsPhase callbacks unavailable session key (.online handle session, before)
@@ -127,8 +128,16 @@ theorem get_online
   rcases after with ⟨phase, storage⟩
   change phase = .online handle session at frame
   subst phase
-  exact ⟨Execution.Run.getOk (s := (Phase.online handle session, before)) prior (fun _ installed => evidence.get catalog installed key) ran,
-    (useSession_online _ invalid handle session before).trans ran⟩
+  have effect (history : Rows) (installed : Installed session (selected before) history) := evidence.get catalog installed key
+  obtain ⟨_, installed⟩ := prior.onlineInstalled
+  have reached := effect _ installed
+  rw [ran] at reached
+  refine ⟨Execution.Run.getOk (selected := selected ∘ Prod.snd) (s := (Phase.online handle session, before)) prior ?_ ran,
+    reached.2.2, (useSession_online _ invalid handle session before).trans ran⟩
+  intro history installed
+  have read := effect history installed
+  rw [ran] at read ⊢
+  exact ⟨read.1, read.2.1⟩
 
 theorem get_online_error
     (prior : Execution.Run events (some session) (selected before))
@@ -137,6 +146,7 @@ theorem get_online_error
     (ran : get ops session key (.online handle session, before) =
       .error error after) (invalid : String) :
     Execution.Run events (some session) (selected after.2) ∧
+      namespaceState.Represents after (selected after.2).tables ∧
       Cell.useSession stateCell invalid (fun live => get ops live key)
         (.online handle session, before) = .error error (.online handle session, after.2) := by
   have frame := get_keepsPhase callbacks unavailable session key (.online handle session, before)
@@ -144,7 +154,15 @@ theorem get_online_error
   rcases after with ⟨phase, storage⟩
   change phase = .online handle session at frame
   subst phase
-  exact ⟨Execution.Run.getError (s := (Phase.online handle session, before)) prior (fun _ installed => evidence.get catalog installed key) ran,
-    (useSession_online _ invalid handle session before).trans ran⟩
+  have effect (history : Rows) (installed : Installed session (selected before) history) := evidence.get catalog installed key
+  obtain ⟨_, installed⟩ := prior.onlineInstalled
+  have reached := effect _ installed
+  rw [ran] at reached
+  refine ⟨Execution.Run.getError (selected := selected ∘ Prod.snd) (s := (Phase.online handle session, before)) prior ?_ ran,
+    reached.2, (useSession_online _ invalid handle session before).trans ran⟩
+  intro history installed
+  have read := effect history installed
+  rw [ran] at read ⊢
+  exact read.1
 
 end ExperimentalL0.Lifecycle

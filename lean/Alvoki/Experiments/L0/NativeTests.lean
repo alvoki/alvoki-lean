@@ -30,9 +30,14 @@ private def interruption (executable library cut : String) : IO Unit :=
       env := #[("LD_PRELOAD", some library), ("ALVOKI_L0_CUT", some cut)]
     }
     check (proc.exitCode == 73) s!"missed process cut {cut}: {proc.stderr}"
+    check proc.stdout.isEmpty "interrupted flush emitted an acknowledgement"
     let active := root / "manifest" / "BLOB"
     let expected : L0Manifest.Version :=
       if cut == "table" then ⟨[0], 1⟩ else ⟨[1, 0], 3⟩
+    check (L0Manifest.decode (← IO.FS.readBinFile active) == some expected)
+      "interruption reached the wrong manifest binding"
+    let prepared := tablePath (root / "tables") 1
+    check ((← prepared.symlinkMetadata).type == .file) "interruption lost the prepared table name"
     let required := tablePath (root / "tables") (if cut == "table" then 0 else 1)
     let hidden := root / "tables" / "hidden-required"
     let published ← IO.mkRef false
@@ -118,7 +123,9 @@ private def nativeSchedule : IO Unit := IO.FS.withTempDir fun root => do
 
 def main (args : List String) : IO Unit := do
   match args with
-  | ["flush", root] => Native.withOpen (FilePath.mk root) Native.flush
+  | ["flush", root] =>
+    Native.withOpen (FilePath.mk root) Native.flush
+    IO.println "flushed"
   | [library] =>
     nativeSchedule
     let executable ← IO.appPath

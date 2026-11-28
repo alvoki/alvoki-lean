@@ -133,8 +133,10 @@ ID, durable name, inode, bytes and proven image. The creation proof
 produces the new binding, and the catalog insertion lemma retains the
 older bindings. Lookup consumes that invariant and the scoped descriptor's inode
 selection and read effects. It carries the catalog forward across each
-successful miss using the read's namespace frame. The caller supplies
-the invariant at the reached entry state. Recovery and mutation use
+successful miss using the read's namespace frame. The public result
+supplies the invariant on success and on a read error. Write, flush and
+recovery also return the reached invariant under their local namespace
+frames. The caller supplies the invariant at the reached entry state. Recovery and mutation use
 `ComponentEffects` and have no dependency on a lookup law. `table_open_published_inode` checks the typed producer-to-reader
 handoff with `buildFileWith_open_represents`. Checked open validates metadata.
 Row validation occurs on demand.
@@ -202,7 +204,11 @@ Delivered success emits `flushed`. Each uncertain observation emits
 frame the durable catalog through each recovery attempt. Connecting the
 reached Linux state to the primitive reports and namespace frames
 remains open. The adapter still owes the initial reached catalog witness,
-exact insertion after a create, and the scoped read-result correspondence.
+the scoped read-result correspondence and the local creation frames.
+The probe frames visibility, the build leaves visibility untouched and
+the directory barrier changes only the allocated binding. These local
+effects yield exact insertion in the shared schedule. The native adapter
+still owes those local effects and the namespace frames.
 The filesystem supplies the survivor and the effects of failed barriers.
 The client or runtime supplies reply delivery and process interruption
 observations.

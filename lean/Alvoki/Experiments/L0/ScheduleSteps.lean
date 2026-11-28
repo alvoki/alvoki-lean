@@ -24,7 +24,7 @@ theorem Run.writeInterrupted (prior : Run events (some session) (selected s))
     exact Or.inr ⟨d⟩
   | error error after => exact effect
 
-private theorem onlineInstalled (prior : Run events (some session) image) :
+theorem Run.onlineInstalled (prior : Run events (some session) image) :
     ∃ history, Installed session image history := by
   obtain ⟨_ | _, _, represented⟩ := prior.refines
   · obtain ⟨_, history, equality, _, installed⟩ := represented
@@ -40,7 +40,7 @@ theorem Run.getOk (prior : Run events (some session) (selected s))
       | .error _ after => selected after = selected s)
     (ran : get ops session key s = .ok value after) :
     Run (events ++ [.got key value]) (some session) (selected after) := by
-  obtain ⟨_, witness⟩ := onlineInstalled prior
+  obtain ⟨_, witness⟩ := prior.onlineInstalled
   have frame := effect _ witness
   rw [ran] at frame
   rw [frame.2]
@@ -56,7 +56,7 @@ theorem Run.getError (prior : Run events (some session) (selected s))
       | .error _ after => selected after = selected s)
     (ran : get ops session key s = .error error after) :
     Run events (some session) (selected after) := by
-  obtain ⟨_, installed⟩ := onlineInstalled prior
+  obtain ⟨_, installed⟩ := prior.onlineInstalled
   have frame := effect _ installed
   rw [ran] at frame
   exact frame ▸ prior

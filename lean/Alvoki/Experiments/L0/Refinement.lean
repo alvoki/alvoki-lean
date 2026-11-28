@@ -122,6 +122,27 @@ theorem recover_refines (laws : ComponentEffects ops selected) (s : σ)
         rw [final]
         exact ⟨d, rfl, rfl⟩
 
+/-- Healthy recovery has no additional rejection once the reached
+manifest, WAL and required table checks report success. -/
+theorem recover_progress (laws : ComponentEffects ops selected)
+    (d : Durable (selected s) history)
+    (opened : ops.manifest.reopen s = .ok version middle)
+    (wal : ops.reopenWal middle = .ok view checked)
+    (tables : checkTables ops.tables version.tables checked = .ok () after) :
+    ∃ session, recover ops s = .ok session after ∧ Installed session (selected after) history := by
+  have manifest := laws.reopenManifest s
+  rw [opened] at manifest
+  have walEffect := laws.reopenWal middle
+  rw [wal] at walEffect
+  obtain ⟨rfl, frame⟩ := manifest
+  obtain ⟨rfl, _⟩ := walEffect
+  have ran : recover ops s = .ok ⟨(selected s).version, replay d.pending⟩ after := by
+    simp [recover, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+      opened, wal, frame, d.bounds, d.replay_pending, tables]
+  have result := recover_refines laws s d
+  rw [ran] at result
+  exact ⟨_, ran, result.2⟩
+
 private def Durable.append (d : Durable image history) (change : Change) :
     Durable (image.append (encode change)) (history ++ [change]) := by
   refine ⟨d.flushed, d.pending ++ [change], ?_, d.base, d.boundary, ?_, d.unique,
@@ -312,16 +333,16 @@ private theorem lookup_refines
     (lookup : ∀ s id key rows, valid s → (selected s).tables id = some rows →
       match ops.tables.lookup id key s with
       | .ok result after => result = lookupRows rows key ∧ selected after = selected s ∧ valid after
-      | .error _ after => selected after = selected s)
+      | .error _ after => selected after = selected s ∧ valid after)
     (s : σ) (entry : valid s) (key : UInt64) (ids : List UInt64) (bound : ids.mapM (selected s).tables = some runs) :
     match lookupTables ops.tables key ids s with
-    | .ok found after => found = overlay runs key ∧ selected after = selected s
-    | .error _ after => selected after = selected s := by
+    | .ok found after => found = overlay runs key ∧ selected after = selected s ∧ valid after
+    | .error _ after => selected after = selected s ∧ valid after := by
   induction ids generalizing s runs with
   | nil =>
     simp at bound
     subst runs
-    exact ⟨rfl, rfl⟩
+    exact ⟨rfl, rfl, entry⟩
   | cons id ids ih =>
     cases head : (selected s).tables id with
     | none => simp [List.mapM_cons, head] at bound
@@ -345,7 +366,7 @@ private theorem lookup_refines
               simp_all [lookupTables, Bind.bind, EStateM.bind, overlay]
           | some mutation =>
             simp [lookupTables, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, probed,
-              overlay, miss, frame]
+              overlay, miss, frame, validMiddle]
 
 /-- Each successful miss carries the invariant to the next table read. -/
 theorem get_refines_from
@@ -353,12 +374,12 @@ theorem get_refines_from
     (lookup : ∀ s id key rows, valid s → (selected s).tables id = some rows →
       match ops.tables.lookup id key s with
       | .ok result after => result = lookupRows rows key ∧ selected after = selected s ∧ valid after
-      | .error _ after => selected after = selected s)
+      | .error _ after => selected after = selected s ∧ valid after)
     (s : σ) (entry : valid s) (session : Session)
     (prior : Installed session (selected s) history) (key : UInt64) :
     match get ops session key s with
-    | .ok value after => value = denote history key ∧ selected after = selected s
-    | .error _ after => selected after = selected s := by
+    | .ok value after => value = denote history key ∧ selected after = selected s ∧ valid after
+    | .error _ after => selected after = selected s ∧ valid after := by
   obtain ⟨d, version, mem⟩ := prior
   have logical : denote history key =
       ((latest d.pending key).or (latest d.flushed key)).bind Mutation.value := by
@@ -369,7 +390,7 @@ theorem get_refines_from
   unfold get
   rw [mem, replay_lookup, version]
   cases latest d.pending key with
-  | some mutation => exact ⟨rfl, rfl⟩
+  | some mutation => exact ⟨rfl, rfl, entry⟩
   | none =>
     have read := lookup_refines valid lookup s entry key (selected s).version.tables d.bindings
     cases scanned : lookupTables ops.tables key (selected s).version.tables s <;>
@@ -380,12 +401,16 @@ theorem get_refines (laws : ComponentLaws ops selected) (s : σ) (session : Sess
     match get ops session key s with
     | .ok value after => value = denote history key ∧ selected after = selected s
     | .error _ after => selected after = selected s :=
-  get_refines_from (fun _ => True) (fun state id key rows _ binding => by
-    have read := laws.lookup state id key rows binding
-    cases ran : ops.tables.lookup id key state with
-    | ok value after =>
-      rw [ran] at read
-      exact ⟨read.1, read.2, trivial⟩
-    | error error after => simpa [ran] using read) s trivial session prior key
+  by
+    have effect := get_refines_from (fun _ => True) (fun state id key rows _ binding => by
+      have read := laws.lookup state id key rows binding
+      cases ran : ops.tables.lookup id key state with
+      | ok value after =>
+        rw [ran] at read
+        exact ⟨read.1, read.2, trivial⟩
+      | error error after =>
+        rw [ran] at read
+        exact ⟨read, trivial⟩) s trivial session prior key
+    cases ran : get ops session key s <;> simpa [ran] using effect
 
 end ExperimentalL0

@@ -44,7 +44,7 @@ structure TableCreationEvidence (create : Rows → StorageM σ UInt64)
     | .ok result after => result = names s id ∧ (names after, selected after) = (names s, selected s)
     | .error _ after => (names after, selected after) = (names s, selected s)
   buildFrame : ∀ s id rows, match build id rows s with
-    | .ok _ after | .error _ after => (selected s).TableFrame (selected after)
+    | .ok _ after | .error _ after => selected after = selected s
   writerCall : ∀ s id rows after, build id rows s = .ok () after →
     ∃ initial reached count,
       initial.rows = rows.map (Entry.encode keyCodec mutationCodec) ∧
@@ -52,6 +52,9 @@ structure TableCreationEvidence (create : Rows → StorageM σ UInt64)
         supplier (fun message => message)).run initial = .ok count reached ∧
       ∀ handle identity bytes, reached.BoundTo (tablePath ns.directory id) handle identity →
         reached.durable = some (identity, bytes) → synced after id = some (identity, bytes)
+  syncAddsOnly : ∀ s id rows written after, build id rows s = .ok () written →
+    syncDirectory written = .ok () after → ∀ key, key ≠ id →
+      (selected after).tables key = (selected written).tables key
   syncEffect : ∀ s, match syncDirectory s with
     | .ok _ after => (selected s).TableFrame (selected after) ∧
         ∀ id rows identity bytes, synced s id = some (identity, bytes) →
@@ -60,7 +63,7 @@ structure TableCreationEvidence (create : Rows → StorageM σ UInt64)
           (selected after).tables id = some rows ∧
             ns.names after (tablePath ns.directory id) = some identity ∧
             ns.contents after identity = some bytes
-    | .error _ after => (selected s).TableFrame (selected after)
+    | .error _ after => selected after = selected s
 
 private theorem TableCreationEvidence.syncedImage {create : Rows → StorageM σ UInt64}
     (e : TableCreationEvidence create selected ns)
@@ -85,6 +88,65 @@ theorem TableCreationEvidence.published {create : Rows → StorageM σ UInt64} (
   exact ⟨identity, bytes, (published.2 _ _ _ _ synced image).2.1,
     (published.2 _ _ _ _ synced image).2.2, image⟩
 
+/-- Only the reserved table becomes visible in the logical catalog.
+The probe frames the catalog and the build leaves visibility to the barrier. -/
+theorem TableCreationEvidence.catalogInserted {create : Rows → StorageM σ UInt64}
+    (e : TableCreationEvidence create selected ns)
+    (ran : create rows s = .ok tableId after) :
+    (selected after).tables = fun key =>
+      if key = tableId then some rows else (selected s).tables key := by
+  rw [e.schedule] at ran
+  obtain ⟨reserved, written, allocation, built, barrier⟩ := createTableAt_success ran
+  have probe := freeTableId_spec e.occupied (fun state => (e.names state, selected state)) (·.1)
+    e.probe 0 s
+  rw [allocation] at probe
+  have unchanged : selected reserved = selected s := congrArg Prod.snd probe.2
+  obtain ⟨identity, bytes, synced, image⟩ := e.syncedImage built
+  have published := e.syncEffect written
+  rw [barrier] at published
+  funext key
+  by_cases same : key = tableId
+  · subst key
+    simpa only [ite_true] using (published.2 _ _ _ _ synced image).1
+  · simp only [same, ite_false]
+    have builtFrame := e.buildFrame reserved tableId rows
+    rw [built] at builtFrame
+    rw [e.syncAddsOnly _ _ _ _ _ built barrier key same, builtFrame, unchanged]
+
+/-- A failed create may leave an orphan. It does not install a new logical binding. -/
+theorem TableCreationEvidence.failureCatalog {create : Rows → StorageM σ UInt64}
+    (e : TableCreationEvidence create selected ns)
+    (ran : create rows s = .error error after) :
+    selected after = selected s := by
+  rw [e.schedule] at ran
+  have probe := freeTableId_spec e.occupied (fun state => (e.names state, selected state)) (·.1)
+    e.probe 0 s
+  cases allocated : freeTableId e.occupied 0 s with
+  | error message reached =>
+    rw [allocated] at probe
+    simp [createTableAt, Bind.bind, EStateM.bind, allocated] at ran
+    exact ran.2 ▸ congrArg Prod.snd probe
+  | ok tableId reserved =>
+    rw [allocated] at probe
+    have reservation : selected reserved = selected s := congrArg Prod.snd probe.2
+    have builtFrame := e.buildFrame reserved tableId rows
+    cases built : e.build tableId rows reserved with
+    | error message reached =>
+      rw [built] at builtFrame
+      simp [createTableAt, Bind.bind, EStateM.bind, allocated, built] at ran
+      exact ran.2 ▸ builtFrame.trans reservation
+    | ok value written =>
+      rw [built] at builtFrame
+      have synced := e.syncEffect written
+      cases barrier : e.syncDirectory written with
+      | error message reached =>
+        rw [barrier] at synced
+        simp [createTableAt, Bind.bind, EStateM.bind, allocated, built, barrier] at ran
+        exact ran.2 ▸ synced.trans (builtFrame.trans reservation)
+      | ok returned reached =>
+        simp [createTableAt, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+          allocated, built, barrier] at ran
+
 /-- The writer and barrier establish the newly allocated binding. The
 allocation frame accounts for the previously published names and excludes
 unpublished orphans from the logical catalog. -/
@@ -92,11 +154,9 @@ theorem TableCreationEvidence.catalogAfter {create : Rows → StorageM σ UInt64
     (e : TableCreationEvidence create selected ns)
     (prior : ns.Represents s (selected s).tables)
     (ran : create rows s = .ok tableId after)
-    (keeps : ns.Keeps s after (selected s).tables)
-    (catalog : (selected after).tables =
-      fun key => if key = tableId then some rows else (selected s).tables key) :
+    (keeps : ns.Keeps s after (selected s).tables) :
     ns.Represents after (selected after).tables := by
-  rw [catalog]
+  rw [e.catalogInserted ran]
   exact prior.insert keeps (e.published ran)
 
 theorem TableCreationEvidence.effect {create : Rows → StorageM σ UInt64} (e : TableCreationEvidence create selected ns) (rows : Rows) (s : σ) :
@@ -115,15 +175,19 @@ theorem TableCreationEvidence.effect {create : Rows → StorageM σ UInt64} (e :
   · intro before id input
     have frame := e.buildFrame before id input
     cases ran : e.build id input before with
-    | error error reached => simpa [ran] using frame
+    | error error reached =>
+      rw [ran] at frame
+      simp [Selected.TableFrame, Catalog.Preserves, frame]
     | ok value after =>
       cases value
       rw [ran] at frame
-      exact ⟨frame, e.syncedImage ran⟩
+      exact ⟨by simp [Selected.TableFrame, Catalog.Preserves, frame], e.syncedImage ran⟩
   · intro before
     have effect := e.syncEffect before
     cases ran : e.syncDirectory before with
-    | error error reached => simpa [ran] using effect
+    | error error reached =>
+      rw [ran] at effect
+      simp [Selected.TableFrame, Catalog.Preserves, effect]
     | ok value after =>
       rw [ran] at effect
       refine ⟨effect.1, ?_⟩
@@ -165,7 +229,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
             namespaceState.contents s identity = some bytes →
             nativeReadPrimitives.ReadsExactly handle bytes) ∧
           withTableSource (handleSource handle) id (·.lookup key) = pure result
-    | .error _ after => selected after = selected s
+    | .error _ after => selected after = selected s ∧ namespaceState.Keeps s after (selected s).tables
 
 private theorem selected_eq {a b : Selected}
     (view : a.view = b.view) (version : a.version = b.version) (tables : a.tables = b.tables) :
@@ -178,7 +242,7 @@ theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
     match ops.tables.lookup tableId key s with
     | .ok result after => result = lookupRows rows key ∧ selected after = selected s ∧
         ns.Represents after (selected after).tables
-    | .error _ after => selected after = selected s := by
+    | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables := by
     have read := evidence.lookup s tableId key rows bound
     cases ran : ops.tables.lookup tableId key s with
     | ok value after =>
@@ -189,7 +253,9 @@ theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
       obtain ⟨world⟩ := (inferInstance : Nonempty (Void IO.RealWorld))
       have equal := returned.symm.trans expected
       exact ⟨EST.Out.ok.inj (congrFun equal world) |>.1, frame, frame.symm ▸ catalog.frame keeps⟩
-    | error error after => simpa [ran] using read
+    | error error after =>
+      rw [ran] at read
+      exact ⟨read.1, read.1.symm ▸ catalog.frame read.2⟩
 
 theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected namespaceState) :
     ComponentEffects ops selected where
@@ -237,10 +303,105 @@ theorem CallbackEvidence.get {ops : Components (StorageM σ)}
     (catalog : ns.Represents s (selected s).tables)
     (prior : Installed session (selected s) history) (key : UInt64) :
     match get ops session key s with
-    | .ok value after => value = denote history key ∧ selected after = selected s
-    | .error _ after => selected after = selected s :=
+    | .ok value after => value = denote history key ∧ selected after = selected s ∧ ns.Represents after (selected after).tables
+    | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables :=
   get_refines_from (fun s => ns.Represents s (selected s).tables)
     (fun _ id key _ ready binding => evidence.lookupFromCatalog ready id key binding)
     s catalog session prior key
+
+/-- WAL mutation uses the supplied namespace frames on the reached scan
+and append calls, including when either call reports an error. -/
+theorem CallbackEvidence.writeCatalog {ops : Components (StorageM σ)}
+    (evidence : CallbackEvidence ops selected ns)
+    (prior : ns.Represents s (selected s).tables)
+    (scan : ∀ s, match ops.scan s with
+      | .ok _ after | .error _ after => ns.Keeps s after (selected s).tables)
+    (append : ∀ s batch, match ops.append batch s with
+      | .ok _ after | .error _ after => ns.Keeps s after (selected s).tables)
+    (session : Session) (change : Change) :
+    match write ops session change s with
+    | .ok _ after | .error _ after => ns.Represents after (selected after).tables := by
+  have scanLogical := evidence.effects.scan s
+  have scanPhysical := scan s
+  cases scanned : ops.scan s with
+  | error error after =>
+    rw [scanned] at scanLogical scanPhysical
+    simpa [write, Bind.bind, EStateM.bind, scanned, scanLogical] using prior.frame scanPhysical
+  | ok view middle =>
+    rw [scanned] at scanLogical scanPhysical
+    have ready : ns.Represents middle (selected middle).tables :=
+      scanLogical.2.symm ▸ prior.frame scanPhysical
+    by_cases fits : view.tail + 1 < UInt64.size
+    · have logical := evidence.effects.append middle (encode change)
+      have physical := append middle (encode change)
+      cases sent : ops.append (encode change) middle with
+      | ok value after =>
+        rw [sent] at logical physical
+        simpa [write, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, scanned, fits,
+          sent, logical, Selected.append] using ready.frame physical
+      | error error after =>
+        rw [sent] at logical physical
+        rcases logical with old | new
+        · simpa [write, Bind.bind, EStateM.bind, scanned, fits, sent, old] using ready.frame physical
+        · simpa [write, Bind.bind, EStateM.bind, scanned, fits, sent, new, Selected.append]
+            using ready.frame physical
+    · simp only [write, Bind.bind, EStateM.bind, scanned, fits, ite_false]
+      exact ready
+
+/-- The normal flush schedule carries the exact durable catalog through
+scan, creation and manifest publication. Failed creation leaves only
+physical orphans. A publication error keeps the already installed table. -/
+theorem CallbackEvidence.flushCatalog {ops : Components (StorageM σ)}
+    (evidence : CallbackEvidence ops selected ns)
+    (prior : ns.Represents s (selected s).tables)
+    (scan : ∀ s, match ops.scan s with
+      | .ok _ after | .error _ after => ns.Keeps s after (selected s).tables)
+    (create : ∀ s rows, match ops.tables.create rows s with
+      | .ok _ after | .error _ after => ns.Keeps s after (selected s).tables)
+    (publish : ∀ s version, match ops.manifest.publish version s with
+      | .ok _ after | .error _ after =>
+        (selected after).tables = (selected s).tables ∧ ns.Keeps s after (selected s).tables)
+    (session : Session) :
+    match flush ops session s with
+    | .ok _ after | .error _ after => ns.Represents after (selected after).tables := by
+  by_cases empty : session.mem.isEmpty = true
+  · simpa [flush, empty, Pure.pure, EStateM.pure] using prior
+  have scanLogical := evidence.effects.scan s
+  have scanPhysical := scan s
+  cases scanned : ops.scan s with
+  | error error after =>
+    rw [scanned] at scanLogical scanPhysical
+    simpa [flush, empty, Bind.bind, EStateM.bind, scanned, scanLogical] using prior.frame scanPhysical
+  | ok view middle =>
+    rw [scanned] at scanLogical scanPhysical
+    have ready : ns.Represents middle (selected middle).tables :=
+      scanLogical.2.symm ▸ prior.frame scanPhysical
+    by_cases fits : view.tail < UInt64.size
+    · obtain ⟨producer⟩ := evidence.create
+      have physical := create middle session.mem.toList
+      cases built : ops.tables.create session.mem.toList middle with
+      | error error after =>
+        rw [built] at physical
+        have unchanged := producer.failureCatalog built
+        simpa [flush, empty, Bind.bind, EStateM.bind, scanned, fits, built, unchanged]
+          using ready.frame physical
+      | ok tableId stored =>
+        rw [built] at physical
+        have installed := producer.catalogAfter ready built physical
+        let version : L0Manifest.Version := ⟨tableId :: session.version.tables, view.tail.toUInt64⟩
+        have kept := publish stored version
+        cases sent : ops.manifest.publish version stored with
+        | ok value after =>
+          rw [sent] at kept
+          dsimp [version] at sent
+          simpa [flush, empty, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, scanned, fits,
+            built, sent, kept.1] using installed.frame kept.2
+        | error error after =>
+          rw [sent] at kept
+          dsimp [version] at sent
+          simpa [flush, empty, Bind.bind, EStateM.bind, scanned, fits, built,
+            sent, kept.1] using installed.frame kept.2
+    · simp [flush, empty, Bind.bind, EStateM.bind, scanned, fits]
+      exact ready
 
 end ExperimentalL0.NativeBridge

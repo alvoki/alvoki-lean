@@ -74,6 +74,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.Interpretation.publishEffect
 #check_axioms CallbackEvidence.effects
 #check_axioms CallbackEvidence.get
+#check_axioms CallbackEvidence.writeCatalog
+#check_axioms CallbackEvidence.flushCatalog
 #check_axioms get_refines_from
 #check_axioms Execution.Run.flushObserved
 #check_axioms Execution.Run.refines
@@ -116,6 +118,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms createTableAt_bindings
 #check_axioms TableCreationEvidence.published
 #check_axioms TableCreationEvidence.catalogAfter
+#check_axioms TableCreationEvidence.catalogInserted
+#check_axioms TableCreationEvidence.failureCatalog
 #check_axioms rowSupply_step
 #check_axioms nextTableRow_cons
 #check_axioms nextTableRow_nil
@@ -131,5 +135,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms CallbackEvidence.lookupFromCatalog
 #check_axioms TableNamespace.Represents.frame
 #check_axioms recoverKeepsCatalog
+#check_axioms recoverCatalog
+#check_axioms recover_progress
 #check_axioms recoverReachedFlush
 LEAN

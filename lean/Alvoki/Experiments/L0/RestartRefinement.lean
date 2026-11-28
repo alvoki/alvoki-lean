@@ -90,6 +90,31 @@ theorem recoverKeepsCatalog {ops : Components (StorageM σ)} {ns : TableNamespac
       · simp only [recover, Bind.bind, EStateM.bind, manifestRan, walRan, bounds, ite_false]
         exact header
 
+/-- Supply the reached catalog on either public recovery outcome. -/
+theorem recoverCatalog
+    {ops : Components (StorageM σ)} {selected : σ → Selected} {ns : TableNamespace σ}
+    (laws : ComponentEffects ops selected) (d : Durable (selected s) history)
+    (prior : ns.Represents s (selected s).tables)
+    (manifest : ∀ state, match ops.manifest.reopen state with
+      | .ok _ after | .error _ after => ns.Keeps state after (selected s).tables)
+    (wal : ∀ state, match ops.reopenWal state with
+      | .ok _ after | .error _ after => ns.Keeps state after (selected s).tables)
+    (check : ∀ state id, match ops.tables.check id state with
+      | .ok _ after | .error _ after => ns.Keeps state after (selected s).tables) :
+    match recover ops s with
+    | .ok _ after | .error _ after => ns.Represents after (selected after).tables := by
+  have physical := recoverKeepsCatalog manifest wal check s
+  have logical := recover_refines laws s d
+  cases ran : recover ops s with
+  | ok session after =>
+    rw [ran] at physical logical
+    change ns.Represents after (selected after).tables
+    exact logical.1.symm ▸ prior.frame physical
+  | error error after =>
+    rw [ran] at physical logical
+    change ns.Represents after (selected after).tables
+    exact logical.symm ▸ prior.frame physical
+
 private theorem checkTablesKeepsImage {ops : Tables (StorageM σ)} (image : σ → Image)
     (keeps : ∀ s id after, ops.check id s = .ok () after → image after = image s)
     (ran : checkTables ops ids s = .ok () after) : image after = image s := by
@@ -191,8 +216,6 @@ theorem recoverReachedFlush {tableId : UInt64}
     (created : ops.tables.create session.mem.toList scannedState = .ok tableId stored)
     (catalogBefore : ns.Represents scannedState (selected scannedState).tables)
     (creationKeeps : ns.Keeps scannedState stored (selected scannedState).tables)
-    (creationCatalog : (selected stored).tables = fun key =>
-      if key = tableId then some session.mem.toList else (selected scannedState).tables key)
     (manifest : Interpretation ops.manifest selected)
     (stable : (manifest.image stored).Stable (L0Manifest.encode (selected stored).version))
     (restart :
@@ -235,8 +258,10 @@ theorem recoverReachedFlush {tableId : UInt64}
       ns.Represents finalState (selected finalState).tables ∧
       (∀ history, Installed second (selected finalState) history → ∀ key,
         match get ops second key finalState with
-        | .ok result after => result = denote history key ∧ selected after = selected finalState
-        | .error _ after => selected after = selected finalState) ∧
+        | .ok result after => result = denote history key ∧ selected after = selected finalState ∧
+            ns.Represents after (selected after).tables
+        | .error _ after => selected after = selected finalState ∧
+            ns.Represents after (selected after).tables) ∧
       Execution.Run (events ++ [observation.event] ++ [.openFailed] ++ [.reopened] ++ [.stop] ++
         [.reopened]) (some second) (selected finalState) := by
   have choose (history : Rows) (installed : Installed session (selected start) history) :
@@ -346,7 +371,7 @@ theorem recoverReachedFlush {tableId : UInt64}
     (fields (b := (selected stored).publish version) secondBootWal secondVersion secondBootCatalog).trans selectedFirst.symm
   obtain ⟨producer⟩ := evidence.create
   have publishedCatalog := producer.catalogAfter catalogBefore created
-    creationKeeps creationCatalog
+    creationKeeps
   have manifestFrame (s : σ) : match ops.manifest.reopen s with
       | .ok _ after | .error _ after => ns.Keeps s after (selected stored).tables := by
     rw [congrArg (fun b : Backend (StorageM σ) L0Manifest.Version => b.reopen s) manifest.schedule]
