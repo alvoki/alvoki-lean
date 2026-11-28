@@ -9,7 +9,7 @@ append through close on the reached disk, and pin the recovered choice
 across two opens. The operations in these checks run on the WAL proof
 model. [WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 
-The native L0 read scope is being integrated on PR #5. The concrete
+PR #5 connects the native L0 read scope to the client trace. The concrete
 [public scope theorem](../lean/Alvoki/Experiments/L0/WithOpenReads.lean)
 follows root acquisition, manifest and WAL recovery, phase publication,
 each public read and cleanup on their reached IO worlds. It starts with
@@ -22,11 +22,12 @@ proof retains the actual root-unlock response even when an earlier error
 determines the public reply. The failed-`fdopen` limitation on Lean 4.36
 is recorded in the [filesystem contract](design/filesystem-assumptions.md).
 
-Milestone 1 requires the entire scope theorem to consume realizable
-per-primitive contracts, including correct cursor, lock and writeback
-timing during child recovery. A native fixture exercises a one-shot table
-size error without changing file contents or directory bindings and reads
-again before and after closing. The [L0 guide](../lean/Alvoki/Experiments/L0/README.md)
+[HealthyReads.withOpen](../lean/Alvoki/Experiments/L0/HealthyReads.lean)
+derives two successful public misses and cleanup on an initialized empty
+root from healthy primitive reports. On a populated root the Linux fixture
+injects a one-shot table size error after descriptor acquisition. It reads
+successfully on the same handle, counts descriptors across close and
+reads again after reopen. The [L0 guide](../lean/Alvoki/Experiments/L0/README.md)
 describes the remaining consumers of the earlier model bridge.
 
 Milestone 2 connects the public append, lost reply and close to the WAL

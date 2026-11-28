@@ -281,6 +281,17 @@ exit, including on a reported read error. The root lock has a separate
 scope and unwraps its actual unlock result. Failed `fdopen` before Lean
 constructs a handle remains outside the last-reference contract.
 
+[HealthyReads.withOpen](HealthyReads.lean) derives a successful public
+scope on an initialized empty root from reports at the reached primitive
+calls. Two public misses, WAL close, root unlock and the client trace all
+refer to the same evaluation. A manifest metadata error has its own
+pre-callback witness in [NativeRecoverAt](NativeRecoverAt.lean).
+
+Against the pre-handoff PR #5 head `5b2e9d30`, 26 of the original 34 L0
+Lean files are byte-identical (2,678 lines, including executable and
+proof code). The model, codecs, execution relation, catalog and manifest
+proofs continue to serve their existing consumers.
+
 The earlier product-carrier get and finite-list scope proofs have been
 removed. The abstract flush/restart theorem still interprets a lookup on
 its model carrier through `RestartLookup.get`, which invokes the same
