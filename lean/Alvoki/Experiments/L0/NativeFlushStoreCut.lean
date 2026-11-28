@@ -132,7 +132,7 @@ theorem mediaResult (cut : Cut stop root image s origin t)
     · obtain ⟨r,allowed⟩ := fault.state (io.publish id w allocated) ready (io.reserved id w allocated ready) pre.manifest
       exact ⟨_,.admitted id created.fresh.1 fits r.created.live allowed,r.created.durable,r.disk⟩
     · have prod := NativeFlushStore.produce io start valid fits
-      unfold NativeFlush.store at prod
+      rw [NativeFlush.store_eq] at prod
       change NativeFlush.publish root (proposal image s id) w = .ok () t at ran
       simp only [Bind.bind,instMonadEIO._aux_13,EST.bind,allocated,ran] at prod
       exact prod.2

@@ -110,7 +110,7 @@ theorem dispatchAt {physical : W → Footprint inode}
     kept, run.trans ?_⟩
   apply congrArg (NativeWrite.afterWrite ref)
   by_cases fit : image.view.tail < UInt64.size <;>
-    simp [empty, fit, Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, store, flushTableWith, proposal] <;> rfl
+    simp [empty, fit, Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, store, flushTableWith] <;> rfl
 
 /-- Reserve the actual online phase. Only a nonempty memtable reaches
 the WAL scan. Its exact rows and the observed tail determine the proposal. -/
