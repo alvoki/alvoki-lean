@@ -253,10 +253,10 @@ inductive Cut (stop : LeafStop) (path : Tail) (start : W) (cut : W) : Prop where
   | boundary : Tail.Prefix path start rest cut → Cut stop path start cut
   | during : Tail.Prefix path start (.call op next) w → stop op w cut → Cut stop path start cut
 
-private theorem Frame.refl (physical : W → Footprint inode) (root : FilePath) (tables : Catalog) (w : W) :
+theorem Frame.refl (physical : W → Footprint inode) (root : FilePath) (tables : Catalog) (w : W) :
     Frame physical root tables w w := ⟨.nil, rfl, rfl, fun _ _ _ _ _ left right => ⟨left, right⟩⟩
 
-private theorem Frame.trans (first : Frame physical root tables s t)
+theorem Frame.trans (first : Frame physical root tables s t)
     (next : Frame physical root tables t u) : Frame physical root tables s u :=
   ⟨first.disk.trans next.disk, next.manifest.trans first.manifest,
     next.survivors.trans first.survivors, first.catalog.trans next.catalog⟩
@@ -268,19 +268,25 @@ structure Frames (edge : W → W → Prop) (stop : LeafStop) (path : Tail) (star
   stopped : ∀ {α} {op : BaseIO α} {next w cut}, Tail.Prefix path start (.call op next) w →
     stop op w cut → edge w cut
 
-private theorem Tail.Prefix.frame (cut : Tail.Prefix path s rest t)
-    (frames : Frames (Frame physical root tables) stop path s) : Frame physical root tables s t := by
+private theorem Tail.Prefix.accumulate {edge : W → W → Prop} (cut : Tail.Prefix path s rest t)
+    (frames : Frames edge stop path s) (same : ∀ w, edge w w)
+    (join : ∀ {a b c}, edge a b → edge b c → edge a c) : edge s t := by
   induction cut with
-  | here => exact Frame.refl ..
+  | here => exact same _
   | step _ ih =>
-    exact (frames.returned .here).trans (ih ⟨fun path => frames.returned (.step path),
+    exact join (frames.returned .here) (ih ⟨fun path => frames.returned (.step path),
       fun path => frames.stopped (.step path)⟩)
 
-theorem Cut.frame (position : Cut stop path s t)
-    (frames : Frames (Frame physical root tables) stop path s) : Frame physical root tables s t := by
+theorem Cut.accumulate {edge : W → W → Prop} (position : Cut stop path s t)
+    (frames : Frames edge stop path s) (same : ∀ w, edge w w)
+    (join : ∀ {a b c}, edge a b → edge b c → edge a c) : edge s t := by
   cases position with
-  | boundary route => exact route.frame frames
-  | during route interrupted => exact (route.frame frames).trans (frames.stopped route interrupted)
+  | boundary route => exact route.accumulate frames same join
+  | during route interrupted => exact join (route.accumulate frames same join) (frames.stopped route interrupted)
+
+theorem Cut.frame (position : Cut stop path s t)
+    (frames : Frames (Frame physical root tables) stop path s) : Frame physical root tables s t :=
+  position.accumulate frames (Frame.refl physical root tables) Frame.trans
 
 theorem Frame.files (keep : Frame physical root image.tables w cut)
     (manifest : (physical w).manifest.Stable (L0Manifest.encode image.version))

@@ -1,5 +1,6 @@
 import Alvoki.Experiments.L0.MutationExitCut
 import Alvoki.Experiments.L0.NativeFlush
+import Alvoki.Experiments.L0.NativeFlushBoot
 
 namespace ExperimentalL0.NativeFlushExit
 open NativeScope (W Ref Post)
@@ -31,31 +32,59 @@ inductive Media (physical : W → Footprint inode) (root : FilePath) (before : S
         (some (L0Manifest.encode (proposal before s id)))) :
       Media physical root before s w (stored before s id).tables
 
-/-- Frame only the physical observations read by reboot. No phase, descriptor
-or lock is assumed to survive the updating callback's finalizers. -/
-theorem Media.restart (source : Media physical root before s w tables)
-    (wal : Recoverable before.view none (physical w).disk) (edge : Frame physical root tables w cut)
-    (restart : NativeAppendCut.Restarted physical root tables cut (physical cut).disk mode after) :
-    ∃ img, Survivor physical root before s after img ∧ Files physical root img after := by
+theorem Media.advance (source : Media physical root before s w tables)
+    (edge : Frame physical root tables w cut) : Media physical root before s cut tables := by
   cases source with
   | original catalog stable =>
-    have files := edge.files stable catalog wal restart
-    exact ⟨_, .old files.manifest, files⟩
+    exact .original (catalog.frame edge.catalog)
+      ⟨edge.manifest.trans stable.1, edge.survivors.trans stable.2⟩
   | published id fresh fits catalog stable =>
-    have files := edge.files (image := NativeFlushRestart.published before s id) stable catalog wal restart
-    have row := files.catalog id s.mem.toList (by simp [NativeFlushRestart.published, stored, Selected.publish])
-    exact ⟨_, .newTable id fresh fits row files.manifest, files⟩
+    exact .published id fresh fits (catalog.frame edge.catalog)
+      ⟨edge.manifest.trans stable.1, edge.survivors.trans stable.2⟩
   | admitted id fresh fits catalog allowed =>
-    have retained := catalog.frame edge.catalog
-    have old : (tableNamespace physical root).Represents cut before.tables := by
+    exact .admitted id fresh fits (catalog.frame edge.catalog)
+      (by simpa only [DurableBlob.Image.Admits, edge.manifest, edge.survivors] using allowed)
+
+/-- Boot resolves each catalog binding from the appropriate live or durable inode.
+A post-rename error retains its whole survivor set until this selection. -/
+theorem Media.reboot {physical : W → Footprint inode} {media : NativeTableCreate.Media (tableNamespace physical root)}
+    (source : Media physical root before s cut tables)
+    (stable : media.stable.Represents cut tables) (wal : Recoverable before.view none (physical cut).disk)
+    (boot : NativeFlushRestart.Boot physical root media tables cut mode after) :
+    ∃ img, Survivor physical root before s after img ∧ Files physical root img after := by
+  have disk := boot.wal.recoverable wal
+  cases source with
+  | original catalog saved =>
+    have active := boot.active saved
+    exact ⟨_, .old active, ⟨boot.catalog catalog stable, active, disk⟩⟩
+  | published id fresh fits catalog saved =>
+    have live := boot.catalog catalog stable
+    have row := live id s.mem.toList (by simp [stored])
+    have active := boot.active saved
+    exact ⟨_, .newTable id fresh fits row active, ⟨live, active, disk⟩⟩
+  | admitted id fresh fits catalog allowed =>
+    have live := boot.catalog catalog stable
+    rcases boot.selected allowed with old | new
+    · refine ⟨_, .old old, ⟨?_, old, disk⟩⟩
       intro k rows bound
       have ne : k ≠ id := by rintro rfl; simp [fresh] at bound
-      exact retained k rows (by simpa [stored, ne] using bound)
-    have admitted : (physical cut).manifest.Admits (L0Manifest.encode before.version)
-        (some (L0Manifest.encode (proposal before s id))) := by
-      simpa only [DurableBlob.Image.Admits, edge.manifest, edge.survivors] using allowed
-    exact NativeFlushRestart.ofRestart restart old fresh fits
-      (retained id s.mem.toList (by simp [stored])) admitted (edge.disk.recoverable wal)
+      exact live k rows (by simpa [stored, ne] using bound)
+    · have row := live id s.mem.toList (by simp [stored])
+      exact ⟨_, .newTable id fresh fits row new, ⟨live, new, disk⟩⟩
+
+structure Edge (physical : W → Footprint inode) (root : FilePath)
+    (media : NativeTableCreate.Media (tableNamespace physical root)) (tables : Catalog) (w t : W) : Prop
+    extends Frame physical root tables w t where
+  stable : media.stable.Keeps w t tables
+
+theorem Edge.same (physical : W → Footprint inode) (root : FilePath)
+    (media : NativeTableCreate.Media (tableNamespace physical root)) (tables : Catalog) (w : W) :
+    Edge physical root media tables w w :=
+  ⟨Frame.refl .., fun _ _ _ _ _ n c => ⟨n,c⟩⟩
+
+theorem Edge.trans (ab : Edge physical root media tables a b)
+    (bc : Edge physical root media tables b c) : Edge physical root media tables a c :=
+  ⟨ab.toFrame.trans bc.toFrame, ab.stable.trans bc.stable⟩
 
 def resultAt (root : FilePath) (image : Selected) (s : Session) (w : W) : Result :=
   if s.mem.isEmpty then .ok s w
@@ -88,12 +117,14 @@ theorem dispatch (p : InterruptedMutation.Prefix path root start)
 /-- Under a stop after store return and before reply, even a successful publication
 has an uncertain client acknowledgement. The physical catalog and manifest still
 decide exactly which image the subsequent concrete open/check/get/cleanup consumes. -/
-theorem readAfterReturn {physical : W → Footprint inode} (out : Result)
+theorem readAfterReturn {physical : W → Footprint inode} {media : NativeTableCreate.Media (tableNamespace physical root)}
+    (out : Result)
     (source : Media physical root image s (returnedWorld out) tables)
+    (stable : media.stable.Represents (returnedWorld out) tables)
     (wal : Recoverable image.view none (physical (returnedWorld out)).disk)
     (position : Cut stop (afterStore ref lock s out) (returnedWorld out) cut)
-    (frames : Frames (Frame physical root tables) stop (afterStore ref lock s out) (returnedWorld out))
-    (restart : NativeAppendCut.Restarted physical root tables cut (physical cut).disk mode after)
+    (frames : Frames (Edge physical root media tables) stop (afterStore ref lock s out) (returnedWorld out))
+    (boot : NativeFlushRestart.Boot physical root media tables cut mode after)
     (run : Execution.Run events (some s) image)
     (entry : ∀ img, NativeReadScope.Entry physical path root img) (heap : WithOpenReads.Heap)
     (runtime : ∀ img lock ref, WithOpenReads.Runtime physical root lock ref img life heap)
@@ -104,7 +135,9 @@ theorem readAfterReturn {physical : W → Footprint inode} (out : Result)
       Post (Native.withOpen path (fun h => (NativeRead.readMany h keys : IO (List NativeRead.Reply)))) after
         (WithOpenReads.Finished physical root img life stopped ⟨path, keys, after⟩ rootLife)
         (WithOpenReads.Failure physical root img life stopped ⟨path, keys, after⟩ rootLife) := by
-  obtain ⟨img, selected, files⟩ := source.restart wal (position.frame frames) restart
+  have edge := position.accumulate frames (Edge.same physical root media tables) Edge.trans
+  obtain ⟨img, selected, files⟩ := (source.advance edge.toFrame).reboot (stable.frame edge.stable)
+    (edge.disk.recoverable wal) boot
   exact ⟨img, selected, files, (selected.uncertain run).stop,
     NativeFlushRestart.uncertainReopen selected files run (entry img) heap (runtime img) keys rootLife⟩
 
