@@ -147,12 +147,6 @@ structure Runtime (physical : W → Footprint inode) (root : System.FilePath) (l
   publishIO : ∀ id w, NativeFlush.createTable root s.mem.toList origin = .ok id w →
     PublishIO physical root lock ref wal image s id media manifest stop w
 
-theorem Runtime.publish (io : Runtime physical root lock ref wal image s media manifest stop origin)
-    (id : UInt64) (w : W) (issued : NativeFlush.createTable root s.mem.toList origin = .ok id w) :
-    NativeManifestPublish.Primitives (root / "manifest") (L0Manifest.encode (proposal image s id)) w
-      (Ready physical root lock ref wal image s id media) (fun t => (physical t).manifest) stop manifest :=
-  (io.publishIO id w issued).frames (fun _ ready => ready.owned) (fun _ _ ready edge => ready.advance edge)
-
 private theorem Runtime.tableFrames (io : Runtime physical root lock ref wal image s media manifest stop origin)
     (start : Pre physical root lock ref wal image media origin) :
     NativeTableCreate.Produced media image.tables (TableFrame physical root wal media image manifest origin) s.mem.toList origin :=
