@@ -61,12 +61,33 @@ whole-builder proof follows supplier reads, data flushes and finalization
 to exclude height exhaustion.
 [Promotion and finalization height](../../lean/Alvoki/Experiments/SSTable/Recursive/WriterHeight.lean)
 
-The progress lemmas construct successful packet writes, data flushes,
-recursive pushes and single-root finalization in the exact append model
-with explicit reserve bounds. A complete theorem for arbitrary admitted
-input still needs a file-reserve invariant through the whole stream and
-multi-level finalization, plus healthy native I/O premises.
-[Physical progress under explicit byte reserves](../../lean/Alvoki/Experiments/SSTable/Recursive/WriterProgress.lean)
+The healthy-progress theorem assumes valid layout and targets, strictly
+ordered rows whose individual data and fence packets fit the format, and
+the following conservative bound on the original supplier count:
+
+```text
+(rows + 1) × (maxRowSize + maxHeight × maxIndexSize)
+  + maxIndexSize × (1 + … + maxHeight)
+  + footerPacketSize
+  ≤ maxFileSize
+```
+
+Each accepted row and the terminal data flush get room for one data packet
+and one promoted packet per index level. Finalization reserves room for each
+remaining level, its possible promotions, and the footer. This bound also
+provides a spare rank for finalization. It is a sufficient capacity bound
+from the input count. The writer keeps its existing single supplier pass and
+does not compute the bound or materialize the input.
+
+With the local healthy exclusive-create, supplier, append, flush and sync
+contracts, the actual native schedule reaches EOF and produces the exact
+synced inode and byte image. The failure theorems cover exclusive create and
+errors returned by the streaming writer or sync. Create returns its actual
+error and reached state directly. A streaming or sync error starts removal in
+the reached state and returns the primary error with the state left by
+removal, including if removal itself fails.
+[Whole-builder progress](../../lean/Alvoki/Experiments/SSTable/Recursive/WriterHealthy.lean)
+· [Native failure schedule](../../lean/Alvoki/Experiments/SSTable/Recursive/WriterEffectsProgress.lean)
 
 The recursive index writer
 and reader retain their existing runtime and wire behavior. The ALVSST05

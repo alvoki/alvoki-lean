@@ -8,7 +8,7 @@ if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
 fi
 
 root=Alvoki.Experiments.SSTable.Recursive
-modules=("$root".{Invariants,Image,WriterHeight,WriterProgress,WriterProofs,NativeReadProofs,NativeWriteProofs}
+modules=("$root".{Invariants,Image,WriterHeight,WriterProgress,WriterProofs,NativeReadProofs,NativeWriteProofs,WriterStreamingProgress,WriterFinalProgress,WriterEffectsProgress,WriterHealthy}
   Alvoki.Checks.Tests.RecursiveSSTableProducer)
 lake build "${modules[@]}" Alvoki.Checks.Audit.AxiomPolicy
 for module in "${modules[@]}"; do
@@ -19,8 +19,7 @@ lake env lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Checks.Tests.RecursiveSSTableProducer
 import Alvoki.Experiments.SSTable.Recursive.Invariants
-import Alvoki.Experiments.SSTable.Recursive.WriterProgress
-import Alvoki.Experiments.SSTable.Recursive.NativeWriteProofs
+import Alvoki.Experiments.SSTable.Recursive.WriterHealthy
 open ImmutableSSTable.Recursive
 #check_axioms checkedChild_bounds
 #check_axioms checkedChild_chunks
@@ -40,11 +39,20 @@ open ImmutableSSTable.Recursive
 #check_axioms Writer.push_progress
 #check_axioms Writer.flushData_progress
 #check_axioms Writer.finishRoot_progress
+#check_axioms streamRows_progress
+#check_axioms Writer.finishPages_progress
+#check_axioms modelBuild_progress
+#check_axioms buildFileWith_progress
 #check_axioms modelBuild_ok
 #check_axioms modelBuild_ne_heightError
 #check_axioms buildFileWith_exact
 #check_axioms buildFileWith_refines
+#check_axioms freshOutput_result
+#check_axioms buildFileWith_createError
+#check_axioms buildFileWith_writeError
 #check_axioms buildFileWith_syncError
+#check_axioms buildFileWith_of_modelBuild_ok
+#check_axioms buildFileWith_healthy
 #check_axioms buildFileWith_open_represents
 #check_axioms buildFileWith_open_typed_represents
 #check_axioms buildFileWith_lookup_framed

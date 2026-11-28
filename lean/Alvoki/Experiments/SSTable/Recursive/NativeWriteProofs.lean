@@ -212,10 +212,6 @@ private structure SinkSimulation {handle inode : Type} (healthy : Prop)
   append : ∀ bytes, Simulates healthy bound bound (sink.write bytes) (modelSink.write bytes)
   flush : Simulates healthy bound ready sink.flush modelSink.flush
 
-private def modelWriter (crc : Checksum) (layout : Layout) (options : BuildOptions) :
-    Writer ModelM String :=
-  ⟨crc, layout, modelSink, id, options⟩
-
 private def nativeWriter (crc : Checksum) (layout : Layout) (options : BuildOptions)
     (sink : Sink (NativeWriteM handle inode)) : Writer (NativeWriteM handle inode) String :=
   ⟨crc, layout, sink, id, options⟩
