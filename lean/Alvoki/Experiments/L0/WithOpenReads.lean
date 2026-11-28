@@ -37,7 +37,7 @@ structure Finished (physical : W → Footprint inode) (root : FilePath) (image :
   trace : Execution.Run (eventsAfter events call.keys replies) none image
   client : ∃ state, Client.Allows (eventsAfter events call.keys replies) state ∧ Execution.Represents none image state
   callback : ∃ lock ref, NativeReadRelease.Closed physical root lock ref image w ∧
-    ∃ wal session history handle opening recovered,
+    ∃ wal session history handle entered opening recovered,
       Native.recoverAt root ref opening = .ok session recovered ∧
       NativeRecoverAt.CheckReceipt root ref image life opening recovered true ∧
       Native.Handle.AtRoot handle root ref ∧ Online physical root lock ref wal session image history entered ∧
