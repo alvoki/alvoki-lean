@@ -123,4 +123,35 @@ theorem Visited.frame (ops : Probe ns P) (path : Visited ns.directory origin n w
     rw [Post, ran] at reached
     exact reached.1
 
+private theorem missing_stat (dir : FilePath)
+    (ran : dir.symlinkMetadata w = .error (.noFileOrDirectory path code message) t) :
+    Native.pathExists dir w = .ok false t := by
+  simp [Native.pathExists, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch,
+    Bind.bind, instMonadEIO._aux_13, EST.bind, ran, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
+/-- The returning directory entries are successive occupied names including
+any private orphans, followed by the actual missing name. -/
+structure Candidate (dir : FilePath) (origin : W) where
+  number : Nat
+  probe : W
+  reserved : W
+  visited : Visited dir origin number probe
+  fits : number < UInt64.size
+  missing : ∃ path code message, (tablePath dir number.toUInt64).symlinkMetadata probe =
+    .error (.noFileOrDirectory path code message) reserved
+
+theorem Visited.nextStat {start : W} (path : Visited dir start n w) (fits : n < UInt64.size)
+    (stat : (tablePath dir n.toUInt64).symlinkMetadata w = .ok metadata after) :
+    Visited dir start (n+1) after := by
+  apply path.next fits
+  simp [Native.pathExists, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch,
+    Bind.bind, instMonadEIO._aux_13, EST.bind, stat, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
+theorem Candidate.allocate (candidate : Candidate dir w) :
+    allocate dir 0 w = .ok candidate.number.toUInt64 candidate.reserved := by
+  obtain ⟨path, code, message, noFile⟩ := candidate.missing
+  rw [candidate.visited.resume, allocate_step]
+  simp [Nat.not_le_of_gt candidate.fits, Bind.bind, instMonadEIO._aux_13, EST.bind,
+    missing_stat _ noFile, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
 end ExperimentalL0.NativeTableCreate
