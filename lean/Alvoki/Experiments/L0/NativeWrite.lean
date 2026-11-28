@@ -114,10 +114,17 @@ private theorem borrow_run (f : Wal → IO α)
     borrow ref f w = f wal t := by
   simp [borrow, Bind.bind, instMonadEIO._aux_13, EST.bind, read, Phase.wal]
 
+/-- World at the append borrow after reserving the L0 reference and scanning the cached WAL. -/
+def issueWorld (ref : Ref) (wal : Wal) (start : W) : W :=
+  let entered := ((ref.get : BaseIO _) start).state
+  let hidden := ((ref.swap (.updating wal) : BaseIO _) entered).state
+  let scanning := ((ref.get : BaseIO _) hidden).state
+  ((ref.get : BaseIO _) (scanWorld wal scanning)).state
+
 /-- The position guard keeps its pre-append disk. Otherwise the public
 operation calls append once, using precisely the registration and world
 that survived both phase borrows and the cached scan. -/
-theorem dispatch {physical : W → Footprint inode}
+theorem dispatchAt {physical : W → Footprint inode}
     (online : Online physical root lock ref wal s image history start)
     (binding : Native.Handle.AtRoot handle root ref)
     (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
@@ -126,7 +133,8 @@ theorem dispatch {physical : W → Footprint inode}
       NativeRecoverAt.ScanPrimitives physical root wal image.tables w)
     (change : Change) :
     if image.view.tail + 1 < UInt64.size then
-      ∃ issued, SessionAt physical root lock ref wal s image history issued (.updating wal) ∧
+      let issued := issueWorld ref wal start
+      SessionAt physical root lock ref wal s image history issued (.updating wal) ∧
         Native.mutation handle change start = afterWrite ref
           (match WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
            | .ok _ t => .ok {s with mem := insert s.mem change} t
@@ -155,7 +163,16 @@ theorem dispatch {physical : W → Footprint inode}
   split
   · rename_i fits
     obtain ⟨issued, borrowAppend, ready⟩ := readAt afterScan rfl
-    refine ⟨issued, ready, run.trans ?_⟩
+    have atIssue : issueWorld ref wal start = issued := by
+      unfold issueWorld
+      dsimp only
+      rw [read_io] at read borrowScan borrowAppend
+      rw [swap_io] at swapped
+      rw [(EST.Out.ok.inj read).2, (EST.Out.ok.inj swapped).2,
+        (EST.Out.ok.inj borrowScan).2, (EST.Out.ok.inj borrowAppend).2]
+    dsimp only
+    rw [atIssue]
+    refine ⟨ready, run.trans ?_⟩
     apply congrArg (afterWrite ref)
     simp [Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, fits]
     simp only [borrow, Bind.bind, instMonadEIO._aux_13, EST.bind, borrowAppend, Phase.wal]
@@ -165,5 +182,30 @@ theorem dispatch {physical : W → Footprint inode}
     apply congrArg (afterWrite ref)
     simp [Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, full]
     rfl
+
+/-- The position guard keeps its pre-append disk. Otherwise the public
+operation calls append once, using precisely the registration and world
+that survived both phase borrows and the cached scan. -/
+theorem dispatch {physical : W → Footprint inode}
+    (online : Online physical root lock ref wal s image history start)
+    (binding : Native.Handle.AtRoot handle root ref)
+    (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (scan : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
+      NativeRecoverAt.ScanPrimitives physical root wal image.tables w)
+    (change : Change) :
+    if image.view.tail + 1 < UInt64.size then
+      ∃ issued, SessionAt physical root lock ref wal s image history issued (.updating wal) ∧
+        Native.mutation handle change start = afterWrite ref
+          (match WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
+           | .ok _ t => .ok {s with mem := insert s.mem change} t
+           | .error e t => .error e t)
+    else
+      ∃ rejected, SessionAt physical root lock ref wal s image history rejected (.updating wal) ∧
+        Native.mutation handle change start = afterWrite ref (.error (IO.userError "absolute WAL position exhausted") rejected) := by
+  have issued := dispatchAt online binding heap cached phase scan change
+  split <;> rename_i fits <;> simp only [fits, ↓reduceIte] at issued
+  · exact ⟨_, issued⟩
+  · exact issued
 
 end ExperimentalL0.NativeWrite
