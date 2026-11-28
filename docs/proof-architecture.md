@@ -40,13 +40,35 @@ A premise stays open until its producer establishes it. Audit premises
 alongside transitive axioms and apply the
 [joint candidate acceptance check](../AGENTS.md#agent-work-and-review).
 
-## Reusing proofs
+## Compose consumer requirements with producer guarantees
+
+Design a component boundary from both ends. Work backward from the public
+consumer theorem to list the exact premises, invariants, and witnesses its
+proof needs. Then work forward from the producer: inventory the properties
+its execution and proofs already establish, and retain those that help current
+or plausible consumers without costly reconstruction. Meet at a composition
+contract whose guarantees are actually consumed.
+
+Keep three layers distinct:
+
+- **Public behavior** states stable, representation-independent outcomes a
+  caller may rely on.
+- **Composition interfaces** pass reusable proved facts or ghost witnesses
+  across boundaries without adding runtime data. Preserve reached state on
+  errors, resource identity and ownership, durability, frame conditions, and
+  authority to continue when a consumer needs them.
+- **Private invariants** support implementation proofs but stay private unless
+  a concrete composition need justifies exposing a stable consequence.
 
 Pass established facts directly to the next proof. The SSTable reader uses
-the writer's proved `Image`. In the open L0 PR #5, `flushPublicationChoices`
-establishes invariants for both manifest choices over the same catalog and
-WAL. The publication branches consume those facts in the flush proof under
-the component contracts. Native end-to-end composition remains open.
+the writer's proved `Image`. DurableBlob carries the exact staged writer
+through to its sync, preserving the inode binding. A WAL ready session carries
+the installed active child that supplies append authority, rather than making
+the consumer reconstruct which child was opened. In the open L0 PR #5,
+`flushPublicationChoices` establishes invariants for both manifest choices
+over the same catalog and WAL. The publication branches consume those facts
+in the flush proof under the component contracts. Native end-to-end
+composition remains open.
 [SSTable composition](../lean/Alvoki/Experiments/SSTable/Proofs/UnifiedNativeEndToEnd.lean)
 · [L0 flush proof](https://github.com/alvoki/alvoki-lean/blob/5bb259a0838c0b02025615ebce452c2582e7648c/lean/Alvoki/Experiments/L0/Refinement.lean#L242-L306)
 
