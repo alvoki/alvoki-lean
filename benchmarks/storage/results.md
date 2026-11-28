@@ -140,12 +140,11 @@ and mixed runs verified outcomes after reopening.
 
 ## Priorities after L0 acceptance
 
-1. **WAL retained history.** Compare a cached count and an append-friendly
-   representation separately. Verify public append positions, scan order,
-   discard and reopen against the same contract. The first target is a
-   flatter short/long append curve without moving disproportionate cost
-   onto `scan`, including the L0 consumer. Measure both policies and
-   exercise retained aliases if a candidate relies on uniqueness.
+1. **WAL retained history.** Review whether the native handles can
+   eliminate resident batch history. The design uses existing positional
+   metadata and a recovery fold. Validate it against append, discard,
+   scan and reopen before running a comparison with these cohorts.
+   [Runtime-state proposal](../../docs/design/wal-runtime-state.md)
 2. **L0 table probes.** Re-pin the accepted implementation. Test proved
    key-range pruning first on disjoint runs, then on overlapping runs and
    tombstones. Compare caching validated root metadata or handles for the
