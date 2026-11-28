@@ -127,8 +127,8 @@ The public single-file recovery schedule supplies the child
 `Recoverable` and `Installed` facts and the cached scan result from local
 primitive effects. Segmented reopen binds that child to its root session.
 The single-file append producer consumes its stored writer and marker
-descriptions. Native segmented append, rotation and bootstrap still need
-their own producers.
+descriptions. The segmented producer reuses that append phase across
+ordinary appends and installs the newly created successor on rotation.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
 [Native CONTROL publication](Proofs/NativeControl.lean) uses the shared
@@ -148,8 +148,7 @@ A failed staging step cannot reach rename, and a retry clears and rewrites
 the stage. Staging failures normalize to before or after a complete
 proposal with no effect on visible CONTROL or selected child names.
 Primitive error messages are abstracted to the modeled error outcome.
-Power loss uses the existing durable-image projection. Bootstrap and
-rotation still owe representability and successor-child authority.
+Power loss uses the existing durable-image projection.
 
 [Native reopen proofs](Proofs/NativeReopen.lean) compose the single-file
 producer with the shared root operations. The root directory descriptor
@@ -183,6 +182,77 @@ schedule returns the session and that same child. The shared installer
 constructs the active entry from the session's segment ID and returned
 child. The native adapter passes that entry to the reference setter.
 Append takes its writer authority from that stored child. Root unlock follows child close even when close reports an error.
+
+### Public append and bootstrap
+
+[Native append](Proofs/NativeAppend.lean) uses one postcondition for
+both append paths. Bootstrap and public reopen supply `AppendReady`.
+On success, the root phase contains the acknowledged session, the
+absolute position advances by one, and the reached active child
+supplies the next `AppendReady`. The position theorem follows the same
+reply schedule as `Native.append` and relates its returned `Nat` to the
+installed session. On failure or process stop, the
+reached disk accepts the single pending request. Guard rejection
+leaves the disk and child phase unchanged. The outer phase can be
+poisoned while those resources still need cleanup.
+
+The successor stays outside CONTROL until its child files and name
+are durable. The shared initialization interprets exact successful
+writes on the created child; failed private initialization can leave
+unselected artifacts. Publication before the first write can therefore
+leave a selected empty child with exactly the old tail. Recovery
+consumes its reached image and pins the selected view. The position
+bound is established at bootstrap, preserved by acknowledged appends
+and the admissible recovery choices, and bounds the decoded CONTROL
+fields. Linux descriptor and name bindings and primitive outcomes,
+including interruption, remain the external interpretation boundary.
+
+The append interpretation distinguishes the child read from the store
+from the child produced by the single successor acquisition in a rotation.
+Writing checks that provenance; registration also checks the reached
+child phase is active. These are proof-only identities. Reported errors
+after the request guard include the reached slot and child phase. The
+rotating error continuation consumes the SingleFile close result on the
+acquired successor's reached image. Public close takes the stored child
+before releasing it, from either the active phase retained by guard
+rejection or the poisoned phase left by an in-place error. The shared
+release schedule unlocks the root even after a child close error and keeps
+the primary error. A second close has no release step. Process
+interruption has no post-stop cleanup schedule.
+
+Public create validates the acquired root before running bootstrap. The
+shared public scope installs the ready phase after bootstrap succeeds and
+uses the same release schedule on the reached resources after a reported
+failure. The healthy proof supplies the ready session and append authority
+for a root listing that contains only the lock. An unsuccessful first
+initialization may leave artifacts. The public create contract gives no
+automatic retry guarantee.
+
+### Lifecycle ownership premises
+
+- Bootstrap uses the root binding returned by checked directory and lock
+  acquisition. Its child authority includes the actual successful
+  single-file create result and its held lock. The installed phase carries
+  that binding and slot.
+- Reopen passes the recovered child's actual open result and held fact,
+  together with the public root-held result and the recorded slot.
+- Append operates under the installed root acquisition. Rejection keeps
+  both incoming locks. In-place failure retains the incoming child lock
+  and changes its phase to poisoned. Reported rotation failure closes the
+  old child and any acquired successor on their reached images. The close
+  interpretation takes the root-held fact from its input and requires an
+  explicitly held child for a populated slot. A stopped process has no
+  subsequent close premise.
+- Close consumes the reached phase and slot via the native swaps. Its
+  result frames the disk even on a reported unlock error. Reopen starts
+  from that disk's recoverability, derives the selected history there,
+  and supplies fresh acquisition evidence.
+
+The local runtime boundary includes reference swaps, descriptor binding
+and lifetime, and lock release. It includes the documented Lean 4.36
+failed-`fdopen` limitation before handle construction succeeds.
+The ownership statements concern the resources represented by the acquired
+handles. [Filesystem assumptions](../../../../../docs/design/filesystem-assumptions.md)
 
 ### Public open contract for the append consumer
 

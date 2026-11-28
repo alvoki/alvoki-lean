@@ -37,6 +37,8 @@ cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,
 cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixture.so"
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
 compile "$l0/NativeBridge" proof
+compile "$l0/WalProducerHandoff" proof
+leanchecker Alvoki.Experiments.L0.WalProducerHandoff
 compile "$l0/LifecycleRefinement" proof
 compile "$l0/RestartRefinement" proof
 compile "$l0/ScheduleSteps" proof

@@ -14,9 +14,13 @@ failure case proves scoped child release and root unlock while preserving the
 primary error and recoverable disk. The native CONTROL interpretation supplies the existing publication cuts,
 including the joint CONTROL and child-name root barrier. Its discard
 continuation preserves the permitted view through a failed publication,
-a failed reopen, and two successful opens. Native rotation and append
-still need to preserve and return the exact successor child authority.
-Bootstrap and mutations must supply CONTROL representability.
+a failed reopen, and two successful opens. The append candidate composes native child creation, CONTROL publication,
+and both append paths. Its public postcondition carries the ready session
+and the child authority at the exact reached disk. The create and reopen
+producers establish that authority, and successful append returns it.
+The recovery continuation selects and pins a view from the reached disk;
+bounded admissible views supply CONTROL representability. The candidate
+still needs integration review.
 [Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 · [WAL fault assumptions](design/wal-recovery.md)
 

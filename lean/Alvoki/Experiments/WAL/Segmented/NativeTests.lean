@@ -59,6 +59,8 @@ private def retryRotation (dir : FilePath) (p : Policy) : IO Unit := do
   failed (Native.append h [2]) "rotation overwrote an invalid staging binding"
   require ((← IO.FS.readBinFile (dir / "CONTROL")) == previous) "failed staging changed control"
   require (← (dir / "segment-1").pathExists) "expected the prepared unpublished successor"
+  let successor ← SingleFile.openExisting (dir / "segment-1")
+  SingleFile.close successor
   Native.close h
   IO.FS.removeDir (dir / "CONTROL.next")
   let h ← Native.openExisting dir
