@@ -174,6 +174,32 @@ private theorem publish_state (r : Ref) (lock : IO.FS.Handle) (next : Session) (
       WalRecoverySlice.Segmented.Native.returnedWorld]
     apply outer_state
 
+/-- Every updating callback uses this suffix after the store action has returned.
+The error arm ignores the proposed next session and runs both finalizers. -/
+noncomputable def afterStore (ref : Ref) (lock : IO.FS.Handle) (fallback : Session) :
+    EST.Out IO.Error IO.RealWorld Session → Tail
+  | .ok next _ => suffix ref lock next true
+  | .error _ _ => suffix ref lock fallback false
+
+theorem afterWrite_state {body : IO Unit} (result : EST.Out IO.Error IO.RealWorld Session)
+    (ran : body callback = NativeWrite.afterWrite ref result) (lock : IO.FS.Handle) (fallback : Session) :
+    ((afterStore ref lock fallback result).run
+      (WalRecoverySlice.Segmented.Native.returnedWorld result)).state =
+    WalRecoverySlice.Segmented.Native.returnedWorld (finish (ε := IO.Error) body
+      (finish (ε := IO.Error) ((Native.phaseCell ref).close WalRecoverySlice.Segmented.Native.close)
+        lock.unlock) callback) := by
+  have state {α : Type} (a : IO α) (w : W) :
+      WalRecoverySlice.Segmented.Native.returnedWorld (a w) = (a.toBaseIO w).state := by
+    cases eq : a w <;> simp [EIO.toBaseIO, eq, WalRecoverySlice.Segmented.Native.returnedWorld]
+  rw [state (finish _ _), finish_state, ← state body callback, ran]
+  cases result with
+  | ok next t => exact publish_state ref lock next t
+  | error e t =>
+    simp only [afterStore, suffix, Bool.false_eq_true, ↓reduceIte, NativeWrite.afterWrite,
+      WalRecoverySlice.Segmented.Native.returnedWorld, close_state]
+    rw [finish_state, call_run, Tail.run]
+    rfl
+
 /-- The last world on the primitive path is the world where withOpen would
 deliver its reply. Intermediate calls are ordered by their actual results. -/
 theorem suffix_state (p : InterruptedMutation.Prefix path root start)
@@ -191,18 +217,11 @@ theorem suffix_state (p : InterruptedMutation.Prefix path root start)
     (tail.run (WalRecoverySlice.Segmented.Native.returnedWorld output)).state =
       (WalRecoverySlice.Segmented.Native.returnedWorld (Native.withOpen path (fun h => Native.mutation h change) start)) := by
   intro output accepted tail
-  have state {α : Type} (a : IO α) (w : W) :
-      WalRecoverySlice.Segmented.Native.returnedWorld (a w) = (a.toBaseIO w).state := by
-    cases eq : a w <;> simp [EIO.toBaseIO, eq, WalRecoverySlice.Segmented.Native.returnedWorld]
-  rw [invoked, state (finish _ _) p.callback, finish_state, ← state (Native.mutation handle change) p.callback, ran]
-  cases out : WalRecoverySlice.Segmented.Native.append p.wal (encode change) p.issue with
-  | ok pos t => simpa only [tail, accepted, output, out, WalRecoverySlice.Segmented.Native.returnedWorld] using
-        publish_state p.ref p.lock {p.session with mem := insert p.session.mem change} t
-  | error e t =>
-    simp only [tail, accepted, output, out, suffix, Bool.false_eq_true, ↓reduceIte, NativeWrite.afterWrite,
-      WalRecoverySlice.Segmented.Native.returnedWorld, close_state]
-    rw [finish_state, call_run, Tail.run]
-    rfl
+  have path := afterWrite_state _ ran p.lock {p.session with mem := insert p.session.mem change}
+  rw [invoked]
+  cases reached : WalRecoverySlice.Segmented.Native.append p.wal (encode change) p.issue <;>
+    simpa only [tail, accepted, output, reached, afterStore, WalRecoverySlice.Segmented.Native.returnedWorld]
+      using path
 
 /-- A primitive preserves the manifest and committed table observations,
 while permitting any whole-file WAL writebacks. -/
