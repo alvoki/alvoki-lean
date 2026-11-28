@@ -1,3 +1,4 @@
+import Alvoki.Experiments.L0.ExitSchedule
 import Alvoki.Experiments.L0.InterruptedMutation
 import Alvoki.Experiments.L0.NativeMutation
 
@@ -8,56 +9,7 @@ open NativeMutationScope (Retry Reopens)
 open WalRecoverySlice.SingleFile (Handle)
 open WalRecoverySlice.Segmented.Native (Store PhaseMemory)
 
-/-- Ordered primitive calls after the WAL returned. Unlock is converted to
-BaseIO so both reported outcomes lead to the same remaining finalizers. -/
-inductive Tail where
-  | done
-  | call {α : Type} (op : BaseIO α) (next : α → Tail)
-
-def Tail.run : Tail → BaseIO Unit
-  | .done => pure ()
-  | .call op next => do (next (← op)).run
-
-noncomputable def child (h : Handle) (next : Tail) : Tail :=
-  let cell := h.bindings.choose
-  let mutex := h.bindings.choose_spec.choose
-  let leave := Tail.call mutex.unlock (fun _ => next)
-  let release := fun (fd : IO.FS.Handle) =>
-    Tail.call (cell.set .closed) (fun _ => .call fd.unlock.toBaseIO (fun _ => leave))
-  .call mutex.lock fun _ => .call cell.get fun
-    | .closed => leave
-    | .active fd _ _ _ | .poisoned fd => release fd
-
-noncomputable def walClose (h : Wal) (next : Tail) : Tail :=
-  let cell := h.parts.choose
-  let mutex := h.parts.choose_spec.choose
-  let leave := Tail.call mutex.unlock (fun _ => next)
-  let release := fun (s : Store) =>
-    let unlock := Tail.call s.lock.unlock.toBaseIO (fun _ => leave)
-    Tail.call (s.active.swap none) fun
-      | none => unlock
-      | some (_, ch) => child ch unlock
-  .call mutex.lock fun _ => .call (cell.swap .closed) fun
-    | .closed => leave
-    | .ready s _ | .poisoned s => release s
-
-noncomputable def close (ref : Ref) (next : Tail) : Tail :=
-  .call (ref.swap .offline) fun old =>
-    match old.wal with
-    | none => next
-    | some wal => walClose wal next
-
-/-- The outer close always runs. A reported WAL error additionally closes
-the current phase in the mutation's own error handler. -/
-noncomputable def suffix (ref : Ref) (lock : IO.FS.Handle) (next : Session) (accepted : Bool) : Tail :=
-  let outer := close ref (.call lock.unlock.toBaseIO (fun _ => .done))
-  if accepted then .call ref.get fun phase =>
-    match phase.publish next with
-    | some published => .call (ref.swap published) (fun _ => outer)
-    | none => close ref outer
-  else close ref outer
-
-private theorem call_run (op : BaseIO α) (next : α → Tail) (w : W) :
+theorem call_run (op : BaseIO α) (next : α → Tail) (w : W) :
     (Tail.call op next).run w = (next (op w).val).run (op w).state := by rw [Tail.run]; rfl
 
 private theorem child_run (h : Handle) (k : Tail) (w : W) :

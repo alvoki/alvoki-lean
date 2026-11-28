@@ -74,7 +74,7 @@ theorem Phase.offline_closed (session : Session) :
 
 
 /-- The executable wrapper interprets the phase cell with an IO.Ref. -/
-structure Cell (m : Type → Type) (W : Type) where
+structure Cell (m : Type → Type u) (W : Type) where
   read : m (Phase W)
   swap : Phase W → m (Phase W)
 
