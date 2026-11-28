@@ -46,6 +46,17 @@ def Reported (a : IO α) (b : M σ β) (w : W) (s : σ) (t : W) (u : σ) : Prop 
 def Returned (a : IO α) (b : M σ β) (w : W) (s : σ) (x : α) (y : β) (t : W) (u : σ) : Prop :=
   a w = .ok x t ∧ b.run s = .ok (.ok y) u
 
+theorem At.returned {a : IO α} {b : M σ β} (h : At a b w s ok fail) (result : Returned a b w s x y t u) :
+    ok x y t u := by
+  unfold At at h
+  rwa [result.1,result.2] at h
+
+theorem At.reported {a : IO α} {b : M σ β} (h : At a b w s ok fail) (result : Reported a b w s t u) :
+    fail t u := by
+  obtain ⟨_,_,a,b⟩ := result
+  unfold At at h
+  rwa [a,b] at h
+
 theorem At.record {a : IO α} {b : M σ β} (h : At a b w s ok fail) :
     At a b w s (fun x y t u => ok x y t u ∧ Returned a b w s x y t u)
       (fun t u => fail t u ∧ Reported a b w s t u) := by

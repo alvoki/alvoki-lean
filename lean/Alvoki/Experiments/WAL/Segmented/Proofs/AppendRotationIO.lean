@@ -178,4 +178,35 @@ def LocalRotation.assemble {disk : W → Disk} {c : Context disk} {r : Reports b
     exact close_unregistered st id c.session.control.policy r.close (livePhase_of_bound c candidate.2)
       op.close (c.base_empty (closedWork st) op.unlock)
 
+/-- The caller of an interrupted primitive consumes the frame produced by
+the preceding *returned* stages of this same rotation. -/
+def PrefixFrame {disk : W → Disk} (c : Context disk) (point : Point)
+    (child : Option SingleFile.Handle) (t : W) (st : Work) : Prop :=
+  match point, child with
+  | .cleared, none => c.Base none t st.1.disk
+  | .prepared, some h => c.ReadyFile none c.nextId h t st ∧ PrepareIO.PreparedFile disk c.nextId t
+  | .synced, some h | .published, some h => c.ReadyFile none c.nextId h t st ∧
+      PrepareIO.PreparedFile disk c.nextId t ∧ c.nextId ∈ (disk t).durableNames
+  | .written, some h => c.Candidate h t st ∧ ∃ files pos bs, st.2 = .active .lock files pos bs
+  | .unwind, some h => c.Candidate h t st
+  | _, _ => False
+
+theorem LocalRotation.frame_of_prefix {disk : W → Disk} {c : Context disk} {r : Reports batch}
+    (io : LocalRotation c r old w s)
+    (held : c.ReadyFile (some (c.session.control.active, old)) c.session.control.active old w s)
+    (ready : AppendReady c.session s) (room : c.session.view.tail < Contract.maxPosition)
+    (full : c.session.activeCount = c.session.control.capacity) (linux : System.Platform.isWindows = false)
+    (path : Prefix c r w s point child t st) : PrefixFrame c point child t st := by
+  have bounds := Model.successor_controlRepresentable ready.installed room
+  let ops := io.assemble held bounds.1 bounds.2 full linux
+  induction path with
+  | close ret => exact (ops.closeOld.returned ret).2
+  | create prev ret ih => exact ((ops.prepare _ _ ⟨prev,ih⟩).returned ret).2.2
+  | sync prev ret ih => exact ((ops.sync _ _ _ ⟨prev,ih⟩).returned ret).2
+  | syncError prev ret ih => exact ((ops.sync _ _ _ ⟨prev,ih⟩).reported ret).2
+  | publish prev ret ih => exact ((ops.publish _ _ _ ⟨prev,ih⟩).returned ret).2
+  | publishError prev ret ih => exact ((ops.publish _ _ _ ⟨prev,ih⟩).reported ret).2
+  | write prev ret ih => exact ((ops.write _ _ _ ⟨prev,ih⟩).returned ret).2
+  | writeError prev ret ih => exact ((ops.write _ _ _ ⟨prev,ih⟩).reported ret).2
+
 end WalRecoverySlice.Segmented.Native.AppendIO
