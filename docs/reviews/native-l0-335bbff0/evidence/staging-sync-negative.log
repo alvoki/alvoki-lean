@@ -1,0 +1,15 @@
+Alvoki/Experiments/L0/NativeManifestPublish.lean:60:2: error: 'change' tactic failed, pattern
+  publishWith
+      (do
+        let h ← IO.FS.Handle.mk (dir / { toString := "BLOB.next" }) IO.FS.Mode.write
+        h.write bytes
+        h.flush
+        pure h)
+      syncHandle (IO.FS.rename (dir / { toString := "BLOB.next" }) (dir / { toString := "BLOB" }))
+      (do
+        let __do_lift ← IO.FS.Handle.mk dir IO.FS.Mode.read
+        syncHandle __do_lift)
+      w =
+    ?m.42
+is not definitionally equal to target
+  (native dir).publish bytes w = remaining dir bytes Point.openWriter w

@@ -1,0 +1,8 @@
+logOnly passed
+boundary passed
+logOnly cut-truncate.so 75
+logOnly cut-sync.so 73
+logOnly restored segment length 64 and 2 subsequent reopens passed
+boundary cut-truncate.so 75
+boundary cut-sync.so 73
+boundary restored segment length 64 and 2 subsequent reopens passed

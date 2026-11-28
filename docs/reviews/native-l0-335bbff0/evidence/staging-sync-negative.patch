@@ -1,0 +1,13 @@
+diff --git a/lean/Alvoki/Experiments/DurableBlob/Native.lean b/lean/Alvoki/Experiments/DurableBlob/Native.lean
+index c2503a00..bed9dbae 100644
+--- a/lean/Alvoki/Experiments/DurableBlob/Native.lean
++++ b/lean/Alvoki/Experiments/DurableBlob/Native.lean
+@@ -49,7 +49,7 @@ def nativeFiles (directory : FilePath) (syncStaged : IO.FS.Handle → IO Unit) :
+ /-- The directory already exists durably. Its owner reserves BLOB and BLOB.next.
+ The active file is initialized by the caller before the first session. -/
+ def native (directory : FilePath) : Backend IO ByteArray :=
+-  linux.backend directory
++  (linux.files directory (fun _ => pure ())).backend
+
+ /-- Keep the actual returned directory handle in the reduction of native reopen. -/
+ theorem native_reopen_schedule (directory : FilePath) :

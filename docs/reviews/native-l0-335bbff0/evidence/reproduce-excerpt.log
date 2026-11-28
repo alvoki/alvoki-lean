@@ -1,0 +1,9 @@
+Build completed successfully (290 jobs).
+CRC32C native consumer checks passed
+WAL recovery slice: all checks passed
+WAL recovery file fixtures passed
+Segmented WAL simulations passed
+Segmented WAL native fixtures passed
+Segmented WAL physical-model fixtures passed
+unified immutable SSTable native fixtures passed
+Checked 30 Markdown files; 0 error(s).

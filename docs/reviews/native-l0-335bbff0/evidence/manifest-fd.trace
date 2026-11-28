@@ -1,0 +1,7 @@
+5464  openat(AT_FDCWD</workspace/work/audit/lean>, "/tmp/tmp.XX4RQ7ni/BLOB.next", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 9</tmp/tmp.XX4RQ7ni/BLOB.next>
+5464  fsync(9</tmp/tmp.XX4RQ7ni/BLOB.next>) = 0
+5464  close(9</tmp/tmp.XX4RQ7ni/BLOB.next>) = 0
+5464  rename("/tmp/tmp.XX4RQ7ni/BLOB.next", "/tmp/tmp.XX4RQ7ni/BLOB") = 0
+5464  openat(AT_FDCWD</workspace/work/audit/lean>, "/tmp/tmp.XX4RQ7ni", O_RDONLY|O_CLOEXEC) = 9</tmp/tmp.XX4RQ7ni>
+5464  fsync(9</tmp/tmp.XX4RQ7ni>)       = 0
+5464  close(9</tmp/tmp.XX4RQ7ni>)       = 0
