@@ -43,7 +43,7 @@ flush_proofs=(
   NativeTableAllocation NativeTableDirectory TableWriterSchedule NativeTableWriter NativeTableCreate
   TableCreateSchedule NativeManifestPublish ManifestPublishSchedule ReserveScanCut NativeFlushInterrupted
   MutationSequence MutationSequenceRoot ExitSchedule ReserveScanSource NativeFlushStoreCut NativeFlushBodyRestart
-  HealthyTableRead MutationIngressCut NativeFlushPinned
+  HealthyTableRead HealthyPublishedRecovery MutationIngressCut NativeFlushPinned
 )
 for module in "${flush_proofs[@]}"; do
   compile "$l0/$module" proof
@@ -106,7 +106,7 @@ import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.HealthyFlush
 import Alvoki.Experiments.L0.NativeFlushBodyRestart
 import Alvoki.Experiments.L0.MutationIngressCut
-import Alvoki.Experiments.L0.HealthyTableRead
+import Alvoki.Experiments.L0.HealthyPublishedRecovery
 import Alvoki.Experiments.L0.NativeFlushPinned
 import Alvoki.Experiments.L0.ReserveScanSource
 import Alvoki.Experiments.L0.NativeFlushInterrupted
@@ -148,6 +148,9 @@ open ExperimentalL0
 #check_axioms MutationSequence.withOpen
 #check_axioms NativeTableWriter.erase
 #check_axioms NativeTableWriter.build
+#check_axioms NativeRead.HealthyChecks.lookup
+#check_axioms HealthyReads.WalRoot.openBatches
+#check_axioms HealthyPublishedRecovery.recover
 #check_axioms NativeTableWriter.onePut
 #check_axioms NativeTableCreate.Schedule.erase
 #check_axioms NativeTableCreate.Schedule.cover
