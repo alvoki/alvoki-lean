@@ -578,14 +578,25 @@ theorem buildFileWith_lookup_footerError {outputOps : OutputOps (NativeWriteM wr
     (initialFrame : frame start)
     (openRan : readOps.openFile readPath .read start = .ok held opened)
     (sizeRan : readOps.size held opened = .ok size sized)
-    (fits : footerPacketSize ≤ size ∧ size ≤ maxFileSize)
     (failed : readOps.pread held (size - footerPacketSize).toUInt64 footerPacketSize.toUSize sized =
       .error error reached) :
     (openCheckedWith readOps crc readPath layout.tableId >>= fun handle => handle.table.lookup key) start =
       .error error reached ∧ frame reached := by
+  obtain ⟨_, _, _, image, _, identity, _, _, durable⟩ := buildFileWith_refines effects built
+  have read := reads identity after.appended durable
+  have openedPost := read.openRead start initialFrame
+  rw [openRan] at openedPost
+  have pinned := read.bindRead start held opened initialFrame openRan
+  have observed := read.size held opened ⟨openedPost.1, pinned⟩
+  rw [sizeRan] at observed
+  have sizeEq : size = after.appended.size := observed.2
+  have fits : footerPacketSize ≤ size ∧ size ≤ maxFileSize := by
+    obtain ⟨_, _, _, _, footerFits, _, _⟩ := image.root
+    rw [sizeEq]
+    exact ⟨footerFits, image.extent⟩
   have surfaced := checkedLookup_footerError (crc := crc) (id := layout.tableId) (key := key)
     openRan sizeRan fits failed
-  have framed := buildFileWith_lookup_framed effects built reads key start initialFrame
+  have framed := checkedNativeLookup read image key start initialFrame
   rw [surfaced] at framed
   exact ⟨surfaced, framed⟩
 

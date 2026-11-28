@@ -103,6 +103,6 @@ theorem durableMultiLevelFooterError :
     (openCheckedWith footerFault crc name layout.tableId >>= fun handle => handle.table.lookup a.key) 7 =
       .error "footer read fault" 10 ∧ 7 ≤ 10 :=
   buildFileWith_lookup_footerError SSTableProducerCheck.effects writes
-    (inodeAt := fun _ _ => some 17) footerFault_reads (by decide) rfl rfl (by decide) rfl
+    (inodeAt := fun _ _ => some 17) footerFault_reads (by decide) rfl rfl rfl
 
 end ImmutableSSTable.Recursive.Vertical
