@@ -41,6 +41,10 @@ theorem healthy {physical : W → Footprint inode}
     let img := published image p.session candidate.number.toUInt64
     let events := before ++ [.reopened]
     ∃ w, Native.withOpen path Native.flush start = (match report with | none => .ok () w | some e => .error e w) ∧
+      (∃ made t, createTable root p.session.mem.toList (origin p.ref p.wal p.session p.callback) =
+        .ok candidate.number.toUInt64 made ∧
+        store root image p.session (origin p.ref p.wal p.session p.callback) = .ok ⟨img.version, ∅⟩ t ∧
+        NativeFlushStore.SameFile media candidate.number.toUInt64 p.session.mem.toList made t) ∧
       NativeReadRelease.Closed physical root p.lock p.ref img w ∧
       (report = none → ReadAt physical path root life rootLife keys ((events ++ [.flushed]) ++ [.stop]) img w) ∧
       ReadAt physical path root life rootLife keys ((events ++ [.flushUncertain]) ++ [.stop]) img w := by
@@ -49,7 +53,7 @@ theorem healthy {physical : W → Footprint inode}
   obtain ⟨h,binding,scope⟩ := p.withOpen Native.flush
   obtain ⟨_,jointEntry,called⟩ := dispatchAt online binding heap ops.cleanup.cached ops.phase (scan history)
   obtain ⟨raw, durable⟩ := NativeFlushCatalog.catalogs jointEntry
-  obtain ⟨t,storedAt,ready,stable⟩ := NativeFlushStore.healthy storage
+  obtain ⟨t,storedAt,ready,stable,made,allocated,sameFile⟩ := NativeFlushStore.healthyPinned storage
     ⟨⟨raw.owned,raw.phase,raw.child⟩,raw.manifest,raw.catalog,durable⟩ raw.installed fits candidate rows writer dir reports
   simp only [nonempty, Bool.false_eq_true, ↓reduceIte, fits, storedAt] at called
   let next : Session := ⟨proposal image p.session candidate.number.toUInt64, ∅⟩
@@ -84,6 +88,6 @@ theorem healthy {physical : W → Footprint inode}
   cases ret : p.lock.unlock endWal with
   | ok _ w | error e w =>
     rw [ret] at unlocked closed returned
-    exact ⟨w,by simpa only [unlocked] using returned,closed,(fun _ => (readOut _ closed).1),(readOut _ closed).2⟩
+    exact ⟨w,by simpa only [unlocked] using returned,⟨made,t,allocated,storedAt,sameFile⟩,closed,(fun _ => (readOut _ closed).1),(readOut _ closed).2⟩
 
 end ExperimentalL0.NativeFlush

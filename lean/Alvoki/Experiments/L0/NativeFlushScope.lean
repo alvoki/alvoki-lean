@@ -135,18 +135,5 @@ theorem callback {physical : W → Footprint inode}
     · simp only [fits, ↓reduceIte] at called
       exact failed grant phase cached release run (SessionAt.uncertain reached) called
 
-structure Recovery (physical : W → Footprint inode) (path root : System.FilePath) (heap : PhaseMemory)
-    (life : NativeRead.Lifetime) (events : List Event) (img : Selected) (w : W) : Prop where
-  files : Files physical root img w
-  trace : Execution.Run events none img
-
-theorem Recovery.read (out : Recovery physical path root heap life events img w)
-    (entry : NativeReadScope.Entry physical path root img)
-    (runtime : ∀ lock ref, WithOpenReads.Runtime physical root lock ref img life heap)
-    (keys : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
-    let call : NativeReadRelease.RootCall := ⟨path, keys, w⟩
-    Post call.run w (WithOpenReads.Finished physical root img life events call rootLife)
-      (WithOpenReads.Failure physical root img life events call rootLife) :=
-  WithOpenReads.withOpen entry out.files heap runtime out.trace keys rootLife
 
 end ExperimentalL0.NativeFlush
