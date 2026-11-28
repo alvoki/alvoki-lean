@@ -13,9 +13,10 @@ def call (world : σ → Void IO.RealWorld) (advance : σ → Void IO.RealWorld 
   | .ok (.error error) after => .error error (advance s after)
   | .error error after => .error (toString error) (advance s after)
 
-/-- Healthy stat and acquire reports on the protected table name, with
-bounded exact reads for the chosen immutable inode. -/
-def HealthySource (ns : TableNamespace σ) (s : σ) (id : UInt64)
+/-- A descriptor acquired from the protected name, with the caller's
+read guarantee for its bound bytes. -/
+def AcquiredSource (guarantee : IO.FS.Handle → ByteArray → Prop)
+    (ns : TableNamespace σ) (s : σ) (id : UInt64)
     (world : Void IO.RealWorld) : Prop :=
   ∃ (handle : IO.FS.Handle) (inodeAt : IO.FS.Handle → Option ns.inode)
     (checked entered : Void IO.RealWorld) (metadata : IO.FS.Metadata),
@@ -24,7 +25,20 @@ def HealthySource (ns : TableNamespace σ) (s : σ) (id : UInt64)
     IO.FS.Handle.mk (tablePath ns.directory id) .read checked = .ok handle entered ∧
     inodeAt handle = ns.names s (tablePath ns.directory id) ∧
     ∀ identity bytes, inodeAt handle = some identity → ns.contents s identity = some bytes →
-      nativeReadPrimitives.ReadsExactly handle bytes
+      guarantee handle bytes
+
+abbrev HealthySource {σ : Type} := AcquiredSource (σ := σ) nativeReadPrimitives.ReadsExactly
+/-- Local descriptor contract. A successful acquisition binds the protected
+name and supplies byte correctness on successful reads of that inode. -/
+def LookupPrimitives (ns : TableNamespace σ) (world : σ → Void IO.RealWorld) : Prop :=
+  ∀ s id metadata checked handle entered,
+    (nativeTableStat (tablePath ns.directory id)).run (world s) = .ok (.ok metadata) checked →
+    isTableFile metadata = true →
+    IO.FS.Handle.mk (tablePath ns.directory id) .read checked = .ok handle entered →
+    ∃ inodeAt : IO.FS.Handle → Option ns.inode,
+      inodeAt handle = ns.names s (tablePath ns.directory id) ∧
+      ∀ identity bytes, inodeAt handle = some identity → ns.contents s identity = some bytes →
+        Unified.ReadSafety (handleSource handle) bytes
 
 /-- Both table callbacks evaluate the native scope once. The carrier
 update accounts only for the reached IO world. -/
@@ -38,9 +52,7 @@ structure Interpretation (ops : Tables (StorageM σ)) (selected : σ → Selecte
     call world advance (nativeTableAt ns.directory id (·.lookup key))
   readFrame : ∀ s reached, selected (advance s reached) = selected s ∧
     ns.Keeps s (advance s reached) (selected s).tables
-  lookupPrimitives : ∀ s id key value reached,
-    (nativeTableAt ns.directory id (·.lookup key)).run (world s) = .ok (.ok value) reached →
-    HealthySource ns s id (world s)
+  lookupPrimitives : LookupPrimitives ns world
 
 /-- On the product carrier, read steps preserve the durable table namespace
 and selected image by construction. -/
@@ -61,9 +73,7 @@ def productTables (ns : TableNamespace σ)
 
 def product (ns : TableNamespace σ) (selected : σ → Selected)
     (create : Rows → StorageM (Void IO.RealWorld × σ) UInt64)
-    (primitives : ∀ (s : Void IO.RealWorld × σ) id key value reached,
-      (nativeTableAt ns.directory id (·.lookup key)).run s.1 = .ok (.ok value) reached →
-      HealthySource ns.storage s id s.1) :
+    (primitives : LookupPrimitives ns.storage Prod.fst) :
     Interpretation (productTables ns create) (selected ∘ Prod.snd) ns.storage where
   world := Prod.fst
   advance s reached := (reached, s.2)
@@ -112,10 +122,11 @@ theorem Interpretation.lookupEffect (i : Interpretation ops selected ns)
     cases response with
     | error error => simpa [call, ran] using And.intro frame kept
     | ok value =>
-      obtain ⟨handle, inodeAt, _, _, _, stat, regular, acquired, picked, reads⟩ :=
-        i.lookupPrimitives s id key value reached ran
-      have result := ns.scopedLookup (catalog id rows bound) handle key stat regular acquired inodeAt picked reads
-      have same := Except.ok.inj (EST.Out.ok.inj (ran.symm.trans result)).1
+      obtain ⟨metadata, checked, handle, entered, stat, regular, acquired⟩ := nativeTableAt_success ran
+      obtain ⟨inodeAt, picked, reads⟩ :=
+        i.lookupPrimitives s id metadata checked handle entered stat regular acquired
+      have same := ns.scopedLookup (catalog id rows bound) handle key stat regular acquired
+        inodeAt picked reads ran
       simpa [call, ran] using And.intro same (And.intro frame kept)
 
 /-- Get needs only the reached lookup effects and the durable catalog. -/

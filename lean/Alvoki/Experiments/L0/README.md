@@ -261,31 +261,30 @@ The remaining native correspondence has two distinct boundaries.
   for that ownership or for the live filesystem. The product read carrier
   preserves its mathematical projections by construction. Preservation of
   the corresponding physical state must follow from primitive effects.
-- The current lookup proof uses `HealthySource` even for safety.
-  `Image.open_represents` consumes `Source.Serves`, whose equalities
-  require all bounded reads to succeed. A successful lookup only
-  constrains the calls on its executed path. For example, it may read one
-  leaf successfully while an unrelated leaf would report EIO.
+- `Unified.ReadSafety` only constrains successful size and read calls.
+  `scopedLookup` applies the producer theorem to the action run on the
+  descriptor returned by acquisition. The healthy image interpreter is
+  used only as the reference for the resulting value. `HealthySource`
+  remains the stronger progress condition used by `scopedCheck`.
 
-The direct route is to compare the actual checked-open and lookup
-schedule with the healthy image interpreter at each reached primitive.
-A successful size or positional read must return the expected size or
-slice for the acquired inode. An error keeps the reached state and
-terminates that branch. Both outcomes must frame the phase reference,
-namespace, WAL authority and manifest image. This would reuse the
-existing healthy image theorem for the computed value and the existing
-error propagation for failure. If the generic reader proofs cannot
-express that comparison compactly, the smaller structural alternative
-is to expose the existing reader's size and positional-read calls
-directly to the caller's interpreter. The executable schedule should
-remain shared. Instrumenting a second lookup or assuming a whole-callback
-result equality would leave the same correspondence gap.
+The segmented WAL proves effects at the boundaries of the shared
+executable schedule. Its proof interpreter threads the reached disk and
+ownership through each bind. The current L0 read interpreter instead
+evaluates a whole native table action and then asks for a witness
+relating that action's result to its named inode. The producer theorem
+removes universal read success from that witness. Moving the remaining
+binding and frame evidence to the stat, acquire, read and release
+boundaries would follow the WAL approach and remove the need to recover
+that evidence from a completed callback. The world can remain opaque.
+The outer public get still needs the corresponding proof of native
+phase ownership, callback assembly and the physical frames on both
+return branches.
 
 ## Remaining premises
 
 | Premise | Owner and producer | Consumer |
 | --- | --- | --- |
-| Stat, acquisition of the inode selected by the protected name, and bounded reads during its immutable lifetime | The primitive boundary must justify reads actually executed and propagate their failures. The current lookup proof still requests a healthy source after success. Deriving safety from the executed reads remains open. Healthy progress can require all bounded reads to succeed | `TableNamespace.scopedLookup` and `scopedCheck` |
+| Stat, acquisition of the inode selected by the protected name, and bounded reads during its immutable lifetime | The primitive boundary must justify reads actually executed and propagate their failures. The scoped producer uses success-only byte correctness. The current interpreter still needs to derive the acquisition, binding and frame witnesses from the local native effects. Healthy progress can require all bounded reads to succeed | `TableNamespace.scopedLookup` and `scopedCheck` |
 | Descriptor drop and outer lock release | Runtime last-reference behavior and unlock effects. L0 must prove release on the reached ownership state. The shared schedule preserves an already-observed client trace through cleanup, assuming the close and unlock storage frames | `Lifecycle.recovery_offline` and `Lifecycle.scope_refines` |
 | Concrete dispatch uses the native read interpreter on its reached carrier | L0 native callback setup. The interpreter itself computes the lookup result and keeps the reported world, so an independent result equality is gone | `NativeTableReads.Interpretation.get` |
 | Durable catalog insertion and preservation of unrelated physical bindings | Filesystem create, file sync and directory sync effects. L0 must represent the reached writer and prove local table, manifest and WAL namespace frames | `TableCreationEvidence.catalogInserted`, `catalogAfter` and the lifecycle postconditions |

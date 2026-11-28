@@ -2,6 +2,7 @@ import Alvoki.Experiments.L0.TableSchedule
 import Alvoki.Experiments.L0.CodecProofs
 import Alvoki.Experiments.L0.ComponentContract
 import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
+import Alvoki.Experiments.SSTable.Proofs.UnifiedReadSafety
 
 namespace ExperimentalL0
 open ImmutableSSTable
@@ -78,13 +79,29 @@ theorem native_table_check (handle : IO.FS.Handle) {id : UInt64} {rows : Rows}
   obtain ⟨_, _, opened⟩ := native_table_source_built handle built serves
   exact opened _
 
-theorem native_table_lookup (handle : IO.FS.Handle) {id : UInt64}
+/-- The actual typed lookup needs correct bytes only on successful
+primitive calls. A different request is allowed to report an error. -/
+theorem table_lookup_success {source : Source (EIO String)} {id : UInt64}
     (built : Unified.Image Alvoki.CRC32C.extend (tableLayout id)
       (rows.map (Entry.encode keyCodec mutationCodec)) bytes)
-    (serves : nativeReadPrimitives.ReadsExactly handle bytes) (key : UInt64) :
-    withTableSource (handleSource handle) id (·.lookup key) = pure (lookupRows rows key) := by
-  obtain ⟨_, represents, opened⟩ := native_table_source_built handle built serves
-  rw [opened, typed_lookup_spec represents]
+    (safe : Unified.ReadSafety source bytes) (key : UInt64)
+    (ran : withTableSource source id (·.lookup key) start = .ok value after) :
+    value = lookupRows rows key := by
+  letI := lawfulEIO
+  have nativeRun : (do
+      let handle ← Unified.openChecked source Alvoki.CRC32C.extend id
+      (TypedTable.mk handle.table keyCodec mutationCodec).lookup key) start = .ok value after := by
+    simpa [withTableSource, Unified.openTableChecked, bind_assoc] using ran
+  have referenceRun := Unified.checkedTypedLookup_success safe keyCodec mutationCodec key nativeRun
+  have served : (Unified.ReadSafety.reference bytes).Serves bytes := ⟨rfl, fun _ _ _ _ => rfl⟩
+  obtain ⟨table, represented, opened⟩ := withTableSource_built built served
+  have exactRead : withTableSource (Unified.ReadSafety.reference bytes) id (·.lookup key) =
+      pure (lookupRows rows key) := by rw [opened, typed_lookup_spec represented]
+  have refRun : withTableSource (Unified.ReadSafety.reference bytes) id (·.lookup key) () =
+      .ok value () := by
+    simpa [withTableSource, Unified.openTableChecked, bind_assoc] using referenceRun
+  rw [exactRead] at refRun
+  exact (EStateM.Result.ok.inj refRun).1.symm
 
 end ExperimentalL0
 
@@ -149,6 +166,47 @@ theorem nativeTableAt_afterStat {dir : System.FilePath} {id : UInt64}
   simp [resume, regular, nativeTableReadScope, IO.FS.withFile, ExceptT.mk, ExceptT.run,
     Bind.bind, instMonadEIO._aux_13, EST.bind]
   cases opened : IO.FS.Handle.mk (tablePath dir id) .read checked <;> simp
+
+/-- A successful scoped action must have passed stat and acquired the
+descriptor at the derived name. These are the effects of that execution. -/
+theorem nativeTableAt_success {dir : System.FilePath} {id : UInt64}
+    {use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α}
+    (ran : (nativeTableAt dir id use).run start = .ok (.ok value) reached) :
+    ∃ md checked handle entered,
+      (nativeTableStat (tablePath dir id)).run start = .ok (.ok md) checked ∧
+      isTableFile md = true ∧
+      IO.FS.Handle.mk (tablePath dir id) .read checked = .ok handle entered := by
+  let resume (md : IO.FS.Metadata) : ExceptT String IO α :=
+    if isTableFile md then nativeTableReadScope (tablePath dir id)
+      (fun held => nativeTableAction held id use)
+    else throw "expected a singly linked regular SSTable"
+  cases stat : (nativeTableStat (tablePath dir id)).run start with
+  | error error checked =>
+    change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _ at ran
+    rw [ExceptT.run_bind] at ran
+    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, stat] at ran
+  | ok result checked =>
+    cases result with
+    | error error =>
+      change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _ at ran
+      rw [ExceptT.run_bind] at ran
+      simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat] at ran
+      change EST.Out.ok (Except.error error : Except String α) checked = _ at ran
+      cases (EST.Out.ok.inj ran).1
+    | ok md =>
+      by_cases regular : isTableFile md = true
+      · rw [nativeTableAt_afterStat stat regular] at ran
+        cases opened : IO.FS.Handle.mk (tablePath dir id) .read checked with
+        | error error entered => simp [opened] at ran
+        | ok handle entered => exact ⟨md, checked, handle, entered, rfl, regular, opened⟩
+      · change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _ at ran
+        rw [ExceptT.run_bind] at ran
+        simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat] at ran
+        have rejected : resume md = throw "expected a singly linked regular SSTable" := by
+          simp [resume, regular]
+        rw [rejected] at ran
+        change EST.Out.ok (Except.error "expected a singly linked regular SSTable" : Except String α) checked = _ at ran
+        cases (EST.Out.ok.inj ran).1
 
 theorem nativeTableAt_acquired {dir : System.FilePath} {id : UInt64}
     {use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α}

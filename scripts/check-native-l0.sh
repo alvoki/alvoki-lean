@@ -125,7 +125,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms table_descriptor_stat_error
 #check_axioms table_descriptor_rejected
 #check_axioms table_descriptor_open_error
-#check_axioms native_table_lookup
+#check_axioms table_lookup_success
 #check_axioms freeTableId_spec
 #check_axioms createTableAt_success
 #check_axioms createTableAt_bindings
@@ -144,8 +144,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.StateWithImage.interpretation
 #check_axioms ManifestComposition.recoverPublication
 #check_axioms ManifestComposition.reopenAfterRestart
-#check_axioms TableNamespace.lookup
 #check_axioms TableNamespace.scopedLookup
+#check_axioms nativeTableAt_success
 #check_axioms TableNamespace.scopedCheck
 #check_axioms NativeTableReads.product
 #check_axioms NativeTableReads.productFrame

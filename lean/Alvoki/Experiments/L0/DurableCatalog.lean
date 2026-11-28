@@ -69,16 +69,6 @@ theorem TableNamespace.Represents.insert {id : UInt64} {ns : TableNamespace σ}
   · simp [same] at found
     exact (valid.frame keeps) key content found
 
-theorem TableNamespace.lookup {id : UInt64} {ns : TableNamespace σ}
-    (bound : ns.Bound s id rows) (handle : IO.FS.Handle)
-    (inodeAt : IO.FS.Handle → Option ns.inode)
-    (selected : inodeAt handle = ns.names s (tablePath ns.directory id))
-    (readEffects : ∀ identity bytes, inodeAt handle = some identity → ns.contents s identity = some bytes →
-      nativeReadPrimitives.ReadsExactly handle bytes) (key : UInt64) :
-    withTableSource (handleSource handle) id (·.lookup key) = pure (lookupRows rows key) := by
-  obtain ⟨inode, bytes, name, content, image⟩ := bound
-  exact native_table_lookup handle image (readEffects inode bytes (selected.trans name) content) key
-
 /-- The healthy check uses the same catalog binding and scoped acquire
 as lookup. Its typed continuation returns no descriptor. -/
 theorem TableNamespace.scopedCheck {id : UInt64} {ns : TableNamespace σ}
@@ -111,13 +101,20 @@ theorem TableNamespace.scopedLookup {id : UInt64} {ns : TableNamespace σ}
     (inodeAt : IO.FS.Handle → Option ns.inode)
     (picked : inodeAt handle = ns.names s (tablePath ns.directory id))
     (reads : ∀ identity bytes, inodeAt handle = some identity → ns.contents s identity = some bytes →
-      nativeReadPrimitives.ReadsExactly handle bytes) :
-    (nativeTableAt ns.directory id (·.lookup key)).run start =
-      .ok (.ok (lookupRows rows key)) entered := by
-  rw [nativeTableAt_acquired stat regular acquired]
-  have read := ns.lookup bound handle inodeAt picked reads key
-  unfold nativeTableAction
-  rw [read]
-  rfl
+      ReadSafety (handleSource handle) bytes)
+    (ran : (nativeTableAt ns.directory id (·.lookup key)).run start = .ok (.ok value) reached) :
+    value = lookupRows rows key := by
+  obtain ⟨identity, bytes, named, stored, built⟩ := bound
+  have safe := reads identity bytes (picked.trans named) stored
+  rw [nativeTableAt_acquired stat regular acquired] at ran
+  change (BaseIO.toEIO (withTableSource (handleSource handle) id (·.lookup key)).toBaseIO)
+    entered = _ at ran
+  cases step : withTableSource (handleSource handle) id (·.lookup key) entered with
+  | error error after =>
+    simp [BaseIO.toEIO, EIO.toBaseIO, step] at ran
+  | ok actual after =>
+    have exactValue := table_lookup_success built safe key step
+    simp [BaseIO.toEIO, EIO.toBaseIO, step] at ran
+    exact ran.1.symm.trans exactValue
 
 end ExperimentalL0
