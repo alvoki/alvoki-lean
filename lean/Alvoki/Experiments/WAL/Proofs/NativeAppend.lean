@@ -130,6 +130,18 @@ theorem appendModel_success_active
         cases ran
         exact ⟨_, _, _, _, rfl⟩
 
+theorem appendModel_error_phase (reports : ∀ cursor, AppendReports policy cursor batch)
+    (ran : appendModel reports ⟨image, .active heldLock files cursor history⟩ =
+      .ok (.error err) after) : after.phase = .poisoned heldLock := by
+  rw [activeResult] at ran
+  cases work : (appendWorker files (reports cursor)).run image with
+  | error => rw [work] at ran; cases ran
+  | ok response reached =>
+    rw [work] at ran
+    cases response with
+    | ok => cases ran
+    | error => cases ran; rfl
+
 def AppendGuarantee (policy : Policy) (known : List Bytes) (batch : Bytes)
     (result : AppendResult) : Prop :=
     Dirty policy known (some batch) (appendReached result).image ∧

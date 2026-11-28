@@ -208,10 +208,11 @@ The append interpretation distinguishes the child read from the store
 from the child produced by the single successor acquisition in a rotation.
 Writing checks that provenance; registration also checks the reached
 child phase is active. These are proof-only identities. Reported errors
-after the request guard include the reached active slot, which is empty
-after rotation and still holds the original entry after an in-place error.
-This slot result does not yet certify the actual release of the child lock
-or connect the reached resources to public close. Process interruption
+after the request guard include the reached slot and child phase. The
+slot is empty after rotation. An in-place error leaves the original
+entry poisoned, which the single-file close proof consumes on the
+reached image. The full segmented close composition and the actual
+release of a scoped successor lock remain open. Process interruption
 has no post-stop cleanup schedule.
 
 Public create validates the acquired root before running bootstrap. The

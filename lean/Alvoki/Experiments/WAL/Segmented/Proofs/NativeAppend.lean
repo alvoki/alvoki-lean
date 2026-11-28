@@ -1369,7 +1369,8 @@ private theorem resumeSuccessor_ready (root : System.FilePath) (held : Nat)
 private def appendCustody (errorEntry : Option Nat) :
     EStateM.Result Unit (State × SingleFile.AppendPhase) (Except String Session) → Prop
   | .ok (.ok next) after => AppendReady next after ∧ after.1.activeEntry = some next.control.active
-  | .ok (.error _) after => after.1.activeEntry = errorEntry
+  | .ok (.error _) after => after.1.activeEntry = errorEntry ∧
+      after.2 = if errorEntry.isSome then .poisoned .lock else .closed
   | .error .. => True
 
 /-- The rotating native schedule preserves the old recoverable view until
@@ -1401,7 +1402,7 @@ theorem nativeAppendModel_rotation_refines (root : System.FilePath) (held : Nat)
   rw [closed]
   let cleared := {s.1 with activeEntry := none}
   cases response with
-  | error => exact ⟨prior, rfl⟩
+  | error => exact ⟨prior, rfl, rfl⟩
   | ok closedValue =>
     cases closedValue
     let rotated := (Native.withActiveChild (error := String) (ExceptT.mk acquire.run) release resume).run (cleared, .closed)
@@ -1432,7 +1433,7 @@ theorem nativeAppendModel_rotation_refines (root : System.FilePath) (held : Nat)
           session.control.policy (successor session).active cleared
         simp only [ExceptT.run] at frame
         rw [ready] at frame
-        exact ⟨prep.offline (.inl rfl), frame⟩
+        exact ⟨prep.offline (.inl rfl), frame, rfl⟩
       | ok phase =>
         have ⟨image, cursor, authority⟩ := prepareNativeChild_authority root removal
           (fun step => effects.prepare step (successor session).active)
@@ -1457,8 +1458,8 @@ theorem nativeAppendModel_rotation_refines (root : System.FilePath) (held : Nat)
             try dsimp only
             rw [released]
             cases reported with
-            | error => exact ⟨continued, rfl⟩
-            | ok unitValue => cases unitValue; exact ⟨continued, rfl⟩
+            | error => exact ⟨continued, rfl, rfl⟩
+            | ok unitValue => cases unitValue; exact ⟨continued, rfl, rfl⟩
 
 private theorem appendActiveModel_registered (session : Session)
     (reports : ∀ cursor, SingleFile.AppendReports session.control.policy cursor batch)
@@ -1543,9 +1544,12 @@ theorem nativeAppendModel_refines (root : System.FilePath) (held : Nat)
           | ok => cases ran
           | error =>
             cases ran
-            simp only [writeActive, ExceptT.run] at wrote
-            split at wrote <;> cases wrote
-            rfl
+            obtain ⟨_, _, _, _, _, livePhase⟩ := ready
+            simp only [writeActive, ExceptT.run, livePhase] at wrote
+            split at wrote <;> rename_i _ childRun
+            all_goals try cases wrote
+            have poisoned := SingleFile.appendModel_error_phase reports childRun
+            simp [appendCustody, State.tick, registered, poisoned]
       | ok next => exact appendActiveModel_registered session reports state ready registered size position full ran
 
 theorem appendChoice_tailBound {known view : Contract.View} {request : Option Contract.Request}
@@ -1584,7 +1588,8 @@ theorem publicNativeAppend_refines (root : System.FilePath) (held : Nat)
       next.tailPosition = session.view.tail + 1 ∧ next.view.tail ≤ Contract.maxPosition
     | .ok (.error _) (after, phase) =>
       phase = .poisoned held ∧
-      after.1.activeEntry = (if session.activeCount = session.control.capacity then none else state.1.activeEntry) ∧
+      (let entry := if session.activeCount = session.control.capacity then none else state.1.activeEntry
+       after.1.activeEntry = entry ∧ after.2 = if entry.isSome then .poisoned .lock else .closed) ∧
       Recoverable session.view (some (.append batch)) after.1.disk
     | .error _ (after, phase) =>
       phase = .poisoned held ∧
@@ -1635,7 +1640,8 @@ theorem publicNativeAppend_position (root : System.FilePath) (held : Nat)
         reply = next.tailPosition ∧ reply = session.view.tail + 1 ∧ next.view.tail ≤ Contract.maxPosition
     | .ok (.error _) (after, phase) =>
       phase = .poisoned held ∧
-      after.1.activeEntry = (if session.activeCount = session.control.capacity then none else state.1.activeEntry) ∧
+      (let entry := if session.activeCount = session.control.capacity then none else state.1.activeEntry
+       after.1.activeEntry = entry ∧ after.2 = if entry.isSome then .poisoned .lock else .closed) ∧
       Recoverable session.view (some (.append batch)) after.1.disk
     | .error _ (after, phase) =>
       phase = .poisoned held ∧ Recoverable session.view (some (.append batch)) after.1.disk := by
@@ -1675,6 +1681,26 @@ theorem publicNativeAppend_position (root : System.FilePath) (held : Nat)
     | ok next =>
       exact ⟨next, post.1, post.2.1, post.2.2.1, post.2.2.2.1, rfl,
         post.2.2.2.2.1, post.2.2.2.2.2⟩
+
+/-- Close consumes the reached in-place failure, including a reported
+unlock error. Rotation has no active entry for the outer close to take. -/
+theorem appendFailure_childClose (policy : Policy) (reports : SingleFile.OpenReports)
+    (after : State × SingleFile.AppendPhase) (entry : Option Nat)
+    (slot : after.1.activeEntry = entry)
+    (phase : after.2 = if entry.isSome then .poisoned .lock else .closed) :
+    match after.1.activeEntry with
+    | none => after.2 = .closed
+    | some id =>
+      let child := SingleFile.postState
+        (SingleFile.closeModel policy reports after.2 {image := after.1.disk.segment id, held := true})
+      child.held = false ∧ child.closed = true ∧ child.image = after.1.disk.segment id := by
+  rw [slot]
+  cases entry with
+  | none => exact phase
+  | some id =>
+    rw [phase]
+    have released := SingleFile.close_poisoned policy reports {image := after.1.disk.segment id, held := true}
+    exact ⟨released.2.1, released.1, released.2.2⟩
 
 /-- Reject an invalid request before releasing, preparing, or writing a
 child. The old disk and child remain unchanged even if the public root

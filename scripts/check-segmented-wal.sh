@@ -164,6 +164,7 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.nativeBootstrap_ready
 #check_axioms Model.publicNativeAppend_refines
 #check_axioms Model.publicNativeAppend_position
+#check_axioms Model.appendFailure_childClose
 #check_axioms Model.reopensWithAppendAuthority
 #check_axioms Model.appendRecovery_representable
 #check_axioms Model.nativeAppendModel_rotation_refines
