@@ -56,6 +56,26 @@ def readEvents : List UInt64 → List Reply → List Event
   | k :: ks, r :: rs => readEvent k r ++ readEvents ks rs
   | _, _ => []
 
+/-- The concrete reply sequence has exactly one entry for every requested key.
+The client projection agrees with the finite-read guarantee of the model. -/
+theorem readMany_length (handle : Native.Handle) (keys : List UInt64) (w : W) :
+    ((readMany handle keys) w).val.length = keys.length := by
+  induction keys generalizing w with
+  | nil => rfl
+  | cons k ks ih =>
+    change ((_ :: (readMany handle ks ((Native.get handle k).toBaseIO w).state).val).length = _)
+    simp [ih]
+
+theorem readEvents_eq_zip (keys : List UInt64) (replies : List Reply) :
+    readEvents keys replies = (keys.zip replies).filterMap (fun (key, reply) =>
+      match reply with | .ok v => some (.got key v) | .error _ => none) := by
+  induction keys generalizing replies with
+  | nil => simp [readEvents]
+  | cons key ks ih =>
+    cases replies with
+    | nil => simp [readEvents]
+    | cons r rs => cases r <;> simp [readEvents, readEvent, ih]
+
 def allReleased (life : Lifetime) (ref : IO.Ref (Phase Wal)) (dir : System.FilePath)
     (handle : Native.Handle) : List UInt64 → W → Prop
   | [], _ => True
