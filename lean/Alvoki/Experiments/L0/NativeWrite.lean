@@ -170,6 +170,31 @@ theorem reserve {physical : W → Footprint inode}
   reserveCore (P := fun stage w => SessionAt physical root lock ref wal s image history w stage)
     online phase (fun h => sessionRead phase h) (fun h => h.owned) (fun h => h.phase) (fun h _ step => h.advance step)
 
+theorem scanAt {physical : W → Footprint inode}
+    (entry : SessionAt physical root lock ref wal s image history hidden (.updating wal))
+    (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (prim : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
+      NativeRecoverAt.ScanPrimitives physical root wal image.tables w) :
+    let borrowing := ((ref.get : BaseIO _) hidden).state
+    let t := scanWorld wal borrowing
+    (ref.get : IO (Phase Wal)) hidden = .ok (.updating wal) borrowing ∧
+      Native.checked (Native.callbackComponents root ref).scan hidden = .ok image.view t ∧
+      SessionAt physical root lock ref wal s image history t (.updating wal) := by
+  obtain ⟨t, observed, scanned, kept⟩ := scanCore (P := fun stage w => SessionAt physical root lock ref wal s image history w stage)
+    entry heap (fun h => sessionRead phase h) (fun h => by
+      obtain ⟨reg, slot, _, _, view⟩ := h.child
+      exact ⟨reg, (cached _ h.owned wal reg).mp slot, view⟩) (fun h =>
+        h.phase ▸ h.advance (WalRecoverySlice.Segmented.Native.scanWorld_frame (prim _ h) Frame.refl))
+  have stateEq := observed
+  rw [read_io] at stateEq
+  dsimp only
+  rw [(EST.Out.ok.inj stateEq).2]
+  refine ⟨observed, ?_, kept⟩
+  unfold Native.callbackComponents Cell.components Native.storageCallbacks
+  rw [checked_borrow]
+  exact scanned
+
 theorem scan {physical : W → Footprint inode}
     (entry : SessionAt physical root lock ref wal s image history hidden (.updating wal))
     (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
@@ -178,15 +203,8 @@ theorem scan {physical : W → Footprint inode}
       NativeRecoverAt.ScanPrimitives physical root wal image.tables w) :
     ∃ t, Native.checked (Native.callbackComponents root ref).scan hidden = .ok image.view t ∧
       SessionAt physical root lock ref wal s image history t (.updating wal) := by
-  obtain ⟨t, _, scanned, kept⟩ := scanCore (P := fun stage w => SessionAt physical root lock ref wal s image history w stage)
-    entry heap (fun h => sessionRead phase h) (fun h => by
-      obtain ⟨reg, slot, _, _, view⟩ := h.child
-      exact ⟨reg, (cached _ h.owned wal reg).mp slot, view⟩) (fun h =>
-        h.phase ▸ h.advance (WalRecoverySlice.Segmented.Native.scanWorld_frame (prim _ h) Frame.refl))
-  refine ⟨_, ?_, kept⟩
-  unfold Native.callbackComponents Cell.components Native.storageCallbacks
-  rw [checked_borrow]
-  exact scanned
+  obtain ⟨_, scanned, kept⟩ := scanAt entry heap cached phase prim
+  exact ⟨_, scanned, kept⟩
 
 /-- The position guard keeps its pre-append disk. Otherwise the public
 operation calls append once, using precisely the registration and world
