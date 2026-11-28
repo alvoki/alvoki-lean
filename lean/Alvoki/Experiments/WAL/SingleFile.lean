@@ -341,6 +341,36 @@ def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload) :
 def scan (h : Handle) : IO (List Bytes) := withMutex h do
   checked (scanWith (← h.state.get))
 
+/-- A read of the allocated, active phase under its own mutex returns the
+stored scan and preserves the actual mutex finalizer's reached world. -/
+theorem scan_active_run (bound : h.Assembled policy cell mutex) (start : Void IO.RealWorld)
+    (active : ((cell.get : BaseIO _) (mutex.lock start).state).val =
+      Phase.active lock files cursor entries) :
+    scan h start = .ok entries
+      (mutex.unlock ((cell.get : BaseIO _) (mutex.lock start).state).state).state := by
+  subst h
+  let locked := (mutex.lock start).state
+  let read := (cell.get : BaseIO _) locked
+  have readRun : (cell.get : IO _) locked = .ok read.val read.state := rfl
+  have checkedRun : checked (scanWith read.val) read.state = .ok entries read.state := by
+    change read.val = _ at active
+    rw [active]
+    rfl
+  have base (a : BaseIO Unit) (w : Void IO.RealWorld) :
+      (liftM a : IO Unit) w = .ok (a w).val (a w).state := by
+    change BaseIO.toEIO a w = _
+    cases ran : a w
+    simp [BaseIO.toEIO, ran]
+  unfold scan withMutex
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base, tryFinally,
+    tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+    Functor.map, instMonadEIO._aux_1]
+  dsimp only [locked] at readRun
+  rw [readRun]
+  simp only
+  rw [checkedRun]
+  rfl
+
 def close (h : Handle) : IO Unit := withMutex h do
   checked (closeWith (← h.state.get) h.state.set (fun lock => lock.unlock))
 

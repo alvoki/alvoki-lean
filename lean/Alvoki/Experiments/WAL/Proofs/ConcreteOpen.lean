@@ -379,4 +379,28 @@ theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps di
   case error.ok x t y u => cases y <;> first | contradiction | exact exitFrame _ _ same
   all_goals contradiction
 
+
+/-- Local laws for a read of a registered phase under the actual mutex.
+All three instructions carry the physical frame to their successor. -/
+structure ScanSteps (R : W → OpenImage → Prop) (rt : Runtime R) : Prop where
+  lock : ∀ t u cell phase mutex, R t u → rt.mutex t mutex → rt.cell t cell phase →
+    let reached := (mutex.lock t).state
+    R reached u ∧ rt.mutex reached mutex ∧ rt.cell reached cell phase
+  read : ∀ t u cell phase mutex, R t u → rt.mutex t mutex → rt.cell t cell phase →
+    let got := (cell.get : BaseIO _) t
+    got.val = phase ∧ R got.state u ∧ rt.mutex got.state mutex ∧ rt.cell got.state cell phase
+  unlock : ∀ t u cell phase mutex, R t u → rt.mutex t mutex → rt.cell t cell phase →
+    let reached := (mutex.unlock t).state
+    R reached u ∧ rt.mutex reached mutex ∧ rt.cell reached cell phase
+
+theorem scan (steps : ScanSteps R rt) (owned : Owns rt B p w h ready) (image : R w u) :
+    ∃ t, SingleFile.scan h w = .ok ready.recovered.batches t ∧
+      R t u ∧ Owns rt B p t h ready := by
+  obtain ⟨a, pair, cell, mutex, bound, ref, held⟩ := owned
+  obtain ⟨frame, held, ref⟩ := steps.lock _ _ _ _ _ image held ref
+  obtain ⟨got, frame, held, ref⟩ := steps.read _ _ _ _ _ frame held ref
+  have eq := scan_active_run bound w (got.trans pair.phase)
+  obtain ⟨frame, held, ref⟩ := steps.unlock _ _ _ _ _ frame held ref
+  exact ⟨_, pair.batches ▸ eq, frame, a, pair, cell, mutex, bound, ref, held⟩
+
 end WalRecoverySlice.SingleFile.ConcreteRecovery
