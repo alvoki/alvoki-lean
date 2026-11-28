@@ -80,6 +80,8 @@ private def retryAfterRelease (dir : FilePath) (p : Policy) : IO Unit := do
   Native.close h
   require ((← IO.FS.readFile unknown) == "keep") "deleted unrelated file during cleanup"
   failed (Native.openExisting dir) "ignored failed cleanup on reopen"
+  let child ← SingleFile.openExisting (dir / "segment-1")
+  SingleFile.close child
   -- Leave a partial retired directory after the release authority has settled.
   IO.FS.removeFile (dir / "segment-0" / "segment")
   IO.FS.removeFile unknown
@@ -87,6 +89,30 @@ private def retryAfterRelease (dir : FilePath) (p : Policy) : IO Unit := do
   check h 1 [[11]]
   require (!(← (dir / "segment-0").pathExists)) "retry failed to finish reclamation"
   Native.close h
+
+private def activeScope : IO Unit := do
+  let events ← IO.mkRef ([] : List String)
+  let child := 37
+  let close (reached : Nat) : IO Unit := do
+    require (reached == child) "cleanup received a different child"
+    events.modify (· ++ ["child close"])
+    throw <| IO.userError "reported child close error"
+  let action : IO Unit := withActiveChild (error := IO.Error) (pure child) close fun reached => do
+    require (reached == child) "continuation received a different child"
+    events.modify (· ++ ["continuation"])
+    throw <| IO.userError "reported collection error"
+  let result ← (releaseWith (error := IO.Error) action (do
+    events.modify (· ++ ["root unlock"])
+    throw <| IO.userError "reported root unlock error")).toBaseIO
+  match result with
+  | .error err => require (err.toString == "reported collection error") "cleanup replaced the primary error"
+  | .ok () => throw <| IO.userError "failed continuation returned a handle"
+  require ((← events.get) == ["continuation", "child close", "root unlock"])
+    "root unlock did not follow failed child close"
+  let transferred ← withActiveChild (error := IO.Error) (pure child) close pure
+  require (transferred == child) "success transferred a different child"
+  require ((← events.get) == ["continuation", "child close", "root unlock"])
+    "successful transfer closed the active child"
 
 private def invalidControl (dir : FilePath) : IO Unit := do
   let h ← Native.create dir .boundary 1
@@ -103,6 +129,10 @@ private def invalidControl (dir : FilePath) : IO Unit := do
   IO.FS.writeBinFile path ok
   IO.FS.writeFile (dir / "segment-0" / "policy") "v3 log"
   failed (Native.openExisting dir) "accepted a child using a different WAL policy"
+  IO.FS.writeFile (dir / "segment-0" / "policy") "v3 boundary"
+  let h ← Native.openExisting dir
+  check h 0 [[7]]
+  Native.close h
 
 private def freshOnly (dir : FilePath) : IO Unit := do
   IO.FS.writeFile (dir / "unrelated") "keep"
@@ -110,6 +140,7 @@ private def freshOnly (dir : FilePath) : IO Unit := do
   require ((← IO.FS.readFile (dir / "unrelated")) == "keep") "create modified unrelated data"
 
 def run : IO Unit := do
+  activeScope
   for p in [Policy.logOnly, .boundary] do
     IO.FS.withTempDir fun dir => lifecycle dir p
     IO.FS.withTempDir fun dir => retryRotation dir p
