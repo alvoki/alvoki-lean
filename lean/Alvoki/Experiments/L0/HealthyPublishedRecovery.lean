@@ -10,50 +10,13 @@ open WalRecoverySlice.Segmented.Native (PhaseMemory ChildMemory Registration Ori
 open WalRecoverySlice.Segmented.Native.HealthyEmpty (bind_ok lift_ok checked_ok FileBytes)
 open Alvoki.NativePost (Returns W)
 
-/-- The manifest read and its directory barrier use consecutive reached worlds. -/
-structure Manifest (root : FilePath) (start : W) (version : L0Manifest.Version) (finish : W) where
-  readAt : W
-  syncAt : W
-  directory : IO.FS.Handle
-  read : FileBytes (root / "manifest" / "BLOB") start (L0Manifest.encode version) readAt
-  opened : IO.FS.Handle.mk (root / "manifest") .read readAt = .ok directory syncAt
-  synced : DurableBlob.syncHandle directory syncAt = .ok () finish
-
-theorem Manifest.run (m : Manifest root start version t) (valid : version.Valid) (ref : Ref) :
-    (Native.callbackComponents root ref).manifest.reopen.run start = .ok (.ok version) t := by
-  have blob : (DurableBlob.native (root / "manifest")).reopen start = .ok (L0Manifest.encode version) t := by
-    rw [DurableBlob.native_reopen_schedule]
-    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, m.read.run, m.opened, m.synced,
-      Pure.pure, instMonadEIO._aux_5, EST.pure]
-  change (NativeManifest.backend _).reopen.run start = _
-  unfold NativeManifest.backend L0Manifest.backend
-  apply bind_ok (lift_ok blob)
-  rw [L0Manifest.decode_encode valid]
-  rfl
-
-private theorem walRan {ref : Ref} {reg : Registration}
-    (opening : (ref.get : IO (Phase Wal)) w = .ok .opening u)
-    (opened : WalRecoverySlice.Segmented.Native.openExisting (root / "wal") u = .ok wal v)
-    (heap : PhaseMemory) (registered : heap.Registered wal reg (HealthyReads.attached ref wal v)) :
-    (Native.callbackComponents root ref).reopenWal.run w =
-      .ok (.ok reg.session.view) (HealthyReads.scanned ref wal v) := by
-  unfold Native.callbackComponents Cell.components Cell.reopenWal
-  apply bind_ok (lift_ok opening)
-  change ((do
-    let h ← (liftM (WalRecoverySlice.Segmented.Native.openExisting (root / "wal")) : Alvoki.NativePost.F Wal)
-    let _ ← (liftM (ref.swap (.recovering h) : IO _) : Alvoki.NativePost.F _)
-    liftM (WalRecoverySlice.Segmented.Native.scan h)) : Alvoki.NativePost.F _).run u = _
-  apply bind_ok (lift_ok opened)
-  apply bind_ok (lift_ok (swap_io ref (.recovering wal) v))
-  exact lift_ok (WalRecoverySlice.Segmented.Native.scan_ready_world heap registered.ready).1
-
 structure Progress {physical : W → Footprint inode} {heap : PhaseMemory} {image : Selected}
     (ops : WithOpenReads.Runtime physical root lock ref image life heap) (start : W) where
   bs : List WalRecoverySlice.Bytes
   small : bs.length ≤ 1
   manifestAt : W
   walAt : W
-  manifest : Manifest root start image.version manifestAt
+  manifest : HealthyReads.Manifest root start manifestAt image.version
   opening : (ref.get : IO (Phase Wal)) manifestAt = .ok .opening walAt
   grant : HealthyReads.WalRoot (root / "wal") walAt
   memory : ChildMemory (fun w => (physical w).disk)
@@ -72,11 +35,11 @@ theorem recover {physical : W → Footprint inode} (heap : PhaseMemory)
     (bytes : (physical start).manifest.active = L0Manifest.encode image.version) (io : Progress ops start) :
     ∃ session wal t, Native.recoverAt root ref start = .ok session t ∧ Installed session image history ∧
       Attached physical root lock ref image wal t := by
-  have manifest := io.manifest.run d.unique ref
+  have manifest := io.manifest.runVersion ref d.unique
   have ready := manifestOpening d opening bytes (ops.manifest _ opening)
   rw [Returns, manifest] at ready
   obtain ⟨wal,v,reg,opened,shape,origin,held,_⟩ := io.grant.openBatches heap io.small io.worker
-  have called := walRan io.opening opened heap (io.attach _ _ _ origin held)
+  have called := HealthyReads.walRan io.opening opened heap (io.attach _ _ _ origin held).ready
   have same v (p : WalRecoverySlice.Segmented.PermittedView image.view none v) : v = image.view := by
     simpa [WalRecoverySlice.Segmented.PermittedView] using p
   have selected := reopenWal_selected ready.2 heap ops.cleanup.cached ops.wal.toOpenIO ops.childCache ops.phase

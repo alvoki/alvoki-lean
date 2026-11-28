@@ -13,26 +13,46 @@ abbrev Wal := NativeScope.Wal
 abbrev F := ExceptT String IO
 def empty : Session := ⟨.empty, ∅⟩
 
-structure Manifest (root : FilePath) (w t : W) where
+structure Manifest (root : FilePath) (w t : W) (version : L0Manifest.Version := .empty) where
   readWorld : W
   dirWorld : W
   dir : IO.FS.Handle
-  bytes : FileBytes (root / "manifest" / "BLOB") w (L0Manifest.encode .empty) readWorld
+  bytes : FileBytes (root / "manifest" / "BLOB") w (L0Manifest.encode version) readWorld
   openDir : IO.FS.Handle.mk (root / "manifest") .read readWorld = .ok dir dirWorld
   sync : DurableBlob.syncHandle dir dirWorld = .ok () t
 
-theorem Manifest.run (m : Manifest root w t) (ref : Ref) :
-    (Native.callbackComponents root ref).manifest.reopen.run w = .ok (.ok .empty) t := by
+theorem Manifest.runVersion (m : Manifest root w t version) (ref : Ref) (valid : version.Valid) :
+    (Native.callbackComponents root ref).manifest.reopen.run w = .ok (.ok version) t := by
   have read := m.bytes.run
-  have blob : (DurableBlob.native (root / "manifest")).reopen w = .ok (L0Manifest.encode .empty) t := by
+  have blob : (DurableBlob.native (root / "manifest")).reopen w = .ok (L0Manifest.encode version) t := by
     rw [DurableBlob.native_reopen_schedule]
     simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, read, m.openDir, m.sync, Pure.pure,
       instMonadEIO._aux_5, EST.pure]
   change (NativeManifest.backend _).reopen.run w = _
   unfold NativeManifest.backend L0Manifest.backend
   apply bind_ok (lift_ok blob)
-  rw [L0Manifest.decode_encode (by decide : L0Manifest.Version.empty.Valid)]
+  rw [L0Manifest.decode_encode valid]
   rfl
+
+theorem Manifest.run (m : Manifest root w t) (ref : Ref) :
+    (Native.callbackComponents root ref).manifest.reopen.run w = .ok (.ok .empty) t :=
+  m.runVersion ref (by decide)
+
+theorem walRan {ref : Ref}
+    (opening : (ref.get : IO (Phase Wal)) w = .ok .opening u)
+    (opened : WalRecoverySlice.Segmented.Native.openExisting (root / "wal") u = .ok wal v)
+    (heap : PhaseMemory) (registered : heap.Ready wal session ((ref.swap (.recovering wal) : BaseIO _) v).state) :
+    (Native.callbackComponents root ref).reopenWal.run w =
+      .ok (.ok session.view) (WalRecoverySlice.Segmented.Native.scanWorld wal ((ref.swap (.recovering wal) : BaseIO _) v).state) := by
+  unfold Native.callbackComponents Cell.components Cell.reopenWal
+  apply bind_ok (lift_ok opening)
+  change ((do
+    let h ← (liftM (WalRecoverySlice.Segmented.Native.openExisting (root / "wal")) : Alvoki.NativePost.F Wal)
+    let _ ← (liftM (ref.swap (.recovering h) : IO _) : Alvoki.NativePost.F _)
+    liftM (WalRecoverySlice.Segmented.Native.scan h)) : Alvoki.NativePost.F _).run u = _
+  apply bind_ok (lift_ok opened)
+  apply bind_ok (lift_ok (NativeScope.swap_io ref (.recovering wal) v))
+  exact lift_ok (WalRecoverySlice.Segmented.Native.scan_ready_world heap registered).1
 
 theorem recover (manifest : Manifest root start t) (ref : Ref) (heap : PhaseMemory)
     (phaseRead : (ref.get : IO (Phase Wal)) t = .ok .opening u)
@@ -41,19 +61,7 @@ theorem recover (manifest : Manifest root start t) (ref : Ref) (heap : PhaseMemo
       ((ref.swap (.recovering wal) : BaseIO _) v).state) :
     Native.recoverAt root ref start = .ok empty
       (WalRecoverySlice.Segmented.Native.scanWorld wal ((ref.swap (.recovering wal) : BaseIO _) v).state) := by
-  let reach := ((ref.swap (.recovering wal) : BaseIO _) v).state
-  have scan := (WalRecoverySlice.Segmented.Native.scan_ready_world heap ready).1
-  have reopen : (Native.callbackComponents root ref).reopenWal.run t =
-      .ok (.ok ⟨0, []⟩) (WalRecoverySlice.Segmented.Native.scanWorld wal reach) := by
-    unfold Native.callbackComponents Cell.components Cell.reopenWal
-    apply bind_ok (lift_ok phaseRead)
-    change ((do
-      let h ← (liftM (WalRecoverySlice.Segmented.Native.openExisting (root / "wal")) : F Wal)
-      let _ ← (liftM (ref.swap (.recovering h) : IO _) : F _)
-      liftM (WalRecoverySlice.Segmented.Native.scan h)) : F _).run u = _
-    apply bind_ok (lift_ok opened)
-    apply bind_ok (lift_ok (NativeScope.swap_io ref (.recovering wal) v))
-    exact lift_ok scan
+  have reopen := walRan phaseRead opened heap ready
   unfold Native.recoverAt
   change WalRecoverySlice.Segmented.Native.checked _ start = _
   apply WalRecoverySlice.Segmented.Native.HealthyEmpty.checked_ok
@@ -288,5 +296,25 @@ theorem withOpen {physical : W → Footprint inode} {Q : W → Prop}
   have safety := WithOpenReads.withOpen entry files heap runtime prior [first, second] rootLife
   rw [NativeScope.Post, completed] at safety
   exact safety
+
+theorem Entry.openingWorld {physical : W → Footprint inode}
+    (entry : NativeReadScope.Entry physical path root image)
+    (files : NativeReadScope.Files physical root image start)
+    (p : Entry path root start) :
+    NativeRecoverAt.Opening physical root p.lock p.fresh.val image p.fresh.state ∧
+      (physical p.fresh.state).manifest.active = L0Manifest.encode image.version := by
+  have validated := NativeScope.validatedRoot_rule path (entry.resolve start files)
+    (fun _ w hr name => (entry.stat name w hr.2).weaken
+      (fun _ _ kept => ⟨hr.1,kept⟩) (fun _ _ kept => ⟨hr.1,kept⟩)) (fun _ _ hr _ => hr.2)
+  have actual := HealthyRootAcquisition.validatedRoot path root p.resolve p.walStat p.walDir p.manifestStat
+    p.manifestDir p.tableStat p.tableDir p.existsLock p.lockStat p.regular
+  rw [NativeScope.Post, actual] at validated
+  have bound := entry.openFile p.checkedLock validated.2
+  rw [NativeScope.Post, p.openLock] at bound
+  have opened : NativeReadScope.OpenedAt root p.lock p.opened := ⟨_,p.openLock⟩
+  have locked := entry.lock p.lock p.opened opened bound.1 bound.2
+  rw [NativeScope.Post,p.exclusive] at locked
+  obtain ⟨owned, phase, represented⟩ := entry.fresh p.lock p.held ⟨_,opened,p.exclusive⟩ (locked.2 rfl) locked.1
+  exact ⟨⟨owned,phase,represented.catalog,represented.disk⟩,represented.manifest⟩
 
 end ExperimentalL0.HealthyReads

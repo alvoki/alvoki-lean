@@ -139,26 +139,6 @@ theorem callback {physical : W → Footprint inode}
   unfold NativeScope.Post at observed
   cases result : lock.unlock endWal <;> rw [result] at observed safe <;> exact ⟨observed,safe⟩
 
-private theorem openingWorld {physical : W → Footprint inode}
-    (entry : NativeReadScope.Entry physical path root image)
-    (files : NativeReadScope.Files physical root image start)
-    (p : HealthyReads.Entry path root start) :
-    NativeRecoverAt.Opening physical root p.lock p.fresh.val image p.fresh.state ∧
-      (physical p.fresh.state).manifest.active = L0Manifest.encode image.version := by
-  have validated := NativeScope.validatedRoot_rule path (entry.resolve start files)
-    (fun _ w hr name => (entry.stat name w hr.2).weaken
-      (fun _ _ kept => ⟨hr.1,kept⟩) (fun _ _ kept => ⟨hr.1,kept⟩)) (fun _ _ hr _ => hr.2)
-  have actual := HealthyRootAcquisition.validatedRoot path root p.resolve p.walStat p.walDir p.manifestStat
-    p.manifestDir p.tableStat p.tableDir p.existsLock p.lockStat p.regular
-  rw [NativeScope.Post, actual] at validated
-  have bound := entry.openFile p.checkedLock validated.2
-  rw [NativeScope.Post, p.openLock] at bound
-  have opened : NativeReadScope.OpenedAt root p.lock p.opened := ⟨_,p.openLock⟩
-  have locked := entry.lock p.lock p.opened opened bound.1 bound.2
-  rw [NativeScope.Post,p.exclusive] at locked
-  obtain ⟨owned, phase, represented⟩ := entry.fresh p.lock p.held ⟨_,opened,p.exclusive⟩ (locked.2 rfl) locked.1
-  exact ⟨⟨owned,phase,represented.catalog,represented.disk⟩,represented.manifest⟩
-
 /-- Starting at an initialized empty root, actual acquisition and recovery
 produce the public callback. A healthy last unlock delivers success; a
 specified last-unlock error returns that error with the same committed append
@@ -191,7 +171,7 @@ theorem withOpen {physical : W → Footprint inode} {Q : W → Prop}
   obtain ⟨wal,v,reg,opened,sessionEq,origin,registered,_⟩ := grant.open heap worker
   have recovered := HealthyReads.recover manifest p.fresh.val heap opening opened
     (sessionEq ▸ (carry wal v reg origin registered).ready)
-  obtain ⟨atRoot,bytes⟩ := openingWorld entry files p
+  obtain ⟨atRoot,bytes⟩ := HealthyReads.Entry.openingWorld entry files p
   let ops := runtime p.lock p.fresh.val
   have ready hist (d : Durable image hist) := by
     have r := NativeRecoverAt.recoverAt_checks d atRoot bytes (ops.manifest _ atRoot) heap ops.cleanup.cached

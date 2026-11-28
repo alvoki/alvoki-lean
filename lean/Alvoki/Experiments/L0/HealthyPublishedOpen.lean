@@ -8,23 +8,6 @@ open NativeRead (Footprint Online)
 open NativeFlushRestart (published)
 open WalRecoverySlice.Segmented.Native (PhaseMemory)
 
-private theorem openingAt (p : HealthyReads.Entry path root start)
-    (entry : NativeReadScope.Entry physical path root image) (files : NativeReadScope.Files physical root image start) :
-    NativeRecoverAt.Opening physical root p.lock p.fresh.val image p.fresh.state ∧
-      (physical p.fresh.state).manifest.active = L0Manifest.encode image.version := by
-  have resolved := HealthyRootAcquisition.validatedRoot path root p.resolve p.walStat p.walDir p.manifestStat
-    p.manifestDir p.tableStat p.tableDir p.existsLock p.lockStat p.regular
-  have valid := NativeScope.validatedRoot_rule path (entry.resolve start files)
-    (fun r w hr file => (entry.stat file w hr.2).weaken (fun _ _ f => ⟨hr.1,f⟩) (fun _ _ f => ⟨hr.1,f⟩))
-    (fun _ _ hr _ => hr.2)
-  rw [Post,resolved] at valid
-  have opened := entry.openFile _ valid.2
-  rw [Post,p.openLock] at opened
-  have grant := entry.lock _ _ ⟨_,p.openLock⟩ opened.1 opened.2
-  rw [Post,p.exclusive] at grant
-  obtain ⟨owned,phase,fresh⟩ := entry.fresh _ _ ⟨_,⟨_,p.openLock⟩,p.exclusive⟩ (grant.2 rfl) grant.1
-  exact ⟨⟨owned,phase,fresh.catalog,fresh.disk⟩,fresh.manifest⟩
-
 noncomputable abbrev pinned (physical : W → Footprint inode) (root : FilePath) (id : UInt64) :=
   pin physical (tablePath (root / "tables") id)
 
@@ -68,7 +51,7 @@ theorem withOpen {physical : W → Footprint inode} {id : UInt64}
     | ready db => obtain ⟨_,_,impossible,_⟩ := represented; cases impossible
     | offline known pending => obtain ⟨_,h,_,dur⟩ := represented; exact ⟨_,dur⟩
   have files' := pinFiles files name content
-  obtain ⟨opening,active⟩ := openingAt p io.entry files'
+  obtain ⟨opening,active⟩ := HealthyReads.Entry.openingWorld io.entry files' p
   obtain ⟨session,wal,t,ran,installed,attached⟩ := recover heap io.runtime d opening active io.recovery
   have recovered := attached.sessionAt installed
   obtain ⟨_,r,frame⟩ := io.runtime.phase.refRead wal _ recovered.owned (by rw [recovered.phase]; rfl)
