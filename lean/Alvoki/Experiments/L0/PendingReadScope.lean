@@ -40,55 +40,6 @@ private theorem historyAt (prior : Execution.Run events none image) : ∃ h, Non
     obtain ⟨_, h, _, d⟩ := represented
     exact ⟨h, d⟩
 
-/-- An early failure swaps the fresh opening cell offline without an attached
-WAL. The root descriptor remains owned until the single outer unlock. -/
-structure Stopped (req : Option WalRecoverySlice.Segmented.Contract.Request)
-    (physical : W → Footprint inode) (root : FilePath) (ref : Ref) (image : Selected) (w : W) : Prop where
-  files : RestartFiles req physical root image w
-  refBound : (physical w).phaseRef = some ref
-  offline : (physical w).phase = .offline
-
-structure EmptyRelease (req : Option WalRecoverySlice.Segmented.Contract.Request)
-    (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle) (ref : Ref)
-    (image : Selected) : Prop where
-  swap : ∀ w, Owned (physical w) root lock ref → (physical w).phase = .opening →
-    RestartFiles req physical root image w →
-    let taken := (ref.swap .offline : BaseIO _) w
-    taken.val = .opening ∧ Stopped req physical root ref image taken.state ∧
-      (physical taken.state).rootLock = some (root, lock)
-  unlock : ∀ u, Grant root lock ref → Stopped req physical root ref image u →
-    (physical u).rootLock = some (root, lock) →
-    Post lock.unlock u (fun _ t => Stopped req physical root ref image t ∧ (physical t).rootLock = none)
-      (fun _ t => Stopped req physical root ref image t)
-
-structure ClosedBeforeSelection (req : Option WalRecoverySlice.Segmented.Contract.Request)
-    (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle) (ref : Ref)
-    (image : Selected) (t : W) : Prop extends Stopped req physical root ref image t where
-  report : ∃ u, Grant root lock ref ∧ (physical u).rootLock = some (root, lock) ∧
-    ((lock.unlock u = .ok () t ∧ (physical t).rootLock = none) ∨ ∃ e, lock.unlock u = .error e t)
-
-theorem EmptyRelease.release (laws : EmptyRelease req physical root lock ref image)
-    (grant : Grant root lock ref) (owned : Owned (physical w) root lock ref)
-    (phase : (physical w).phase = .opening) (files : RestartFiles req physical root image w)
-    (finish : ∀ t, ClosedBeforeSelection req physical root lock ref image t → result t) :
-    Release ref lock w result (fun _ t => result t) := by
-  obtain ⟨opening, off, held⟩ := laws.swap w owned phase files
-  unfold Release
-  dsimp only
-  rw [opening]
-  let u := ((ref.swap .offline : BaseIO _) w).state
-  change Post lock.unlock u (fun _ t => result t) (fun _ t => result t)
-  have returned := laws.unlock u grant off held
-  unfold Post at *
-  cases ran : lock.unlock u with
-  | ok val t =>
-    cases val
-    rw [ran] at returned
-    exact finish t ⟨returned.1, u, grant, held, .inl ⟨ran, returned.2⟩⟩
-  | error e t =>
-    rw [ran] at returned
-    exact finish t ⟨returned, u, grant, held, .inr ⟨e, ran⟩⟩
-
 /-- The first public restart can fail before granting its root, return
 before WAL selection, or select a view and then report a validation or cleanup error. -/
 inductive Failure (req : Option WalRecoverySlice.Segmented.Contract.Request) (physical : W → Footprint inode)
@@ -96,7 +47,7 @@ inductive Failure (req : Option WalRecoverySlice.Segmented.Contract.Request) (ph
     (call : RootCall) (rootLife : RootLifetime) (err : IO.Error) (w : W) : Prop where
   | before : call.Released rootLife → RestartFiles req physical root image w →
       Admitted (events ++ [.openFailed]) image req → Failure req physical root image life events call rootLife err w
-  | early : call.Released rootLife → ClosedBeforeSelection req physical root lock ref image w →
+  | early : call.Released rootLife → Closed physical root lock ref image w req →
       Native.recoverAt root ref start = .error err reached →
       (∀ view, NativeRecoverAt.NoChecks root ref (choose image view) start) →
       Admitted (events ++ [.openFailed]) image req → Failure req physical root image life events call rootLife err w
@@ -127,7 +78,11 @@ structure Runtime (req : Option WalRecoverySlice.Segmented.Contract.Request) (ph
     NativeRecoverAt.ScanPrimitives physical root wal image.tables w
   tables : ∀ wal w, Owned (physical w) root lock ref →
     Primitives (tableNamespace physical root) life (Frame physical root wal image.tables w)
-  empty : EmptyRelease req physical root lock ref image
+  unlock : RootUnlock physical root lock ref image req
+  openingSwap : ∀ w, Owned (physical w) root lock ref → (physical w).phase = .opening →
+    RestartFiles req physical root image w →
+    let taken := (ref.swap .offline : BaseIO _) w
+    taken.val = .opening ∧ Custody physical root lock ref image taken.state req
   attached : ∀ view, PermittedView image.view req view →
     NativeReadRelease.Laws heap physical root lock ref (choose image view)
 
@@ -159,8 +114,11 @@ theorem withOpen (entry : RestartEntry req physical path root image) (files : Re
   | error e t =>
     rw [Post, ran] at post
     rcases post with ⟨⟨early, manifest⟩, noChecks⟩ | ⟨v, choice, ⟨wal, attached⟩, receipt⟩
-    · exact ops.empty.release grant early.owned early.phase ⟨early.catalog, manifest, early.disk⟩
-        fun _ closed => .early (call.released rootLife) closed ran noChecks prior.failed
+    · obtain ⟨opening, off⟩ := ops.openingSwap t early.owned early.phase ⟨early.catalog, manifest, early.disk⟩
+      have done u (closed : Closed physical root lock ref image u req) :
+          Failure req physical root image life events call rootLife e u :=
+        .early (call.released rootLife) closed ran noChecks prior.failed
+      exact ops.unlock.emptyTo grant opening off done (fun _ => done)
     · have failure : NativeRecoverAt.Failed physical root lock ref (choose image v) t := .inr ⟨wal, attached⟩
       have done u (closed : Closed physical root lock ref (choose image v) u) :
           Failure req physical root image life events call rootLife e u :=

@@ -111,6 +111,19 @@ theorem RootUnlock.observed (laws : RootUnlock physical root lock ref image pend
   | ok val t => cases val; exact ⟨by simpa only [EIO.toBaseIO, ran] using kept, grant, u, held,
       .inl ⟨ran, laws.unlocked _ _ grant held ran⟩⟩
 
+/-- Releasing a scope before WAL acquisition consumes the owned opening
+cell and reports the same outer unlock for known and pending histories. -/
+theorem RootUnlock.emptyTo (laws : RootUnlock physical root lock ref image pending)
+    (grant : Grant root lock ref) (opening : ((ref.swap .offline : BaseIO _) w).val = .opening)
+    (off : Custody physical root lock ref image ((ref.swap .offline : BaseIO _) w).state pending)
+    (succeed : ∀ t, Closed physical root lock ref image t pending → ok t)
+    (fail : ∀ e t, Closed physical root lock ref image t pending → err e t) :
+    Release ref lock w ok err := by
+  unfold Release
+  dsimp only
+  rw [opening]
+  exact (laws.observed grant off).weaken (fun _ => succeed) fail
+
 private theorem releaseTo (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (oldValue : ((ref.swap .offline : BaseIO _) w).val = old)
     (held : Custody physical root lock ref image ((ref.swap .offline : BaseIO _) w).state)
@@ -167,7 +180,7 @@ theorem failedTo (laws : Laws heap physical root lock ref image) (grant : Grant 
     Release ref lock w ok err := by
   rcases failed with ⟨opening, bytes⟩ | ⟨wal, held, child⟩
   · obtain ⟨value, off⟩ := laws.emptySwap w opening ⟨opening.catalog, bytes, opening.disk⟩
-    exact releaseTo laws grant value off (fun _ impossible => by cases impossible) succeed fail
+    exact laws.toRootUnlock.emptyTo grant value off succeed fail
   · exact childTo laws grant held.owned (by rw [held.phaseEq]; rfl) child held.catalog held.manifest.1 succeed fail
 
 theorem online (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
