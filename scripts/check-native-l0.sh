@@ -119,6 +119,9 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeRead.readMany_length
 #check_axioms NativeRead.readEvents_eq_zip
 #check_axioms NativeRead.caughtSizeError_thenHit
+#check_axioms WalRecoverySlice.Segmented.Native.acquireStore_rootLockAt
+#check_axioms WalRecoverySlice.Segmented.Native.close_registered
+#check_axioms NativeReadRelease.Laws.separate
 #check_axioms NativeReadRelease.root_released
 #check_axioms NativeRecoverAt.withOpen_manifestStatError
 #check_axioms HealthyReads.withOpen
