@@ -81,6 +81,9 @@ inductive ClosePoint (h : SingleFile.Handle) (fd : IO.FS.Handle) (w : W)
 
 inductive CloseSite (h : SingleFile.Handle) (w : W) : {α : Type} → IO α → W → Prop where
   | entry : ChildEntry h w action t → CloseSite h w action t
+  | closed (bound : h.Binds cell mutex) :
+      ((cell.get : BaseIO _) (mutex.lock w).state).val = .closed →
+      CloseSite h w (liftM mutex.unlock : IO Unit) ((cell.get : BaseIO _) (mutex.lock w).state).state
   | observed (op : AppendIO.CloseOperand h fd w) : ClosePoint h fd w op action t → CloseSite h w action t
 
 /-- The actual old slot is taken before any old-child close instruction.

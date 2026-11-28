@@ -1,8 +1,10 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.ChildCutCoverage
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutCoverage
+import Alvoki.Experiments.WAL.Segmented.Proofs.CloseCutCoverage
 
 namespace WalRecoverySlice.Segmented.Native.AppendCut
 open Model (Disk)
+open Observed (leaf finallyUnlock bindCuts bindRun resultCuts)
 open AppendIO (LocalIO Active sourceState inputContext issuedWorld installedWorld)
 open Alvoki.NativePost (W IOReturns)
 
@@ -26,7 +28,9 @@ proof below transforms them into the prefix evidence used by the disk model. -/
 def sourceSites (s : Store) (session : Session) (stop : Stop) : Sites s :=
   { sites s session stop with
     publish := fun _ => (ControlCutIO.program s session.control stop).cuts
-    write := ChildCutIO.source stop }
+    write := ChildCutIO.source stop
+    close := closeSource stop
+    oldClose := (oldCloseProgram s stop).cuts }
 
 private structure Covers (source certified : Observed α) : Prop where
   erase : source.run = certified.run
@@ -63,7 +67,8 @@ private theorem bodyCovered (s : Store) (session : Session) (batch : Bytes) (sto
   intro _
   dsimp only
   split
-  · apply Covers.bind (Covers.refl _)
+  · apply Covers.bind
+    · exact ⟨rfl, fun hit => oldCloseCovered hit⟩
     intro _
     unfold withActiveChild cleanupOnError
     apply Covers.bind (Covers.refl _)
@@ -77,7 +82,12 @@ private theorem bodyCovered (s : Store) (session : Session) (batch : Bytes) (sto
       apply Covers.bind
       · exact ⟨rfl, fun hit => ChildCutIO.sourceCovered hit⟩
       · exact fun _ => Covers.refl _
-    · exact fun _ => Covers.refl _
+    · intro _
+      apply Covers.bind
+      · apply Covers.catch
+        · exact ⟨rfl, fun hit => closeCovered hit⟩
+        · exact fun _ => Covers.refl _
+      · exact fun _ => Covers.refl _
   · apply Covers.bind (Covers.refl _)
     intro slot
     cases slot with
@@ -95,14 +105,6 @@ private theorem bodyCovered (s : Store) (session : Session) (batch : Bytes) (sto
         · exact ⟨rfl, fun hit => ChildCutIO.sourceCovered hit⟩
         · exact fun _ => Covers.refl _
 
-/-- Instrument a primitive without requiring that it returned at the point
-of interruption. The ordinary interpreter still calls the original action. -/
-private def leaf (stop : Stop) (a : IO α) : Observed α := ⟨a, stop a⟩
-
-private def finallyUnlock (body : Observed α) (mutex : Std.BaseMutex) (stop : Stop) : Observed α where
-  run := try body.run finally mutex.unlock
-  cuts w d := body.cuts w d ∨ stop (liftM mutex.unlock : IO Unit) (returnedWorld (body.run w)) d
-
 /-- Instantiate the executable phase update and child scheduling code with
 primitive observations. The lock and the finalizer surround the same body
 for successful and failed calls. -/
@@ -112,25 +114,6 @@ def publicProgram (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (batch :
   finallyUnlock (updateWith IO.userError (leaf stop (cell.get : IO _))
     (fun ph => leaf stop (cell.set ph : IO Unit))
     (fun store session => (sourceSites store session stop).appendSession session batch)) mutex stop
-
-private theorem bindCuts (a : Observed α) (f : α → Observed β) (w : W) (d : Disk) :
-    (a >>= f).cuts w d ↔ a.cuts w d ∨
-      match a.run w with | .ok x t => (f x).cuts t d | .error .. => False := by
-  change (_ ∨ ∃ x t, _ ∧ _) ↔ _
-  cases a.run w <;> simp [and_assoc]
-
-private theorem pureCuts (x : α) (w : W) (d : Disk) : (pure x : Observed α).cuts w d ↔ False := Iff.rfl
-
-private theorem resultCuts (a : Observed α) (f : α → β) (w : W) (d : Disk) :
-    (a >>= fun x => pure (f x)).cuts w d ↔ a.cuts w d := by
-  rw [bindCuts]
-  cases a.run w <;> simp [pureCuts]
-
-private theorem bindRun (a : Observed α) (f : α → Observed β) (w : W) :
-    (a >>= f).run w = match a.run w with
-      | .ok x t => (f x).run t | .error e t => .error e t := by
-  change (a.run >>= fun x => (f x).run) w = _
-  cases ran : a.run w <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
 
 private theorem readReady (cell : IO.Ref (Phase Store)) (mu : Std.BaseMutex) (stop : Stop) (w : W)
     (ready : ((cell.get : BaseIO _) (mu.lock w).state).val = .ready s session) :

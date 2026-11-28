@@ -60,6 +60,7 @@ theorem VolatileIO.closeSite (io : VolatileIO disk stop) (site : CloseSite h w a
     Writebacks (disk w) d := by
   cases site with
   | entry early => exact io.childEntry early cut
+  | closed _ _ => exact ((io.lock _ _).trans (io.get _ _)).trans (io.stopped _ (.leave _) _ _ cut)
   | observed op point => exact io.close op point cut
 
 theorem VolatileIO.oldClose (io : VolatileIO disk stop) (site : OldClose s w a t)

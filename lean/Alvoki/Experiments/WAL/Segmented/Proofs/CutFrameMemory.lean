@@ -35,6 +35,7 @@ theorem VolatileFrame.entry (f : VolatileFrame P) (site : ChildEntry h w a t) (p
 theorem VolatileFrame.close (f : VolatileFrame P) (site : CloseSite h w a t) (pw : P w) : P t := by
   cases site with
   | entry site => exact f.entry site pw
+  | closed _ _ => exact f.get _ (f.lock _ pw)
   | observed op site =>
     have read := f.get op.cell (f.lock op.mutex pw)
     have cleared := f.set op.cell .closed read

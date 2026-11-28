@@ -20,6 +20,37 @@ instance : MonadExceptOf IO.Error Observed where
   tryCatch a handler := ⟨tryCatchThe IO.Error a.run (fun e => (handler e).run), fun w d =>
     a.cuts w d ∨ ∃ e t, a.run w = .error e t ∧ (handler e).cuts t d⟩
 
+namespace Observed
+
+/-- Instrument a primitive without requiring that it returned at the point
+of interruption. The ordinary interpreter still calls the original action. -/
+def leaf (stop : {α : Type} → IO α → W → Disk → Prop) (a : IO α) : Observed α := ⟨a, stop a⟩
+
+def finallyUnlock (body : Observed α) (mutex : Std.BaseMutex) (stop : {α : Type} → IO α → W → Disk → Prop) : Observed α where
+  run := try body.run finally mutex.unlock
+  cuts w d := body.cuts w d ∨ stop (liftM mutex.unlock : IO Unit) (returnedWorld (body.run w)) d
+
+theorem bindCuts (a : Observed α) (f : α → Observed β) (w : W) (d : Disk) :
+    (a >>= f).cuts w d ↔ a.cuts w d ∨
+      match a.run w with | .ok x t => (f x).cuts t d | .error .. => False := by
+  change (_ ∨ ∃ x t, _ ∧ _) ↔ _
+  cases a.run w <;> simp [and_assoc]
+
+theorem pureCuts (x : α) (w : W) (d : Disk) : (pure x : Observed α).cuts w d ↔ False := Iff.rfl
+
+theorem resultCuts (a : Observed α) (f : α → β) (w : W) (d : Disk) :
+    (a >>= fun x => pure (f x)).cuts w d ↔ a.cuts w d := by
+  rw [bindCuts]
+  cases a.run w <;> simp [pureCuts]
+
+theorem bindRun (a : Observed α) (f : α → Observed β) (w : W) :
+    (a >>= f).run w = match a.run w with
+      | .ok x t => (f x).run t | .error e t => .error e t := by
+  change (a.run >>= fun x => (f x).run) w = _
+  cases ran : a.run w <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+
+end Observed
+
 /-- For every operation that calls the kernel, the abrupt observation is
 provided by the actual issued primitive within that operation. The root
 scheduler does not invent an exception or run the unwinder after a cut. -/
