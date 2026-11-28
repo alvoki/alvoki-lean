@@ -1508,7 +1508,8 @@ theorem installScopedModel_appendPhase (owned : RootBinding directory lock) (r :
       store.activeId = session.control.active ∧
       SingleFile.storedPhase store.activeChild =
         .active .lock (SingleFile.appendBindings session.control.policy)
-          (t.disk.cursor store.activeId) (segmentHistory session.control.capacity store.activeId history) := by
+          (t.disk.cursor store.activeId) (segmentHistory session.control.capacity store.activeId history) ∧
+      store.activeChild.recovered.batches = segmentHistory session.control.capacity store.activeId history := by
   rw [installScopedModel_run] at installed
   cases ran : (reopenScopedModel owned.root r openReports closeError).run s with
   | error => rw [ran] at installed; cases installed
@@ -1561,7 +1562,7 @@ theorem installScopedModel_appendPhase (owned : RootBinding directory lock) (r :
       have same : ready.recovered.batches = suffix := by
         injection other with result
         exact congrArg Decoded.batches (Except.ok.inj result)
-      refine ⟨history, shape, layout, live, durable, rfl, rfl, ?_⟩
+      refine ⟨history, shape, layout, live, durable, rfl, rfl, ?_, same⟩
       simp only [phase, same, layout.active.position, suffix]
 
 /-- The append consumer uses the active reference installed by the same

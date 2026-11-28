@@ -171,61 +171,6 @@ theorem appendActiveModel_refines (c : Control) (history : List Bytes) (batch : 
         have := entry.layout.lower
         omega
 
-theorem appendAfterNativeReopen (owned : RootBinding directory lock)
-    (rootReports : RootReports) (openReports : Nat → Nat → SingleFile.OpenReports)
-    (closeError : Option String) {start s : State} (prior : Recoverable known request start.disk)
-    {store : ReopenedStore directory lock} {session : Session}
-    (opened : (installScopedModel owned rootReports openReports closeError).run start =
-      .ok (.ok (.ready store session)) s)
-    (room : session.activeCount < session.control.capacity)
-    (size : batch.length ≤ 32) (position : session.view.tail < Contract.maxPosition)
-    (reports : ∀ cursor, SingleFile.AppendReports session.control.policy cursor batch) :
-    let result := (appendActiveModel session store.activeId reports).run
-      (s, SingleFile.storedPhase store.activeChild)
-    DiskPost (fun next disk => Installed next disk ∧
-      Contract.Step (.online session.view) (.ack (.append batch)) (.online next.view) ∧
-      next.tailPosition = session.view.tail + 1)
-      (Recoverable session.view (some (.append batch))) (erasePhase result) := by
-  obtain ⟨history, shape, entry, live, durable, _, idEq, phaseEq⟩ :=
-    installScopedModel_appendPhase owned rootReports openReports closeError prior opened
-  have fits : history.length < (session.control.active + 1) * session.control.capacity := by
-    have length := segmentHistory_active_length entry.layout.upper
-    have count := congrArg Session.activeCount shape
-    change session.activeCount =
-      (segmentHistory session.control.capacity session.control.active history).length at count
-    rw [length] at count
-    have lower := entry.layout.lower
-    have upper := entry.layout.upper
-    rw [Nat.add_mul, Nat.one_mul] at upper ⊢
-    omega
-  have exactView := congrArg Session.view shape
-  change session.view = historyView session.control history at exactView
-  have post := appendActiveModel_refines session.control history batch s entry live durable
-    fits size (exactView ▸ position) reports
-  dsimp only at post ⊢
-  rw [phaseEq, idEq, entry.active.position]
-  cases session with
-  | mk control count view =>
-    simp only [sessionOf, Session.mk.injEq, true_and] at shape
-    obtain ⟨rfl, rfl⟩ := shape
-    exact post
-
-/-- Position exhaustion and oversize checks run before any child or
-namespace action, so the original history remains recoverable. -/
-theorem appendActiveModel_rejected (session : Session) (id : Nat)
-    (reports : ∀ cursor, SingleFile.AppendReports session.control.policy cursor batch)
-    (s : State × SingleFile.AppendPhase)
-    (rejected : batch.length > 32 ∨ session.view.tail ≥ Contract.maxPosition) :
-    (appendActiveModel session id reports).run s =
-      .ok (.error (if batch.length > 32 then "batch out of bounds" else
-        "segmented WAL position exhausted")) s := by
-  by_cases size : batch.length > 32
-  · simp only [appendActiveModel, Native.appendOwnedWith, checkAppend, size, ↓reduceIte]
-    rfl
-  · have exhausted := rejected.resolve_left size
-    simp only [appendActiveModel, Native.appendOwnedWith, checkAppend, size, exhausted, ↓reduceIte]
-    rfl
-
 /-- A successful non-rotating append leaves the retained child description
 positioned at the new history. A failed write leaves that description poisoned. -/
 theorem appendActiveModel_childPhase (c : Control) (history : List Bytes) (batch : Bytes)
@@ -271,6 +216,70 @@ theorem appendActiveModel_childPhase (c : Control) (history : List Bytes) (batch
     cases response with
     | error => exact child.2.2.2
     | ok ack => cases ack; exact child.2.2.2.1
+
+theorem appendAfterNativeReopen (owned : RootBinding directory lock)
+    (rootReports : RootReports) (openReports : Nat → Nat → SingleFile.OpenReports)
+    (closeError : Option String) {start s : State} (prior : Recoverable known request start.disk)
+    {store : ReopenedStore directory lock} {session : Session}
+    (opened : (installScopedModel owned rootReports openReports closeError).run start =
+      .ok (.ok (.ready store session)) s)
+    (room : session.activeCount < session.control.capacity)
+    (size : batch.length ≤ 32) (position : session.view.tail < Contract.maxPosition)
+    (reports : ∀ cursor, SingleFile.AppendReports session.control.policy cursor batch) :
+    let result := (appendActiveModel session store.activeId reports).run
+      (s, SingleFile.storedPhase store.activeChild)
+    DiskPost (fun next disk => Installed next disk ∧
+      Contract.Step (.online session.view) (.ack (.append batch)) (.online next.view) ∧
+      next.tailPosition = session.view.tail + 1)
+      (Recoverable session.view (some (.append batch))) (erasePhase result) ∧
+    match result with
+    | .ok (.ok _) after =>
+      let next := store.activeChild.recovered.batches ++ [batch]
+      after.2 = .active .lock (SingleFile.appendBindings session.control.policy)
+        (Persistence.historyCursor next) next
+    | .ok (.error _) after | .error _ after => after.2 = .poisoned .lock := by
+  obtain ⟨history, shape, entry, live, durable, _, idEq, phaseEq, batchesEq⟩ :=
+    installScopedModel_appendPhase owned rootReports openReports closeError prior opened
+  have fits : history.length < (session.control.active + 1) * session.control.capacity := by
+    have length := segmentHistory_active_length entry.layout.upper
+    have count := congrArg Session.activeCount shape
+    change session.activeCount =
+      (segmentHistory session.control.capacity session.control.active history).length at count
+    rw [length] at count
+    have lower := entry.layout.lower
+    have upper := entry.layout.upper
+    rw [Nat.add_mul, Nat.one_mul] at upper ⊢
+    omega
+  have exactView := congrArg Session.view shape
+  change session.view = historyView session.control history at exactView
+  have post := appendActiveModel_refines session.control history batch s entry live durable
+    fits size (exactView ▸ position) reports
+  have phase := appendActiveModel_childPhase session.control history batch s entry fits size
+    (exactView ▸ position) reports
+  dsimp only at post phase ⊢
+  rw [idEq] at batchesEq
+  rw [phaseEq, idEq, entry.active.position, batchesEq]
+  cases session with
+  | mk control count view =>
+    simp only [sessionOf, Session.mk.injEq, true_and] at shape
+    obtain ⟨rfl, rfl⟩ := shape
+    exact ⟨post, phase⟩
+
+/-- Position exhaustion and oversize checks run before any child or
+namespace action, so the original history remains recoverable. -/
+theorem appendActiveModel_rejected (session : Session) (id : Nat)
+    (reports : ∀ cursor, SingleFile.AppendReports session.control.policy cursor batch)
+    (s : State × SingleFile.AppendPhase)
+    (rejected : batch.length > 32 ∨ session.view.tail ≥ Contract.maxPosition) :
+    (appendActiveModel session id reports).run s =
+      .ok (.error (if batch.length > 32 then "batch out of bounds" else
+        "segmented WAL position exhausted")) s := by
+  by_cases size : batch.length > 32
+  · simp only [appendActiveModel, Native.appendOwnedWith, checkAppend, size, ↓reduceIte]
+    rfl
+  · have exhausted := rejected.resolve_left size
+    simp only [appendActiveModel, Native.appendOwnedWith, checkAppend, size, exhausted, ↓reduceIte]
+    rfl
 
 /-- Retain the outer phase alongside the reached child and disk. Phase
 writes are reference operations and have no disk effects. -/
@@ -319,10 +328,14 @@ theorem publicAppendAfterReopen (owned : RootBinding directory lock)
     | .ok (.ok next) (after, phase) =>
       phase = .ready store.activeId next ∧ Installed next after.1.disk ∧
       Contract.Step (.online session.view) (.ack (.append batch)) (.online next.view) ∧
-      next.tailPosition = session.view.tail + 1
+      next.tailPosition = session.view.tail + 1 ∧
+      let nextHistory := store.activeChild.recovered.batches ++ [batch]
+      after.2 = .active .lock (SingleFile.appendBindings session.control.policy)
+        (Persistence.historyCursor nextHistory) nextHistory
     | .ok (.error _) (after, phase) | .error _ (after, phase) =>
       phase = .poisoned store.activeId ∧
-      Recoverable session.view (some (.append batch)) after.1.disk := by
+      Recoverable session.view (some (.append batch)) after.1.disk ∧
+      after.2 = .poisoned .lock := by
   dsimp only
   rw [publicAppendActiveModel_run]
   have result := appendAfterNativeReopen owned rootReports openReports closeError prior opened
@@ -330,10 +343,12 @@ theorem publicAppendAfterReopen (owned : RootBinding directory lock)
   dsimp only at result
   cases ran : (appendActiveModel session store.activeId (reports session.control.policy)).run
       (s, SingleFile.storedPhase store.activeChild) with
-  | error => rw [ran] at result; exact ⟨rfl, result⟩
+  | error => rw [ran] at result; exact ⟨rfl, result.1, result.2⟩
   | ok response after =>
     rw [ran] at result
-    cases response <;> exact ⟨rfl, result⟩
+    cases response with
+    | error => exact ⟨rfl, result.1, result.2⟩
+    | ok => exact ⟨rfl, result.1.1, result.1.2.1, result.1.2.2, result.2⟩
 
 /-- A pending append's exact reached disk is a valid input to the existing
 reopen producer. A failed attempt preserves both choices, and the first
