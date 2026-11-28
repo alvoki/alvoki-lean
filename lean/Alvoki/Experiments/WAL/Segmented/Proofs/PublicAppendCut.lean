@@ -20,6 +20,117 @@ inductive PublicStop (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (stor
   | fail : store.appendSession session batch (issuedWorld cell mutex store w) = .error e t →
       stop (liftM mutex.unlock : IO Unit) t d → PublicStop cell mutex store session batch w stop d
 
+/-- Instrument a primitive without requiring that it returned at the point
+of interruption. The ordinary interpreter still calls the original action. -/
+private def leaf (stop : Stop) (a : IO α) : Observed α := ⟨a, stop a⟩
+
+private def finallyUnlock (body : Observed α) (mutex : Std.BaseMutex) (stop : Stop) : Observed α where
+  run := try body.run finally mutex.unlock
+  cuts w d := body.cuts w d ∨ stop (liftM mutex.unlock : IO Unit) (returnedWorld (body.run w)) d
+
+/-- Instantiate the executable phase update and child scheduling code with
+primitive observations. The lock and the finalizer surround the same body
+for successful and failed calls. -/
+def publicProgram (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (batch : Bytes)
+    (stop : Stop) : Observed Nat := appendPositionWith do
+  let _ ← leaf stop (liftM mutex.lock : IO Unit)
+  finallyUnlock (updateWith IO.userError (leaf stop (cell.get : IO _))
+    (fun ph => leaf stop (cell.set ph : IO Unit))
+    (fun store session => (sites store session stop).appendSession session batch)) mutex stop
+
+private theorem bindCuts (a : Observed α) (f : α → Observed β) (w : W) (d : Disk) :
+    (a >>= f).cuts w d ↔ a.cuts w d ∨
+      match a.run w with | .ok x t => (f x).cuts t d | .error .. => False := by
+  change (_ ∨ ∃ x t, _ ∧ _) ↔ _
+  cases a.run w <;> simp [and_assoc]
+
+private theorem pureCuts (x : α) (w : W) (d : Disk) : (pure x : Observed α).cuts w d ↔ False := Iff.rfl
+
+private theorem resultCuts (a : Observed α) (f : α → β) (w : W) (d : Disk) :
+    (a >>= fun x => pure (f x)).cuts w d ↔ a.cuts w d := by
+  rw [bindCuts]
+  cases a.run w <;> simp [pureCuts]
+
+private theorem bindRun (a : Observed α) (f : α → Observed β) (w : W) :
+    (a >>= f).run w = match a.run w with
+      | .ok x t => (f x).run t | .error e t => .error e t := by
+  change (a.run >>= fun x => (f x).run) w = _
+  cases ran : a.run w <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+
+private theorem readReady (cell : IO.Ref (Phase Store)) (mu : Std.BaseMutex) (stop : Stop) (w : W)
+    (ready : ((cell.get : BaseIO _) (mu.lock w).state).val = .ready s session) :
+    (leaf stop (cell.get : IO _)).run (mu.lock w).state =
+      .ok (.ready s session) ((cell.get : BaseIO _) (mu.lock w).state).state := by
+  change EST.Out.ok _ _ = _
+  rw [← ready]
+  rfl
+
+private theorem updateOutput (cell : IO.Ref (Phase Store)) (mu : Std.BaseMutex) (stop : Stop)
+    (batch : Bytes) (w : W) (ready : ((cell.get : BaseIO _) (mu.lock w).state).val = .ready s session) :
+    (updateWith IO.userError (leaf stop (cell.get : IO _))
+      (fun ph => leaf stop (cell.set ph : IO Unit))
+      (fun store session => (sites store session stop).appendSession session batch)).run (mu.lock w).state =
+      match s.appendSession session batch (issuedWorld cell mu s w) with
+      | .error e t => .error e t
+      | .ok next t => .ok next (installedWorld cell s next t) := by
+  unfold updateWith
+  rw [bindRun, readReady cell mu stop w ready]
+  change (((sites s session stop).appendSession session batch).run >>= _) (issuedWorld cell mu s w) = _
+  rw [Sites.erase]
+  cases a : s.appendSession session batch (issuedWorld cell mu s w) <;>
+    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, a] <;> rfl
+
+theorem publicProgram_run {wal : Handle} (parts : wal.Parts cell mu) (stop : Stop) (batch : Bytes) (w : W)
+    (ready : ((cell.get : BaseIO _) (mu.lock w).state).val = .ready s session) :
+    (publicProgram cell mu batch stop).run w = append wal batch w := by
+  rw [append_ready_run parts batch w ready]
+  unfold publicProgram appendPositionWith
+  simp only [bindRun]
+  have held : (leaf stop (liftM mu.lock : IO Unit)).run w = .ok () (mu.lock w).state := rfl
+  simp only [held]
+  have cleanup (act : IO Session) (t : W) :
+      (try act finally mu.unlock : IO Session) t =
+      match act t with
+      | .ok x u => .ok x (mu.unlock u).state | .error e u => .error e (mu.unlock u).state := by
+    simp only [tryFinally, tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1, Functor.map, instMonadEIO._aux_1, EST.bind]
+    cases act t <;> rfl
+  simp only [finallyUnlock, cleanup, updateOutput cell mu stop batch w ready]
+  simp only [issuedWorld]
+  cases s.appendSession session batch ((cell.set (.poisoned s) : BaseIO _) ((cell.get : BaseIO _) (mu.lock w).state).state).state <;> rfl
+
+/-- Reverse coverage: every raw observation emitted by this instantiation
+of the actual update goes to an admitted stop, including both unlock paths. -/
+theorem publicProgram_covered (cell : IO.Ref (Phase Store)) (mu : Std.BaseMutex) (stop : Stop)
+    (batch : Bytes) (w : W) (ready : ((cell.get : BaseIO _) (mu.lock w).state).val = .ready s session)
+    (obs : (publicProgram cell mu batch stop).cuts w d) : PublicStop cell mu s session batch w stop d := by
+  unfold publicProgram appendPositionWith at obs
+  rw [resultCuts, bindCuts] at obs
+  rcases obs with early | body
+  · exact .lock early
+  change _ ∨ stop _ (returnedWorld _) d at body
+  rcases body with inner | leaving
+  · unfold updateWith at inner
+    rw [bindCuts] at inner
+    rcases inner with early | phase
+    · exact .read early
+    simp only [readReady cell mu stop w ready] at phase
+    rw [bindCuts] at phase
+    rcases phase with early | work
+    · exact .poison early
+    change (_ >>= _ : Observed _).cuts (issuedWorld cell mu s w) d at work
+    rw [bindCuts, Sites.erase] at work
+    rcases work with early | installed
+    · exact .worker early
+    cases ran : s.appendSession session batch (issuedWorld cell mu s w) with
+    | error e t => rw [ran] at installed; contradiction
+    | ok next t =>
+      rw [ran] at installed
+      exact .install ran ((resultCuts ..).mp installed)
+  · rw [updateOutput cell mu stop batch w ready] at leaving
+    cases ran : s.appendSession session batch (issuedWorld cell mu s w) with
+    | error e t => rw [ran] at leaving; exact .fail ran leaving
+    | ok next t => rw [ran] at leaving; exact .leave ran leaving
+
 /-- The physical pending state is already available upon ordinary worker
 return, before updating the outer WAL phase or releasing its mutex. -/
 private theorem afterWorker {disk : W → Disk} {mem : ChildMemory disk}

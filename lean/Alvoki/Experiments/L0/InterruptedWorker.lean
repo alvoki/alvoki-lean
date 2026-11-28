@@ -88,7 +88,8 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
       CutRuntime (fun w => (physical w).disk) store session (tagAt stop last))
     (frames : ∀ store session, worker.phase = .ready store session →
       FrameRuntime (fun w => (physical w).disk) store session (Protected physical root image))
-    (cut : worker.Cut change (tagAt stop last) d)
+    (cut : (WalRecoverySlice.Segmented.Native.AppendCut.publicProgram worker.cell worker.mutex
+      (encode change) (tagAt stop last)).cuts p.issue d)
     (restart : NativeAppendCut.Restarted physical root image.tables last d mode after)
     (reopens : Reopens physical heap path root image life (some (.append (encode change))))
     (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
@@ -97,6 +98,8 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
         (NativeMutationScope.uncertainEvents before change) after a b rootLife := by
   obtain ⟨trace, history, issued, _⟩ := p.issued entry files heap (runtime _ _) prior change scans fits
   obtain ⟨reg, _, op, active, selected, view, room⟩ := worker.prepared heap runtime io issued fits
+  have cut : worker.Cut change (tagAt stop last) d :=
+    .ready selected (WalRecoverySlice.Segmented.Native.AppendCut.publicProgram_covered _ _ _ _ _ selected cut)
   have cell := op.parts.1.symm.trans worker.parts.1
   have mutex := op.parts.2.symm.trans worker.parts.2
   have held : NativeRecoverAt.Held physical root p.lock p.ref image (.updating p.wal) p.issue :=
