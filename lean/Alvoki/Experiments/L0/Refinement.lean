@@ -150,6 +150,15 @@ def Durable.append (d : Durable image history) (change : Change) :
   · exact (congrArg (· ++ [change]) d.split).trans (List.append_assoc ..)
   · simp [Selected.append, Contract.View.append, d.wal, List.map_append, List.append_assoc]
 
+/-- Installing the inserted memtable agrees with the single WAL batch
+that represents this mutation. Shared by the model and the native write. -/
+theorem Installed.append (prior : Installed session image history) (change : Change) :
+    Installed {session with mem := insert session.mem change} (image.append (encode change)) (history ++ [change]) := by
+  obtain ⟨d, version, mem⟩ := prior
+  exact ⟨d.append change, version, by
+    change insert session.mem change = replay (d.pending ++ [change])
+    simp [mem, replay, List.foldl_append]⟩
+
 theorem write_refines (laws : ComponentEffects ops selected) (s : σ) (session : Session)
     (prior : Installed session (selected s) history) (change : Change) :
     match write ops session change s with
@@ -182,9 +191,7 @@ theorem write_refines (laws : ComponentEffects ops selected) (s : σ) (session :
         rw [issued, frame] at appended
         simp [write, Bind.bind, EStateM.bind, scanned, fit, issued, Pure.pure, EStateM.pure]
         rw [appended]
-        exact ⟨extended, version, by
-          change insert session.mem change = replay (d.pending ++ [change])
-          simp [mem, replay, List.foldl_append]⟩
+        exact Installed.append ⟨d, version, mem⟩ change
     · simp [write, Bind.bind, EStateM.bind, scanned, fit]
       exact Or.inl ⟨frame ▸ d⟩
 
