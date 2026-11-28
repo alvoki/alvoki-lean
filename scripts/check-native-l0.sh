@@ -104,6 +104,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.Proof.get_keepsPhase
 #check_axioms Lifecycle.initialCatalog
 #check_axioms Lifecycle.recovery_progress
+#check_axioms Lifecycle.scope_refines
 #check_axioms Lifecycle.recovery_online
 #check_axioms Lifecycle.recovery_offline
 #check_axioms Lifecycle.write_online

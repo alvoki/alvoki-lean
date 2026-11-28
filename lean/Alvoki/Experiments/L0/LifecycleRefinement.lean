@@ -75,6 +75,28 @@ theorem recovery_online
     successful_recovery_publishes (recover ops) use invalid closeWal unlock handle session
       before storage ran⟩
 
+/-- The callback's finite trace is already observed when outer cleanup runs.
+A cleanup error ends the scope with the same client history and reached storage. -/
+theorem scope_refines
+    (use : StorageM (Phase W × S) α)
+    (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit)
+    (unlock : StorageM (Phase W × S) Unit)
+    (ran : recover ops (.opening, before) = .ok session (.recovering handle, after))
+    (closeFrame : ∀ h storage, reached (closeWal h (.offline, storage)) = (.offline, storage))
+    (unlockFrame : ∀ storage, reached (unlock (.offline, storage)) = (.offline, storage))
+    (client : Execution.Run events visible (selected (reached (use (.online handle session, after))).2))
+    (catalog : namespaceState.Represents (reached (use (.online handle session, after))).2
+      (selected (reached (use (.online handle session, after))).2).tables) :
+    let final := reached (Cell.withSession stateCell invalid (recover ops) use closeWal unlock
+      (.opening, before))
+    final.1 = .offline ∧ namespaceState.Represents final.2 (selected final.2).tables ∧
+      ∃ state, Client.Allows (events ++ [.stop]) state ∧
+        Execution.Represents none (selected final.2) state := by
+  dsimp only
+  rw [successful_recovery_cleanup (recover ops) use invalid closeWal unlock handle session before after
+    ran closeFrame unlockFrame]
+  exact ⟨rfl, catalog, (Execution.Run.stop client).refines⟩
+
 /-- Use the healthy WAL producer at the state reached by the manifest
 open, then check each required table on the state reached by its predecessor. -/
 theorem recovery_progress
@@ -112,7 +134,7 @@ theorem recovery_progress
       (blob.image after).Stable (L0Manifest.encode (selected after.2).version) ∧
       ∃ store walSession, wal.phase after = .ready store walSession ∧
         store.activeId = walSession.control.active ∧
-        WalRecoverySlice.Segmented.Model.Installed walSession (wal.diskState after).disk ∧
+        WalRecoverySlice.Segmented.Installed walSession (wal.diskState after).disk ∧
         walSession.view = (selected after.2).view := by
   obtain ⟨checked, opened, _⟩ :=
     wal.reopenHealthy middle binding rootOK childrenOK closeOK unlockOK representable

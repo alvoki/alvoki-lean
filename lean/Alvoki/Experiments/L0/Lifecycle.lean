@@ -476,6 +476,27 @@ theorem successful_recovery_publishes (recover : EStateM ε (Phase W × S) Sessi
   rw [finish_state, finish_state]
   simp [Bind.bind, EStateM.bind, ran, Cell.publish, stateCell, Phase.publish, Pure.pure, EStateM.pure]
 
+/-- Once the callback has run, outer cleanup detaches the session from its
+reached storage on either result. The outer return can still report an error. -/
+theorem successful_recovery_cleanup (recover : EStateM ε (Phase W × S) Session)
+    (use : EStateM ε (Phase W × S) α) (invalid : ε)
+    (closeWal : W → EStateM ε (Phase W × S) Unit) (unlock) (wal : W)
+    (session : Session) (before after : S)
+    (ran : recover (.opening, before) = .ok session (.recovering wal, after))
+    (closeFrame : ∀ handle storage, reached (closeWal handle (.offline, storage)) = (.offline, storage))
+    (unlockFrame : ∀ storage, reached (unlock (.offline, storage)) = (.offline, storage)) :
+    reached (Cell.withSession stateCell invalid recover use closeWal unlock (.opening, before)) =
+      (.offline, (reached (use (.online wal session, after))).2) := by
+  rw [successful_recovery_publishes recover use invalid closeWal unlock wal session before after ran]
+  rw [finish_state]
+  cases used : use (.online wal session, after) with
+  | error error next =>
+    exact cleanup_closes closeWal unlock closeFrame unlockFrame next
+  | ok value next =>
+    have closed := cleanup_closes closeWal unlock closeFrame unlockFrame next
+    cases cleaned : finish (ε := ε) (Cell.close stateCell closeWal) unlock next <;>
+      simpa [cleaned, reached] using closed
+
 theorem useSession_online (use : Session → EStateM ε (Phase W × S) α) (invalid : ε)
     (wal : W) (session : Session) (storage : S) :
     Cell.useSession stateCell invalid use (.online wal session, storage) =
