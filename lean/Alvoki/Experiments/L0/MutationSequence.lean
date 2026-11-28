@@ -84,6 +84,35 @@ def StepIO.Healthy (op : StepIO physical heap mem root lock ref wal reg session 
   ∀ entry, ∃ directory removal, (op.append entry).worker.reports = healthyReports (encode change) directory removal ∧
     WalRecoverySlice.Segmented.Model.HealthyRoot removal
 
+private theorem walRoom (entered : Current physical heap mem root lock ref wal reg image stage w)
+    (fits : image.view.tail + 1 < UInt64.size) : reg.session.view.tail < WalRecoverySlice.Segmented.Contract.maxPosition := by
+  rw [entered.view]
+  change image.view.tail + 1 < 18446744073709551616 at fits
+  change image.view.tail < 18446744073709551615
+  omega
+
+private theorem publish (entered : Current physical heap mem root lock ref wal reg image (.updating wal) w)
+    (cache : Cached heap physical root lock ref) (phase : PhasePrimitives physical root lock ref image)
+    (input : NativeMutationScope.MutationIO mem heap (Held physical root lock ref image (.updating wal)) ref wal reg session change w)
+    (room : reg.session.view.tail < WalRecoverySlice.Segmented.Contract.maxPosition)
+    (sent : WalRecoverySlice.Segmented.Native.append wal (encode change) w = .ok pos t)
+    (succeeded : WalRecoverySlice.Segmented.Native.AppendIO.Succeeded mem heap
+      (Held physical root lock ref image (.updating wal)) wal reg (encode change) pos t) :
+    ∃ u, NativeWrite.afterWrite ref (.ok (next session change) t) = .ok () u ∧ ∃ reg',
+      reg'.store = reg.store ∧ reg'.session = nextSession reg.session (encode change) ∧
+      Current physical heap mem root lock ref wal reg' (image.append (encode change)) (.online wal (next session change)) u := by
+  obtain ⟨reg',storeEq,nextEq,nextActive,held,ack,_,_⟩ := succeeded
+  have view : reg'.session.view = image.view.append (encode change) := by
+    rw [← entered.view]
+    cases ack with
+    | ack chosen => simpa [WalRecoverySlice.Segmented.Contract.Request.apply, room] using chosen.symm
+  have changed : Held physical root lock ref (image.append (encode change)) (.updating wal) t :=
+    ⟨held.owned, held.phaseEq, held.catalog, held.manifest⟩
+  have nextPhase : PhasePrimitives physical root lock ref (image.append (encode change)) := ⟨phase.read, phase.swap⟩
+  obtain ⟨u,pub,updated,reusable,_⟩ := NativeWriteRelease.publishActive nextPhase cache changed nextActive
+    (next session change) (input.publication pos t sent reg' nextActive.2.1)
+  exact ⟨u,pub,reg',storeEq,nextEq,updated,reusable,view⟩
+
 /-- Both mutations use this same public entry point. The success carries
 the actual store, control, and active child for the following operation. -/
 theorem healthyStep (cur : Current physical heap mem root lock ref wal reg image (.online wal session) start)
@@ -98,24 +127,12 @@ theorem healthyStep (cur : Current physical heap mem root lock ref wal reg image
   obtain ⟨entered, ran⟩ := dispatch cur bound cache phase io.borrows change fits
   let input := io.append entered
   obtain ⟨dir, removal, reports, removes⟩ := ok entered
-  have room : reg.session.view.tail < WalRecoverySlice.Segmented.Contract.maxPosition := by
-    rw [entered.view]
-    change image.view.tail + 1 < 18446744073709551616 at fits
-    change image.view.tail < 18446744073709551615
-    omega
-  obtain ⟨pos,t,sent,reg',storeEq,nextEq,nextActive,held,ack,_,_⟩ :=
+  have room := walRoom entered fits
+  obtain ⟨pos,t,sent,succeeded⟩ :=
     input.worker.healthy entered.active entered.held (encode_size change) room linux reports removes
   rw [sent] at ran
-  have view : reg'.session.view = image.view.append (encode change) := by
-    rw [← entered.view]
-    cases ack with
-    | ack chosen => simpa [WalRecoverySlice.Segmented.Contract.Request.apply, room] using chosen.symm
-  have changed : Held physical root lock ref (image.append (encode change)) (.updating wal) t :=
-    ⟨held.owned, held.phaseEq, held.catalog, held.manifest⟩
-  have nextPhase : PhasePrimitives physical root lock ref (image.append (encode change)) := ⟨phase.read, phase.swap⟩
-  obtain ⟨u,pub,updated,reusable,_⟩ := NativeWriteRelease.publishActive nextPhase cache changed nextActive
-    (next session change) (input.publication pos t sent reg' nextActive.2.1)
-  exact ⟨_,reg',ran.trans pub,storeEq,nextEq,updated,reusable,view⟩
+  obtain ⟨u,pub,reg',storeEq,nextEq,updated⟩ := publish entered cache phase input room sent succeeded
+  exact ⟨u,reg',ran.trans pub,storeEq,nextEq,updated⟩
 
 /-- Reported failure preserves both permitted WAL histories through the
 actual inner close, including failure of a nested unlock. -/
@@ -132,11 +149,7 @@ theorem step (cur : Current physical heap mem root lock ref wal reg image (.onli
     | .error _ t => NativeReadRelease.Custody physical root lock ref image t (some (.append (encode change))) := by
   obtain ⟨entered, ran⟩ := dispatch cur bound cache phase io.borrows change fits
   let input := io.append entered
-  have room : reg.session.view.tail < WalRecoverySlice.Segmented.Contract.maxPosition := by
-    rw [entered.view]
-    change image.view.tail + 1 < 18446744073709551616 at fits
-    change image.view.tail < 18446744073709551615
-    omega
+  have room := walRoom entered fits
   have checked := input.worker.append entered.active entered.held (encode_size change) room linux
   unfold Alvoki.NativePost.IOReturns at checked
   rw [ran]
@@ -150,18 +163,9 @@ theorem step (cur : Current physical heap mem root lock ref wal reg image (.onli
     exact stopped
   | ok pos t =>
     rw [real] at checked
-    obtain ⟨reg',storeEq,nextEq,nextActive,held,ack,_,_⟩ := checked
-    have view : reg'.session.view = image.view.append (encode change) := by
-      rw [← entered.view]
-      cases ack with
-      | ack chosen => simpa [WalRecoverySlice.Segmented.Contract.Request.apply, room] using chosen.symm
-    have changed : Held physical root lock ref (image.append (encode change)) (.updating wal) t :=
-      ⟨held.owned, held.phaseEq, held.catalog, held.manifest⟩
-    have nextPhase : PhasePrimitives physical root lock ref (image.append (encode change)) := ⟨phase.read, phase.swap⟩
-    obtain ⟨u,pub,updated,reusable,_⟩ := NativeWriteRelease.publishActive nextPhase cache changed nextActive
-      (next session change) (input.publication pos t real reg' nextActive.2.1)
+    obtain ⟨u,pub,reg',storeEq,nextEq,updated⟩ := publish entered cache phase input room real checked
     rw [pub]
-    exact ⟨reg',storeEq,nextEq,updated,reusable,view⟩
+    exact ⟨reg',storeEq,nextEq,updated⟩
 
 /-- The ordinary public get can use tables or report an allowed read error
 after a mutation. Its frame includes the same write authority. -/
