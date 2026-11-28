@@ -92,7 +92,6 @@ private structure Store where
   lock : IO.FS.Handle
   directory : IO.FS.Handle
   active : IO.Ref (Option (Nat × SingleFile.Handle))
-  controlWriter : IO.Ref (Option IO.FS.Handle)
 
 @[inline] def closeChildWith [Monad m] (take : m (Option (Nat × child)))
     (close : child → m Unit) : m Unit := do
@@ -114,7 +113,6 @@ private def Store.closeChild (s : Store) : IO Unit :=
   unlock
 
 private def Store.release (s : Store) : IO Unit := do
-  s.controlWriter.set none
   releaseWith (error := IO.Error) s.closeChild s.lock.unlock
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
@@ -206,24 +204,48 @@ private def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
 @[inline] def syncRootWith {m : Type → Type} (sync : descriptor → m Unit) (directory : descriptor) : m Unit :=
   sync directory
 
+/-- The writer returned by staging is the input to the writer barrier.
+The directory description is acquired and held by the root store. -/
+structure ControlPrimitives (m : Type → Type) (writer directory : Type) where
+  clearStage : FilePath → m Unit
+  openWriter : FilePath → IO.FS.Mode → m writer
+  disableBuffering : writer → m Unit
+  write : writer → ByteArray → m Unit
+  flush : writer → m Unit
+  syncWriter : writer → m Unit
+  rename : FilePath → FilePath → m Unit
+  syncDirectory : directory → m Unit
+
+@[inline] def publishControlWith [Monad m] [MonadExceptOf String m]
+    (ops : ControlPrimitives m writer directory) (root : FilePath)
+    (held : directory) (c : Control) : m Unit :=
+  let stage := root / "CONTROL.next"
+  let active := root / "CONTROL"
+  DurableBlob.publishWith (do
+    unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do
+      throw "segmented WAL position exhausted"
+    ops.clearStage stage
+    let writer ← ops.openWriter stage .writeNew
+    ops.disableBuffering writer
+    ops.write writer (ControlCodec.encode c)
+    ops.flush writer
+    pure writer)
+    ops.syncWriter (ops.rename stage active) (ops.syncDirectory held)
+
+private def controlPrimitives : ControlPrimitives FileM IO.FS.Handle IO.FS.Handle where
+  clearStage path := liftM (removeRegular path)
+  openWriter path mode := liftM (IO.FS.Handle.mk path mode)
+  disableBuffering writer := liftM (disableBuffering writer)
+  write writer bytes := liftM (writer.write bytes)
+  flush writer := liftM writer.flush
+  syncWriter writer := liftM (syncHandle writer)
+  rename stage active := liftM (IO.FS.rename stage active)
+  syncDirectory directory := liftM (syncHandle directory)
+
 private def Store.callbacks (s : Store) : Ops FileM where
   prepareSegment p id := s.prepare p id
   syncRoot := syncRootWith (fun directory => liftM (syncHandle directory)) s.directory
-  stageControl c := do
-    unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do throw "segmented WAL position exhausted"
-    let stage := s.root / "CONTROL.next"
-    removeRegular stage
-    let h ← IO.FS.Handle.mk stage .writeNew
-    disableBuffering h
-    h.write (ControlCodec.encode c)
-    h.flush
-    s.controlWriter.set (some h)
-  syncControl := do
-    -- Consume the original writer on either outcome. An independently
-    -- opened descriptor can miss a writeback error reported to this writer.
-    let some h ← s.controlWriter.swap none | throw "no staged control writer"
-    syncHandle h
-  renameControl := IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")
+  publishControl := publishControlWith controlPrimitives s.root s.directory
   readControl := readControlWith controlMetadata (fun file => IO.FS.readBinFile file) s.root
   openSegment p id := s.readSealedChild p id
   appendSegment _ id batch := do
@@ -269,8 +291,7 @@ structure Handle where private mk ::
 private def acquireStore (dir : FilePath) : IO Store :=
   acquireStoreWith IO.FS.realPath IO.FS.Handle.mk acquireRoot (fun root directory lock => do
     let active ← IO.mkRef none
-    let controlWriter ← IO.mkRef none
-    return {root, directory, lock, active, controlWriter}) dir
+    return {root, directory, lock, active}) dir
 
 @[inline] def openWithStore [Monad m] [MonadExceptOf error m]
     (acquire : m store) (load : store → m phase) (newRef : phase → m cell)
@@ -318,7 +339,7 @@ private def update (h : Handle) (action : Ops FileM → Session → FileM Sessio
   match ← h.state.get with
   | .ready store session =>
     h.state.set (.poisoned store)
-    let next ← try checked (action store.callbacks session) finally store.controlWriter.set none
+    let next ← checked (action store.callbacks session)
     h.state.set (.ready store next)
     return next
   | .poisoned _ => throw <| IO.userError "segmented WAL requires reopen"

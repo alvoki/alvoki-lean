@@ -1,3 +1,4 @@
+import Alvoki.Experiments.DurableBlob.Protocol
 import Alvoki.Experiments.WAL.Recovery
 import Alvoki.Experiments.WAL.Segmented.Contract
 
@@ -29,9 +30,7 @@ are distinct operations in the exclusively owned directory. -/
 structure Ops (m : Type → Type) where
   prepareSegment : Policy → Nat → m Unit
   syncRoot : m Unit
-  stageControl : Control → m Unit
-  syncControl : m Unit
-  renameControl : m Unit
+  publishControl : Control → m Unit
   readControl : m Control
   openSegment : Policy → Nat → m (List Bytes)
   appendSegment : Policy → Nat → Bytes → m Unit
@@ -41,11 +40,8 @@ structure Ops (m : Type → Type) where
 section
 variable {m : Type → Type} [Monad m] [MonadExceptOf String m]
 
-def publish (ops : Ops m) (c : Control) : m Unit := do
-  ops.stageControl c
-  ops.syncControl
-  ops.renameControl
-  ops.syncRoot
+def publish (ops : Ops m) (c : Control) : m Unit :=
+  ops.publishControl c
 
 def create (ops : Ops m) (policy : Policy) (capacity : Nat) : m Session := do
   if capacity = 0 || capacity > 255 then throw "segment capacity out of bounds"

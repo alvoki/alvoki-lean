@@ -11,12 +11,16 @@ structure Files (m : Type → Type) (stage : Type) where
   syncDirectory : m Unit
   readActive : m ByteArray
 
+/-- The staged writer is carried directly from the write to its barrier. -/
+@[inline] def publishWith [Monad m] (writeStaged : m stage) (syncStaged : stage → m Unit)
+    (renameStaged syncDirectory : m Unit) : m Unit := do
+  let staged ← writeStaged
+  syncStaged staged
+  renameStaged
+  syncDirectory
+
 def Files.backend [Monad m] (files : Files m stage) : Backend m ByteArray where
-  publish bytes := do
-    let staged ← files.writeStaged bytes
-    files.syncStaged staged
-    files.renameStaged
-    files.syncDirectory
+  publish bytes := publishWith (files.writeStaged bytes) files.syncStaged files.renameStaged files.syncDirectory
   reopen := do
     let bytes ← files.readActive
     files.syncDirectory

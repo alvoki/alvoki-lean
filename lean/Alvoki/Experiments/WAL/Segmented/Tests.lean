@@ -111,12 +111,15 @@ private def simOps : Ops M where
     let s := putFile s id ⟨policy, [], []⟩
     {s with names := id :: s.names.filter (· != id)}
   syncRoot := gate .root fun s => {s with durableNames := s.names, durableControl := s.control}
-  stageControl c := gate .stage fun s => {s with staged := some c}
-  syncControl := gate .controlSync fun s => {s with stagedDurable := s.staged}
-  renameControl := do
-    let s ← get
-    if s.stagedDurable.isNone then throw "staged control not synced"
-    gate .rename fun s => {s with control := s.stagedDurable}
+  publishControl c :=
+    DurableBlob.publishWith
+      (gate .stage fun s => {s with staged := some c})
+      (fun _ => gate .controlSync fun s => {s with stagedDurable := s.staged})
+      (do
+        let s ← get
+        if s.stagedDurable.isNone then throw "staged control not synced"
+        gate .rename fun s => {s with control := s.stagedDurable})
+      (gate .root fun s => {s with durableNames := s.names, durableControl := s.control})
   readControl := do
     let some c := (← get).control | throw "missing control"
     return c
