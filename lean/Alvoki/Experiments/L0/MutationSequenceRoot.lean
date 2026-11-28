@@ -5,7 +5,6 @@ namespace ExperimentalL0.MutationSequence
 open NativeScope Lifecycle
 open NativeRead (Footprint)
 open WalRecoverySlice.Segmented.Native (PhaseMemory Registration ChildMemory)
-open WalRecoverySlice.Segmented.Native.HealthyEmpty (control)
 open NativeWriteRelease (KeepsLive)
 open InterruptedMutation (Prefix)
 
@@ -23,19 +22,37 @@ structure HealthyOperations (physical : W → Footprint inode) (heap : PhaseMemo
     (p.ref.get : IO (Phase Wal)) w = .ok (.online p.wal (next (next p.session (key,.put value)) (key,.delete))) t →
     KeepsLive mem r w t
 
-private theorem emptyCounts {disk : W → WalRecoverySlice.Segmented.Model.Disk}
-    {mem : ChildMemory disk} {reg : Registration}
-    (active : WalRecoverySlice.Segmented.Native.AppendIO.Active mem heap wal reg w)
-    (control : (disk w).liveControl = some WalRecoverySlice.Segmented.Native.HealthyEmpty.control)
-    (empty : reg.session.view = ⟨0,[]⟩) : reg.session.control.capacity = 1 ∧ reg.session.activeCount = 0 := by
-  obtain ⟨_,_,_,_,_,history,shape,_,observed,_,_⟩ := active
-  have cfg := Option.some.inj (observed.symm.trans control)
-  have view := congrArg WalRecoverySlice.Segmented.Session.view shape
-  rw [empty, cfg] at view
-  have nil : history = [] := by
-    simpa [WalRecoverySlice.Segmented.sessionOf, WalRecoverySlice.Segmented.historyView, WalRecoverySlice.Segmented.Native.HealthyEmpty.control] using
-      (congrArg WalRecoverySlice.Segmented.Contract.View.batches view).symm
-  exact ⟨cfg ▸ rfl, by rw [shape, cfg, nil]; rfl⟩
+/-- Successful primitive reports for a fresh initialized root produce the
+same recovered prefix and registration consumed by the two public writes. -/
+theorem initialized {disk : W → WalRecoverySlice.Segmented.Model.Disk} {mem : ChildMemory disk}
+    (p : HealthyReads.Entry path root start) (manifest : HealthyReads.Manifest root p.fresh.state t)
+    (opening : (p.fresh.val.get : IO (Phase Wal)) t = .ok .opening u)
+    (grant : HealthyReads.WalRoot (root / "wal") u)
+    (worker : ∀ s, WalRecoverySlice.Segmented.Native.acquireStore (root / "wal") u = .ok s (HealthyReads.storeEntry grant) →
+      s.root = grant.canonical → s.directory = grant.directory → s.lock = grant.lock →
+      WalRecoverySlice.Segmented.Native.HealthyEmpty.Worker s disk Q mem (HealthyReads.storeEntry grant))
+    (attach : ∀ wal v reg, WalRecoverySlice.Segmented.Native.Origin (root / "wal") wal reg u v →
+      heap.Registered wal reg v → heap.Registered wal reg (HealthyReads.attached p.fresh.val wal v))
+    (publishRead : ∀ wal v reg, WalRecoverySlice.Segmented.Native.Origin (root / "wal") wal reg u v →
+      heap.Registered wal reg (HealthyReads.scanned p.fresh.val wal v) →
+      (HealthyReads.phaseRead p.fresh.val (HealthyReads.scanned p.fresh.val wal v)).val = .recovering wal)
+    (publishSwap : ∀ wal v reg, WalRecoverySlice.Segmented.Native.Origin (root / "wal") wal reg u v →
+      heap.Registered wal reg (HealthyReads.phaseRead p.fresh.val (HealthyReads.scanned p.fresh.val wal v)).state →
+      heap.Registered wal reg (HealthyReads.online p.fresh.val wal v)) :
+    ∃ q : Prefix path root start, ∃ reg, heap.Registered q.wal reg q.callback ∧ reg.session = HealthyReads.specSession := by
+  obtain ⟨wal,v,reg,opened,shape,origin,held,_⟩ := grant.open heap worker
+  have attached := attach wal v reg origin held
+  have recovered := HealthyReads.recover manifest p.fresh.val heap opening opened (shape ▸ attached.ready)
+  have scanned : heap.Registered wal reg (HealthyReads.scanned p.fresh.val wal v) :=
+    ⟨attached.1,heap.unlock _ (heap.readFrame _ (heap.lock _ attached.2.1)),
+      heap.unlock _ (heap.readFrame _ (heap.lock _ attached.2.2))⟩
+  let q : Prefix path root start := {
+    checked := p.checkedLock, opened := p.opened, granted := p.held, recovered := HealthyReads.scanned p.fresh.val wal v,
+    lock := p.lock, wal := wal, session := HealthyReads.empty,
+    resolved := HealthyRootAcquisition.validatedRoot path root p.resolve p.walStat p.walDir p.manifestStat
+      p.manifestDir p.tableStat p.tableDir p.existsLock p.lockStat p.regular,
+    openFile := p.openLock, exclusive := p.exclusive, recovery := recovered, phaseRead := publishRead _ _ _ origin scanned }
+  exact ⟨q,reg,publishSwap _ _ _ origin (HealthyReads.readFrame heap p.fresh.val scanned),shape⟩
 
 def events (before : List Event) (key value : UInt64) :=
   before ++ [.reopened, .written (key,.put value), .written (key,.delete), .got key none, .stop]
@@ -62,7 +79,7 @@ the get. Cleanup closes this last registration and releases the root lock. -/
 theorem withOpen (p : Prefix path root start) (key value : UInt64)
     (entry : NativeReadScope.Entry physical path root image) (files : NativeReadScope.Files physical root image start)
     (ops : WithOpenReads.Runtime physical root p.lock p.ref image life heap) (prior : Execution.Run before none image)
-    (control : (physical p.callback).disk.liveControl = some WalRecoverySlice.Segmented.Native.HealthyEmpty.control) (empty : image.view = ⟨0,[]⟩)
+    (initial : ∃ reg, heap.Registered p.wal reg p.callback ∧ reg.session = HealthyReads.specSession)
     (localIO : ∀ (reg : Registration) (pathEq : reg.store.root = ops.wal.acquire.canonical), (physical p.callback).readyWal p.wal = some reg →
       HealthyOperations physical heap p reg (ops.wal.worker reg.store pathEq).children.memory image key value)
     (cleanup : HealthyMutation.Cleanup physical heap root p.lock p.ref (extend (extend image (key,.put value)) (key,.delete)) none)
@@ -78,8 +95,12 @@ theorem withOpen (p : Prefix path root start) (key value : UInt64)
   intro first second
   obtain ⟨trace,_,online⟩ := p.online entry files heap ops prior
   obtain ⟨reg,pathEq,slot,view,active⟩ := NativeMutationScope.atIssue ops online
-  obtain ⟨cap,count⟩ := emptyCounts active control (view.trans empty)
-  have fits : image.view.tail + 2 < UInt64.size := by rw [empty]; decide
+  obtain ⟨r,registered,shape⟩ := initial
+  have same : reg = r := Option.some.inj (slot.symm.trans ((ops.cleanup.cached _ online.owned p.wal r).mpr registered))
+  subst r
+  have fits : image.view.tail + 2 < UInt64.size := by rw [← view,shape]; decide
+  have cap : reg.session.control.capacity = 1 := shape ▸ rfl
+  have count : reg.session.activeCount = 0 := shape ▸ rfl
   obtain ⟨h,bound,scope⟩ := p.withOpen (fun h => program h first second key)
   let inputs := localIO reg pathEq slot
   obtain ⟨u,v,t,one,two,put,del,get,callback,_,rotation,store₁,store₂,_,final⟩ :=
