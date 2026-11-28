@@ -41,6 +41,7 @@ open ImmutableSSTable
 #check_axioms SSTableProducerCheck.uncertainResult
 #check_axioms Unified.open_built_table
 #check_axioms Unified.Image.checkedLookup_sound
+#check_axioms Unified.checkedLookup_success
 #check_axioms Unified.checkedTypedLookup_success
 #check_axioms Unified.Image.openCheckedWith_represents_at
 #check_axioms ReadSnapshot.readsExactly
