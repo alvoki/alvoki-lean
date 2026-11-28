@@ -40,16 +40,6 @@ private theorem page_head_exists {page : Page} (nonempty : 0 < page.refs.size) :
     omega
   | some ref => exact ⟨ref, rfl⟩
 
-private theorem pendingBytes_le {layout crc bytes rows endAt height stop pages}
-    (pending : PendingPages layout crc bytes rows endAt height stop pages) :
-    pendingPacketBytes pages ≤ maxIndexSize * pages.length := by
-  induction pending with
-  | nil => simp [pendingPacketBytes]
-  | cons upper current ih =>
-    simp only [pendingPacketBytes, List.length_cons, Nat.mul_succ]
-    have size := current.packetBound
-    omega
-
 private theorem finishPages_progressFrom (crc : Checksum) (layout : Layout)
     (options : BuildOptions) (file : ModelFile) (rows : List Entry) (height stop fuel : Nat)
     (pages : List Page)
@@ -123,7 +113,7 @@ private theorem finishPages_progressFrom (crc : Checksum) (layout : Layout)
             writePage_ok current (Nat.le_refl _) rowLimit exactWrite
           have newer : PendingPages layout crc beforePush.bytes rows beforePush.bytes.size
               (height + 1) first upper := higher.extend payload (by rw [cursor]; omega) (Nat.le_refl _)
-          have upperBudget := Nat.le_trans (pendingBytes_le higher)
+          have upperBudget := Nat.le_trans higher.pendingPacketBytes_le
             (Nat.mul_le_mul_left maxIndexSize (Nat.le_of_lt slots))
           have pushRoom : beforePush.bytes.size + pendingPacketBytes upper + footerPacketSize ≤ maxFileSize :=
             by
