@@ -608,11 +608,19 @@ theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready 
     ∃ t, scan handle w = .ok session.view t ∧ heap.Ready handle session t :=
   ⟨_, scan_ready_world heap ready⟩
 
-theorem scanWorld_frame (handle : Handle) {P : Void IO.RealWorld → Prop}
-    (lock : ∀ (m : Std.BaseMutex) t, P t → P (m.lock t).state)
-    (read : ∀ (r : IO.Ref (Phase Store)) t, P t → P ((r.get : BaseIO _) t).state)
-    (unlock : ∀ (m : Std.BaseMutex) t, P t → P (m.unlock t).state) (start : P w) :
-    P (scanWorld handle w) := unlock _ _ (read _ _ (lock _ _ start))
+/-- Three local frames at the actual returning steps of this scan.
+The read concerns the handle's phase slot after acquiring its mutex. -/
+structure ScanFrames (handle : Handle) (w : Void IO.RealWorld)
+    (P : Void IO.RealWorld → Prop) : Prop where
+  lock : P w → P (handle.mutex.lock w).state
+  read : let locked := (handle.mutex.lock w).state
+    P locked → P ((handle.state.get : BaseIO (Phase Store)) locked).state
+  unlock : let locked := (handle.mutex.lock w).state
+    let got := ((handle.state.get : BaseIO (Phase Store)) locked).state
+    P got → P (handle.mutex.unlock got).state
+
+theorem scanWorld_frame (steps : ScanFrames handle w P) (start : P w) :
+    P (scanWorld handle w) := steps.unlock (steps.read (steps.lock start))
 
 /-- A reported failure comes from acquisition or the inner recovery on the
 acquired store. The outer release may change the world but keeps the error. -/

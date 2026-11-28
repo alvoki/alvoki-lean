@@ -152,15 +152,9 @@ def Cached (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
 
 /-- The stage-specific frame on the actual mutex and inner phase reference
 operations used by scan. -/
-structure ScanPrimitives (physical : W → Footprint inode) (root : FilePath) (wal : Wal)
-    (tables : Catalog) (epoch : W) : Prop where
-  lock : ∀ (m : Std.BaseMutex) t, NativeRead.Frame physical root wal tables epoch t →
-    NativeRead.Frame physical root wal tables epoch (m.lock t).state
-  read : ∀ (r : IO.Ref (WalRecoverySlice.Segmented.Native.Phase WalRecoverySlice.Segmented.Native.Store)) t,
-    NativeRead.Frame physical root wal tables epoch t →
-    NativeRead.Frame physical root wal tables epoch ((r.get : BaseIO _) t).state
-  unlock : ∀ (m : Std.BaseMutex) t, NativeRead.Frame physical root wal tables epoch t →
-    NativeRead.Frame physical root wal tables epoch (m.unlock t).state
+abbrev ScanPrimitives (physical : W → Footprint inode) (root : FilePath) (wal : Wal)
+    (tables : Catalog) (epoch : W) :=
+  WalRecoverySlice.Segmented.Native.ScanFrames wal epoch (NativeRead.Frame physical root wal tables epoch)
 
 theorem scanned (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
     (cached : Cached heap physical root lock ref) (before : Attached physical root lock ref image wal start)
@@ -170,8 +164,7 @@ theorem scanned (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
   obtain ⟨c, slot, _, _, view⟩ := before.2
   have ready := (cached _ before.1.owned wal c).mp slot
   have ran := (WalRecoverySlice.Segmented.Native.scan_ready_world heap ready.ready).1
-  have frame := WalRecoverySlice.Segmented.Native.scanWorld_frame wal prim.lock prim.read prim.unlock
-    NativeRead.Frame.refl
+  have frame := WalRecoverySlice.Segmented.Native.scanWorld_frame prim NativeRead.Frame.refl
   unfold IOReturns
   rw [ran]
   exact ⟨view, before.1.frame frame, before.2.frame frame⟩
