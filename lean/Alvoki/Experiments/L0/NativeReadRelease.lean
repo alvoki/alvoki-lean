@@ -12,15 +12,17 @@ variable {inode : Type} {physical : NativeScope.W → Footprint inode} {root : F
 /-- The phase cell survives as offline even when a public handle was
 retained. These are the persistent files consumed by the next open. -/
 structure Offline (physical : NativeScope.W → Footprint inode) (root : FilePath)
-    (ref : NativeScope.Ref) (image : Selected) (w : NativeScope.W) : Prop where
-  files : Files physical root image w
+    (ref : NativeScope.Ref) (image : Selected) (w : NativeScope.W)
+    (pending : Option WalRecoverySlice.Segmented.Contract.Request := none) : Prop where
+  files : RestartFiles pending physical root image w
   phaseRef : (physical w).phaseRef = some ref
   offline : (physical w).phase = .offline
 
 /-- Root ownership remains live through the registered WAL and child closes.
 Only the outer unlock may consume this grant. -/
 structure Custody (physical : NativeScope.W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
-    (ref : NativeScope.Ref) (image : Selected) (w : NativeScope.W) : Prop extends Offline physical root ref image w where
+    (ref : NativeScope.Ref) (image : Selected) (w : NativeScope.W)
+    (pending : Option WalRecoverySlice.Segmented.Contract.Request := none) : Prop extends Offline physical root ref image w pending where
   owner : (physical w).rootLock = some (root, lock)
 
 abbrev Nested := WalRecoverySlice.Segmented.Native.CloseSites NativeCleanup.ChildIssued
@@ -28,16 +30,26 @@ abbrev Nested := WalRecoverySlice.Segmented.Native.CloseSites NativeCleanup.Chil
 /-- An unlock error can be masked by a primary failure. The report retains
 the actual descriptor outcome independently of what withOpen returns. -/
 def Report (physical : NativeScope.W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
-    (ref : NativeScope.Ref) (image : Selected) (t : NativeScope.W) : Prop :=
-  Grant root lock ref ∧ ∃ u, Custody physical root lock ref image u ∧
+    (ref : NativeScope.Ref) (image : Selected) (t : NativeScope.W)
+    (pending : Option WalRecoverySlice.Segmented.Contract.Request := none) : Prop :=
+  Grant root lock ref ∧ ∃ u, Custody physical root lock ref image u pending ∧
     ((lock.unlock u = .ok () t ∧ (physical t).rootLock = none) ∨ ∃ e, lock.unlock u = .error e t)
 
 structure Closed (physical : NativeScope.W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
-    (ref : NativeScope.Ref) (image : Selected) (t : NativeScope.W) : Prop extends Offline physical root ref image t where
-  report : Report physical root lock ref image t
+    (ref : NativeScope.Ref) (image : Selected) (t : NativeScope.W)
+    (pending : Option WalRecoverySlice.Segmented.Contract.Request := none) : Prop extends Offline physical root ref image t pending where
+  report : Report physical root lock ref image t pending
+
+structure RootUnlock (physical : NativeScope.W → Footprint inode) (root : FilePath)
+    (lock : IO.FS.Handle) (ref : NativeScope.Ref) (image : Selected)
+    (pending : Option WalRecoverySlice.Segmented.Contract.Request := none) : Prop where
+  rootFrame : ∀ u, Grant root lock ref → Custody physical root lock ref image u pending →
+    Offline physical root ref image (lock.unlock.toBaseIO u).state pending
+  unlocked : ∀ u t, Grant root lock ref → Custody physical root lock ref image u pending →
+    lock.unlock u = .ok () t → (physical t).rootLock = none
 
 structure Laws (heap : PhaseMemory) (physical : NativeScope.W → Footprint inode) (root : FilePath)
-    (lock : IO.FS.Handle) (ref : NativeScope.Ref) (image : Selected) : Prop where
+    (lock : IO.FS.Handle) (ref : NativeScope.Ref) (image : Selected) : Prop extends RootUnlock physical root lock ref image where
   cached : Cached heap physical root lock ref
   swap : ∀ wal, RefSwap physical root lock ref wal image.tables
   emptySwap : ∀ w, Opening physical root lock ref image w → Files physical root image w →
@@ -64,11 +76,6 @@ structure Laws (heap : PhaseMemory) (physical : NativeScope.W → Footprint inod
   site is eligible. Mutex and typed cell operations preserve the root. -/
   nested : ∀ wal c w, NativeCleanup.Frame (fun fd u => Nested wal c w fd u ∧ fd ≠ lock)
     (Custody physical root lock ref image)
-  rootFrame : ∀ u, Grant root lock ref → Custody physical root lock ref image u →
-    Offline physical root ref image (lock.unlock.toBaseIO u).state
-  unlocked : ∀ u t, Grant root lock ref → Custody physical root lock ref image u →
-    lock.unlock u = .ok () t → (physical t).rootLock = none
-
 /-- Descriptor separation follows from the originally bound successful opens
 and the local phase read. No unlock operand is postulated for a completed
 child close. -/
@@ -93,10 +100,10 @@ theorem Laws.separate (laws : Laws heap physical root lock ref image) (grant : G
     exact same ▸ fresh _ child (.inr ⟨rfl, opened⟩) opened.root
   · exact fresh _ reg.store.lock (.inl ⟨rfl, rfl⟩) outer
 
-private theorem observed (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
-    (held : Custody physical root lock ref image u) :
-    Post lock.unlock u (fun _ t => Closed physical root lock ref image t)
-      (fun _ t => Closed physical root lock ref image t) := by
+theorem RootUnlock.observed (laws : RootUnlock physical root lock ref image pending) (grant : Grant root lock ref)
+    (held : Custody physical root lock ref image u pending) :
+    Post lock.unlock u (fun _ t => Closed physical root lock ref image t pending)
+      (fun _ t => Closed physical root lock ref image t pending) := by
   have kept := laws.rootFrame u grant held
   unfold Post
   cases ran : lock.unlock u with
@@ -112,7 +119,7 @@ private theorem releaseTo (laws : Laws heap physical root lock ref image) (grant
     (fail : ∀ e t, Closed physical root lock ref image t → err e t) :
     Release ref lock w ok err := by
   let taken := (ref.swap .offline : BaseIO _) w
-  have finish u (h : Custody physical root lock ref image u) := (observed laws grant h).weaken (fun _ => succeed) fail
+  have finish u (h : Custody physical root lock ref image u) := (laws.toRootUnlock.observed grant h).weaken (fun _ => succeed) fail
   unfold Release
   dsimp only
   rw [oldValue]
@@ -124,7 +131,7 @@ private theorem releaseTo (laws : Laws heap physical root lock ref image) (grant
       fun step => laws.nested wal c taken.state
         (step.map (fun fd u site => ⟨site, laws.separate grant held origin ready site⟩))
     exact (NativeCleanup.wal_close heap frame ready held).weaken (fun _ => finish)
-      (fun e _ h => (observed laws grant h).weaken (fun _ => fail e) (fun _ => fail e))
+      (fun e _ h => (laws.toRootUnlock.observed grant h).weaken (fun _ => fail e) (fun _ => fail e))
 
 private theorem childTo (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (owned : Owned (physical w) root lock ref) (attached : (physical w).phase.wal = some wal)

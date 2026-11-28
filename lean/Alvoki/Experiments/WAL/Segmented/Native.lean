@@ -788,6 +788,52 @@ def CloseSites (childSite : SingleFile.Handle → Void IO.RealWorld → IO.FS.Ha
   childSite reg.child u fd t ∨
     (fd = reg.store.lock ∧ t = ((SingleFile.close reg.child).toBaseIO u).state)
 
+/-- The empty slot skips child close. The WAL file unlock still executes,
+and its mutex is released at the world returned by that syscall. -/
+def slotCloseResult (slot : Option (Nat × SingleFile.Handle)) (root : IO.FS.Handle) (mutex : Std.BaseMutex)
+    (taken : Void IO.RealWorld) : EST.Out IO.Error IO.RealWorld Unit :=
+  match slot with
+  | some (_, h) => closeResult h root mutex taken
+  | none => match root.unlock taken with
+    | .ok x t => .ok x (mutex.unlock t).state
+    | .error e t => .error e (mutex.unlock t).state
+
+theorem close_owned_slot (heap : PhaseMemory) {store : Store} {handle : Handle} (parts : handle.Parts cell mutex)
+    (distinct : heap.separate cell store.active) (phase : heap.holds cell old w)
+    (stored : old = .poisoned store ∨ ∃ session, old = .ready store session)
+    (registered : heap.holds store.active slot w) :
+    let locked := (mutex.lock w).state
+    let closed := (cell.swap .closed : BaseIO _) locked
+    let taken := (store.active.swap none : BaseIO _) closed.state
+    closed.val = old ∧ taken.val = slot ∧
+      close handle w = slotCloseResult slot store.lock mutex taken.state := by
+  obtain ⟨rfl, rfl⟩ := parts
+  intro locked closed taken
+  have phaseValue := heap.swap .closed (heap.lock handle.mutex phase)
+  have slotValue := heap.swap none (heap.swapFrame (w := locked) .closed distinct (heap.lock handle.mutex registered))
+  refine ⟨phaseValue, slotValue, ?_⟩
+  have removedPhase : (handle.state.swap .closed : IO _) locked = .ok old closed.state := by
+    change EST.Out.ok closed.val closed.state = _
+    rw [show closed.val = _ from phaseValue]
+  have removedChild : (store.active.swap none : IO _) closed.state = .ok slot taken.state := by
+    change EST.Out.ok taken.val taken.state = _
+    rw [show taken.val = _ from slotValue]
+  unfold close
+  rw [locked_run, show (handle.mutex.lock w).state = locked from rfl]
+  simp only [closeWith, Bind.bind, instMonadEIO._aux_13, EST.bind, removedPhase]
+  rcases stored with rfl | ⟨session, rfl⟩ <;>
+    simp only [Store.release, releaseWith, cleanupOnError, Store.closeChild, closeChildWith,
+      tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch,
+      Bind.bind, instMonadEIO._aux_13, EST.bind, removedChild, slotCloseResult]
+  all_goals
+    cases slot with
+    | none => dsimp only [Pure.pure, instMonadEIO._aux_5, EST.pure]; cases store.lock.unlock taken.state <;> rfl
+    | some pair =>
+      obtain ⟨id, child⟩ := pair
+      cases stopped : SingleFile.close child taken.state with
+      | ok x t => cases x; dsimp only [closeResult]; rw [stopped]; dsimp only; cases store.lock.unlock t <;> rfl
+      | error e t => dsimp only [closeResult]; rw [stopped]; dsimp only; cases store.lock.unlock t <;> rfl
+
 /-- The consuming close takes exactly the registered store and active child
 from its two typed heap cells. -/
 theorem close_registered (heap : PhaseMemory) {handle : Handle} {reg : Registration}
@@ -797,31 +843,8 @@ theorem close_registered (heap : PhaseMemory) {handle : Handle} {reg : Registrat
     let taken := (reg.store.active.swap none : BaseIO _) closed.state
     closed.val = .ready reg.store reg.session ∧ taken.val = some (reg.session.control.active, reg.child) ∧
       close handle w = closeResult reg.child reg.store.lock handle.mutex taken.state := by
-  obtain ⟨session, store, child⟩ := reg
-  obtain ⟨separate, phase, slot⟩ := held
-  intro locked closed taken
-  have phaseAt := heap.lock handle.mutex phase
-  have slotAt := heap.swapFrame (w := locked) .closed separate (heap.lock handle.mutex slot)
-  have phaseValue := heap.swap .closed phaseAt
-  have slotValue := heap.swap none slotAt
-  refine ⟨phaseValue, slotValue, ?_⟩
-  have removedPhase : (handle.state.swap .closed : IO _) locked = .ok (.ready store session) closed.state := by
-    change EST.Out.ok closed.val closed.state = _
-    rw [show closed.val = _ from phaseValue]
-  have removedChild : (store.active.swap none : IO _) closed.state =
-      .ok (some (session.control.active, child)) taken.state := by
-    change EST.Out.ok taken.val taken.state = _
-    rw [show taken.val = _ from slotValue]
-  unfold close
-  rw [locked_run]
-  rw [show (handle.mutex.lock w).state = locked from rfl]
-  simp only [closeWith, Bind.bind, instMonadEIO._aux_13, EST.bind, removedPhase]
-  simp only [Store.release, releaseWith, cleanupOnError, Store.closeChild, closeChildWith,
-    tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch,
-    Bind.bind, instMonadEIO._aux_13, EST.bind, removedChild, closeResult]
-  cases stopped : SingleFile.close child taken.state with
-  | ok x t => cases x; dsimp only; cases store.lock.unlock t <;> rfl
-  | error e t => dsimp only; cases store.lock.unlock t <;> rfl
+  exact close_owned_slot heap (show handle.Parts handle.state handle.mutex from ⟨rfl, rfl⟩)
+    held.1 held.2.1 (.inr ⟨_, rfl⟩) held.2.2
 
 theorem close_ready_releases (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
     ∃ store child, heap.holds handle.state (.ready store session) w ∧

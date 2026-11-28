@@ -70,7 +70,7 @@ theorem child_close (frame : Frame issued P) (h : SingleFile.Handle)
       simp only [unlock]
       exact frame (.mutexUnlock mutex t) preserved
 
-private theorem closeResult_frame (frame : Frame issued P) (child : SingleFile.Handle)
+theorem closeResult_frame (frame : Frame issued P) (child : SingleFile.Handle)
     (fd : IO.FS.Handle) (mutex : Std.BaseMutex)
     (childSite : ∀ f t, ChildIssued child w f t → issued f t)
     (storeSite : issued fd ((SingleFile.close child).toBaseIO w).state) (start : P w) :
