@@ -1,33 +1,39 @@
 import Alvoki.Experiments.L0.InterruptedMutation
 import Alvoki.Experiments.L0.NativeMutation
-import Alvoki.Experiments.WAL.Segmented.Proofs.CutRuntime
+import Alvoki.Experiments.WAL.Segmented.Proofs.PublicAppendCut
 
 namespace ExperimentalL0.InterruptedMutation
 
-open System Lifecycle NativeScope
-open NativeRead (Footprint SessionAt)
-open WalRecoverySlice.Segmented.Native (PhaseMemory Store Registration)
+open NativeScope
+open NativeRead (SessionAt)
+open WalRecoverySlice.Segmented.Native (PhaseMemory Store)
+open WalRecoverySlice.Segmented.Native.AppendCut (CutRuntime Stop PublicStop recoverPublic)
 open NativeMutationScope (AppendPrimitives Retry Reopens)
-open WalRecoverySlice.Segmented.Native.AppendCut (CutRuntime sites recoverBody)
-open WalRecoverySlice.Segmented.Native.AppendIO (LocalIO Active issuedWorld)
 
-/-- The actual outer WAL phase read under its mutex identifies the worker;
-the active child identity and its files will come from the successful open. -/
+/-- The mutex and phase cell belonging to the public WAL handle. -/
 structure Worker (p : Prefix path root start) where
   cell : IO.Ref (WalRecoverySlice.Segmented.Native.Phase Store)
   mutex : Std.BaseMutex
-  store : Store
-  session : WalRecoverySlice.Segmented.Session
   parts : p.wal.Parts cell mutex
-  read : ((cell.get : BaseIO _) (mutex.lock p.issue).state).val = .ready store session
 
-def Worker.begin (worker : Worker p) : W :=
-  issuedWorld worker.cell worker.mutex worker.store p.issue
+abbrev Worker.phase (worker : Worker p) : WalRecoverySlice.Segmented.Native.Phase Store :=
+  ((worker.cell.get : BaseIO _) (worker.mutex.lock p.issue).state).val
 
-/-- A nonreturning instruction inside the shared append schedule. The
-same root, recovered handle, store, active child, batch and issued worlds
-are used to obtain a permitted disk at the physical reboot. Both reads
-start their actual reopen from the immediately preceding reached world. -/
+/-- An interruption before the mutex or phase read returns requires only
+the issued primitive. Once the phase has returned, the remaining cut
+comes from the exact store and session that it selected. -/
+inductive Worker.Cut (worker : Worker p) (change : Change) (stop : Stop)
+    (d : WalRecoverySlice.Segmented.Model.Disk) : Prop where
+  | lock : stop (liftM worker.mutex.lock : IO Unit) p.issue d → worker.Cut change stop d
+  | read : stop (worker.cell.get : IO _) (worker.mutex.lock p.issue).state d → worker.Cut change stop d
+  | ready : worker.phase = .ready store session →
+      PublicStop worker.cell worker.mutex store session (encode change) p.issue stop d →
+      worker.Cut change stop d
+
+/-- The public mutation reaches this same WAL handle from the recovered
+L0 session. A nonreturning observation in its mutex, phase update or
+worker produces a physical survivor for the first actual reopen. The
+second public reopen consumes the first one's reached state. -/
 theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
     (entry : NativeReadScope.Entry physical path root image)
     (files : NativeReadScope.Files physical root image start)
@@ -38,9 +44,9 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
     (fits : image.view.tail + 1 < UInt64.size)
     (io : AppendPrimitives runtime change)
     (linux : System.Platform.isWindows = false)
-    (prim : CutRuntime (fun w => (physical w).disk) worker.store worker.session stop)
-    (cut : ((sites worker.store worker.session stop).appendSession worker.session (encode change)).cuts
-      worker.begin d)
+    (prim : ∀ store session, worker.phase = .ready store session →
+      CutRuntime (fun w => (physical w).disk) store session stop)
+    (cut : worker.Cut change stop d)
     (restart : NativeAppendCut.Restarted physical root image.tables p.issue d mode after)
     (reopens : Reopens physical heap path root image life (some (.append (encode change))))
     (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
@@ -52,19 +58,22 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
   obtain ⟨reg, pathEq, slot, view, active⟩ := NativeMutationScope.atIssue ops issued
   have registered := (ops.cleanup.cached _ issued.owned _ reg).mp slot
   let op := (io p.lock p.ref p.wal p.session history p.issue reg pathEq issued slot active).worker
-  have got := (heap.read (heap.lock worker.mutex (worker.parts.1 ▸ registered.2.1))).1
-  obtain ⟨store, session⟩ := WalRecoverySlice.Segmented.Native.Phase.ready.inj (got.symm.trans worker.read)
-  have world : issuedWorld op.cell op.mutex reg.store p.issue = worker.begin := by
-    unfold Worker.begin
-    rw [op.parts.1.symm.trans worker.parts.1, op.parts.2.symm.trans worker.parts.2, store]
+  have selected := (heap.read (heap.lock worker.mutex (worker.parts.1 ▸ registered.2.1))).1
+  have actual : PublicStop op.cell op.mutex reg.store reg.session (encode change) p.issue stop d := by
+    rw [op.parts.1.symm.trans worker.parts.1, op.parts.2.symm.trans worker.parts.2]
+    cases cut with
+    | lock stopped => exact .lock stopped
+    | read stopped => exact .read stopped
+    | ready observed site =>
+      obtain ⟨rfl, rfl⟩ := WalRecoverySlice.Segmented.Native.Phase.ready.inj (selected.symm.trans observed)
+      exact site
   have room : reg.session.view.tail < WalRecoverySlice.Segmented.Contract.maxPosition := by
     rw [view]
     change image.view.tail + 1 < 18446744073709551616 at fits
     change image.view.tail < 18446744073709551615
     omega
-  have recoverable := recoverBody op (by simpa only [store, session] using prim) active
-    ⟨issued.owned, issued.phase, issued.catalog, issued.manifest⟩ (encode_size change) room linux
-    (by rw [world, store, session]; exact cut)
+  have recoverable := recoverPublic op (prim _ _ selected) active
+    ⟨issued.owned, issued.phase, issued.catalog, issued.manifest⟩ (encode_size change) room linux actual
   have retry := restart.uncertain issued.manifest issued.catalog (view ▸ recoverable) trace
   exact ⟨retry, retry.readTwice reopens a b rootLife⟩
 
