@@ -23,7 +23,7 @@ private theorem Writebacks.named (writes : Writebacks before after) :
     after.liveNames = before.liveNames := by
   induction writes <;> first | rfl | assumption
 
-private theorem Writebacks.segment {id : Nat} (writes : Writebacks before after)
+theorem Writebacks.segment {id : Nat} (writes : Writebacks before after)
     (prior : Child.Recoverable p bs pending (before.segment id)) :
     Child.Recoverable p bs pending (after.segment id) := by
   induction writes with

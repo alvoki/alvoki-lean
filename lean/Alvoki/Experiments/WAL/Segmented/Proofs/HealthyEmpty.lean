@@ -1,4 +1,4 @@
-import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeChild
+import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeStoreOpen
 
 namespace WalRecoverySlice.Segmented.Native
 open Alvoki.NativePost System
@@ -229,7 +229,7 @@ structure Inspected (s : Store) (start after : W) where
 
 /-- Primitive success reports for CONTROL and the selected, settled child.
 After that child's proved read, collection consumes its actual exit world. -/
-structure Worker (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMemory disk) (w : W) (bs : List Bytes := []) where
+structure Reports (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMemory disk) (w : W) (bs : List Bytes := []) where
   md : IO.FS.Metadata
   controlStat : W
   controlRead : W
@@ -249,12 +249,57 @@ structure Worker (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMe
   stamp : FileBytes (segmentPath s.root 0 / "policy") policyStat (policyStamp .logOnly).toUTF8 policyRead
   child : ChildAttempt s disk P mem 0 .logOnly policyRead
   healthy : child.reports = {}
-  prior : Child.Recoverable .logOnly bs none ((disk policyRead).segment 0)
   useChild : ChildUseIO mem P
   collect : ∀ h t u, SingleFile.openExisting (segmentPath s.root 0) policyRead = .ok h t →
     SingleFile.scan h t = .ok bs u →
     ∃ items v z, entries s.root u = .ok items v ∧ listedIds (·.fileName) items = .ok [0] ∧
       syncHandle s.directory v = .ok () z
+
+/-- Follow the successful raw reports with the ordinary recovery runtime. Reading CONTROL
+selects the physical child. Root synchronization and validation preserve its recoverability
+through the last policy byte, where single-file recovery actually starts. -/
+theorem Reports.selected (p : Reports s disk P mem w view.batches) (ops : LocalStoreIO s disk Q)
+    (entry : Q w) (initial : Recoverable view none (disk w)) :
+    Child.Recoverable .logOnly view.batches none ((disk p.policyRead).segment 0) ∧ view.batches.length ≤ 1 := by
+  have stat := ops.metadata w entry
+  rw [IOReturns,p.stat] at stat
+  have bytes := FileRead.readBinFile (ops.file (disk w)) stat
+  rw [FileRead.Effect,p.bytes.run] at bytes
+  have selected : (disk p.controlRead).liveControl = some control := by
+    have encoded : ops.controlBytes p.controlStat = ControlCodec.encode control := bytes.2.2.symm
+    rw [← ops.controlBound _ bytes.1.1,bytes.2.1,encoded]
+    exact ControlCodec.decode_encode control (by decide) (by decide)
+  have can := bytes.1.2.recoverable initial
+  obtain ⟨c,live,h,pending,_,allow⟩ := can.live
+  rw [selected] at live
+  cases live
+  have fixed := allow h (.inl rfl)
+  have viewEq : historyView control h = view := by simpa [PermittedView] using fixed
+  have same : (sessionFor view.batches).view = view := by rw [← viewEq]; rfl
+  have canonical : Recoverable (sessionFor view.batches).view none (disk p.controlRead) := same.symm ▸ can
+  obtain ⟨prior,fits⟩ := selectedChild canonical selected
+  have sync := ops.sync p.controlRead bytes.1.1
+  rw [IOReturns,p.sync] at sync
+  let guard := fun t => Q t ∧ Writebacks (disk p.synced) (disk t)
+  have val := ops.children.validation
+  have names := inspectChild_io (P := guard) (segmentPath s.root 0) (fun _ => True)
+    (val.stat (disk p.synced)) (fun u hu => by
+      have out := val.list (disk p.synced) 0 u hu
+      unfold IOReturns at out ⊢
+      cases run : entries (segmentPath s.root 0) u with
+      | ok => rw [run] at out; exact ⟨out,trivial⟩
+      | error => rw [run] at out; exact out) (w := p.synced) ⟨sync.1,.nil⟩
+  rw [IOReturns,inspect _ p.names.stat p.names.directory p.names.list p.names.members] at names
+  have file := val.file (disk p.synced) 0
+  have md := file.metadata p.inspected names.1
+  rw [FileRead.Effect,p.sizeStat] at md
+  have last := FileRead.readBinFile file md.1
+  rw [FileRead.Effect,p.stamp.run] at last
+  exact ⟨Writebacks.segment last.1.2 (Writebacks.segment sync.2 (id := 0) prior),fits⟩
+
+structure Worker (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMemory disk) (w : W)
+    (bs : List Bytes := []) extends Reports s disk P mem w bs where
+  prior : Child.Recoverable .logOnly bs none ((disk policyRead).segment 0)
 
 theorem Worker.run (p : Worker s disk P mem w bs) (fits : bs.length ≤ 1) : ∃ h u, s.recoverChild w = .ok (sessionFor bs, h) u ∧
       ∃ fd, ChildLockAt (segmentPath s.root 0) h fd := by
