@@ -83,7 +83,7 @@ structure LocalRotation (c : Context disk) (r : Reports batch) (h : SingleFile.H
   detach : Detach c r h w s
   prepare : ∀ t (u : Work), Prefix c r w s .cleared none t u → c.Base none t u.1.disk →
     PrepareIO.Successor c.store c.session.control.policy c.nextId r.removal r.effects r.create t u.1
-      (fun v n => c.Base none v n.disk) (fun child phase v => c.Bound c.nextId child v phase) disk
+      (fun v n => c.Base none v n.disk) disk c.mem
   root : ∀ child t u, Prefix c r w s .prepared (some child) t u → c.ReadyFile none c.nextId child t u → PrepareIO.PreparedFile disk c.nextId t →
     At (syncHandle c.store.directory) (ControlIO.rootSync r.effects) t u.1
       (fun _ _ => c.rootFrame child u.2) (fun v n => c.Candidate child v (n,u.2))

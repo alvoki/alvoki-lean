@@ -34,11 +34,11 @@ theorem PreparedFile.namedChild (file : PreparedFile disk id w) (barrier : id �
   rw [file.image, file.cursor]
   exact ⟨⟨Persistence.fresh_ready p, rfl⟩, rfl⟩
 
-theorem Successor.healthy (steps : Successor s p id removal Model.healthy {} origin initial R owns disk)
+theorem Successor.healthy (steps : Successor s p id removal Model.healthy {} origin initial R disk mem)
     (root : HealthyRoot removal) (linux : Platform.isWindows = false) :
     ∃ h t phase u, s.prepareChild p id origin = .ok h t ∧
       (prepareNativeChild s.root removal (fun step => Model.healthy.prepare step id) {} p id).run initial =
-        .ok (.ok phase) u ∧ owns h phase t ∧ R t u ∧ PreparedFile disk id t := by
+        .ok (.ok phase) u ∧ CreatedChild mem s id p h phase t ∧ R t u ∧ PreparedFile disk id t := by
   obtain ⟨phase, u, model⟩ := prepareNativeChild_healthy s.root removal root p id initial linux
   have result := steps.prepare linux
   unfold AppendIO.At at result

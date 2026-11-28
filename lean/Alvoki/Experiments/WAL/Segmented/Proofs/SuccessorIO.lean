@@ -1,5 +1,5 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.PrepareIO
-import Alvoki.Experiments.WAL.Proofs.ConcreteCreate
+import Alvoki.Experiments.WAL.Segmented.Proofs.ChildAuthority
 
 namespace WalRecoverySlice.Segmented.Native.PrepareIO
 open Model System Alvoki.NativePost
@@ -33,25 +33,27 @@ def Material (disk : W → Disk) (id : Nat) (w : W) (child : SingleFile.OpenImag
   child.namesDurable = true → id ∈ (disk w).liveNames ∧
     (disk w).segment id = child.image ∧ (disk w).cursor id = {}
 
+def CreatedChild (mem : ChildMemory disk) (s : Store) (id : Nat) (p : Policy)
+    (h : SingleFile.Handle) (phase : SingleFile.AppendPhase) (t : W) : Prop :=
+  ∃ a : AppendIO.ChildAuthority mem (segmentPath s.root id) id p h, a.Live t phase
+
 /-- Creation is interpreted on the successor which was just given a
 directory. The outer state may abstract its private contents on failure.
 The success projection receives the actual newly allocated cell and mutex. -/
 structure Creation (s : Store) (id : Nat) (p : Policy) (r : SingleFile.CreateReports)
     (w : W) (before : State) (R : W → State → Prop)
-    (owns : SingleFile.Handle → SingleFile.AppendPhase → W → Prop) (disk : W → Disk) where
-  role : IO.FS.Handle → SingleFile.OpenTarget → Prop
+    (disk : W → Disk) (mem : ChildMemory disk) where
   building : W → SingleFile.OpenImage → Prop
   steps : SingleFile.ConcreteCreate.Steps
-    (fun t child => R t (createdDisk before id child) ∧ Material disk id t child ∧ building t child) role
+    (fun t child => R t (createdDisk before id child) ∧ Material disk id t child ∧ building t child) (mem.bound id)
     (segmentPath s.root id) p r w
-  owned : ∀ h ready t, SingleFile.create (segmentPath s.root id) p w = .ok h t →
-    SingleFile.ConcreteRecovery.Owns steps.runtime role p (segmentPath s.root id) w t h ready →
-    owns h (SingleFile.storedPhase ready) t
+  cell : ∀ t ref phase, steps.runtime.cell t ref phase → mem.cell t ref phase
+  mutex : ∀ t guard, steps.runtime.mutex t guard → mem.mutex t guard
 
-private theorem Creation.run (creation : Creation s id p r w before R owns disk)
+private theorem Creation.run (creation : Creation s id p r w before R disk mem)
     (linux : System.Platform.isWindows = false) :
     At (SingleFile.create (segmentPath s.root id) p) (make s.root id p r) w before
-      (fun h phase t u => owns h phase t ∧ R t u ∧ PreparedFile disk id t) R := by
+      (fun h phase t u => CreatedChild mem s id p h phase t ∧ R t u ∧ PreparedFile disk id t) R := by
   have run := SingleFile.ConcreteCreate.create creation.steps
   unfold At make
   dsimp only [ExceptT.run]
@@ -61,11 +63,10 @@ private theorem Creation.run (creation : Creation s id p r w before R owns disk)
     cases result with
     | error => contradiction
     | ok ready =>
-      have guarantee := (SingleFile.createModel_opened _ _ _ linux model).1
-      have names := guarantee.2.2.2.2.2.2.2.2.2.1
-      have data := (nativeCreatedChild _ _ _ linux model).1
+      obtain ⟨data, names, _, _⟩ := nativeCreatedChild _ _ _ linux model
       obtain ⟨name, image, cursor⟩ := run.1.2.1 names
-      exact ⟨creation.owned h ready t actual run.2, run.1.1, name, image.trans data, cursor⟩
+      have custody := AppendIO.ChildAuthority.created creation.steps actual model linux creation.cell creation.mutex
+      exact ⟨custody.2, run.1.1, name, image.trans data, cursor⟩
   case error.ok e t result u =>
     cases result <;> first | contradiction | exact run.1
   all_goals contradiction
@@ -74,7 +75,7 @@ private theorem Creation.run (creation : Creation s id p r w before R owns disk)
 successor cleanup and mkdir both returned on this invocation. -/
 structure Successor (s : Store) (p : Policy) (id : Nat) (removal : RootReports)
     (reports : Effects) (create : SingleFile.CreateReports) (origin : W) (initial : State)
-    (R : W → State → Prop) (owns : SingleFile.Handle → SingleFile.AppendPhase → W → Prop) (disk : W → Disk) where
+    (R : W → State → Prop) (disk : W → Disk) (mem : ChildMemory disk) where
   remove : Removal s.root id removal origin initial R
   createDirectory : ∀ t u, removeSegment s.root id origin = .ok () t →
     ((nativeReopenOps s.root removal (fun _ _ => {})).removeSegment id).run initial = .ok (.ok ()) u → R t u →
@@ -82,14 +83,14 @@ structure Successor (s : Store) (p : Policy) (id : Nat) (removal : RootReports)
   child : ∀ t u v n, removeSegment s.root id origin = .ok () t →
     ((nativeReopenOps s.root removal (fun _ _ => {})).removeSegment id).run initial = .ok (.ok ()) u →
     IO.FS.createDir (segmentPath s.root id) t = .ok () v →
-    (mkdir reports id).run u = .ok (.ok ()) n → R v n → Creation s id p create v n R owns disk
+    (mkdir reports id).run u = .ok (.ok ()) n → R v n → Creation s id p create v n R disk mem
 
 variable {create : SingleFile.CreateReports}
 
-theorem Successor.prepare (steps : Successor s p id removal reports create w initial R owns disk)
+theorem Successor.prepare (steps : Successor s p id removal reports create w initial R disk mem)
     (linux : System.Platform.isWindows = false) :
     At (s.prepareChild p id) (prepareNativeChild s.root removal (fun step => reports.prepare step id) create p id)
-      w initial (fun h phase t u => owns h phase t ∧ R t u ∧ PreparedFile disk id t) R := by
+      w initial (fun h phase t u => CreatedChild mem s id p h phase t ∧ R t u ∧ PreparedFile disk id t) R := by
   unfold Store.prepareChild prepareNativeChild prepareChildWith
   apply (ControlIO.trace steps.remove.run).bind
   rintro _ _ t u ⟨frame, removed, result⟩
@@ -104,10 +105,10 @@ theorem Successor.prepare (steps : Successor s p id removal reports create w ini
   case ok response child => cases response <;> exact output
   case error => exact output
 
-theorem Successor.acquire (steps : Successor s p id removal reports create w initial R owns disk)
+theorem Successor.acquire (steps : Successor s p id removal reports create w initial R disk mem)
     (phase : SingleFile.AppendPhase) (linux : System.Platform.isWindows = false) :
     At (s.prepareChild p id) (acquireSuccessor s.root removal reports create p id) w (initial, phase)
-      (fun h tag t u => tag = .acquired id ∧ owns h u.2 t ∧ R t u.1 ∧ PreparedFile disk id t) (fun t u => u.2 = phase ∧ R t u.1) := by
+      (fun h tag t u => tag = .acquired id ∧ CreatedChild mem s id p h u.2 t ∧ R t u.1 ∧ PreparedFile disk id t) (fun t u => u.2 = phase ∧ R t u.1) := by
   have run := steps.prepare linux
   unfold At acquireSuccessor at *
   dsimp only [ExceptT.run, Prod.fst, Prod.snd] at *
