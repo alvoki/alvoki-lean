@@ -204,24 +204,48 @@ private def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
 @[inline] def syncRootWith {m : Type → Type} (sync : descriptor → m Unit) (directory : descriptor) : m Unit :=
   sync directory
 
+/-- The writer returned by staging is the input to the writer barrier.
+The directory description is acquired and held by the root store. -/
+structure ControlPrimitives (m : Type → Type) (writer directory : Type) where
+  clearStage : FilePath → m Unit
+  openWriter : FilePath → IO.FS.Mode → m writer
+  disableBuffering : writer → m Unit
+  write : writer → ByteArray → m Unit
+  flush : writer → m Unit
+  syncWriter : writer → m Unit
+  rename : FilePath → FilePath → m Unit
+  syncDirectory : directory → m Unit
+
+@[inline] def publishControlWith [Monad m] [MonadExceptOf String m]
+    (ops : ControlPrimitives m writer directory) (root : FilePath)
+    (held : directory) (c : Control) : m Unit :=
+  let stage := root / "CONTROL.next"
+  let active := root / "CONTROL"
+  DurableBlob.publishWith (do
+    unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do
+      throw "segmented WAL position exhausted"
+    ops.clearStage stage
+    let writer ← ops.openWriter stage .writeNew
+    ops.disableBuffering writer
+    ops.write writer (ControlCodec.encode c)
+    ops.flush writer
+    pure writer)
+    ops.syncWriter (ops.rename stage active) (ops.syncDirectory held)
+
+private def controlPrimitives : ControlPrimitives FileM IO.FS.Handle IO.FS.Handle where
+  clearStage path := liftM (removeRegular path)
+  openWriter path mode := liftM (IO.FS.Handle.mk path mode)
+  disableBuffering writer := liftM (disableBuffering writer)
+  write writer bytes := liftM (writer.write bytes)
+  flush writer := liftM writer.flush
+  syncWriter writer := liftM (syncHandle writer)
+  rename stage active := liftM (IO.FS.rename stage active)
+  syncDirectory directory := liftM (syncHandle directory)
+
 private def Store.callbacks (s : Store) : Ops FileM where
   prepareSegment p id := s.prepare p id
   syncRoot := syncRootWith (fun directory => liftM (syncHandle directory)) s.directory
-  publishControl c :=
-    let stage := s.root / "CONTROL.next"
-    let active := s.root / "CONTROL"
-    DurableBlob.publishWith (do
-      unless c.active ≤ ControlCodec.wordMax && c.discarded ≤ ControlCodec.wordMax do
-        throw "segmented WAL position exhausted"
-      removeRegular stage
-      let writer ← IO.FS.Handle.mk stage .writeNew
-      disableBuffering writer
-      writer.write (ControlCodec.encode c)
-      writer.flush
-      pure writer)
-      (fun writer => liftM (syncHandle writer))
-      (liftM (IO.FS.rename stage active))
-      (syncRootWith (fun directory => liftM (syncHandle directory)) s.directory)
+  publishControl := publishControlWith controlPrimitives s.root s.directory
   readControl := readControlWith controlMetadata (fun file => IO.FS.readBinFile file) s.root
   openSegment p id := s.readSealedChild p id
   appendSegment _ id batch := do

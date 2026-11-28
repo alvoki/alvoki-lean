@@ -128,12 +128,23 @@ descriptions. Native rotation and CONTROL
 publication remain segmented responsibilities.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
-CONTROL uses the shared DurableBlob publication schedule to pass the
-original staged writer directly to fsync. The remaining producer proof
-must relate each native cut to the WAL disk model, including private stage
-failures and the root barrier that settles both CONTROL and child names.
-Reuse the existing WAL segment creation, prefix release and collection
-invariants. Coordinate changes to the adapter with the L0 consumer.
+[Native CONTROL publication](Proofs/NativeControl.lean) uses the shared
+DurableBlob schedule to pass the original staged writer directly to fsync.
+The proof derives the existing `PublishCut` on the reached WAL image.
+One successful root barrier settles both CONTROL and child names. The
+result can feed the existing discard recovery continuation, including a
+failed recovery followed by two successful opens. Collection in that
+continuation uses the existing model effects.
+
+The primitive premises are checked private staging under the root lock,
+an exact successful write and flush, fsync on the returned writer, rename
+with the reported live and durable effects, and fsync on the held root.
+Partial private stage contents are abstracted out. They can never be
+renamed by a failed staging step, and a retry clears and rewrites the
+stage. Staging failures normalize to before or after a complete proposal
+with no effect on visible CONTROL or selected child names. The proof
+uses the existing power-loss projection. Bootstrap and rotation still
+owe representability and successor-child authority.
 
 [Native reopen proofs](Proofs/NativeReopen.lean) compose the single-file
 producer with the shared root operations. The root directory descriptor
