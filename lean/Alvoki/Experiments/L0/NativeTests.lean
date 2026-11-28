@@ -11,11 +11,23 @@ private def expectError (operation : IO α) : IO Unit := do
   | .error _ => pure ()
   | .ok _ => throw (IO.userError "expected native operation to fail")
 
-private def initializeRoot (root : FilePath) : IO Unit := do
+private def initializeRoot (root : FilePath) (capacity : Nat := 2) (policy : WalRecoverySlice.Policy := .boundary) : IO Unit := do
   for dir in ["wal", "manifest", "tables"] do IO.FS.createDir (root / dir)
-  let wal ← WalRecoverySlice.Segmented.Native.create (root / "wal") .boundary 2
+  let wal ← WalRecoverySlice.Segmented.Native.create (root / "wal") policy capacity
   WalRecoverySlice.Segmented.Native.close wal
   (DurableBlob.native (root / "manifest")).publish (L0Manifest.encode .empty)
+
+private def sameHandleRotation : IO Unit := IO.FS.withTempDir fun root => do
+  initializeRoot root 1 .logOnly
+  let successor := WalRecoverySlice.Segmented.Native.segmentPath (root / "wal") 1
+  Native.withOpen root fun db => do
+    Native.put db 42 99
+    check (!(← successor.pathExists)) "first put unexpectedly created a successor segment"
+    Native.delete db 42
+    check ((← successor.metadata).type == .dir) "second mutation did not create the successor segment"
+    check ((← Native.get db 42).isNone) "same-handle get missed the successor tombstone"
+  Native.withOpen root fun db => do
+    check ((← Native.get db 42).isNone) "successor tombstone did not survive close and reopen"
 
 private def oneShotTableRead : IO Unit := IO.FS.withTempDir fun dir => do
   let root ← IO.FS.realPath dir
@@ -209,6 +221,7 @@ def main (args : List String) : IO Unit := do
     IO.println "flushed"
   | [library] =>
     nativeSchedule
+    sameHandleRotation
     let executable ← IO.appPath
     let proc ← IO.Process.output {
       cmd := executable.toString
