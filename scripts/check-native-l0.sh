@@ -79,7 +79,6 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.Interpretation.reopenHealthy
 #check_axioms ManifestComposition.Interpretation.publishEffect
 #check_axioms CallbackEvidence.effects
-#check_axioms CallbackEvidence.get
 #check_axioms CallbackEvidence.writeCatalog
 #check_axioms CallbackEvidence.flushCatalog
 #check_axioms get_refines_from
@@ -152,7 +151,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeTableReads.productFrame
 #check_axioms NativeTableReads.Interpretation.lookupEffect
 #check_axioms NativeTableReads.Interpretation.checkHealthy
-#check_axioms CallbackEvidence.lookupFromCatalog
+#check_axioms ExperimentalL0.NativeTableReads.Interpretation.get
 #check_axioms TableNamespace.Represents.frame
 #check_axioms recoverKeepsCatalog
 #check_axioms recoverCatalog

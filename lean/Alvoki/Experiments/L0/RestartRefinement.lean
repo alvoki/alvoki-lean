@@ -407,8 +407,9 @@ theorem recoverReachedFlush {tableId : UInt64}
     (congrArg Selected.tables secondOpened.1).trans secondBootCatalog
   have reachedCatalog : ns.Represents finalState (selected finalState).tables :=
     finalCatalog.symm ▸ catalog
+  obtain ⟨reads⟩ := evidence.reads
   refine ⟨?_, version, observed, openedAgain.1, exactFirst, exactSecond, pinned, ⟨durable⟩,
-    reachedCatalog, (fun _ installed key => evidence.get reachedCatalog installed key), trace⟩
+    reachedCatalog, (fun _ installed key => reads.get reachedCatalog installed key), trace⟩
   simp only [flush, nonempty, Bool.false_eq_true, ite_false, Bind.bind, EStateM.bind,
     scanned, fits, ite_true, created]
   split <;> (rename_i issued; rw [issued] <;> rfl)

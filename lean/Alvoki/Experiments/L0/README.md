@@ -248,8 +248,38 @@ successful get and threads the catalog through each result. Cleanup
 preserves the resulting trace even when the enclosing call reports an
 error. The remaining bridge must relate the actual phase reference and
 primitive calls to the reached carrier for this dispatch. The theorem
-currently consumes the existing interpreted callback evidence and
-cleanup frames.
+currently consumes the interpreted lookup effects and cleanup frames.
+The online read theorems take only the table-read interpretation.
+They need no append, creation, manifest or WAL law.
+
+The remaining native correspondence has two distinct boundaries.
+
+- The phase reference and file handles are opaque runtime objects.
+  A caller-side invariant must relate the owned reference to its online
+  phase, and the acquired descriptor to the inode named in the durable
+  catalog. The world token sequences operations and has no Lean projection
+  for that ownership or for the live filesystem. The product read carrier
+  preserves its mathematical projections by construction. Preservation of
+  the corresponding physical state must follow from primitive effects.
+- The current lookup proof uses `HealthySource` even for safety.
+  `Image.open_represents` consumes `Source.Serves`, whose equalities
+  require all bounded reads to succeed. A successful lookup only
+  constrains the calls on its executed path. For example, it may read one
+  leaf successfully while an unrelated leaf would report EIO.
+
+The direct route is to compare the actual checked-open and lookup
+schedule with the healthy image interpreter at each reached primitive.
+A successful size or positional read must return the expected size or
+slice for the acquired inode. An error keeps the reached state and
+terminates that branch. Both outcomes must frame the phase reference,
+namespace, WAL authority and manifest image. This would reuse the
+existing healthy image theorem for the computed value and the existing
+error propagation for failure. If the generic reader proofs cannot
+express that comparison compactly, the smaller structural alternative
+is to expose the existing reader's size and positional-read calls
+directly to the caller's interpreter. The executable schedule should
+remain shared. Instrumenting a second lookup or assuming a whole-callback
+result equality would leave the same correspondence gap.
 
 ## Remaining premises
 
@@ -257,7 +287,7 @@ cleanup frames.
 | --- | --- | --- |
 | Stat, acquisition of the inode selected by the protected name, and bounded reads during its immutable lifetime | The primitive boundary must justify reads actually executed and propagate their failures. The current lookup proof still requests a healthy source after success. Deriving safety from the executed reads remains open. Healthy progress can require all bounded reads to succeed | `TableNamespace.scopedLookup` and `scopedCheck` |
 | Descriptor drop and outer lock release | Runtime last-reference behavior and unlock effects. L0 must prove release on the reached ownership state. The shared schedule preserves an already-observed client trace through cleanup, assuming the close and unlock storage frames | `Lifecycle.recovery_offline` and `Lifecycle.scope_refines` |
-| Concrete dispatch uses the native read interpreter on its reached carrier | L0 native callback setup. The interpreter itself computes the lookup result and keeps the reported world, so an independent result equality is gone | `CallbackEvidence.lookupFromCatalog` |
+| Concrete dispatch uses the native read interpreter on its reached carrier | L0 native callback setup. The interpreter itself computes the lookup result and keeps the reported world, so an independent result equality is gone | `NativeTableReads.Interpretation.get` |
 | Durable catalog insertion and preservation of unrelated physical bindings | Filesystem create, file sync and directory sync effects. L0 must represent the reached writer and prove local table, manifest and WAL namespace frames | `TableCreationEvidence.catalogInserted`, `catalogAfter` and the lifecycle postconditions |
 | Healthy recovery state and primitive reports | The filesystem supplies healthy manifest and table primitives. The manifest interpreter derives the typed open, and `scopedCheck` yields the table callback result. The returned state carries the installed L0 session, physical catalog, stable manifest image and exact ready WAL child, including the original successful WAL open result on the reached disk. L0 still supplies the catalog and manifest frames across WAL open and the manifest/WAL frames across table checks. The product read interpreter supplies mathematical projection frames; instantiating it in the callbacks also requires connecting actual Linux primitive effects and namespace ownership to those projections | `Lifecycle.recovery_progress` |
 | Restart selection, reply delivery and loss | Filesystem survivor choice and runtime/client observations. L0 must connect the resulting image and observations to the interpreter for arbitrary permitted prefixes, including allocation, table creation and the interval before manifest publication. Before a table enters the selected catalog, `retainRecoverySelection` derives the recovery precondition from the unchanged selection and the old inode bindings. After durable creation, `flushPublicationChoices` supplies both selections. Concrete cut coverage remains open | `recoverReachedFlush` and `Execution.Run.flushObserved` |

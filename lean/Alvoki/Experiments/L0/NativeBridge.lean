@@ -219,17 +219,6 @@ private theorem selected_eq {a b : Selected}
     (view : a.view = b.view) (version : a.version = b.version) (tables : a.tables = b.tables) :
     a = b := by cases a; cases b; simp_all
 
-theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
-    (evidence : CallbackEvidence ops selected ns)
-    (catalog : ns.Represents s (selected s).tables)
-    (tableId key : UInt64) (bound : (selected s).tables tableId = some rows) :
-    match ops.tables.lookup tableId key s with
-    | .ok result after => result = lookupRows rows key ∧ selected after = selected s ∧
-        ns.Represents after (selected after).tables
-    | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables := by
-    obtain ⟨reads⟩ := evidence.reads
-    exact reads.lookupEffect catalog tableId key bound
-
 theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected namespaceState) :
     ComponentEffects ops selected where
   scan s := by
@@ -264,17 +253,6 @@ theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected names
   check s id := by
     obtain ⟨reads⟩ := evidence.reads
     exact reads.checkEffect s id
-
-theorem CallbackEvidence.get {ops : Components (StorageM σ)}
-    (evidence : CallbackEvidence ops selected ns)
-    (catalog : ns.Represents s (selected s).tables)
-    (prior : Installed session (selected s) history) (key : UInt64) :
-    match get ops session key s with
-    | .ok value after => value = denote history key ∧ selected after = selected s ∧ ns.Represents after (selected after).tables
-    | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables :=
-  get_refines_from (fun s => ns.Represents s (selected s).tables)
-    (fun _ id key _ ready binding => evidence.lookupFromCatalog ready id key binding)
-    s catalog session prior key
 
 /-- WAL mutation uses the supplied namespace frames on the reached scan
 and append calls, including when either call reports an error. -/

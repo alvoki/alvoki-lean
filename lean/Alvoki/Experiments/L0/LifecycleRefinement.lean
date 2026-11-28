@@ -396,7 +396,7 @@ theorem flush_offline
 
 theorem get_online
     (prior : Execution.Run events (some session) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
+    (reads : NativeTableReads.Interpretation (ops).tables (selected ∘ Prod.snd) tns)
     (catalog : namespaceState.Represents before (selected before).tables)
     (ran : get ops session key (.online handle session, before) =
       .ok value after) (invalid : String) :
@@ -409,7 +409,7 @@ theorem get_online
   rcases after with ⟨phase, storage⟩
   change phase = .online handle session at frame
   subst phase
-  have effect (history : Rows) (installed : Installed session (selected before) history) := evidence.get (s := (Phase.online handle session, before)) catalog installed key
+  have effect (history : Rows) (installed : Installed session (selected before) history) := reads.get (s := (Phase.online handle session, before)) catalog installed key
   obtain ⟨_, installed⟩ := prior.onlineInstalled
   have reached := effect _ installed
   rw [ran] at reached
@@ -422,7 +422,7 @@ theorem get_online
 
 theorem get_online_error
     (prior : Execution.Run events (some session) (selected before))
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
+    (reads : NativeTableReads.Interpretation (ops).tables (selected ∘ Prod.snd) tns)
     (catalog : namespaceState.Represents before (selected before).tables)
     (ran : get ops session key (.online handle session, before) =
       .error error after) (invalid : String) :
@@ -435,7 +435,7 @@ theorem get_online_error
   rcases after with ⟨phase, storage⟩
   change phase = .online handle session at frame
   subst phase
-  have effect (history : Rows) (installed : Installed session (selected before) history) := evidence.get (s := (Phase.online handle session, before)) catalog installed key
+  have effect (history : Rows) (installed : Installed session (selected before) history) := reads.get (s := (Phase.online handle session, before)) catalog installed key
   obtain ⟨_, installed⟩ := prior.onlineInstalled
   have reached := effect _ installed
   rw [ran] at reached
@@ -456,7 +456,7 @@ private def readSequence [Monad m] [MonadExceptOf String m]
 remain in the returned list and do not add a successful client event. -/
 theorem getList_online
     (keys : List UInt64) (handle : W)
-    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
+    (tableReads : NativeTableReads.Interpretation (ops).tables (selected ∘ Prod.snd) tns)
     (invalid : String)
     (prior : Execution.Run events (some session) (selected before))
     (catalog : namespaceState.Represents before (selected before).tables) :
@@ -472,7 +472,7 @@ theorem getList_online
   | cons key keys ih =>
     cases ran : get ops session key (.online handle session, before) with
     | ok value next =>
-      obtain ⟨trace, kept, dispatch⟩ := get_online prior evidence catalog ran invalid
+      obtain ⟨trace, kept, dispatch⟩ := get_online prior tableReads catalog ran invalid
       obtain ⟨results, after, reads, trace, kept⟩ := ih trace kept
       refine ⟨.ok value :: results, after, ?_, ?_, kept⟩
       · simp only [readSequence, Bind.bind, MonadExceptOf.tryCatch, Pure.pure] at reads
@@ -480,7 +480,7 @@ theorem getList_online
           EStateM.tryCatch, Pure.pure, EStateM.pure, dispatch, reads]
       · simpa [List.append_assoc] using trace
     | error error next =>
-      obtain ⟨trace, kept, dispatch⟩ := get_online_error prior evidence catalog ran invalid
+      obtain ⟨trace, kept, dispatch⟩ := get_online_error prior tableReads catalog ran invalid
       obtain ⟨results, after, reads, trace, kept⟩ := ih trace kept
       refine ⟨.error error :: results, after, ?_, ?_, kept⟩
       · simp only [readSequence, Bind.bind, MonadExceptOf.tryCatch, Pure.pure] at reads
@@ -513,7 +513,8 @@ theorem getScope_refines
         Execution.Represents none (selected after) state := by
   dsimp only
   have reopened := Execution.Run.recoverOk (s := (.opening, before)) prior evidence.effects ran
-  obtain ⟨results, after, reads, trace, kept⟩ := getList_online keys handle evidence invalid reopened catalog
+  obtain ⟨tableReads⟩ := evidence.reads
+  obtain ⟨results, after, reads, trace, kept⟩ := getList_online keys handle tableReads invalid reopened catalog
   let use := readSequence (Cell.get stateCell invalid ops) keys
   have closed := successful_recovery_cleanup (recover ops) use invalid closeWal unlock handle session
     before opened ran closeFrame unlockFrame

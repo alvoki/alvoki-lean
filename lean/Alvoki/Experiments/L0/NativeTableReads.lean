@@ -1,4 +1,5 @@
 import Alvoki.Experiments.L0.DurableCatalog
+import Alvoki.Experiments.L0.Refinement
 
 namespace ExperimentalL0.NativeTableReads
 open ImmutableSSTable
@@ -116,5 +117,18 @@ theorem Interpretation.lookupEffect (i : Interpretation ops selected ns)
       have result := ns.scopedLookup (catalog id rows bound) handle key stat regular acquired inodeAt picked reads
       have same := Except.ok.inj (EST.Out.ok.inj (ran.symm.trans result)).1
       simpa [call, ran] using And.intro same (And.intro frame kept)
+
+/-- Get needs only the reached lookup effects and the durable catalog. -/
+theorem Interpretation.get {components : Components (StorageM σ)}
+    (reads : Interpretation components.tables selected ns)
+    (catalog : ns.Represents s (selected s).tables)
+    (prior : Installed session (selected s) history) (key : UInt64) :
+    match ExperimentalL0.get components session key s with
+    | .ok value after => value = denote history key ∧ selected after = selected s ∧
+        ns.Represents after (selected after).tables
+    | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables :=
+  get_refines_from (fun s => ns.Represents s (selected s).tables)
+    (fun _ id key _ ready binding => reads.lookupEffect ready id key binding)
+    s catalog session prior key
 
 end ExperimentalL0.NativeTableReads
