@@ -76,7 +76,7 @@ theorem Held.frame (held : Held physical root lock ref image phase s)
 theorem Child.frame (held : Child physical root image wal s)
     (step : NativeRead.Frame physical root wal image.tables s t) : Child physical root image wal t := by
   obtain ⟨c, cached, origin, installed, view⟩ := held
-  exact ⟨c, step.child.trans cached, origin, WalRecoverySlice.Segmented.Writebacks.installed step.disk installed, view⟩
+  exact ⟨c, step.child.trans cached, origin, installed.frame step cached, view⟩
 
 theorem manifestOpening (d : Durable image history) (opening : Opening physical root lock ref image start req)
     (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
@@ -137,7 +137,7 @@ theorem Swapped.held (step : Swapped physical root wal image.tables next s t)
 theorem Swapped.keepsChild (step : Swapped physical root wal image.tables next s t)
     (before : Child physical root image wal s) : Child physical root image wal t := by
   obtain ⟨c, cached, origin, valid, view⟩ := before
-  exact ⟨c, step.child.trans cached, origin, WalRecoverySlice.Segmented.Writebacks.installed step.disk valid, view⟩
+  exact ⟨c, step.child.trans cached, origin, valid.frame step cached, view⟩
 
 theorem Attached.sessionAt (attached : Attached physical root lock ref image wal w)
     (installed : Installed session image history) :
@@ -185,7 +185,8 @@ structure PhasePrimitives (physical : W → Footprint inode) (root : FilePath)
   read : ∀ w, Owned (physical w) root lock ref → ∃ t,
     (ref.get : IO (Phase Wal)) w = .ok (physical w).phase t ∧
     ManifestFrame physical root image.tables w t ∧ (physical t).manifest = (physical w).manifest ∧
-    ∀ wal, (physical w).phase.wal = some wal → (physical t).readyWal wal = (physical w).readyWal wal
+    ∀ wal, (physical w).phase.wal = some wal → (physical t).readyWal wal = (physical w).readyWal wal ∧
+      ∀ reg bs, (physical w).readyWal wal = some reg → (physical w).walChild reg bs → (physical t).walChild reg bs
   swap : ∀ w, Owned (physical w) root lock ref → ∀ wal next, ∃ t,
     (ref.swap next : IO (Phase Wal)) w = .ok (physical w).phase t ∧
     Swapped physical root wal image.tables next w t
@@ -197,7 +198,7 @@ theorem PhasePrimitives.refRead (phase : PhasePrimitives physical root lock ref 
     NativeRead.RefRead physical root lock ref wal image.tables := by
   intro w owned attached
   obtain ⟨t, ran, frame, manifest, child⟩ := phase.read w owned
-  exact ⟨t, ran, frame.lock, frame.ref, frame.phase, child wal attached, frame.disk,
+  exact ⟨t, ran, frame.lock, frame.ref, frame.phase, (child wal attached).1, (child wal attached).2, frame.disk,
     congrArg DurableBlob.Image.active manifest, congrArg DurableBlob.Image.survivors manifest, frame.tablesKept⟩
 
 /-- Recovery attachment and public session publication share the very same

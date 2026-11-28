@@ -19,6 +19,7 @@ structure Runtime (physical : W → Footprint inode) (root : FilePath) (lock : I
       (fun w => (physical w).manifest)
   wal : WalRecoverySlice.Segmented.Native.LocalOpenIO heap (root / "wal") (fun w => (physical w).disk)
     image.view (NativeRecoverAt.Held physical root lock ref image .opening)
+  childCache : NativeRecoverAt.ChildCache physical root lock ref wal.toOpenIO
   phase : NativeRecoverAt.PhasePrimitives physical root lock ref image
   scan : ∀ wal w, NativeRecoverAt.Attached physical root lock ref image wal w →
     NativeRecoverAt.ScanPrimitives physical root wal image.tables w
@@ -151,7 +152,7 @@ theorem withRecovered {physical : W → Footprint inode} {ok : α → W → Prop
   let ops := runtime lock ref
   have safe (actual) (D : Durable image actual) :=
     NativeRecoverAt.recoverAt_checks D opening bytes (ops.manifest _ opening) heap ops.cleanup.cached
-      ops.wal.toOpenIO ops.phase ops.scan (fun wal t a => ops.tables wal t a.1.owned)
+      ops.wal.toOpenIO ops.childCache ops.phase ops.scan (fun wal t a => ops.tables wal t a.1.owned)
   unfold Post
   cases recovery : Native.recoverAt root ref w with
   | error e t =>

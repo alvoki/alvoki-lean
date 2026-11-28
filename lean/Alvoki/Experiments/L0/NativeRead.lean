@@ -442,6 +442,7 @@ structure Footprint (inode : Type) where
   phaseRef : Option (IO.Ref (Phase Wal))
   phase : Phase Wal
   readyWal : Wal → Option WalRecoverySlice.Segmented.Native.Registration
+  walChild : WalRecoverySlice.Segmented.Native.Registration → List WalRecoverySlice.Bytes → Prop
   disk : WalRecoverySlice.Segmented.Model.Disk
   manifest : DurableBlob.Image
   names : System.FilePath → Option inode
@@ -466,6 +467,8 @@ structure FrameTo (physical : W → Footprint inode) (root : System.FilePath)
   ref : (physical after).phaseRef = (physical before).phaseRef
   phase : (physical after).phase = next
   child : (physical after).readyWal wal = (physical before).readyWal wal
+  childOwned : ∀ reg bs, (physical before).readyWal wal = some reg →
+    (physical before).walChild reg bs → (physical after).walChild reg bs
   disk : Writebacks (physical before).disk (physical after).disk
   manifest : (physical after).manifest.active = (physical before).manifest.active
   survivors : (physical after).manifest.survivors = (physical before).manifest.survivors
@@ -476,11 +479,12 @@ abbrev Frame (physical : W → Footprint inode) (root : System.FilePath)
   FrameTo physical root wal tables before after (physical before).phase
 
 theorem Frame.refl : Frame physical root wal tables w w :=
-  ⟨rfl, rfl, rfl, rfl, .nil, rfl, rfl, fun _ _ _ _ _ a b => ⟨a, b⟩⟩
+  ⟨rfl, rfl, rfl, rfl, (fun _ _ _ h => h), .nil, rfl, rfl, fun _ _ _ _ _ a b => ⟨a, b⟩⟩
 
 theorem Frame.trans (a : Frame physical root wal tables s t) (b : Frame physical root wal tables t u) :
     Frame physical root wal tables s u :=
   ⟨b.lock.trans a.lock, b.ref.trans a.ref, b.phase.trans a.phase, b.child.trans a.child,
+    (fun reg bs atS h => b.childOwned reg bs (a.child.trans atS) (a.childOwned reg bs atS h)),
     Writebacks.trans a.disk b.disk, b.manifest.trans a.manifest, b.survivors.trans a.survivors,
     a.tablesKept.trans b.tablesKept⟩
 
@@ -490,10 +494,32 @@ def Original (root : System.FilePath) (wal : Wal) (reg : WalRecoverySlice.Segmen
   (∃ start finish, WalRecoverySlice.Segmented.Native.Origin (root / "wal") wal reg start finish) ∧
     WalRecoverySlice.Segmented.Native.LocksFrom reg
 
+open WalRecoverySlice.Segmented (sessionOf segmentHistory ReadyLayout)
+
+/-- The history installed on disk is the history owned by this particular
+registered child in the runtime, including after intervening reads. -/
+def InstalledChild (physical : W → Footprint inode) (reg : WalRecoverySlice.Segmented.Native.Registration) (w : W) : Prop :=
+  ∃ history, reg.session = sessionOf reg.session.control history ∧
+    (physical w).walChild reg (segmentHistory reg.session.control.capacity reg.session.control.active history) ∧
+    ReadyLayout reg.session.control history (physical w).disk ∧
+    (physical w).disk.liveControl = some reg.session.control ∧ (physical w).disk.durableControl = some reg.session.control
+
+theorem InstalledChild.installed (held : InstalledChild physical reg w) :
+    WalRecoverySlice.Segmented.Installed reg.session (physical w).disk :=
+  let ⟨hist, eq, _, layout, live, durable⟩ := held
+  ⟨hist, eq, layout, live, durable⟩
+
+theorem InstalledChild.frame (held : InstalledChild physical reg w)
+    (step : FrameTo physical root wal tables w t next) (slot : (physical w).readyWal wal = some reg) :
+    InstalledChild physical reg t :=
+  let ⟨hist, eq, child, layout, live, durable⟩ := held
+  ⟨hist, eq, step.childOwned _ _ slot child, step.disk.readyLayout layout,
+    step.disk.live.trans live, step.disk.durable.trans durable⟩
+
 def RegisteredChild (physical : W → Footprint inode) (root : System.FilePath)
     (image : Selected) (wal : Wal) (w : W) : Prop :=
   ∃ reg, (physical w).readyWal wal = some reg ∧ Original root wal reg ∧
-    WalRecoverySlice.Segmented.Installed reg.session (physical w).disk ∧ reg.session.view = image.view
+    InstalledChild physical reg w ∧ reg.session.view = image.view
 
 /-- Recovery publishes precisely this session, having obtained the cached
 view from the acquired WAL, settled the encoded manifest, and checked
@@ -519,7 +545,7 @@ theorem SessionAt.advance (ready : SessionAt physical root lock ref wal session 
   obtain ⟨child, cached, origin, childDisk, view⟩ := ready.child
   exact ⟨⟨step.lock.trans ready.owned.1, step.ref.trans ready.owned.2⟩,
     step.phase,
-    ⟨child, step.child.trans cached, origin, Writebacks.installed step.disk childDisk, view⟩,
+    ⟨child, step.child.trans cached, origin, childDisk.frame step cached, view⟩,
     ⟨step.manifest.trans ready.manifest.1, step.survivors.trans ready.manifest.2⟩,
     ready.catalog.frame step.tablesKept, ready.installed⟩
 

@@ -23,7 +23,7 @@ theorem filesOfChild (child : NativeRecoverAt.Child physical root image wal w)
     (manifest : (physical w).manifest.active = L0Manifest.encode image.version) :
     Files physical root image w := by
   obtain ⟨c, _, _, installed, view⟩ := child
-  exact ⟨catalog, manifest, installed.offline (.inl view)⟩
+  exact ⟨catalog, manifest, installed.installed.offline (.inl view)⟩
 
 theorem filesOfFailed (failed : Failed physical root lock ref image w) : Files physical root image w := by
   rcases failed with ⟨opening, manifest⟩ | ⟨wal, attached⟩

@@ -20,6 +20,7 @@ theorem recoverAt_checks (d : Durable image history)
     (heap : WalRecoverySlice.Segmented.Native.PhaseMemory) (cache : Cached heap physical root lock ref)
     (walIO : WalRecoverySlice.Segmented.Native.OpenIO heap (root / "wal") (fun w => (physical w).disk)
       image.view (Held physical root lock ref image .opening))
+    (childCache : ChildCache physical root lock ref walIO)
     (phase : PhasePrimitives physical root lock ref image)
     (scanPrim : ∀ wal w, Attached physical root lock ref image wal w →
       ScanPrimitives physical root wal image.tables w)
@@ -34,7 +35,7 @@ by
   have same v (p : WalRecoverySlice.Segmented.PermittedView image.view none v) : v = image.view := by
     simpa [WalRecoverySlice.Segmented.PermittedView] using p
   apply (recoverAt_selected_checks (hist := fun _ => history) (req := none)
-    (fun v p => same v p ▸ d) opening bytes manifestPrim heap cache walIO phase
+    (fun v p => same v p ▸ d) opening bytes manifestPrim heap cache walIO childCache phase
     (fun v wal t p => by cases same v p; exact scanPrim wal t)
     (fun v wal t p => by cases same v p; exact tablePrim wal t)).weaken
   · rintro session u ⟨v, p, installed, attached, receipt⟩
@@ -53,6 +54,7 @@ theorem recoverAt (d : Durable image history)
     (heap : WalRecoverySlice.Segmented.Native.PhaseMemory) (cache : Cached heap physical root lock ref)
     (walIO : WalRecoverySlice.Segmented.Native.OpenIO heap (root / "wal") (fun w => (physical w).disk)
       image.view (Held physical root lock ref image .opening))
+    (childCache : ChildCache physical root lock ref walIO)
     (phase : PhasePrimitives physical root lock ref image)
     (scanPrim : ∀ wal w, Attached physical root lock ref image wal w →
       ScanPrimitives physical root wal image.tables w)
@@ -61,7 +63,7 @@ theorem recoverAt (d : Durable image history)
     NativeScope.Post (Native.recoverAt root ref) start
       (fun session t => Installed session image history ∧ ∃ wal, Attached physical root lock ref image wal t)
       (fun _ t => Failed physical root lock ref image t) :=
-  (recoverAt_checks d opening bytes manifestPrim heap cache walIO phase scanPrim tablePrim).weaken
+  (recoverAt_checks d opening bytes manifestPrim heap cache walIO childCache phase scanPrim tablePrim).weaken
     (fun _ _ h => h.1) (fun _ _ h => h.1)
 
 /-- The first failed manifest stat is propagated with its exact error and
