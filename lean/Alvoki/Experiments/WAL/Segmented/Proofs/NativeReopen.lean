@@ -1473,7 +1473,9 @@ def installScopedModel (owned : RootBinding directory lock) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (closeError : Option String) :
     M (Native.Phase (ReopenedStore directory lock)) :=
   Native.installReopenedWith (reopenScopedModel owned.root r reports closeError)
-    (fun index ready => pure ⟨owned, index, ready⟩)
+    (fun entry => match entry with
+      | some (index, ready) => pure ⟨owned, index, ready⟩
+      | none => throw "missing active child")
 
 private theorem installScopedModel_run (owned : RootBinding directory lock) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (closeError : Option String) (s : State) :

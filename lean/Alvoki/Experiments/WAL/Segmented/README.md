@@ -122,10 +122,9 @@ state are outside this experiment.
 
 The public single-file recovery schedule supplies the child
 `Recoverable` and `Installed` facts and the cached scan result from local
-primitive effects. Native segmented recovery still needs to bind that
-child to the root session that `openExisting` and `scan` expose to L0.
-The single-file append producer composes with that child recovery result
-on its stored writer and marker descriptions. Native rotation and CONTROL
+primitive effects. Segmented reopen binds that child to its root session.
+The single-file append producer consumes its stored writer and marker
+descriptions. Native rotation and CONTROL
 publication remain segmented responsibilities.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
@@ -166,9 +165,10 @@ The native sealed reader releases each child after scanning it. The active
 child is carried through scan, validation and collection by the shared
 `reopenWith` schedule. A reported error in that scope closes the acquired
 child before the outer store cleanup unlocks the root. On success, the
-schedule returns the session and that same child. The native installer
-writes the child into the ready store, where append takes its writer
-authority. Root unlock follows child close even when close reports an error.
+schedule returns the session and that same child. The shared installer
+constructs the active entry from the session's segment ID and returned
+child. The native adapter passes that entry to the reference setter.
+Append takes its writer authority from that stored child. Root unlock follows child close even when close reports an error.
 
 ### Public open contract for the append consumer
 

@@ -279,9 +279,9 @@ private def acquireStore (dir : FilePath) : IO Store :=
   installPhaseWith (error := error) (load owned) newRef newMutex (release owned)
 
 @[inline] def installReopenedWith [Monad m] (recovery : m (Session × child))
-    (storeActive : Nat → child → m store) : m (Phase store) := do
+    (storeActive : Option (Nat × child) → m store) : m (Phase store) := do
   let (session, child) ← recovery
-  let owned ← storeActive session.control.active child
+  let owned ← storeActive (some (session.control.active, child))
   return .ready owned session
 
 private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
@@ -297,8 +297,8 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handl
             let batches ← SingleFile.scan child
             checked (resume child batches)))
         (fun session child => pure (session, child))
-      installReopenedWith recovery fun id child => do
-        store.active.set (some (id, child))
+      installReopenedWith recovery fun entry => do
+        store.active.set entry
         return store
 
   let (state, mutex) ← openWithStore (error := IO.Error) (acquireStore dir) load
