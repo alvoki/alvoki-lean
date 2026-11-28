@@ -56,10 +56,34 @@ for module in PreparedFile ControlCutIO PrepareCutIO ChildCutIO CutSchedule; do
   compile "Alvoki/Experiments/WAL/Segmented/Proofs/$module" proof
 done
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendRecovery NativeWrite NativeWriteRelease NativeMutation HealthyMutation NativeMutationScope NativeMutationReopens NativeAppendCut InterruptedMutation InterruptedWorker NativeRecoverSelected PendingReadScope NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish; do
+l0_proofs=(
+  Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition
+  ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps
+  TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs
+  NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut
+  WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendRecovery NativeWrite
+  NativeWriteRelease NativeMutation HealthyMutation NativeMutationScope NativeMutationReopens
+  NativeAppendCut InterruptedMutation InterruptedWorker NativeRecoverSelected PendingReadScope
+  NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish
+)
+for module in "${l0_proofs[@]}"; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
-for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Proofs.ConcreteRecovery WAL.Proofs.ConcreteOpen WAL.Segmented.Proofs.NativeRootIO WAL.Segmented.Proofs.NativeChildIO WAL.Segmented.Proofs.StoreAcquisition WAL.Segmented.Proofs.RuntimeStoreOpen WAL.Segmented.Proofs.RuntimeChild WAL.Segmented.Proofs.RuntimeDisk WAL.Segmented.Proofs.HealthyEmpty WAL.Proofs.ConcreteAppend WAL.Proofs.ConcreteCreate WAL.Segmented.Proofs.AppendIngress WAL.Segmented.Proofs.AppendRotationIO WAL.Segmented.Proofs.ControlCutIO WAL.Segmented.Proofs.PrepareCutIO WAL.Segmented.Proofs.PreparedFile WAL.Segmented.Proofs.AppendRuntime WAL.Segmented.Proofs.CutSchedule WAL.Segmented.Proofs.ChildCutIO WAL.Proofs.ConcreteAppendCut WAL.Segmented.Proofs.CreateCutIO WAL.Segmented.Proofs.AppendPrefixLayout WAL.Segmented.Proofs.ChildHeapCut WAL.Segmented.Proofs.AppendCutBody WAL.Segmented.Proofs.CutRuntime; do
+component_proofs=(
+  DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost
+  WAL.Proofs.ConcreteRecovery WAL.Proofs.ConcreteOpen WAL.Segmented.Proofs.NativeRootIO
+  WAL.Segmented.Proofs.NativeChildIO WAL.Segmented.Proofs.StoreAcquisition
+  WAL.Segmented.Proofs.RuntimeStoreOpen WAL.Segmented.Proofs.RuntimeChild
+  WAL.Segmented.Proofs.RuntimeDisk WAL.Segmented.Proofs.HealthyEmpty WAL.Proofs.ConcreteAppend
+  WAL.Proofs.ConcreteCreate WAL.Segmented.Proofs.AppendIngress WAL.Segmented.Proofs.AppendRotationIO
+  WAL.Segmented.Proofs.ControlCutIO WAL.Segmented.Proofs.PrepareCutIO
+  WAL.Segmented.Proofs.PreparedFile WAL.Segmented.Proofs.AppendRuntime
+  WAL.Segmented.Proofs.CutSchedule WAL.Segmented.Proofs.ChildCutIO WAL.Proofs.ConcreteAppendCut
+  WAL.Segmented.Proofs.CreateCutIO WAL.Segmented.Proofs.AppendPrefixLayout
+  WAL.Segmented.Proofs.ChildHeapCut WAL.Segmented.Proofs.AppendCutBody
+  WAL.Segmented.Proofs.CutRuntime
+)
+for module in "${component_proofs[@]}"; do
   leanchecker "Alvoki.Experiments.$module"
 done
 lean --stdin <<'LEAN'
