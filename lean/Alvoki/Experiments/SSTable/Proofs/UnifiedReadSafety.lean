@@ -145,6 +145,72 @@ private theorem open_sim (h : ScopedRead P source image) :
       · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
   · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
 
+/-- The metadata checks for an immutable table preserve the read footprint,
+including when an extent read or a metadata check reports an error. -/
+theorem checkedOpen_frame (safe : ScopedRead P source image) :
+    ReadPost P (fun _ => True) (openChecked source crc tableId) := by
+  intro w held
+  have frame := open_sim (crc := crc) (tableId := tableId) safe w held
+  cases ran : openChecked source crc tableId w with
+  | error e t => simpa only [ran] using frame
+  | ok handle t =>
+    rw [ran] at frame
+    exact ⟨frame.1, trivial⟩
+
+/-- Total reads needed only for healthy recovery. The poststates of two
+different bounded reads may differ, even when both read the same inode. -/
+structure AvailableRead (P : ReadWorld → Prop) (source : Source Native) (bytes : ByteArray) : Prop where
+  size : ∀ w, P w → ∃ t, source.size w = .ok bytes.size t ∧ P t
+  read : ∀ offset count, count ≤ maxRowSize → offset + count ≤ bytes.size →
+    ∀ w, P w → ∃ t, source.readAt offset count w = .ok (bytes.extract offset (offset + count)) t ∧ P t
+
+/-- A valid image needs a size read, a footer read and, for a nonempty
+table, one bounded root packet read. All use the actual reached world. -/
+theorem Image.checkedOpen_healthy {source : Source Native} (built : Image crc layout rows image)
+    (available : AvailableRead P source image) (w) (held : P w) :
+    ∃ h t, openChecked source crc layout.tableId w = .ok h t ∧ P t := by
+  obtain ⟨footer, groups, rfl, count, _, valid, footerAt, footerWithin, _, root⟩ := built.exists_layout
+  obtain ⟨s, size, held⟩ := available.size w held
+  have endEq := Nat.sub_add_cancel footerWithin
+  obtain ⟨u, fread, held⟩ := available.read _ _ (by decide : footerBodySize + checksumSize ≤ maxRowSize)
+    (Nat.le_of_eq endEq) s held
+  rw [endEq, footerAt] at fread
+  have flength : (encodePacket crc 0 4 0 (encodeFooterBody footer)).size =
+      footerBodySize + checksumSize := by rw [encodePacket_size, encodeFooterBody_size]
+  have readsFooter : readFooter source crc w =
+      .ok (footer, image.size - (footerBodySize + checksumSize)) u := by
+    simp [readFooter, Bind.bind, instMonadEIO._aux_13, EST.bind, size,
+      footerWithin, built.extent, fread, flength,
+      decodePacket_encodePacket, decodeFooterBody_encodeFooterBody footer valid, liftDecode,
+      Pure.pure, instMonadEIO._aux_5, EST.pure]
+  cases rows with
+  | nil =>
+    have zero : footer.count = 0 := count
+    simp only [List.isEmpty_nil, ite_true] at root
+    have noData : image.size - (footerBodySize + checksumSize) = 0 := by rw [root.2, Nat.sub_self]
+    simp only [openChecked, Bind.bind, instMonadEIO._aux_13, EST.bind, readsFooter, zero,
+      noData, eq_self, ite_true, Pure.pure, instMonadEIO._aux_5]
+    exact ⟨_, u, rfl, held⟩
+  | cons row rest =>
+    simp only [List.isEmpty_cons, Bool.false_eq_true, ite_false] at root
+    obtain ⟨refs, children, rootEnd, packet⟩ := root
+    obtain ⟨t, rread, held⟩ := available.read _ _ packet.bounded packet.extent u held
+    rw [packet.slice] at rread
+    have enough : checksumSize ≤ footer.rootSize := by rw [packet.size_eq]; omega
+    have length : (encodePacket crc footer.layout.tableId 3 footer.rootOffset
+        (encodeIndex (groups.map LeafGroup.ref))).size = footer.rootSize := by rw [encodePacket_size, packet.size_eq]
+    have readsRoot : readPacket source crc footer.layout.tableId 3 footer.rootOffset footer.rootSize
+        (image.size - (footerBodySize + checksumSize)) u = .ok (encodeIndex (groups.map LeafGroup.ref)) t := by
+      simp [readPacket, Bind.bind, instMonadEIO._aux_13, EST.bind,
+        enough, packet.bounded, Nat.le_of_eq rootEnd, rread, length, decodePacket_encodePacket, liftDecode]
+      rfl
+    have children' : checkChildren (groups.map LeafGroup.ref) 0 (rest.length + 1) footer.rootOffset = .ok () := by
+      simpa using children
+    simp [openChecked, Bind.bind, instMonadEIO._aux_13, EST.bind, readsFooter, count, rootEnd,
+      readsRoot, decodeIndex_encodeIndex _ refs, liftDecode, children', Pure.pure, instMonadEIO._aux_5,
+      EST.pure]
+    exact ⟨_, t, ⟨rfl, rfl⟩, held⟩
+
 private theorem seek_sim (data : Data) (key : ByteArray) (lo hi : Nat) :
     Sim (P := P) (seekBetween (fun i => liftDecode (data.readRow i)) key lo hi : Native Nat)
       (seekBetween (fun i => liftDecode (data.readRow i)) key lo hi : Reference Nat) Eq := by
