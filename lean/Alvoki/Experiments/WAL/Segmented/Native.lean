@@ -445,13 +445,16 @@ before preparation. The successor goes into the store only on success. -/
   let next ← update
   return next.tailPosition
 
+/-- Operations on the store already selected by the public phase read. -/
+@[inline] def Store.appendSession (store : Store) (session : Session) (batch : Bytes) : IO Session :=
+  appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
+    IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
+    (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
+    SingleFile.append store.active.set
+
 /-- Return the absolute, one-based position only after the append schedule succeeds. -/
 def append (h : Handle) (batch : Bytes) : IO Nat :=
-  appendPositionWith <| update h fun store session =>
-    liftM <| appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
-      IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
-      (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
-      SingleFile.append store.active.set
+  appendPositionWith <| update h fun store session => liftM (store.appendSession session batch)
 
 def discardThrough (h : Handle) (k : Nat) : IO Unit := do
   let _ ← update h (fun store s => Segmented.discardThrough store.callbacks s k)
@@ -730,6 +733,46 @@ private theorem locked_run (handle : Handle) (action : IO α) (w : Void IO.RealW
     tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
     Functor.map, instMonadEIO._aux_1]
   cases action (handle.mutex.lock w).state <;> rfl
+
+/-- Expose the identity of the private phase and guard to proofs only. -/
+def Handle.Parts (h : Handle) (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) : Prop :=
+  h.state = cell ∧ h.mutex = mutex
+
+theorem Handle.parts (h : Handle) : ∃ cell mutex, h.Parts cell mutex := ⟨_, _, rfl, rfl⟩
+
+/-- On a ready handle the check, child mutation, and public reply all run
+after the same phase has been poisoned. Errors leave it poisoned. Success
+publishes the returned session before the guard releases the mutex. -/
+theorem append_ready_run {h : Handle} (parts : h.Parts cell mutex) (batch : Bytes) (w : Void IO.RealWorld)
+    (read : ((cell.get : BaseIO _) (mutex.lock w).state).val = .ready store session) :
+    append h batch w =
+      let got := (cell.get : BaseIO _) (mutex.lock w).state
+      let poisoned := ((cell.set (.poisoned store) : BaseIO Unit) got.state).state
+      match store.appendSession session batch poisoned with
+      | .error e t => .error e (mutex.unlock t).state
+      | .ok next t =>
+        let installed := ((cell.set (.ready store next) : BaseIO Unit) t).state
+        .ok next.tailPosition (mutex.unlock installed).state := by
+  obtain ⟨rfl, rfl⟩ := parts
+  let got := (h.state.get : BaseIO _) (h.mutex.lock w).state
+  let poisoned := ((h.state.set (.poisoned store) : BaseIO Unit) got.state).state
+  have readIO : (h.state.get : IO _) (h.mutex.lock w).state = .ok (.ready store session) got.state := by
+    change EST.Out.ok got.val got.state = _
+    rw [show got.val = _ from read]
+  have checkedLift {α : Type} (a : IO α) (t) : checked (liftM a) t = a t := by
+    unfold checked
+    change ((Except.ok <$> a : IO (Except String α)) >>= _) t = _
+    cases run : a t <;>
+      simp [Functor.map, instMonadEIO._aux_1, Bind.bind, instMonadEIO._aux_13, EST.bind,
+        Pure.pure, instMonadEIO._aux_5, EST.pure, run]
+  have setIO (p : Phase Store) (v) : (h.state.set p : IO Unit) v =
+      .ok () ((h.state.set p : BaseIO Unit) v).state := by
+    change EST.Out.ok ((h.state.set p : BaseIO Unit) v).val _ = _
+    rfl
+  unfold append appendPositionWith update
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, locked_run]
+  simp only [updateWith, Bind.bind, instMonadEIO._aux_13, EST.bind, readIO, setIO, checkedLift, Pure.pure, instMonadEIO._aux_5, EST.pure]
+  cases store.appendSession session batch poisoned <;> rfl
 
 /-- The child close starts on the output of the registered slot removal. -/
 def detachedWorld (wal : Handle) (reg : Registration) (w : Void IO.RealWorld) : Void IO.RealWorld :=
