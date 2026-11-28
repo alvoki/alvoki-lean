@@ -1,15 +1,24 @@
 import Alvoki.Experiments.L0.InterruptedMutation
 import Alvoki.Experiments.L0.NativeMutation
-import Alvoki.Experiments.WAL.Segmented.Proofs.PublicAppendCut
+import Alvoki.Experiments.WAL.Segmented.Proofs.CutFrame
+import Alvoki.Experiments.WAL.Segmented.Proofs.CutSite
 
 namespace ExperimentalL0.InterruptedMutation
 
 open NativeScope
 open NativeRead (SessionAt)
 open WalRecoverySlice.Segmented.Native (PhaseMemory Store)
-open WalRecoverySlice.Segmented.Native.AppendCut (CutRuntime Stop PublicStop recoverPublic BeforeWorker AfterSuccess VolatileIO recoverAfterSuccess)
+open WalRecoverySlice.Segmented.Native.AppendCut (CutRuntime Stop PublicStop recoverPublic BeforeWorker AfterSuccess VolatileIO recoverAfterSuccess
+  tagAt FrameRuntime VolatileFrame framePublic frameBefore frameAfterSuccess)
 open NativeMutationScope (AppendPrimitives Retry Reopens)
 open WalRecoverySlice.Segmented.Native.AppendIO (LocalIO Active)
+
+/-- Storage outside the WAL which remains protected by the enclosing L0
+operation while the WAL runs. The catalog uses actual names and inode bytes. -/
+def Protected (physical : W → NativeRead.Footprint inode) (root : System.FilePath)
+    (image : Selected) (w : W) : Prop :=
+  (physical w).manifest.Stable (L0Manifest.encode image.version) ∧
+    (NativeRead.tableNamespace physical root).Represents w image.tables
 
 /-- The mutex and phase cell belonging to the public WAL handle. -/
 structure Worker (p : Prefix path root start) where
@@ -30,6 +39,15 @@ inductive Worker.Cut (worker : Worker p) (change : Change) (stop : Stop)
   | ready : worker.phase = .ready store session →
       PublicStop worker.cell worker.mutex store session (encode change) p.issue stop d →
       worker.Cut change stop d
+
+theorem Worker.Cut.located {worker : Worker p} (cut : worker.Cut change stop d) :
+    ∃ last, worker.Cut change (tagAt stop last) d := by
+  cases cut with
+  | lock hit => exact ⟨_, .lock ⟨rfl, hit⟩⟩
+  | read hit => exact ⟨_, .read ⟨rfl, hit⟩⟩
+  | ready observed hit =>
+    obtain ⟨last, receipt⟩ := hit.located
+    exact ⟨last, .ready observed receipt⟩
 
 private theorem Worker.prepared {p : Prefix path root start} (worker : Worker p)
     (heap : PhaseMemory) (runtime : ∀ lock ref, WithOpenReads.Runtime physical root lock ref image life heap)
@@ -67,9 +85,11 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
     (io : AppendPrimitives runtime change)
     (linux : System.Platform.isWindows = false)
     (prim : ∀ store session, worker.phase = .ready store session →
-      CutRuntime (fun w => (physical w).disk) store session stop)
-    (cut : worker.Cut change stop d)
-    (restart : NativeAppendCut.Restarted physical root image.tables p.issue d mode after)
+      CutRuntime (fun w => (physical w).disk) store session (tagAt stop last))
+    (frames : ∀ store session, worker.phase = .ready store session →
+      FrameRuntime (fun w => (physical w).disk) store session (Protected physical root image))
+    (cut : worker.Cut change (tagAt stop last) d)
+    (restart : NativeAppendCut.Restarted physical root image.tables last d mode after)
     (reopens : Reopens physical heap path root image life (some (.append (encode change))))
     (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
     Retry physical root (NativeMutationScope.uncertainEvents before change) image (some (.append (encode change))) after ∧
@@ -81,7 +101,7 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
   have mutex := op.parts.2.symm.trans worker.parts.2
   have held : NativeRecoverAt.Held physical root p.lock p.ref image (.updating p.wal) p.issue :=
     ⟨issued.owned, issued.phase, issued.catalog, issued.manifest⟩
-  have actual : PublicStop op.cell op.mutex reg.store reg.session (encode change) p.issue stop d := by
+  have actual : PublicStop op.cell op.mutex reg.store reg.session (encode change) p.issue (tagAt stop last) d := by
     rw [cell, mutex]
     cases cut with
     | lock stopped => exact .lock stopped
@@ -90,7 +110,9 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
       obtain ⟨rfl, rfl⟩ := WalRecoverySlice.Segmented.Native.Phase.ready.inj (selected.symm.trans observed)
       exact site
   have pending := recoverPublic op (prim _ _ selected) active held (encode_size change) room linux actual
-  have retry := restart.uncertain issued.manifest issued.catalog (view ▸ pending) trace
+  have protectedAt := framePublic op (frames _ _ selected) (fun _ h => ⟨h.manifest, h.catalog⟩)
+    active held (encode_size change) room linux actual
+  have retry := restart.uncertain protectedAt.1 protectedAt.2 (view ▸ pending) trace
   exact ⟨retry, retry.readTwice reopens a b rootLife⟩
 
 /-- The mutex, read and poison before the worker can only write back the
@@ -103,12 +125,13 @@ theorem Worker.beforeReopens {p : Prefix path root start} (worker : Worker p)
     (scans : ∀ history w, SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) →
       NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
     (fits : image.view.tail + 1 < UInt64.size)
-    (volatile : VolatileIO (fun w => (physical w).disk) stop)
-    (restart : NativeAppendCut.Restarted physical root image.tables p.issue d mode after)
+    (volatile : VolatileIO (fun w => (physical w).disk) (tagAt stop last))
+    (frames : VolatileFrame (Protected physical root image))
+    (restart : NativeAppendCut.Restarted physical root image.tables last d mode after)
     (original : Reopens physical heap path root image life none)
     (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
     ∃ store session, worker.phase = .ready store session ∧
-      (BeforeWorker worker.cell worker.mutex store p.issue stop d →
+      (BeforeWorker worker.cell worker.mutex store p.issue (tagAt stop last) d →
         Retry physical root (NativeMutationScope.uncertainEvents before change) image none after ∧
         PendingReadScope.TwoReads none physical path root image life (NativeMutationScope.uncertainEvents before change)
           after a b rootLife) := by
@@ -119,7 +142,8 @@ theorem Worker.beforeReopens {p : Prefix path root start} (worker : Worker p)
   refine ⟨reg.store, reg.session, selected, ?_⟩
   intro cut
   have known := (cut.writes volatile).recoverable (installed.installed.offline (request := none) (.inl view))
-  have retry := Retry.rejected (change := change) trace (restart.filesAt reached.manifest reached.catalog known)
+  have protectedAt := frameBefore frames (w := p.issue) ⟨reached.manifest, reached.catalog⟩ cut
+  have retry := Retry.rejected (change := change) trace (restart.filesAt protectedAt.1 protectedAt.2 known)
   exact ⟨retry, retry.readTwice original a b rootLife⟩
 
 /-- Once the actual worker succeeded, interrupting phase publication or
@@ -135,12 +159,13 @@ theorem Worker.afterSuccessReopens {p : Prefix path root start} (worker : Worker
     (fits : image.view.tail + 1 < UInt64.size)
     (io : AppendPrimitives runtime change)
     (linux : System.Platform.isWindows = false)
-    (volatile : VolatileIO (fun w => (physical w).disk) stop)
-    (restart : NativeAppendCut.Restarted physical root image.tables p.issue d mode after)
+    (volatile : VolatileIO (fun w => (physical w).disk) (tagAt stop last))
+    (frames : VolatileFrame (Protected physical root image))
+    (restart : NativeAppendCut.Restarted physical root image.tables last d mode after)
     (extended : Reopens physical heap path root (image.append (encode change)) life none)
     (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
     ∃ store session, worker.phase = .ready store session ∧
-      (AfterSuccess worker.cell worker.mutex store session (encode change) p.issue stop d →
+      (AfterSuccess worker.cell worker.mutex store session (encode change) p.issue (tagAt stop last) d →
         Retry physical root (NativeMutationScope.uncertainEvents before change) (image.append (encode change)) none after ∧
         PendingReadScope.TwoReads none physical path root (image.append (encode change)) life
           (NativeMutationScope.uncertainEvents before change) after a b rootLife) := by
@@ -152,10 +177,14 @@ theorem Worker.afterSuccessReopens {p : Prefix path root start} (worker : Worker
     ⟨issued.owned, issued.phase, issued.catalog, issued.manifest⟩
   refine ⟨reg.store, reg.session, selected, ?_⟩
   intro cut
-  have known := recoverAfterSuccess op volatile active held (encode_size change) room linux
-    (by rw [cell, mutex]; exact cut)
+  have actual : AfterSuccess op.cell op.mutex reg.store reg.session (encode change) p.issue (tagAt stop last) d := by
+    rw [cell, mutex]
+    exact cut
+  have known := recoverAfterSuccess op volatile active held (encode_size change) room linux actual
+  have protectedAt := frameAfterSuccess op frames (fun _ h => ⟨h.manifest, h.catalog⟩)
+    active held (encode_size change) room linux actual
   have saved : NativeReadScope.Files physical root (image.append (encode change)) after :=
-    restart.filesAt (image := image.append (encode change)) issued.manifest issued.catalog
+    restart.filesAt (image := image.append (encode change)) protectedAt.1 protectedAt.2
       (by simpa only [view, Selected.append] using known)
   have retry := (Retry.written trace saved).2
   exact ⟨retry, retry.readTwice extended a b rootLife⟩
