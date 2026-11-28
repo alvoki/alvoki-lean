@@ -169,13 +169,13 @@ theorem reopen_shrinks (p : Policy) : (WalRecoverySlice.reopen programOps p).shr
 def Observed (actual : Ops F) (i : Image) : Option Bytes → Prop
   | none => True
   | some bytes => (∃ w t, actual.readData.run w = .ok (.ok bytes) t) ∧
-    i.data.live = bytes ∧ bytes.length ≤ 2^63
+    i.data.live = bytes ∧ bytes.length ≤ USize.size / 2
 
 /-- At an issued truncate the new offset is below the live extent reported
-by that same reader and fits the scalar Nat ABI of the Linux x86-64 adapter. -/
+by that same reader and fits the scalar Nat representation checked by the Linux adapter. -/
 def Op.legal (actual : Ops F) (i : Image) : Op → Prop
   | .truncate n => ∃ bytes, (∃ w t, actual.readData.run w = .ok (.ok bytes) t) ∧
-    i.data.live = bytes ∧ n < bytes.length ∧ n < 2^63
+    i.data.live = bytes ∧ n < bytes.length ∧ n < USize.size / 2
   | _ => True
 
 structure ReadModel (model : Ops M) : Prop where
@@ -186,7 +186,7 @@ structure RecoveryOps (R : W → Image → Prop) (actual : Ops F) (model : Ops M
     (p : Policy) (start : W) (initial : Image) : Prop where
   readSize : ∀ next w i bytes t,
     Prefix actual model (WalRecoverySlice.reopen programOps p) start initial (.call .readData next) w i →
-    actual.readData.run w = .ok (.ok bytes) t → bytes.length ≤ 2^63
+    actual.readData.run w = .ok (.ok bytes) t → bytes.length ≤ USize.size / 2
   issue : ∀ (op : Op) (next : op.Result → Program Decoded) w i,
     Prefix actual model (WalRecoverySlice.reopen programOps p) start initial (.call op next) w i → op.legal actual i → R w i →
     At (op.eval actual) (op.eval model) w i (fun x y t u => R t u ∧ x = y) R

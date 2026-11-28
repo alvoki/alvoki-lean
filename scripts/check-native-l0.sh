@@ -81,6 +81,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms WalRecoverySlice.Segmented.Native.ChildPrimitives.access
 #check_axioms WalRecoverySlice.Segmented.Native.StoreIO.recoverChild_disk
 #check_axioms WalRecoverySlice.Segmented.Native.openExisting_diskPost
+#check_axioms NativeRecoverAt.recoverAt_checks
 #check_axioms NativeRecoverAt.recoverAt
 #check_axioms NativeRead.publishOnline
 #check_axioms NativeReadRelease.onlineTo

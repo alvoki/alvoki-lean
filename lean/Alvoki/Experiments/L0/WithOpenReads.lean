@@ -34,24 +34,28 @@ structure Finished (physical : W → Footprint inode) (root : FilePath) (image :
     (life : Lifetime) (events : List Event) (keys : List UInt64) (replies : List Reply) (w : W) : Prop where
   trace : Execution.Run (eventsAfter events keys replies) none image
   client : ∃ state, Client.Allows (eventsAfter events keys replies) state ∧ Execution.Represents none image state
-  callback : ∃ lock ref wal session history handle entered, Native.Handle.AtRoot handle root ref ∧
-    Online physical root lock ref wal session image history entered ∧
-    (readMany handle keys entered).val = replies ∧
-    Online physical root lock ref wal session image history (readMany handle keys entered).state ∧
-    allReleased life ref (root / "tables") handle keys entered ∧
-    NativeReadRelease.Closed physical root lock ref image w
+  callback : ∃ lock ref, NativeReadRelease.Closed physical root lock ref image w ∧
+    ∃ wal session history handle entered opening recovered,
+      Native.recoverAt root ref opening = .ok session recovered ∧
+      NativeRecoverAt.CheckReceipt root ref image life opening recovered true ∧
+      Native.Handle.AtRoot handle root ref ∧ Online physical root lock ref wal session image history entered ∧
+      (readMany handle keys entered).val = replies ∧
+      Online physical root lock ref wal session image history (readMany handle keys entered).state ∧
+      allReleased life ref (root / "tables") handle keys entered
 
 inductive Failure (physical : W → Footprint inode) (root : FilePath) (image : Selected)
-    (life : Lifetime) (events : List Event) (keys : List UInt64) (w : W) : Prop where
+    (life : Lifetime) (events : List Event) (keys : List UInt64) (err : IO.Error) (w : W) : Prop where
   | before : Files physical root image w →
-    Execution.Run (events ++ [.openFailed]) none image → Failure physical root image life events keys w
+    Execution.Run (events ++ [.openFailed]) none image → Failure physical root image life events keys err w
   | recovery : NativeReadRelease.Closed physical root lock ref image w →
-    Execution.Run (events ++ [.openFailed]) none image → Failure physical root image life events keys w
-  | cleanup : Finished physical root image life events keys replies w → Failure physical root image life events keys w
+    Native.recoverAt root ref opening = .error err reached →
+    (NativeRecoverAt.NoChecks root ref image opening ∨ NativeRecoverAt.CheckReceipt root ref image life opening reached false) →
+    Execution.Run (events ++ [.openFailed]) none image → Failure physical root image life events keys err w
+  | cleanup : Finished physical root image life events keys replies w → Failure physical root image life events keys err w
 
 /-- A reported scope failure retains the entry files for a retry and the
 client trace appropriate to the point where the failure occurred. -/
-theorem Failure.refines (failure : Failure physical root image life events keys w) :
+theorem Failure.refines (failure : Failure physical root image life events keys err w) :
     Files physical root image w ∧ ∃ observed state,
       (observed = events ++ [.openFailed] ∨ ∃ replies, observed = eventsAfter events keys replies) ∧
       Client.Allows observed state ∧ Execution.Represents none image state := by
@@ -59,19 +63,19 @@ theorem Failure.refines (failure : Failure physical root image life events keys 
   | before files run =>
     obtain ⟨state, allowed, off⟩ := run.refines
     exact ⟨files, _, state, .inl rfl, allowed, off⟩
-  | recovery closed run =>
+  | recovery closed _ _ run =>
     obtain ⟨state, allowed, off⟩ := run.refines
     exact ⟨closed.files, _, state, .inl rfl, allowed, off⟩
   | cleanup finished =>
     obtain ⟨state, allowed, off⟩ := finished.client
-    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, closed⟩ := finished.callback
+    obtain ⟨_, _, closed, _⟩ := finished.callback
     exact ⟨closed.files, _, state, .inr ⟨_, rfl⟩, allowed, off⟩
 
 theorem withOpen (entry : Entry physical path root image) (files : Files physical root image start)
     (heap : Heap) (runtime : ∀ lock ref, Runtime physical root lock ref image life heap)
     (prior : Execution.Run events none image) (keys : List UInt64) :
     Post (Native.withOpen path (fun h => (readMany h keys : IO (List Reply)))) start
-      (Finished physical root image life events keys) (fun _ => Failure physical root image life events keys) := by
+      (Finished physical root image life events keys) (Failure physical root image life events keys) := by
   have failedTrace := prior.openFailed (fun _ h => ⟨h⟩)
   obtain ⟨state, _, represented⟩ := prior.refines
   obtain ⟨history, durable⟩ : ∃ history, Nonempty (Durable image history) := by
@@ -85,22 +89,22 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
   intro lock ref w grant opening bytes handle binding
   let ops := runtime lock ref
   have safe (actual) (D : Durable image actual) :=
-    NativeRecoverAt.recoverAt D opening bytes (ops.manifest _ opening) heap ops.cleanup.cached
+    NativeRecoverAt.recoverAt_checks D opening bytes (ops.manifest _ opening) heap ops.cleanup.cached
       ops.wal.toOpenIO ops.phase ops.scan (fun wal t a => ops.tables wal t a.1.owned)
   unfold Post
   cases recovery : Native.recoverAt root ref w with
   | error e t =>
     have exit := safe history d
     rw [Post, recovery] at exit
-    exact NativeReadRelease.failedTo ops.cleanup grant exit
-      (fun _ closed => .recovery closed failedTrace) (fun _ _ closed => .recovery closed failedTrace)
+    exact NativeReadRelease.failedTo ops.cleanup grant exit.1
+      (fun _ closed => .recovery closed recovery exit.2 failedTrace) (fun _ _ closed => .recovery closed recovery exit.2 failedTrace)
   | ok session t =>
     have installed actual (D : Durable image actual) := by
       have r := safe actual D
       rw [Post, recovery] at r
       exact r
-    obtain ⟨valid, wal, attached⟩ := installed history d
-    have reopened := prior.reopened (fun actual D => (installed actual D).1)
+    obtain ⟨⟨valid, wal, attached⟩, checkedTables⟩ := installed history d
+    have reopened := prior.reopened (fun actual D => (installed actual D).1.1)
     apply publishOnline (attached.sessionAt valid) (ops.phase.refRead wal) (ops.phase.refSwap wal)
     intro entered online
     let result := readMany handle keys entered
@@ -109,8 +113,9 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
     have stopped := trace.stop
     have finish (u) (closed : NativeReadRelease.Closed physical root lock ref image u) :
         Finished physical root image life events keys result.val u :=
-      ⟨stopped, stopped.refines, lock, ref, wal, session, history, handle, entered, binding, online, rfl, reached, released, closed⟩
-    have release := NativeReadRelease.onlineTo ops.cleanup grant reached finish (fun _ u h => Failure.cleanup (finish u h))
+      ⟨stopped, stopped.refines, lock, ref, closed, wal, session, history, handle, entered, w, t,
+        recovery, checkedTables, binding, online, rfl, reached, released⟩
+    have release := NativeReadRelease.onlineTo ops.cleanup grant reached finish (fun e u h => Failure.cleanup (err := e) (finish u h))
     unfold NativeScope.Callback Post
     change (match readMany handle keys entered with | ⟨xs, v⟩ => _)
     dsimp only [result] at release
@@ -135,7 +140,7 @@ theorem caught_then_got {finish : W} (entry : Entry physical path root image) (f
     ∃ lock ref, NativeReadRelease.Closed physical root lock ref image finish := by
   have observed := withOpen entry files heap runtime prior [first, second]
   rw [Post, returned] at observed
-  obtain ⟨lock, ref, _, _, _, _, _, _, _, _, _, _, closed⟩ := observed.callback
+  obtain ⟨lock, ref, closed, _⟩ := observed.callback
   exact ⟨by simpa [eventsAfter, readEvents, readEvent] using observed.trace, lock, ref, closed⟩
 
 end ExperimentalL0.WithOpenReads

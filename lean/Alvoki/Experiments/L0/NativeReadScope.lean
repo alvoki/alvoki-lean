@@ -31,6 +31,12 @@ theorem filesOfFailed (failed : Failed physical root lock ref image w) : Files p
 theorem filesOfOnline (online : Online physical root lock ref wal session image history w) :
     Files physical root image w := filesOfChild online.child online.catalog online.manifest.1
 
+def OpenedAt (root : FilePath) (h : IO.FS.Handle) (w : W) : Prop :=
+  ∃ checked, IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok h w
+
+def GrantedAt (root : FilePath) (h : IO.FS.Handle) (w : W) : Prop :=
+  ∃ opened, OpenedAt root h opened ∧ h.tryLock true opened = .ok true w
+
 /-- The caller owns an initialized directory binding. Acquiring the root
 lock adds the exact descriptor; allocation installs an opening phase on the
 fresh reference while preserving the represented storage. -/
@@ -42,10 +48,10 @@ structure Entry (physical : W → Footprint inode) (path root : FilePath) (image
     (fun _ t => Files physical root image t) (fun _ t => Files physical root image t)
   openFile : ∀ w, Files physical root image w → Post (IO.FS.Handle.mk (root / "l0.lock") .append) w
     (fun lock t => bound lock t ∧ Files physical root image t) (fun _ t => Files physical root image t)
-  lock : ∀ h w, bound h w → Files physical root image w → Post (h.tryLock true) w
+  lock : ∀ h w, OpenedAt root h w → bound h w → Files physical root image w → Post (h.tryLock true) w
     (fun yes t => Files physical root image t ∧ (yes = true → (physical t).rootLock = some (root, h)))
     (fun _ t => Files physical root image t)
-  fresh : ∀ h w, (physical w).rootLock = some (root, h) → Files physical root image w →
+  fresh : ∀ h w, GrantedAt root h w → (physical w).rootLock = some (root, h) → Files physical root image w →
     let f := IO.mkRef (.opening : Phase Wal) w
     Owned (physical f.state) root h f.val ∧ (physical f.state).phase = .opening ∧ Files physical root image f.state
 
@@ -86,7 +92,7 @@ theorem Entry.withOpen (entry : Entry physical path root image) (initial : Files
     · rintro _ t ⟨rfl, files⟩
       apply (withReturn (entry.openFile t files)).weaken
       · rintro h u ⟨opened, bound, files⟩
-        apply (withReturn (entry.lock h u bound files)).weaken
+        apply (withReturn (entry.lock h u ⟨t, opened⟩ bound files)).weaken
         · rintro yes v ⟨granted, succeeded⟩
           cases yes with
           | true => exact ⟨rfl, succeeded.1, succeeded.2 rfl, t, u, opened, granted⟩
@@ -95,7 +101,7 @@ theorem Entry.withOpen (entry : Entry physical path root image) (initial : Files
       · exact reject
     · exact reject
   · rintro _ lock v ⟨rfl, files, owns, checked, opened, mk, yes⟩ fresh handle binding
-    obtain ⟨owned, phase, ready⟩ := entry.fresh lock v owns files
+    obtain ⟨owned, phase, ready⟩ := entry.fresh lock v ⟨opened, ⟨checked, mk⟩, yes⟩ owns files
     exact recover lock _ _ ⟨checked, opened, v, mk, yes, rfl⟩ ⟨owned, phase, ready.catalog, ready.disk⟩ ready.manifest handle binding
 
 end ExperimentalL0.NativeReadScope
