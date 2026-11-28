@@ -109,6 +109,39 @@ private theorem activeResult (reports : ∀ cursor, AppendReports policy cursor 
     simp [storeAppendPhase, liftWorker, h, Bind.bind, ExceptT.bind, ExceptT.bindCont,
       ExceptT.run, ExceptT.mk, EStateM.bind]
 
+/-- A successful append keeps a live phase for the same handle's bindings. -/
+theorem appendModel_success_active
+    (reports : ∀ cursor, AppendReports policy cursor batch) {before after : AppendImage}
+    (ran : appendModel reports before = .ok (.ok ()) after) :
+    ∃ heldLock files cursor history, after.phase = .active heldLock files cursor history := by
+  obtain ⟨image, phase⟩ := before
+  cases phase with
+  | closed => cases ran
+  | poisoned => cases ran
+  | active heldLock files cursor history =>
+    rw [activeResult] at ran
+    cases work : (appendWorker files (reports cursor)).run image with
+    | error => rw [work] at ran; cases ran
+    | ok response reached =>
+      rw [work] at ran
+      cases response with
+      | error => cases ran
+      | ok cursor =>
+        cases ran
+        exact ⟨_, _, _, _, rfl⟩
+
+theorem appendModel_error_phase (reports : ∀ cursor, AppendReports policy cursor batch)
+    (ran : appendModel reports ⟨image, .active heldLock files cursor history⟩ =
+      .ok (.error err) after) : after.phase = .poisoned heldLock := by
+  rw [activeResult] at ran
+  cases work : (appendWorker files (reports cursor)).run image with
+  | error => rw [work] at ran; cases ran
+  | ok response reached =>
+    rw [work] at ran
+    cases response with
+    | ok => cases ran
+    | error => cases ran; rfl
+
 def AppendGuarantee (policy : Policy) (known : List Bytes) (batch : Bytes)
     (result : AppendResult) : Prop :=
     Dirty policy known (some batch) (appendReached result).image ∧
@@ -145,6 +178,33 @@ theorem append_refines (reports : ∀ cursor, AppendReports policy cursor batch)
     | ok next =>
       obtain ⟨rfl, ready, settled⟩ := facts.2.2 next rfl
       exact ⟨facts.1, facts.2.1, .ack, rfl, ready, settled⟩
+
+def healthyAppendReports : AppendReports policy cursor batch where
+  effects := {
+    appendData := .full .old none
+    dataSync := .after none
+    writeMarker := .full .old none
+    markerSync := fun _ => .after none
+  }
+
+theorem appendModel_healthy (policy : Policy) (image : Image) (known : List Bytes)
+    (bounded : ∀ b ∈ known, b.length ≤ 32) (room : known.length < 255)
+    (size : batch.length ≤ 32) :
+    ∃ after, appendModel (policy := policy) (batch := batch) (fun _ => healthyAppendReports)
+      ⟨image, .active .lock (appendBindings policy) (historyCursor known) known⟩ =
+        .ok (.ok ()) after := by
+  have seqFits : ¬255 < 1 + known.length := by omega
+  have offsetFits : ¬65535 < (encodeFrames 1 known).length + (frame (1 + known.length) batch).length := by
+    have bytes := encoded_history_size known 1 bounded
+    rw [frame_length]
+    omega
+  simp only [activeResult, appendWorker_eq]
+  cases policy <;>
+    simp [healthyAppendReports, appendPrimitives, scheduledOps, appendBatch, ops, historyCursor,
+      maxPayload, Nat.not_lt.mpr size, seqFits, offsetFits, reduceBEq, Policy.ctorIdx,
+      Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, ExceptT.bindCont, Pure.pure,
+      ExceptT.pure, EStateM.bind, EStateM.pure, withWritebacks, Write.result, Primitive.syncResult] <;>
+    first | rfl | exact ⟨_, rfl⟩
 
 /-- A lost reply after the final barrier has the same public uncertainty
 as an error, while recovery still uses the exact reached image. -/

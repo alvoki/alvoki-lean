@@ -40,7 +40,7 @@ lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
 done
-for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen NativeControl; do
+for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen NativeControl NativeAppend; do
   lean -o "$scratch/$seg/Proofs/$proof.olean" "$seg/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Segmented.Proofs.$proof"
 done
@@ -67,6 +67,7 @@ import Alvoki.Experiments.WAL.Segmented.Proofs.Discard
 import Alvoki.Experiments.WAL.Segmented.Proofs.Execution
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeReopen
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeControl
+import Alvoki.Experiments.WAL.Segmented.Proofs.NativeAppend
 open WalRecoverySlice.Segmented
 #check_axioms Recoverable.withUnselectedArtifact
 #check_axioms ControlCodec.decode_encode
@@ -141,6 +142,47 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.publicOpenModel_refines
 #check_axioms Model.nativeControl_cuts
 #check_axioms Model.nativeControl_healthy
+#check_axioms Model.appendAfterNativeReopen
+#check_axioms Model.publicAppendAfterReopen
+#check_axioms Model.initializeChild_writes
+#check_axioms Model.appendActiveModel_childPhase
+#check_axioms Model.appendActiveModel_rejected
+#check_axioms Model.repeatOpenAfterAppend
+#check_axioms Model.nativeControl_bootstrap
+#check_axioms Model.nativeControl_bootstrap_ready
+#check_axioms Model.nativeRotation_beforeAppend
+#check_axioms Model.nativeCreatedChild
+#check_axioms Model.prepareNativeChild_authority
+#check_axioms Model.prepareNativeChild_frames
+#check_axioms Model.publishPreparedChild
+#check_axioms Model.readyAfterPublishingSuccessor
+#check_axioms Model.settlePreparedChild
+#check_axioms Model.nativeAppendModel_active
+#check_axioms Model.nativeAppendModel_refines
+#check_axioms Model.nativeAppendModel_rejected
+#check_axioms Model.nativeAppendModel_healthy
+#check_axioms Model.nativeBootstrap_ready
+#check_axioms Model.publicNativeAppend_refines
+#check_axioms Model.publicNativeAppend_position
+#check_axioms Model.appendFailure_childClose
+#check_axioms Model.publicAppendClose_releases
+#check_axioms Model.publicAppendClose_afterReported
+#check_axioms Model.publicNativeAppend_reportedClose
+#check_axioms Model.publicAppendClose_afterRejection
+#check_axioms Model.publicAppendClose_repeated
+#check_axioms Model.publicNativeAppend_rejected
+#check_axioms Model.publicBootstrap_installs
+#check_axioms Model.publicBootstrap_healthy
+#check_axioms Model.publicNativeCreate_healthy
+#check_axioms Model.publicBootstrap_failed_releases
+#check_axioms Model.reopensWithAppendAuthority
+#check_axioms Model.appendRecovery_representable
+#check_axioms Model.nativeAppendModel_rotation_refines
+#check_axioms Model.publicAppendRecovery
+#check_axioms Model.appendLostAck
+#check_axioms WalRecoverySlice.SingleFile.createModel_opened
+#check_axioms WalRecoverySlice.SingleFile.createModel_healthy
+#check_axioms Model.successor_controlRepresentable
 #check_axioms Model.nativeControl_rejected
 #check_axioms Model.nativeDiscard_recoverable
 #check_axioms Model.repeatOpenAfterNativeFailedDiscard
