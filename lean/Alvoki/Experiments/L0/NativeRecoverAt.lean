@@ -1,7 +1,7 @@
 import Alvoki.Experiments.L0.NativeManifest
 import Alvoki.Experiments.L0.NativeRecovery
 import Alvoki.Experiments.L0.NativeTableCheck
-import Alvoki.Experiments.L0.NativeScope
+import Alvoki.Experiments.L0.NativePublish
 import Alvoki.Experiments.WAL.Segmented.Proofs.Writeback
 import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeStoreOpen
 
@@ -203,6 +203,16 @@ structure PhasePrimitives (physical : W → Footprint inode) (root : FilePath)
   swap : ∀ w, Owned (physical w) root lock ref → ∀ wal next, ∃ t,
     (ref.swap next : IO (Phase Wal)) w = .ok (physical w).phase t ∧
     Swapped physical root wal image.tables next w t
+
+/-- Recovery attachment and public session publication share the very same
+owned-reference swap contract. -/
+theorem PhasePrimitives.refSwap (phase : PhasePrimitives physical root lock ref image) (wal : Wal) :
+    NativeRead.RefSwap physical root lock ref wal image.tables := by
+  intro w owns next
+  obtain ⟨t, ran, effects⟩ := phase.swap w owns wal next
+  rw [NativeScope.swap_io] at ran
+  obtain ⟨value, world⟩ := EST.Out.ok.inj ran
+  exact ⟨value, world ▸ effects⟩
 
 private theorem readOpening (prim : PhasePrimitives physical root lock ref image)
     (ready : ManifestReady physical root lock ref image w) :
