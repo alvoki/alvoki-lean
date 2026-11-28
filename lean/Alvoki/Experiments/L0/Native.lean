@@ -70,6 +70,13 @@ structure Handle where private mk ::
   private ops : Components FileM
   private phase : IO.Ref (Phase Wal)
 
+private def assembled (root : FilePath) (phase : IO.Ref (Phase Wal)) : Handle :=
+  ⟨callbackComponents root phase, phase⟩
+
+/-- The private handle actually passed to the callback in withOpen. -/
+def Handle.AtRoot (handle : Handle) (root : FilePath) (phase : IO.Ref (Phase Wal)) : Prop :=
+  handle = assembled root phase
+
 /-- Exclusive root ownership is held for the entire callback. The caller
 supplies an initialized root containing distinct, durably named wal,
 manifest, and tables directories. All operations must be sequential.
@@ -87,9 +94,9 @@ def withOpen (path : FilePath) (use : Handle → IO α) : IO α := do
   IO.FS.withFile lockPath .append fun lock => do
     unless ← lock.tryLock do throw (IO.userError "L0 already open")
     let phase ← IO.mkRef (.opening : Phase Wal)
-    let ops := callbackComponents root phase
+    let handle := assembled root phase
     (phaseCell phase).withSession (IO.userError "L0 cannot publish a session")
-      (checked (recover ops)) (use ⟨ops, phase⟩)
+      (checked (recover handle.ops)) (use handle)
       WalRecoverySlice.Segmented.Native.close lock.unlock
 
 private def update (handle : Handle) (operation : Session → FileM Session) : IO Unit := do
@@ -132,5 +139,35 @@ theorem get_afterPhaseRead (handle : Handle) (key : UInt64)
     rw [phaseRead]
   rw [lifted]
   cases phase <;> rfl
+
+/-- A proof consumer may choose arbitrary implementations of the operations
+which get cannot reach. Only the lookup field must agree. -/
+theorem get_atRoot (binding : Handle.AtRoot handle root ref)
+    (phaseRead : (ref.get : IO (Phase Wal)) start = .ok (.online wal session) entered)
+    (ops : Components FileM)
+    (lookup : ops.tables.lookup = fun id key => nativeTableAt (root / "tables") id (·.lookup key)) :
+    get handle key start = (do
+      match ← (ExperimentalL0.get ops session key).run with
+      | .ok value => pure value
+      | .error error => throw (IO.userError error) : IO _) entered := by
+  cases binding
+  rw [get_afterPhaseRead _ _ phaseRead]
+  change checked (ExperimentalL0.get (callbackComponents root ref) session key) entered = _
+  have same (ids) : lookupTables (callbackComponents root ref).tables key ids =
+      lookupTables ops.tables key ids := by
+    induction ids with
+    | nil => rfl
+    | cons id ids ih =>
+      simp only [lookupTables, ← ih]
+      rw [lookup]
+      rfl
+  unfold ExperimentalL0.get
+  rw [same]
+  change checked (ExperimentalL0.get ops session key) entered = _
+  unfold checked
+  cases ran : (ExperimentalL0.get ops session key).run entered with
+  | error => simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ExperimentalL0.get] at ran ⊢; rw [ran]
+  | ok r t =>
+    cases r <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ExperimentalL0.get] at ran ⊢ <;> rw [ran]
 
 end ExperimentalL0.Native

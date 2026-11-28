@@ -36,6 +36,8 @@ cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,
   .lake/build/native/libalvoki_crc32c.a -lstdc++ -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
 cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixture.so"
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
+compile "$l0/PublicReadInvestigation" proof
+compile "$l0/PublicationInvestigation" proof
 compile "$l0/NativeBridge" proof
 compile "$l0/LifecycleRefinement" proof
 compile "$l0/RestartRefinement" proof
@@ -43,7 +45,7 @@ compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
+for module in PublicReadInvestigation PublicationInvestigation Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
@@ -55,8 +57,18 @@ import Alvoki.Experiments.L0.ScheduleSteps
 import Alvoki.Experiments.L0.Lifecycle
 import Alvoki.Experiments.L0.LifecycleRefinement
 import Alvoki.Experiments.L0.TableProofs
+import Alvoki.Experiments.L0.PublicReadInvestigation
+import Alvoki.Experiments.L0.PublicationInvestigation
 import Alvoki.Experiments.L0.TableAllocationProofs
 open ExperimentalL0 ExperimentalL0.NativeBridge
+#check_axioms ImmutableSSTable.Unified.checkedTypedLookup_scoped
+#check_axioms table_lookup_scoped
+#check_axioms Native.get_atRoot
+#check_axioms PublicReadInvestigation.table
+#check_axioms PublicReadInvestigation.publicGet
+#check_axioms PublicReadInvestigation.onlineGet
+#check_axioms PublicationInvestigation.renameCut
+#check_axioms PublicationInvestigation.cutRecovery
 #check_axioms keyCodec_roundtrips
 #check_axioms keyCodec_preservesOrder
 #check_axioms mutationCodec_roundtrips
