@@ -88,16 +88,16 @@ private theorem closeResult_frame (frame : Frame issued P) (child : SingleFile.H
 
 /-- Frame the actual close using the registered child's identity from the
 reached ready store. No callback-wide close frame is a premise. -/
-theorem wal_close (heap : Segmented.Native.PhaseMemory) (frame : Frame (Segmented.Native.CloseSites ChildIssued heap wal session w) P)
-    (ready : heap.Ready wal session w) (start : P w) :
+theorem wal_close (heap : Segmented.Native.PhaseMemory) (frame : Frame (Segmented.Native.CloseSites ChildIssued wal reg w) P)
+    (ready : heap.Registered wal reg w) (start : P w) :
     Post (Segmented.Native.close wal) w (fun _ t => P t) (fun _ t => P t) := by
-  obtain ⟨store, child, phase, slot, _, _, ran⟩ := Segmented.Native.close_ready_releases heap ready
+  obtain ⟨_, _, ran⟩ := Segmented.Native.close_registered heap ready
   have body : P (Segmented.Native.returnedWorld (Segmented.Native.close wal w)) := by
     rw [ran]
     apply closeResult_frame frame
-    · exact fun f t site => ⟨store, child, phase, slot, .inl site⟩
-    · exact ⟨store, child, phase, slot, .inr ⟨rfl, rfl⟩⟩
-    apply frame (.takeChild store.active _)
+    · exact fun f t site => .inl site
+    · exact .inr ⟨rfl, rfl⟩
+    apply frame (.takeChild reg.store.active _)
     apply frame (.walClosed _ _)
     exact frame (.mutexLock _ w) start
   unfold Post

@@ -16,11 +16,11 @@ structure Files (physical : W → Footprint inode) (root : FilePath) (image : Se
   manifest : (physical w).manifest.active = L0Manifest.encode image.version
   disk : WalRecoverySlice.Segmented.Recoverable image.view none (physical w).disk
 
-theorem filesOfChild (child : NativeRecoverAt.Child physical image wal w)
+theorem filesOfChild (child : NativeRecoverAt.Child physical root image wal w)
     (catalog : (tableNamespace physical root).Represents w image.tables)
     (manifest : (physical w).manifest.active = L0Manifest.encode image.version) :
     Files physical root image w := by
-  obtain ⟨c, _, installed, view⟩ := child
+  obtain ⟨c, _, _, installed, view⟩ := child
   exact ⟨catalog, manifest, installed.offline (.inl view)⟩
 
 theorem filesOfFailed (failed : Failed physical root lock ref image w) : Files physical root image w := by

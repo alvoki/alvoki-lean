@@ -441,7 +441,7 @@ structure Footprint (inode : Type) where
   rootLock : Option (System.FilePath × IO.FS.Handle)
   phaseRef : Option (IO.Ref (Phase Wal))
   phase : Phase Wal
-  readyWal : Wal → Option WalRecoverySlice.Segmented.Session
+  readyWal : Wal → Option WalRecoverySlice.Segmented.Native.Registration
   disk : WalRecoverySlice.Segmented.Model.Disk
   manifest : DurableBlob.Image
   names : System.FilePath → Option inode
@@ -484,6 +484,16 @@ theorem Frame.trans (a : Frame physical root wal tables s t) (b : Frame physical
     Writebacks.trans a.disk b.disk, b.manifest.trans a.manifest, b.survivors.trans a.survivors,
     a.tablesKept.trans b.tablesKept⟩
 
+/-- This particular store and child were registered by the public WAL open.
+The same value remains in the framed heap projection during reads. -/
+def Original (root : System.FilePath) (wal : Wal) (reg : WalRecoverySlice.Segmented.Native.Registration) : Prop :=
+  ∃ start finish, WalRecoverySlice.Segmented.Native.Origin (root / "wal") wal reg start finish
+
+def RegisteredChild (physical : W → Footprint inode) (root : System.FilePath)
+    (image : Selected) (wal : Wal) (w : W) : Prop :=
+  ∃ reg, (physical w).readyWal wal = some reg ∧ Original root wal reg ∧
+    WalRecoverySlice.Segmented.Installed reg.session (physical w).disk ∧ reg.session.view = image.view
+
 /-- Recovery publishes precisely this session, having obtained the cached
 view from the acquired WAL, settled the encoded manifest, and checked
 the referenced tables on the reached namespace. -/
@@ -492,8 +502,7 @@ structure SessionAt (physical : W → Footprint inode) (root : System.FilePath)
     (image : Selected) (history : Rows) (w : W) (stage : Phase Wal) : Prop where
   owned : Owned (physical w) root lock ref
   phase : (physical w).phase = stage
-  child : ∃ child, (physical w).readyWal wal = some child ∧
-    WalRecoverySlice.Segmented.Installed child (physical w).disk ∧ child.view = image.view
+  child : RegisteredChild physical root image wal w
   manifest : (physical w).manifest.Stable (L0Manifest.encode image.version)
   catalog : (tableNamespace physical root).Represents w image.tables
   installed : Installed session image history
@@ -506,10 +515,10 @@ abbrev Online (physical : W → Footprint inode) (root : System.FilePath)
 theorem SessionAt.advance (ready : SessionAt physical root lock ref wal session image history s current)
     (step : FrameTo physical root wal image.tables s t next) :
     SessionAt physical root lock ref wal session image history t next := by
-  obtain ⟨child, cached, childDisk, view⟩ := ready.child
+  obtain ⟨child, cached, origin, childDisk, view⟩ := ready.child
   exact ⟨⟨step.lock.trans ready.owned.1, step.ref.trans ready.owned.2⟩,
     step.phase,
-    ⟨child, step.child.trans cached, Writebacks.installed step.disk childDisk, view⟩,
+    ⟨child, step.child.trans cached, origin, Writebacks.installed step.disk childDisk, view⟩,
     ⟨step.manifest.trans ready.manifest.1, step.survivors.trans ready.manifest.2⟩,
     ready.catalog.frame step.tablesKept, ready.installed⟩
 

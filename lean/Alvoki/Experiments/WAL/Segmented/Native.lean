@@ -676,27 +676,23 @@ def CloseChildAt (heap : PhaseMemory) (wal : Handle) (session : Session)
 Only the stored directory lock and the child's actual phase lock can issue
 a file unlock, each at its particular syscall input. -/
 def CloseSites (childSite : SingleFile.Handle → Void IO.RealWorld → IO.FS.Handle → Void IO.RealWorld → Prop)
-    (heap : PhaseMemory) (wal : Handle)
-    (session : Session) (w : Void IO.RealWorld) (fd : IO.FS.Handle) (t : Void IO.RealWorld) : Prop :=
-  ∃ store child, heap.holds wal.state (.ready store session) w ∧
-    heap.holds store.active (some (session.control.active, child)) w ∧
-    let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
-    let taken := (store.active.swap none : BaseIO _) closed.state
-    childSite child taken.state fd t ∨
-      (fd = store.lock ∧ t = ((SingleFile.close child).toBaseIO taken.state).state)
+    (wal : Handle) (reg : Registration) (w : Void IO.RealWorld) (fd : IO.FS.Handle) (t : Void IO.RealWorld) : Prop :=
+  let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
+  let taken := (reg.store.active.swap none : BaseIO _) closed.state
+  childSite reg.child taken.state fd t ∨
+    (fd = reg.store.lock ∧ t = ((SingleFile.close reg.child).toBaseIO taken.state).state)
 
-/-- Exact release data for the active child registered in the held store.
-Physical unlock-on-last-drop remains the local descriptor contract. -/
-theorem close_ready_releases (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
-    ∃ store child, heap.holds handle.state (.ready store session) w ∧
-      heap.holds store.active (some (session.control.active, child)) w ∧
-      let locked := (handle.mutex.lock w).state
-      let closed := (handle.state.swap .closed : BaseIO _) locked
-      let taken := (store.active.swap none : BaseIO _) closed.state
-      closed.val = .ready store session ∧ taken.val = some (session.control.active, child) ∧
-        close handle w = closeResult child store.lock handle.mutex taken.state := by
-  obtain ⟨store, child, separate, phase, slot⟩ := ready
-  refine ⟨store, child, phase, slot, ?_⟩
+/-- The consuming close takes exactly the registered store and active child
+from its two typed heap cells. -/
+theorem close_registered (heap : PhaseMemory) {handle : Handle} {reg : Registration}
+    (held : heap.Registered handle reg w) :
+    let locked := (handle.mutex.lock w).state
+    let closed := (handle.state.swap .closed : BaseIO _) locked
+    let taken := (reg.store.active.swap none : BaseIO _) closed.state
+    closed.val = .ready reg.store reg.session ∧ taken.val = some (reg.session.control.active, reg.child) ∧
+      close handle w = closeResult reg.child reg.store.lock handle.mutex taken.state := by
+  obtain ⟨session, store, child⟩ := reg
+  obtain ⟨separate, phase, slot⟩ := held
   intro locked closed taken
   have phaseAt := heap.lock handle.mutex phase
   have slotAt := heap.swapFrame (w := locked) .closed separate (heap.lock handle.mutex slot)
@@ -720,6 +716,18 @@ theorem close_ready_releases (heap : PhaseMemory) {handle : Handle} (ready : hea
   cases stopped : SingleFile.close child taken.state with
   | ok x t => cases x; dsimp only; cases store.lock.unlock t <;> rfl
   | error e t => dsimp only; cases store.lock.unlock t <;> rfl
+
+theorem close_ready_releases (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    ∃ store child, heap.holds handle.state (.ready store session) w ∧
+      heap.holds store.active (some (session.control.active, child)) w ∧
+      let locked := (handle.mutex.lock w).state
+      let closed := (handle.state.swap .closed : BaseIO _) locked
+      let taken := (store.active.swap none : BaseIO _) closed.state
+      closed.val = .ready store session ∧ taken.val = some (session.control.active, child) ∧
+        close handle w = closeResult child store.lock handle.mutex taken.state := by
+  obtain ⟨store, child, separate, phase, slot⟩ := ready
+  refine ⟨store, child, phase, slot, ?_⟩
+  exact close_registered heap (reg := ⟨session, store, child⟩) ⟨separate, phase, slot⟩
 
 /-- Open and public scan agree on the recovered session using the original
 handle's mutex, phase cell and registered child, starting at the reached

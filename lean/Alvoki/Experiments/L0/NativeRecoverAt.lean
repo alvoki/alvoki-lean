@@ -50,9 +50,7 @@ structure Held (physical : W → Footprint inode) (root : FilePath)
   catalog : (tableNamespace physical root).Represents w image.tables
   manifest : (physical w).manifest.Stable (L0Manifest.encode image.version)
 
-def Child (physical : W → Footprint inode) (image : Selected) (wal : Wal) (w : W) : Prop :=
-  ∃ child, (physical w).readyWal wal = some child ∧
-    WalRecoverySlice.Segmented.Installed child (physical w).disk ∧ child.view = image.view
+abbrev Child {inode : Type} := NativeRead.RegisteredChild (inode := inode)
 
 abbrev ManifestReady (physical : W → Footprint inode) (root : FilePath)
     (lock : IO.FS.Handle) (ref : Ref) (image : Selected) (w : W) : Prop :=
@@ -61,7 +59,7 @@ abbrev ManifestReady (physical : W → Footprint inode) (root : FilePath)
 
 abbrev Attached (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
     (ref : Ref) (image : Selected) (wal : Wal) (w : W) : Prop :=
-  Held physical root lock ref image (.recovering wal) w ∧ Child physical image wal w
+  Held physical root lock ref image (.recovering wal) w ∧ Child physical root image wal w
 
 def Failed (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
     (ref : Ref) (image : Selected) (w : W) : Prop :=
@@ -75,10 +73,10 @@ theorem Held.frame (held : Held physical root lock ref image phase s)
     step.phase.trans held.phaseEq, held.catalog.frame step.tablesKept,
     ⟨step.manifest.trans held.manifest.1, step.survivors.trans held.manifest.2⟩⟩
 
-theorem Child.frame (held : Child physical image wal s)
-    (step : NativeRead.Frame physical root wal image.tables s t) : Child physical image wal t := by
-  obtain ⟨c, cached, installed, view⟩ := held
-  exact ⟨c, step.child.trans cached, WalRecoverySlice.Segmented.Writebacks.installed step.disk installed, view⟩
+theorem Child.frame (held : Child physical root image wal s)
+    (step : NativeRead.Frame physical root wal image.tables s t) : Child physical root image wal t := by
+  obtain ⟨c, cached, origin, installed, view⟩ := held
+  exact ⟨c, step.child.trans cached, origin, WalRecoverySlice.Segmented.Writebacks.installed step.disk installed, view⟩
 
 theorem manifest (d : Durable image history) (opening : Opening physical root lock ref image start)
     (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
@@ -137,9 +135,9 @@ theorem Swapped.held (step : Swapped physical root wal image.tables next s t)
     ⟨step.manifest.trans before.manifest.1, step.survivors.trans before.manifest.2⟩⟩
 
 theorem Swapped.keepsChild (step : Swapped physical root wal image.tables next s t)
-    (before : Child physical image wal s) : Child physical image wal t := by
-  obtain ⟨c, cached, valid, view⟩ := before
-  exact ⟨c, step.child.trans cached, WalRecoverySlice.Segmented.Writebacks.installed step.disk valid, view⟩
+    (before : Child physical root image wal s) : Child physical root image wal t := by
+  obtain ⟨c, cached, origin, valid, view⟩ := before
+  exact ⟨c, step.child.trans cached, origin, WalRecoverySlice.Segmented.Writebacks.installed step.disk valid, view⟩
 
 theorem Attached.sessionAt (attached : Attached physical root lock ref image wal w)
     (installed : Installed session image history) :
@@ -150,7 +148,7 @@ theorem Attached.sessionAt (attached : Attached physical root lock ref image wal
 owned WAL handle denotes its two actual heap bindings. -/
 def Cached (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
     (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle) (ref : Ref) : Prop :=
-  ∀ w, Owned (physical w) root lock ref → ∀ h c, (physical w).readyWal h = some c ↔ heap.Ready h c w
+  ∀ w, Owned (physical w) root lock ref → ∀ h c, (physical w).readyWal h = some c ↔ heap.Registered h c w
 
 /-- The stage-specific frame on the actual mutex and inner phase reference
 operations used by scan. -/
@@ -169,9 +167,9 @@ theorem scanned (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
     (prim : ScanPrimitives physical root wal image.tables start) :
     IOReturns (WalRecoverySlice.Segmented.Native.scan wal) start
       (fun v t => v = image.view ∧ Attached physical root lock ref image wal t) failed := by
-  obtain ⟨c, slot, _, view⟩ := before.2
+  obtain ⟨c, slot, _, _, view⟩ := before.2
   have ready := (cached _ before.1.owned wal c).mp slot
-  have ran := (WalRecoverySlice.Segmented.Native.scan_ready_world heap ready).1
+  have ran := (WalRecoverySlice.Segmented.Native.scan_ready_world heap ready.ready).1
   have frame := WalRecoverySlice.Segmented.Native.scanWorld_frame wal prim.lock prim.read prim.unlock
     NativeRead.Frame.refl
   unfold IOReturns
@@ -233,7 +231,7 @@ private theorem readOpening (prim : PhasePrimitives physical root lock ref image
   exact ⟨ready.1.phaseEq, ⟨after.owned, after.phase, after.catalog, same ▸ ready.1.manifest⟩, after.disk⟩
 
 private theorem attach (prim : PhasePrimitives physical root lock ref image)
-    (held : Held physical root lock ref image .opening w) (child : Child physical image wal w) :
+    (held : Held physical root lock ref image .opening w) (child : Child physical root image wal w) :
     Returns ((Native.componentCell ref).swap (.recovering wal)) w
       (fun _ t => Attached physical root lock ref image wal t) failed := by
   obtain ⟨t, ran, step⟩ := prim.swap w held.owned wal (.recovering wal)
@@ -248,8 +246,8 @@ def OpenDiskPost (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
     (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
     (ref : Ref) (image : Selected) (w : W) : Prop :=
   IOReturns (WalRecoverySlice.Segmented.Native.openExisting (root / "wal")) w
-    (fun h t => ∃ c, heap.Ready h c t ∧ WalRecoverySlice.Segmented.Installed c (physical t).disk ∧
-      c.view = image.view ∧ Held physical root lock ref image .opening t)
+    (fun h t => ∃ c, WalRecoverySlice.Segmented.Native.Origin (root / "wal") h c w t ∧ heap.Registered h c t ∧
+      WalRecoverySlice.Segmented.Installed c.session (physical t).disk ∧ c.session.view = image.view ∧ Held physical root lock ref image .opening t)
     (fun t => WalRecoverySlice.Segmented.Recoverable image.view none (physical t).disk ∧
       Held physical root lock ref image .opening t)
 
@@ -321,18 +319,18 @@ theorem recoverAt_checks_of_open (d : Durable image history)
         (Failed physical root lock ref image) := by
     apply NativeRecovery.reopenWal (Native.componentCell ref) _ (Native.storageCallbacks root).openWal
       (Native.storageCallbacks root).scan (readOpening phase ready)
-      (acquired := fun h t => Held physical root lock ref image .opening t ∧ Child physical image h t)
+      (acquired := fun h t => Held physical root lock ref image .opening t ∧ Child physical root image h t)
       (attached := Attached physical root lock ref image)
     · intro t can
       apply (Returns.liftIO (openDisk t can)).mapPost
-      · rintro wal u ⟨c, readyWal, disk, view, held⟩
-        exact ⟨held, c, (cache u held.owned wal c).mpr readyWal, disk, view⟩
+      · rintro wal u ⟨c, origin, readyWal, disk, view, held⟩
+        exact ⟨held, c, (cache u held.owned wal c).mpr readyWal, ⟨t, u, origin⟩, disk, view⟩
       · rintro u ⟨disk, held⟩
         exact .inl ⟨⟨held.owned, held.phaseEq, held.catalog, disk⟩, held.manifest.1⟩
     · intro wal t acquired
       exact attach phase acquired.1 acquired.2
     · intro wal t attached
-      apply (Returns.liftIO (scanned heap cache attached (scanPrim wal t attached))).mapPost
+      apply (Returns.liftIO (scanned (failed := fun _ => False) heap cache attached (scanPrim wal t attached))).mapPost
       · rintro v u ⟨view, after⟩
         exact ⟨view, wal, after⟩
       · exact fun _ impossible => False.elim impossible
@@ -395,7 +393,7 @@ theorem recoverAt_checks (d : Durable image history)
       (fun _ t => Failed physical root lock ref image t ∧
         (NoChecks root ref image start ∨ CheckReceipt root ref image life start t false)) :=
   recoverAt_checks_of_open d opening bytes manifestPrim heap cache
-    (fun _ ⟨held, disk⟩ => WalRecoverySlice.Segmented.Native.openExisting_diskPost walIO ⟨disk, held⟩)
+    (fun _ ⟨held, disk⟩ => WalRecoverySlice.Segmented.Native.openExisting_registered_diskPost walIO ⟨disk, held⟩)
     phase scanPrim tablePrim
 
 theorem recoverAt (d : Durable image history)
