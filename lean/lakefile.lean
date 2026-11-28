@@ -65,3 +65,9 @@ lean_lib Alvoki.Checks.Benchmarks.BloomWord
 
 lean_exe bloomPlacementCheck where
   root := `Alvoki.Checks.Benchmarks.BloomPlacement
+
+lean_lib Alvoki.Checks.Benchmarks.CoarseFilter
+lean_lib Alvoki.Checks.Benchmarks.CoarseFilterProofs
+
+lean_exe coarseFilterCheck where
+  root := `Alvoki.Checks.Benchmarks.CoarseFilterBench

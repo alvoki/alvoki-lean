@@ -169,7 +169,7 @@ private theorem Handle.Observes.select [Monad m] [LawfulMonad m] [MonadExceptOf 
   exact ⟨rootChild, ref, data, picked, by simp [Handle.select, routeRead, read],
     start, stop, exactData.rowExtent, fits⟩
 
-private theorem Handle.Observes.locate [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+theorem Handle.Observes.locate [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {handle : Handle m} (observed : handle.Observes image rows)
     (lower : LowerBound (fun i => (rowAt rows i).key) rows.length key index)
     (inside : index < rows.length) :

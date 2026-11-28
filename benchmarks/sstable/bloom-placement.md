@@ -145,3 +145,7 @@ propagate that error. Cached masks require this same checked identity
 on admission and retain it for the immutable descriptor lifetime.
 These obligations extend the general recursive writer refinement.
 [Recursive format and current filter obligations](../../docs/design/sstable-recursive.md)
+
+The [coarse companion and cache experiment](coarse-filter-cache.md) runs
+the recursive structure on actual companion files and measures four-table
+probes with cold and resident masks.
