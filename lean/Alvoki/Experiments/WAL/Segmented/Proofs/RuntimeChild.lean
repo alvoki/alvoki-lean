@@ -162,8 +162,8 @@ def ChildMemory.Owns (mem : ChildMemory disk) (h : SingleFile.Handle) (bs : List
     OpenedTogether (mem.bound id) p a ready ∧ h.Assembled a.policy ref mutex ∧
     mem.cell t ref a.phase ∧ mem.mutex t mutex
 
-/-- A schedule for the issued file primitives on one reached segment. Its
-entry and exit relate physical writebacks outside the recovery worker. -/
+/-- Outside-worker writebacks belong to the first and terminal issued
+primitives of this attempt, including a failed acquisition or unlock. -/
 structure ChildAttempt (s : Store) (disk : W → Disk) (Q : W → Prop) (mem : ChildMemory disk)
     (id : Nat) (p : Policy) (w : W) where
   reports : OpenReports
@@ -173,9 +173,8 @@ structure ChildAttempt (s : Store) (disk : W → Disk) (Q : W → Prop) (mem : C
   runtime : Runtime state
   cell : ∀ t ref phase, runtime.cell t ref phase → mem.cell t ref phase
   mutex : ∀ t m, runtime.mutex t m → mem.mutex t m
-  entry : state w (SingleFile.settleImage reports.beforeWorker {image := (disk w).segment id})
-  exitFrame : ∀ t u, state t u →
-    ChildAt disk Q id (disk w) t (SingleFile.settleImage reports.afterWorker u)
+  boundaries : SingleFile.ConcreteRecovery.Boundaries (segmentPath s.root id) p reports state
+    (mem.bound id) runtime w {image := (disk w).segment id} (ChildAt disk Q id (disk w))
 
 theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q mem id p w)
     (prior : Child.Recoverable p bs none ((disk w).segment id)) :
@@ -185,7 +184,7 @@ theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q me
   let dir := segmentPath s.root id
   let reports := attempt.reports
   have run := SingleFile.ConcreteRecovery.openExisting attempt.steps attempt.recovery attempt.runtime w initial
-    attempt.entry attempt.exitFrame
+    attempt.boundaries
   change (match SingleFile.openExisting dir w, SingleFile.openExistingModel dir p reports initial with
     | .ok h t, .ok (.ok ready) u => ChildAt disk Q id (disk w) t u ∧
       SingleFile.ConcreteRecovery.Owns attempt.runtime (mem.bound id) p t h ready
