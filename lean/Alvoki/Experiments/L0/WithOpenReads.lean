@@ -49,6 +49,24 @@ inductive Failure (physical : W → Footprint inode) (root : FilePath) (image : 
     Execution.Run (events ++ [.openFailed]) none image → Failure physical root image life events keys w
   | cleanup : Finished physical root image life events keys replies w → Failure physical root image life events keys w
 
+/-- A reported scope failure retains the entry files for a retry and the
+client trace appropriate to the point where the failure occurred. -/
+theorem Failure.refines (failure : Failure physical root image life events keys w) :
+    Files physical root image w ∧ ∃ observed state,
+      (observed = events ++ [.openFailed] ∨ ∃ replies, observed = eventsAfter events keys replies) ∧
+      Client.Allows observed state ∧ Execution.Represents none image state := by
+  cases failure with
+  | before files run =>
+    obtain ⟨state, allowed, off⟩ := run.refines
+    exact ⟨files, _, state, .inl rfl, allowed, off⟩
+  | recovery closed run =>
+    obtain ⟨state, allowed, off⟩ := run.refines
+    exact ⟨closed.files, _, state, .inl rfl, allowed, off⟩
+  | cleanup finished =>
+    obtain ⟨state, allowed, off⟩ := finished.client
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, closed⟩ := finished.callback
+    exact ⟨closed.files, _, state, .inr ⟨_, rfl⟩, allowed, off⟩
+
 theorem withOpen (entry : Entry physical path root image) (files : Files physical root image start)
     (heap : Heap) (runtime : ∀ lock ref, Runtime physical root lock ref image life heap)
     (prior : Execution.Run events none image) (keys : List UInt64) :
