@@ -99,7 +99,9 @@ installs the offline phase.
 [ScheduleSteps](ScheduleSteps.lean) takes the result of each reached
 operation directly to an `Execution.Run` step. The model uses these same
 lemmas. [NativeBridge](NativeBridge.lean) derives the operation laws from
-component observations. WAL receipts identify the modeled sessions.
+component observations. [WalRecovery](WalRecovery.lean) consumes
+`publicOpenModel_refines` and the ready-phase scan on the exact installed
+session. The separate model receipt remains only for append.
 [ManifestComposition](ManifestComposition.lean) derives the typed result and
 selected manifest directly from the DurableBlob primitive interpreter.
 `RecoveryChoices` discharges uncertain effects from the public steps.
@@ -161,8 +163,8 @@ error never returns an older value.
 
 ## Producer boundary for native components
 
-These are proposed producer signatures in terms of the existing public
-states and events. Each premise about a call means a report of the actual
+These are the producer boundaries in terms of the existing public states
+and events. Each premise about a call means a report of the actual
 native call, at its reached handle or binding, under that component's
 primitive filesystem assumptions. The component owns that interpretation.
 
@@ -173,8 +175,14 @@ primitive filesystem assumptions. The component owns that interpretation.
 | DurableBlob `reopen` | `Step offline (.opened bytes) (.ready bytes)` for the exact returned and durably settled bytes. A failed reopen exposes no value and preserves the admissible choices. |
 | DurableBlob `publish bytes` | `Step (.ready old) (.published bytes) (.ready bytes)` on success, or the existing uncertain step for those same proposed bytes. Later reopen supplies the selected bytes. |
 
-The producer starts from the initialized component trace and identifies the
-same returned WAL handle on scan and append. Close after an uncertain
+The WAL recovery interpretation retains the exact public open result,
+including the ready store, active child identity and reached disk. A scan
+after open uses that phase directly. A reported open failure retains the
+recoverable disk, closed phase and the producer's root and child release
+facts. The open interpretation takes the WAL view as already selected at
+the restart boundary. Connecting uncertain native append and later restart
+to that selected input remains open. Arbitrary ready states still need a
+cached-view invariant, in particular after native append. Close after an uncertain
 operation preserves the pending request via the existing offline stop step.
 If a component opened successfully and a later L0 callback failed, record
 the successful component open followed by stop. A scan failure after a
@@ -217,8 +225,9 @@ The interpretation needs the active image projection, installation of the
 reached image and frames for the WAL and table namespaces. The reports
 describe reached primitive outcomes, including whether a failed sync took
 effect. Relating the actual Linux IO and filesystem state to those reports
-and namespace frames remains the runtime boundary. The native segmented
-WAL and SSTable producer handoffs are separate obligations.
+and namespace frames remains the runtime boundary. The remaining native handoffs include the correspondence between the
+Linux callbacks and the reached primitive reports, segmented append and
+CONTROL effects, and the SSTable scoped-reader continuation.
 
 ## Process interruption checks
 

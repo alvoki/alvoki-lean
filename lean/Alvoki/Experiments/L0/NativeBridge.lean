@@ -1,4 +1,5 @@
 import Alvoki.Experiments.L0.NativeFacts
+import Alvoki.Experiments.L0.WalRecovery
 import Alvoki.Experiments.L0.Refinement
 import Alvoki.Experiments.L0.ManifestComposition
 import Alvoki.Experiments.L0.TableAllocationProofs
@@ -202,12 +203,7 @@ built image served by its descriptor. State indices identify the reached
 phase. Relating the reported callbacks to native IO remains a premise. -/
 structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → Selected)
     (namespaceState : TableNamespace σ) : Prop where
-  scan : ∀ s, match ops.scan s with
-    | .ok view after => WalScanReceipt (selected s).view view ∧ selected after = selected s
-    | .error _ after => selected after = selected s
-  reopenWal : ∀ s, match ops.reopenWal s with
-    | .ok view after => WalOpenReceipt (selected s).view view ∧ selected after = selected s
-    | .error _ after => selected after = selected s
+  walRecovery : Nonempty (WalRecovery.Interpretation ops selected)
   manifest : Nonempty (ManifestComposition.Interpretation ops.manifest selected)
   append : ∀ s batch, match ops.append batch s with
     | .ok _ after => WalReceipt (selected s).view (selected after).view batch ∧
@@ -260,19 +256,11 @@ theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
 theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected namespaceState) :
     ComponentEffects ops selected where
   scan s := by
-    have read := evidence.scan s
-    cases ran : ops.scan s with
-    | ok value after =>
-      rw [ran] at read
-      exact ⟨read.1.effect, read.2⟩
-    | error error after => simpa [ran] using read
+    obtain ⟨wal⟩ := evidence.walRecovery
+    exact wal.scanEffect s
   reopenWal s := by
-    have read := evidence.reopenWal s
-    cases ran : ops.reopenWal s with
-    | ok value after =>
-      rw [ran] at read
-      exact ⟨read.1.effect, read.2⟩
-    | error error after => simpa [ran] using read
+    obtain ⟨wal⟩ := evidence.walRecovery
+    exact wal.reopenEffect s
   reopenManifest s := by
     obtain ⟨manifest⟩ := evidence.manifest
     exact manifest.reopenEffect s
