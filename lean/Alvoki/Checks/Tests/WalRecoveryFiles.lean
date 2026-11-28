@@ -17,8 +17,11 @@ private opaque loseMarkerSyncReply (path : @& String) : IO Unit
 @[extern "alvoki_test_fail_directory_listing"]
 private opaque failDirectoryListing (afterEntry : Bool) : IO Unit
 
+private inductive ReadFault where
+  | interiorEIO | eofEIO | shortWithoutEOF | interiorDenied
+
 @[extern "alvoki_test_short_segment_read"]
-private opaque shortSegmentRead (path : @& String) (errorAtEOF : Bool) : IO Unit
+private opaque shortSegmentRead (path : @& String) (fault : ReadFault) : IO Unit
 
 private def encodeBytes (xs : Bytes) : ByteArray :=
   ⟨xs.toArray⟩
@@ -131,11 +134,15 @@ private def failedChunk (dir : FilePath) (policy : Policy) : IO Unit := do
   let files : List FilePath := if policy == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
   let snapshot := files.mapM fun name => IO.FS.readBinFile (dir / name)
   let before ← snapshot
-  for errorAtEOF in [true, false] do
-    shortSegmentRead segment.toString errorAtEOF
+  for fault in [ReadFault.interiorEIO, .eofEIO, .shortWithoutEOF, .interiorDenied] do
+    shortSegmentRead segment.toString fault
     match ← (SingleFile.openExisting dir).toBaseIO with
-    | .error (.hardwareFault 5 _) => pure ()
-    | .error err => throw err
+    | .error err =>
+      match fault, err with
+      | .interiorDenied, .permissionDenied none 13 _ => pure ()
+      | .interiorDenied, _ => throw err
+      | _, .hardwareFault 5 _ => pure ()
+      | _, _ => throw err
     | .ok unexpected =>
       SingleFile.close unexpected
       throw <| IO.userError "reopen accepted an incomplete WAL read"
