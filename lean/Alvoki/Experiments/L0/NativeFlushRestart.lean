@@ -179,4 +179,35 @@ theorem orphanIgnored {id : UInt64} (fresh : before.tables id = none)
   obtain ⟨rows, bound⟩ := durable.boundTable c.id listed
   simp [eq, fresh] at bound
 
+/-- The first recovered public get in a completed scope really did visit the table
+created by the flush. Its actual reply satisfies the recovered history and its
+descriptor has left the private scope, including when the first read reported an error. -/
+theorem finishedPublishedLookup {id : UInt64}
+    (finished : WithOpenReads.Finished physical root (published before session id) life events
+      ⟨path, key :: keys, start⟩ rootLife replies after)
+    (fits : before.view.tail < UInt64.size) (heap : WithOpenReads.Heap)
+    (runtime : ∀ lock ref, WithOpenReads.Runtime physical root lock ref (published before session id) life heap) :
+    ∃ lock ref wal recovered history handle opening recoveredAt entered w,
+      Native.recoverAt root ref opening = .ok recovered recoveredAt ∧
+      Online physical root lock ref wal recovered (published before session id) history entered ∧
+      NativeReadRelease.Closed physical root lock ref (published before session id) after ∧
+      (readMany handle (key :: keys) entered).val = replies ∧
+      Observes history key ((Native.get handle key).toBaseIO entered).val ∧
+      Call.mk (root / "tables") id (.lookup key) w ∈ publicCalls ref (root / "tables") key entered ∧
+      (Call.mk (root / "tables") id (.lookup key) w).Balanced life := by
+  obtain ⟨lock, ref, closed, wal, recovered, history, handle, entered, opening, recoveredAt, recoveredRun, _, binding,
+    online, equal, _, _, _⟩ := finished.callback
+  let ops := runtime lock ref
+  have read := ops.phase.refRead wal
+  obtain ⟨w, phase, _⟩ := read entered online.owned (by rw [online.phase]; rfl)
+  rw [online.phase] at phase
+  have visited := publishedLookup (dir := root / "tables") online.installed fits phase key
+  have checked := onlineGet online binding read (ops.tables wal entered online.owned) .refl key
+  refine ⟨lock, ref, wal, recovered, history, handle, opening, recoveredAt, entered, w,
+    recoveredRun, online, closed, equal, ?_, visited, checked.1 _ visited⟩
+  have post := checked.2
+  cases ran : Native.get handle key entered with
+  | ok _ t => simpa only [EIO.toBaseIO, ran] using (show _ from (ran ▸ post).1)
+  | error _ t => simp [EIO.toBaseIO, ran, Observes]
+
 end ExperimentalL0.NativeFlushRestart
