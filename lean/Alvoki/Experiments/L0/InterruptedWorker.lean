@@ -72,6 +72,27 @@ private theorem Worker.prepared {p : Prefix path root start} (worker : Worker p)
     omega
   exact ⟨reg, pathEq, op, active, selected, view, room⟩
 
+/-- The instant before a primitive has the disk already reached by its
+predecessor. A stop during the primitive uses its external interruption law. -/
+def BoundaryOr (disk : W → WalRecoverySlice.Segmented.Model.Disk) (during : Stop) : Stop :=
+  fun action w d => d = disk w ∨ during action w d
+
+/-- Every primitive entry is an ordinary boundary of the executable
+schedule. The final return has no next instruction and is named separately. -/
+inductive Worker.Observation (worker : Worker p) (change : Change) (disk : W → WalRecoverySlice.Segmented.Model.Disk)
+    (stop : Stop) (last : W) (d : WalRecoverySlice.Segmented.Model.Disk) : Prop where
+  | instruction : (WalRecoverySlice.Segmented.Native.AppendCut.publicProgram worker.cell worker.mutex
+      (encode change) (tagAt (BoundaryOr disk stop) last)).cuts p.issue d →
+      worker.Observation change disk stop last d
+  | returned : WalRecoverySlice.Segmented.Native.returnedWorld
+      (WalRecoverySlice.Segmented.Native.append p.wal (encode change) p.issue) = last →
+      d = disk last → worker.Observation change disk stop last d
+
+theorem Worker.Observation.entry (worker : Worker p) (disk : W → WalRecoverySlice.Segmented.Model.Disk) :
+    worker.Observation change disk stop p.issue (disk p.issue) := by
+  apply Worker.Observation.instruction
+  exact Or.inl (Or.inl ⟨rfl, .inl rfl⟩)
+
 /-- The complete public append admits either survivor on an unspecified
 abrupt instruction and hands the selected disk to two public reopens. -/
 theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
@@ -85,11 +106,10 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
     (io : AppendPrimitives runtime change)
     (linux : System.Platform.isWindows = false)
     (prim : ∀ store session, worker.phase = .ready store session →
-      CutRuntime (fun w => (physical w).disk) store session (tagAt stop last))
+      CutRuntime (fun w => (physical w).disk) store session (tagAt (BoundaryOr (fun w => (physical w).disk) stop) last))
     (frames : ∀ store session, worker.phase = .ready store session →
       FrameRuntime (fun w => (physical w).disk) store session (Protected physical root image))
-    (cut : (WalRecoverySlice.Segmented.Native.AppendCut.publicProgram worker.cell worker.mutex
-      (encode change) (tagAt stop last)).cuts p.issue d)
+    (cut : worker.Observation change (fun w => (physical w).disk) stop last d)
     (restart : NativeAppendCut.Restarted physical root image.tables last d mode after)
     (reopens : Reopens physical heap path root image life (some (.append (encode change))))
     (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
@@ -97,26 +117,49 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
       PendingReadScope.TwoReads (some (.append (encode change))) physical path root image life
         (NativeMutationScope.uncertainEvents before change) after a b rootLife := by
   obtain ⟨trace, history, issued, _⟩ := p.issued entry files heap (runtime _ _) prior change scans fits
-  obtain ⟨reg, _, op, active, selected, view, room⟩ := worker.prepared heap runtime io issued fits
-  have cut : worker.Cut change (tagAt stop last) d :=
-    .ready selected (WalRecoverySlice.Segmented.Native.AppendCut.publicProgram_covered _ _ _ _ _ selected cut)
-  have cell := op.parts.1.symm.trans worker.parts.1
-  have mutex := op.parts.2.symm.trans worker.parts.2
-  have held : NativeRecoverAt.Held physical root p.lock p.ref image (.updating p.wal) p.issue :=
-    ⟨issued.owned, issued.phase, issued.catalog, issued.manifest⟩
-  have actual : PublicStop op.cell op.mutex reg.store reg.session (encode change) p.issue (tagAt stop last) d := by
-    rw [cell, mutex]
-    cases cut with
-    | lock stopped => exact .lock stopped
-    | read stopped => exact .read stopped
-    | ready observed site =>
-      obtain ⟨rfl, rfl⟩ := WalRecoverySlice.Segmented.Native.Phase.ready.inj (selected.symm.trans observed)
-      exact site
-  have pending := recoverPublic op (prim _ _ selected) active held (encode_size change) room linux actual
-  have protectedAt := framePublic op (frames _ _ selected) (fun _ h => ⟨h.manifest, h.catalog⟩)
-    active held (encode_size change) room linux actual
-  have retry := restart.uncertain protectedAt.1 protectedAt.2 (view ▸ pending) trace
-  exact ⟨retry, retry.readTwice reopens a b rootLife⟩
+  cases cut with
+  | returned atEnd imageAt =>
+    subst last d
+    have result := NativeMutationScope.appendAt runtime io issued fits linux
+    unfold Alvoki.NativePost.IOReturns at result
+    have retry : Retry physical root (NativeMutationScope.uncertainEvents before change) image (some (.append (encode change))) after := by
+      cases ran : WalRecoverySlice.Segmented.Native.append p.wal (encode change) p.issue with
+      | error e t =>
+        rw [ran] at result restart
+        exact restart.uncertain result.1.manifest result.1.catalog result.2.1 trace
+      | ok pos t =>
+        rw [ran] at result restart
+        obtain ⟨_,held,reg,mem,active,view,_⟩ := result
+        obtain ⟨_,_,_,_,_,ready⟩ := active
+        apply restart.uncertain held.manifest held.catalog (ready.installed.offline (.inr ?_)) trace
+        have room : image.view.tail < WalRecoverySlice.Segmented.Contract.maxPosition := by
+          change image.view.tail + 1 < 18446744073709551616 at fits
+          change image.view.tail < 18446744073709551615
+          omega
+        simp [WalRecoverySlice.Segmented.Contract.Request.apply, room, view]
+    exact ⟨retry, retry.readTwice reopens a b rootLife⟩
+  | instruction cut =>
+    let stop : Stop := BoundaryOr (fun w => (physical w).disk) stop
+    obtain ⟨reg, _, op, active, selected, view, room⟩ := worker.prepared heap runtime io issued fits
+    have cut : worker.Cut change (tagAt stop last) d :=
+      .ready selected (WalRecoverySlice.Segmented.Native.AppendCut.publicProgram_covered _ _ _ _ _ selected cut)
+    have cell := op.parts.1.symm.trans worker.parts.1
+    have mutex := op.parts.2.symm.trans worker.parts.2
+    have held : NativeRecoverAt.Held physical root p.lock p.ref image (.updating p.wal) p.issue :=
+      ⟨issued.owned, issued.phase, issued.catalog, issued.manifest⟩
+    have actual : PublicStop op.cell op.mutex reg.store reg.session (encode change) p.issue (tagAt stop last) d := by
+      rw [cell, mutex]
+      cases cut with
+      | lock stopped => exact .lock stopped
+      | read stopped => exact .read stopped
+      | ready observed site =>
+        obtain ⟨rfl, rfl⟩ := WalRecoverySlice.Segmented.Native.Phase.ready.inj (selected.symm.trans observed)
+        exact site
+    have pending := recoverPublic op (prim _ _ selected) active held (encode_size change) room linux actual
+    have protectedAt := framePublic op (frames _ _ selected) (fun _ h => ⟨h.manifest, h.catalog⟩)
+      active held (encode_size change) room linux actual
+    have retry := restart.uncertain protectedAt.1 protectedAt.2 (view ▸ pending) trace
+    exact ⟨retry, retry.readTwice reopens a b rootLife⟩
 
 /-- The mutex, read and poison before the worker can only write back the
 existing files. These observations need only the volatile primitive laws. -/
