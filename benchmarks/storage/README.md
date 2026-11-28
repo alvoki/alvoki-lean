@@ -24,8 +24,9 @@ python3 benchmarks/storage/summarize.py /tmp/alvoki-storage-tmpfs
 ```
 
 Choose an idle CPU in the affinity mask with `--cpu`. The default is the
-first available CPU. Each case gets one warm-up and seven fresh timed
-processes by default. The runner shuffles the case order deterministically
+first available CPU. Each case gets one warm-up and seven fresh throughput
+processes by default. Cases with per-call latency use a second set of
+seven processes. The runner shuffles the case order deterministically
 within each round. The output directory must be new. Use `--quick
 --repeats 1` to smoke-test or repeat `--case NAME` to select a subset. The
 default full suite needs up to roughly 30 MiB of workspace on the test

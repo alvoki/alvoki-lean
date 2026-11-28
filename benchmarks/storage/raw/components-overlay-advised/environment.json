@@ -1,0 +1,59 @@
+{
+  "source_head": "3cafc8881b70f3363ed1fac8b5c0354c575dbf5b",
+  "source_status": "",
+  "harness_head": "3cafc8881b70f3363ed1fac8b5c0354c575dbf5b",
+  "harness_status": "",
+  "binary": "/workspace/work/alvoki-storage-baseline/lean/.lake/build/bin/storageBench",
+  "binary_sha256": "cad45d80832e53dc71f34c4ba5b9215f6ce911ec09220ed994b1cb3e34a40085",
+  "command": "benchmarks/storage/run.py --data-dir /workspace/work/storage-data --output /workspace/work/baseline-overlay-advised --case sst-lookup --case sst-scan --cache advised",
+  "kernel": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "cpu": 0,
+  "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "governor": null,
+  "affinity_available": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "virtualization": "container-other",
+  "mount": "overlay[/workspace] overlay rw,nosuid,nodev,relatime",
+  "block_devices": "NAME  ROTA TRAN   MODEL\nvda      1 virtio \npmem0    0",
+  "lean": "Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)",
+  "lake": "Lake version 5.0.0-src+611c117 (Lean version 4.36.0)",
+  "cc": "cc (Debian 14.2.0-19) 14.2.0",
+  "cxx": "c++ (Debian 14.2.0-19) 14.2.0",
+  "cases": [
+    {
+      "name": "sst-lookup",
+      "args": [
+        "sst",
+        "lookup",
+        "{path}",
+        65537,
+        4096
+      ],
+      "fixture": true,
+      "latency": true
+    },
+    {
+      "name": "sst-scan",
+      "args": [
+        "sst",
+        "scan",
+        "{path}",
+        65537,
+        4096
+      ],
+      "fixture": true,
+      "latency": false
+    }
+  ],
+  "cache": "advised",
+  "seed": 20261128,
+  "warmups": 1,
+  "repeats": 7,
+  "strace": null,
+  "sync_timing": false
+}

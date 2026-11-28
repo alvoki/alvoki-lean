@@ -1,0 +1,167 @@
+{
+  "source_head": "791940352e0068a9e303236c8b50b22d638fa139",
+  "source_status": "M lean/lakefile.lean\n?? lean/Alvoki/Bench/\n?? lean/native/storage_bench_metrics.c",
+  "harness_head": "9587ec9f4fdc0e62f33a663d80913442525ec67c",
+  "harness_status": "",
+  "binary": "/workspace/work/alvoki-storage-l0-bench/lean/.lake/build/bin/storageL0Bench",
+  "binary_sha256": "4fac7eb419b69c2683971672a0864b33329421aa6c9503c62945dd09d5aa678e",
+  "command": "benchmarks/storage/run.py --suite l0 --binary /workspace/work/alvoki-storage-l0-bench/lean/.lake/build/bin/storageL0Bench --data-dir /dev/shm --output /workspace/work/baseline-l0 --strace --sync-timing",
+  "kernel": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "cpu": 0,
+  "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "governor": null,
+  "affinity_available": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "virtualization": "container-other",
+  "mount": "shm tmpfs ro,nosuid,nodev,relatime",
+  "block_devices": "NAME  ROTA TRAN   MODEL\nvda      1 virtio \npmem0    0",
+  "lean": "Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)",
+  "lake": "Lake version 5.0.0-src+611c117 (Lean version 4.36.0)",
+  "cc": "cc (Debian 14.2.0-19) 14.2.0",
+  "cxx": "c++ (Debian 14.2.0-19) 14.2.0",
+  "cases": [
+    {
+      "name": "l0-newest-2",
+      "args": [
+        "newest",
+        "{path}",
+        2,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-oldest-2",
+      "args": [
+        "oldest",
+        "{path}",
+        2,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-miss-2",
+      "args": [
+        "miss",
+        "{path}",
+        2,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-newest-8",
+      "args": [
+        "newest",
+        "{path}",
+        8,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-oldest-8",
+      "args": [
+        "oldest",
+        "{path}",
+        8,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-miss-8",
+      "args": [
+        "miss",
+        "{path}",
+        8,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-newest-16",
+      "args": [
+        "newest",
+        "{path}",
+        16,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-oldest-16",
+      "args": [
+        "oldest",
+        "{path}",
+        16,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-miss-16",
+      "args": [
+        "miss",
+        "{path}",
+        16,
+        2048
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "l0-flush-64",
+      "args": [
+        "flush",
+        "{path}",
+        0,
+        64
+      ],
+      "fixture": false,
+      "latency": false
+    },
+    {
+      "name": "l0-flush-256",
+      "args": [
+        "flush",
+        "{path}",
+        0,
+        256
+      ],
+      "fixture": false,
+      "latency": false
+    },
+    {
+      "name": "l0-mixed-8",
+      "args": [
+        "mixed",
+        "{path}",
+        8,
+        64
+      ],
+      "fixture": false,
+      "latency": true
+    }
+  ],
+  "cache": "warm",
+  "seed": 20261128,
+  "warmups": 1,
+  "repeats": 7,
+  "strace": "strace -- version 6.13\nCopyright (c) 1991-2025 The strace developers <https://strace.io>.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\nOptional features enabled: stack-trace=libunwind stack-demangle m32-mpers mx32-mpers",
+  "sync_timing": true
+}
