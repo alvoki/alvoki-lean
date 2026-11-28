@@ -140,7 +140,7 @@ def measure(args, binary, cpu, case, fixture, scratch, stage, profiler):
             env["ALVOKI_BENCH_SYNC_FILE"] = str(sync)
         if stage == "syscall":
             env["ALVOKI_BENCH_TRACE"] = "1"
-            cmd = ["strace", "-f", "-qq", "-T", "-s", "96", "-e", "trace=%file,%desc",
+            cmd = ["strace", "-ff", "-qq", "-T", "-s", "96", "-e", "trace=%file,%desc",
                    "-o", str(trace), *cmd]
         result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True, env=env)
         rows = list(csv.DictReader(result.stdout.splitlines(), fieldnames=NATIVE_FIELDS))
@@ -148,9 +148,13 @@ def measure(args, binary, cpu, case, fixture, scratch, stage, profiler):
             raise ValueError(f"expected one measurement from {case.name}")
         if stage == "syscall":
             # Keep exactly the measured region, including syscall return values and durations.
-            with gzip.open(args.output / f"{case.name}.strace.gz", "wt") as saved:
-                with trace.open() as source:
-                    return rows, syscall_rows(source, saved), []
+            for thread_trace in trace.parent.glob(f"{trace.name}.*"):
+                with thread_trace.open() as source:
+                    for line in source:
+                        if "STORAGE_BENCH_BEGIN" in line:
+                            with gzip.open(args.output / f"{case.name}.strace.gz", "wt") as saved:
+                                return rows, syscall_rows(source, saved), []
+            raise ValueError(f"missing strace start marker for {case.name}")
         if stage == "sync-timing":
             with sync.open(newline="") as source:
                 return rows, [], list(csv.reader(source))
@@ -159,24 +163,18 @@ def measure(args, binary, cpu, case, fixture, scratch, stage, profiler):
 
 def syscall_rows(source, saved):
     calls = defaultdict(lambda: [0, 0, 0])
-    thread = None
-    for raw in source:
-        pid, _, line = raw.partition(" ")
-        line = line.lstrip()
-        if "STORAGE_BENCH_BEGIN" in line:
-            thread = pid
-        elif thread is not None and pid == thread:
-            if "STORAGE_BENCH_END" in line:
-                return [(name, *values) for name, values in sorted(calls.items())]
-            saved.write(line)
-            match = re.match(r"(\w+)\(.*\)\s+=\s+(-?\d+).*<([\d.]+)>\s*$", line)
-            if match:
-                name, result, seconds = match.groups()
-                state = calls[name]
-                state[0] += 1
-                state[1] += round(float(seconds) * 1_000_000_000)
-                if name in ("read", "pread64", "write", "pwrite64") and int(result) > 0:
-                    state[2] += int(result)
+    for line in source:
+        if "STORAGE_BENCH_END" in line:
+            return [(name, *values) for name, values in sorted(calls.items())]
+        saved.write(line)
+        match = re.match(r"(\w+)\(.*\)\s+=\s+(-?\d+).*<([\d.]+)>\s*$", line)
+        if match:
+            name, result, seconds = match.groups()
+            state = calls[name]
+            state[0] += 1
+            state[1] += round(float(seconds) * 1_000_000_000)
+            if name in ("read", "pread64", "write", "pwrite64") and int(result) > 0:
+                state[2] += int(result)
     raise ValueError("missing strace end marker")
 
 
