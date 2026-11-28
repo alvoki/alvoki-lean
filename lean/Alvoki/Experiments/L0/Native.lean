@@ -106,7 +106,31 @@ def flush (handle : Handle) : IO Unit :=
   update handle (ExperimentalL0.flush handle.ops)
 
 def get (handle : Handle) (key : UInt64) : IO (Option UInt64) :=
-  (phaseCell handle.phase).useSession (IO.userError "L0 requires reopen")
-    (fun session => checked (ExperimentalL0.get handle.ops session key))
+  checked ((componentCell handle.phase).get "L0 requires reopen" handle.ops key)
+
+/-- Execute public get on the exact world reached by reading its phase
+reference. A closed phase never enters the storage lookup. -/
+theorem get_afterPhaseRead (handle : Handle) (key : UInt64)
+    (phaseRead : (handle.phase.get : IO (Phase Wal)) start = .ok phase entered) :
+    get handle key start =
+      match phase.session with
+      | none => .error (IO.userError "L0 requires reopen") entered
+      | some session => checked (ExperimentalL0.get handle.ops session key) entered := by
+  let resume (phase : Phase Wal) : FileM (Option UInt64) :=
+    match phase.session with
+    | some session => ExperimentalL0.get handle.ops session key
+    | _ => throw "L0 requires reopen"
+  change checked ((liftM (handle.phase.get : IO (Phase Wal)) : FileM (Phase Wal)) >>= resume) start = _
+  unfold checked
+  rw [ExceptT.run_bind]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind]
+  have lifted : (liftM (handle.phase.get : IO (Phase Wal)) : FileM (Phase Wal)).run start =
+      .ok (.ok phase) entered := by
+    change (match (handle.phase.get : IO (Phase Wal)) start with
+      | .ok p world => EST.Out.ok (Except.ok p : Except String (Phase Wal)) world
+      | .error error world => EST.Out.error error world) = _
+    rw [phaseRead]
+  rw [lifted]
+  cases phase <;> rfl
 
 end ExperimentalL0.Native

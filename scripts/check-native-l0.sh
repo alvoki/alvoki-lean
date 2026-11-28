@@ -49,6 +49,7 @@ done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.NativeBridge
+import Alvoki.Experiments.L0.Native
 import Alvoki.Experiments.L0.RestartRefinement
 import Alvoki.Experiments.L0.ScheduleSteps
 import Alvoki.Experiments.L0.Lifecycle
@@ -105,6 +106,9 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.initialCatalog
 #check_axioms Lifecycle.recovery_progress
 #check_axioms Lifecycle.scope_refines
+#check_axioms Lifecycle.getList_online
+#check_axioms Lifecycle.getScope_refines
+#check_axioms ExperimentalL0.Native.get_afterPhaseRead
 #check_axioms retainRecoverySelection
 #check_axioms Lifecycle.recovery_online
 #check_axioms Lifecycle.recovery_offline

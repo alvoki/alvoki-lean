@@ -135,12 +135,13 @@ theorem recovery_progress
       ∃ store walSession, wal.phase after = .ready store walSession ∧
         store.activeId = walSession.control.active ∧
         WalRecoverySlice.Segmented.Installed walSession (wal.diskState after).disk ∧
-        walSession.view = (selected after.2).view := by
+        walSession.view = (selected after.2).view ∧
+        wal.runOpen middle = .ok (.ok (.ready store walSession, ())) (wal.diskState after, true) := by
   obtain ⟨checked, opened, _⟩ :=
     wal.reopenHealthy middle binding rootOK childrenOK closeOK unlockOK representable
   have walReached := wal.reopenReached middle
   rw [opened] at walReached
-  obtain ⟨_, _, store, walSession, walPhase, active, walInstalled, walView, _⟩ := walReached
+  obtain ⟨_, _, store, walSession, walPhase, active, walInstalled, walView, walRan⟩ := walReached
   have healthyManifest := blob.reopenHealthy (Phase.opening, before) readActive openDirectory syncDirectory
   have manifest : (ops).manifest.reopen (Phase.opening, before) = .ok (selected before).version middle :=
     middleInstalled.symm ▸ healthyManifest.1
@@ -189,12 +190,14 @@ theorem recovery_progress
     exact catalogAfter
   · rw [selectedAfter, imageAfter, walKeepsManifest _ _ opened, middleInstalled]
     exact healthyManifest.2
-  · refine ⟨store, walSession, phaseAfter.trans walPhase, active, ?_, ?_⟩
+  · refine ⟨store, walSession, phaseAfter.trans walPhase, active, ?_, ?_, ?_⟩
     · rw [diskAfter]
       exact walInstalled
     · have middleSelected : selected middle.2 = selected before := manifestEffect.2
       rw [selectedAfter, ← middleSelected]
       exact walView
+    · rw [diskAfter]
+      exact walRan
 
 /-- Failed recovery records only an offline client step. Phase cleanup
 detaches the handle even when closing the WAL or releasing the lock fails. -/
@@ -399,7 +402,7 @@ theorem get_online
       .ok value after) (invalid : String) :
     Execution.Run (events ++ [.got key value]) (some session) (selected after.2) ∧
       namespaceState.Represents after.2 (selected after.2).tables ∧
-      Cell.useSession stateCell invalid (fun live => get ops live key)
+      Cell.get stateCell invalid ops key
         (.online handle session, before) = .ok value (.online handle session, after.2) := by
   have frame := get_keepsPhase callbacks unavailable session key (.online handle session, before)
   rw [ran] at frame
@@ -425,7 +428,7 @@ theorem get_online_error
       .error error after) (invalid : String) :
     Execution.Run events (some session) (selected after.2) ∧
       namespaceState.Represents after.2 (selected after.2).tables ∧
-      Cell.useSession stateCell invalid (fun live => get ops live key)
+      Cell.get stateCell invalid ops key
         (.online handle session, before) = .error error (.online handle session, after.2) := by
   have frame := get_keepsPhase callbacks unavailable session key (.online handle session, before)
   rw [ran] at frame
@@ -442,5 +445,84 @@ theorem get_online_error
   have read := effect history installed
   rw [ran] at read ⊢
   exact read.1
+
+private def readSequence [Monad m] [MonadExceptOf String m]
+    (read : UInt64 → m (Option UInt64)) (keys : List UInt64) : m (List (Except String (Option UInt64))) :=
+  keys.mapM (fun key => MonadExceptOf.tryCatch (ε := String)
+    (read key >>= fun value => pure (Except.ok value))
+    (fun error => pure (Except.error error)))
+
+/-- Interpret a finite callback of public gets. Reported read errors
+remain in the returned list and do not add a successful client event. -/
+theorem getList_online
+    (keys : List UInt64) (handle : W)
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
+    (invalid : String)
+    (prior : Execution.Run events (some session) (selected before))
+    (catalog : namespaceState.Represents before (selected before).tables) :
+    ∃ results after,
+      readSequence (Cell.get stateCell invalid ops) keys (.online handle session, before) =
+        .ok results (.online handle session, after) ∧
+      Execution.Run (events ++ (keys.zip results).filterMap (fun (key, result) =>
+        match result with | .ok value => some (.got key value) | .error _ => none))
+        (some session) (selected after) ∧
+      namespaceState.Represents after (selected after).tables := by
+  induction keys generalizing events before with
+  | nil => exact ⟨[], before, rfl, by simpa using prior, catalog⟩
+  | cons key keys ih =>
+    cases ran : get ops session key (.online handle session, before) with
+    | ok value next =>
+      obtain ⟨trace, kept, dispatch⟩ := get_online prior evidence catalog ran invalid
+      obtain ⟨results, after, reads, trace, kept⟩ := ih trace kept
+      refine ⟨.ok value :: results, after, ?_, ?_, kept⟩
+      · simp only [readSequence, Bind.bind, MonadExceptOf.tryCatch, Pure.pure] at reads
+        simp [readSequence, List.mapM_cons, Bind.bind, EStateM.bind, MonadExceptOf.tryCatch,
+          EStateM.tryCatch, Pure.pure, EStateM.pure, dispatch, reads]
+      · simpa [List.append_assoc] using trace
+    | error error next =>
+      obtain ⟨trace, kept, dispatch⟩ := get_online_error prior evidence catalog ran invalid
+      obtain ⟨results, after, reads, trace, kept⟩ := ih trace kept
+      refine ⟨.error error :: results, after, ?_, ?_, kept⟩
+      · simp only [readSequence, Bind.bind, MonadExceptOf.tryCatch, Pure.pure] at reads
+        simp [readSequence, List.mapM_cons, Bind.bind, EStateM.bind, MonadExceptOf.tryCatch,
+          EStateM.tryCatch, Pure.pure, EStateM.pure, dispatch, reads,
+          EStateM.Backtrackable.restore, EStateM.dummyRestore]
+      · simpa using trace
+
+/-- A recovered session, arbitrarily many public reads, and scope exit
+share one client trace. The scope result may report a cleanup error. -/
+theorem getScope_refines
+    (keys : List UInt64)
+    (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
+    (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit)
+    (unlock : StorageM (Phase W × S) Unit)
+    (prior : Execution.Run events none (selected before))
+    (ran : recover ops (.opening, before) = .ok session (.recovering handle, opened))
+    (catalog : namespaceState.Represents opened (selected opened).tables)
+    (closeFrame : ∀ h storage, reached (closeWal h (.offline, storage)) = (.offline, storage))
+    (unlockFrame : ∀ storage, reached (unlock (.offline, storage)) = (.offline, storage)) :
+    let use := readSequence (Cell.get stateCell invalid ops) keys
+    let final := reached (Cell.withSession stateCell invalid (recover ops) use closeWal unlock (.opening, before))
+    ∃ results after,
+      use (.online handle session, opened) = .ok results (.online handle session, after) ∧
+      final = (.offline, after) ∧
+      namespaceState.Represents after (selected after).tables ∧
+      ∃ state,
+        Client.Allows ((events ++ [.reopened]) ++ (keys.zip results).filterMap (fun (key, result) =>
+          match result with | .ok value => some (.got key value) | .error _ => none) ++ [.stop]) state ∧
+        Execution.Represents none (selected after) state := by
+  dsimp only
+  have reopened := Execution.Run.recoverOk (s := (.opening, before)) prior evidence.effects ran
+  obtain ⟨results, after, reads, trace, kept⟩ := getList_online keys handle evidence invalid reopened catalog
+  let use := readSequence (Cell.get stateCell invalid ops) keys
+  have closed := successful_recovery_cleanup (recover ops) use invalid closeWal unlock handle session
+    before opened ran closeFrame unlockFrame
+  change use (.online handle session, opened) = _ at reads
+  rw [reads] at closed
+  refine ⟨results, after, reads, closed, kept, ?_⟩
+  have scope := scope_refines use invalid closeWal unlock ran closeFrame unlockFrame
+    (by rw [reads]; exact trace) (by rw [reads]; exact kept)
+  rw [closed] at scope
+  exact scope.2.2
 
 end ExperimentalL0.Lifecycle

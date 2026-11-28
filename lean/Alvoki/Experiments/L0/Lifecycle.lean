@@ -146,6 +146,11 @@ def Cell.useSession [Monad m] [MonadExceptOf ε m] (cell : Cell m W) (invalid : 
   let some session := (← cell.read).session | throw invalid
   use session
 
+/-- The phase check and the storage lookup run in the same interpreter. -/
+def Cell.get [Monad m] [MonadExceptOf ε m] (cell : Cell m W) (invalid : ε)
+    (ops : Components m) (key : UInt64) : m (Option UInt64) :=
+  cell.useSession invalid (fun live => ExperimentalL0.get ops live key)
+
 def Cell.update [Monad m] [MonadExceptOf ε m] (cell : Cell m W) (invalid : ε)
     (operation : Session → m Session) (closeWal : W → m Unit) : m Unit := do
   let some (next, session) := (← cell.read).beginUpdate | throw invalid
