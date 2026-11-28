@@ -43,4 +43,29 @@ theorem Returns.liftIO {a : IO α} (h : IOReturns a w ok failed) :
   cases ran : a w <;>
     simpa [Bind.bind, instMonadEIO._aux_13, EST.bind, ran, Pure.pure, instMonadEIO._aux_5, EST.pure] using h
 
+theorem IOReturns.bind {a : IO α} {f : α → IO β}
+    (first : IOReturns a start middle failed)
+    (next : ∀ x w, middle x w → IOReturns (f x) w done failed) :
+    IOReturns (a >>= f) start done failed := by
+  unfold IOReturns at *
+  cases ran : a start with
+  | error e t =>
+    rw [ran] at first
+    simpa only [Bind.bind, instMonadEIO._aux_13, EST.bind, ran] using first
+  | ok x t =>
+    rw [ran] at first
+    simpa only [Bind.bind, instMonadEIO._aux_13, EST.bind, ran] using next x t first
+
+theorem Returns.mapPost {done : α → W → Prop} {failed : W → Prop} {ok : α → W → Prop} {fail : W → Prop}
+    (step : Returns a w ok fail) (success : ∀ x t, ok x t → done x t)
+    (failure : ∀ t, fail t → failed t) : Returns a w done failed := by
+  unfold Returns at *
+  cases ran : a.run w with
+  | error e t => rw [ran] at step; exact failure _ step
+  | ok r t =>
+    rw [ran] at step
+    cases r with
+    | error => exact failure _ step
+    | ok x => exact success _ _ step
+
 end Alvoki.NativePost

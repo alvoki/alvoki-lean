@@ -16,9 +16,9 @@ private opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
 @[extern "alvoki_read_dir_checked"]
 opaque entries (path : @& FilePath) : IO (Array IO.FS.DirEntry)
 
-def metadata? (path : FilePath) : IO (Option IO.FS.Metadata) := do
-  try return some (← path.symlinkMetadata) catch
-    | .noFileOrDirectory .. => return none
+def metadata? (path : FilePath) : IO (Option IO.FS.Metadata) :=
+  tryCatchThe IO.Error (some <$> path.symlinkMetadata) fun
+    | .noFileOrDirectory .. => pure none
     | err => throw err
 
 def regular (path : FilePath) (md : IO.FS.Metadata) : IO Unit := do
