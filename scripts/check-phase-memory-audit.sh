@@ -24,6 +24,9 @@ open L0Audit.OwnedRoleModel
 #check_axioms reached
 #check_axioms mutexFailure
 #check_axioms reuse
+#check_axioms retryHandoff
+#check_axioms clobberKeepsTarget
+#check_axioms clobberRejected
 LEAN
 
 lean --run "$audit/PhaseInstallProbe.lean"
