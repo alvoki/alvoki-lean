@@ -59,6 +59,14 @@ worlds. A temporary second rename in the actual DurableBlob publisher
 made the native manifest correspondence proof fail at compile time.
 Restoring the executable restored the proof.
 
+The scan, table create and manifest calls preserve different fields.
+Table preparation may add a file while framing the manifest, and the
+publisher changes the manifest while framing the original file. They
+share the bind and scope rules but keep these two contracts separate.
+A conditional healthy execution also needs positive syscall reports.
+The capacity-one recovery witness reuses the same segmented worker as
+the empty example and the same public read pipeline as the safety proof.
+
 The former whole-callback bridge required a separate writer execution
 and an installation map from that run to the purported physical state.
 Deleting the unused bridge and its product-world consumers removed
