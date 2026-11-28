@@ -157,10 +157,16 @@ structure ChildMemory (disk : W → Disk) where
     cell w ref (.active lock (SingleFile.appendFiles writer reader markers) pos batches) →
     (disk w).cursor id = pos
 
+/-- The mutex and phase reference came from the same public child open.
+The value binding persists for aliases; access to its contents still needs
+the world-indexed live phase and mutex facts. -/
+def IssuedPair (ref : Ref) (mutex : Std.BaseMutex) : Prop :=
+  ∃ h p dir w t, SingleFile.openExisting dir w = .ok h t ∧ h.Assembled p ref mutex
+
 def ChildMemory.Owns (mem : ChildMemory disk) (h : SingleFile.Handle) (bs : List Bytes) (t : W) : Prop :=
   ∃ (id : Nat) (p : Policy) (ready : ModelOpened) (a : ActualOpened), ∃ ref mutex, ready.recovered.batches = bs ∧
     OpenedTogether (mem.bound id) p a ready ∧ h.Assembled a.policy ref mutex ∧
-    mem.cell t ref a.phase ∧ mem.mutex t mutex
+    mem.cell t ref a.phase ∧ mem.mutex t mutex ∧ IssuedPair ref mutex
 
 /-- Outside-worker writebacks belong to the first and terminal issued
 primitives of this attempt, including a failed acquisition or unlock. -/
@@ -203,7 +209,8 @@ theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q me
       have cur := mem.cursor id t ref a.lock a.writer a.reader a.markers a.recovered.cursor a.recovered.batches
         pair.writer (pair.phase ▸ cell)
       apply physical.opened initial rfl rfl reports prior model
-      · exact ⟨id, p, ready, a, ref, m, rfl, pair, built, cell, attempt.mutex _ _ mutex⟩
+      · exact ⟨id, p, ready, a, ref, m, rfl, pair, built, cell, attempt.mutex _ _ mutex,
+          h, a.policy, _, w, t, actual, built⟩
       · rw [← pair.batches]; exact cur
   case error.ok e t result after =>
     cases result with
@@ -211,52 +218,64 @@ theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q me
     | ok => contradiction
   all_goals contradiction
 
+/-- The unlock operand and world after the active cell has been marked
+closed. The phase is read under the matching mutex before this transition. -/
+def ChildUnlockAt (mem : ChildMemory disk) (id : Nat) (fd : IO.FS.Handle) (m : Std.BaseMutex) (v : W) : Prop :=
+  ∃ start ref files pos bs, IssuedPair ref m ∧ mem.mutex start m ∧
+    mem.cell start ref (.active fd files pos bs) ∧ mem.bound id fd .lock ∧
+    let got := (ref.get : BaseIO _) (m.lock start).state
+    got.val = .active fd files pos bs ∧ v = ((ref.set .closed : BaseIO Unit) got.state).state
+
 /-- The read laws apply only to the live cell and mutex. A terminal
 reference write can forget the cursor; subsequent unlocks frame that state. -/
 structure ChildUseIO (mem : ChildMemory disk) (Q : W → Prop) : Prop where
-  lock : ∀ u ref m phase, Q u → mem.mutex u m → mem.cell u ref phase →
+  lock : ∀ u ref m phase, IssuedPair ref m → Q u → mem.mutex u m → mem.cell u ref phase →
     let t := (m.lock u).state
     Q t ∧ Writebacks (disk u) (disk t) ∧ mem.mutex t m ∧ mem.cell t ref phase
-  read : ∀ u ref m phase, Q u → mem.mutex u m → mem.cell u ref phase →
+  read : ∀ u ref m phase, IssuedPair ref m → Q u → mem.mutex u m → mem.cell u ref phase →
     let read := (ref.get : BaseIO _) u
     read.val = phase ∧ Q read.state ∧ Writebacks (disk u) (disk read.state) ∧
       mem.mutex read.state m ∧ mem.cell read.state ref phase
-  unlock : ∀ u ref m phase, Q u → mem.mutex u m → mem.cell u ref phase →
+  unlock : ∀ u ref m phase, IssuedPair ref m → Q u → mem.mutex u m → mem.cell u ref phase →
     let t := (m.unlock u).state
     Q t ∧ Writebacks (disk u) (disk t) ∧ mem.mutex t m ∧ mem.cell t ref phase
-  closed : ∀ start u ref phase, Q u → mem.cell u ref phase → Writebacks start (disk u) →
+  closed : ∀ start u ref m fd files pos bs, IssuedPair ref m → Q u → mem.mutex u m →
+    mem.cell u ref (.active fd files pos bs) → Writebacks start (disk u) →
     let t := ((ref.set .closed : BaseIO Unit) u).state
     Q t ∧ AfterClose start (disk t)
-  fileUnlock : ∀ start id fd u, mem.bound id fd .lock → Q u ∧ AfterClose start (disk u) →
+  fileUnlock : ∀ start id fd m u, ChildUnlockAt mem id fd m u → Q u ∧ AfterClose start (disk u) →
     IOReturns fd.unlock u (fun _ t => Q t ∧ AfterClose start (disk t)) (fun t => Q t ∧ AfterClose start (disk t))
-  leave : ∀ start (m : Std.BaseMutex) u, Q u ∧ AfterClose start (disk u) →
+  leave : ∀ start id fd (m : Std.BaseMutex) v u, ChildUnlockAt mem id fd m v →
+    returnedWorld (fd.unlock v) = u → Q u ∧ AfterClose start (disk u) →
     Q (m.unlock u).state ∧ AfterClose start (disk (m.unlock u).state)
 
 theorem ChildUseIO.scan {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns h bs w) (entry : Q w) :
     IOReturns (SingleFile.scan h) w
       (fun bytes t => bytes = bs ∧ mem.Owns h bs t ∧ Q t ∧ Writebacks (disk w) (disk t))
       (fun t => mem.Owns h bs t ∧ Q t ∧ Writebacks (disk w) (disk t)) := by
-  obtain ⟨id, p, ready, a, ref, m, rfl, pair, bound, cell, mutex⟩ := owned
-  obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ entry mutex cell
-  obtain ⟨got, q1, b1, m1, r1⟩ := io.read _ _ _ _ q0 m0 r0
+  obtain ⟨id, p, ready, a, ref, m, rfl, pair, bound, cell, mutex, issued⟩ := owned
+  obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ issued entry mutex cell
+  obtain ⟨got, q1, b1, m1, r1⟩ := io.read _ _ _ _ issued q0 m0 r0
   have run := SingleFile.scan_active_run bound w (got.trans pair.phase)
-  obtain ⟨q2, b2, m2, r2⟩ := io.unlock _ _ _ _ q1 m1 r1
+  obtain ⟨q2, b2, m2, r2⟩ := io.unlock _ _ _ _ issued q1 m1 r1
   unfold IOReturns
   rw [run, pair.batches]
-  exact ⟨rfl, ⟨id, p, ready, a, ref, m, rfl, pair, bound, r2, m2⟩, q2, (b0.trans b1).trans b2⟩
+  exact ⟨rfl, ⟨id, p, ready, a, ref, m, rfl, pair, bound, r2, m2, issued⟩, q2, (b0.trans b1).trans b2⟩
 
 theorem ChildUseIO.close {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns h bs w) (entry : Q w) :
     IOReturns (SingleFile.close h) w (fun _ t => Q t ∧ AfterClose (disk w) (disk t))
       (fun t => Q t ∧ AfterClose (disk w) (disk t)) := by
-  obtain ⟨id, p, ready, a, ref, m, _, pair, bound, cell, mutex⟩ := owned
+  obtain ⟨id, p, ready, a, ref, m, _, pair, bound, cell, mutex, issued⟩ := owned
   have binds : h.Binds ref m := by subst h; exact ⟨rfl, rfl⟩
-  obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ entry mutex cell
-  obtain ⟨got, q1, b1, _, r1⟩ := io.read _ _ _ _ q0 m0 r0
-  have framed := io.closed (disk w) _ _ _ q1 r1 (b0.trans b1)
-  have released := io.fileUnlock _ id a.lock _ pair.lock framed
+  obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ issued entry mutex cell
+  obtain ⟨got, q1, b1, m1, r1⟩ := io.read _ _ _ _ issued q0 m0 r0
   let locked := (m.lock w).state
   let read := (ref.get : BaseIO _) locked
   let stopped := ((ref.set .closed : BaseIO Unit) read.state).state
+  have valid : ChildUnlockAt mem id a.lock m stopped :=
+    ⟨w, ref, _, _, _, issued, mutex, pair.phase ▸ cell, pair.lock, got.trans pair.phase, rfl⟩
+  have framed := io.closed (disk w) _ ref m _ _ _ _ issued q1 m1 (pair.phase ▸ r1) (b0.trans b1)
+  have released := io.fileUnlock _ id a.lock m stopped valid framed
   change IOReturns a.lock.unlock stopped _ _ at released
   unfold IOReturns
   rw [SingleFile.close_run binds]
@@ -265,7 +284,8 @@ theorem ChildUseIO.close {disk : W → Disk} {mem : ChildMemory disk} (io : Chil
   dsimp only [read, locked] at got
   rw [got, pair.phase]
   dsimp only
-  cases run : a.lock.unlock stopped <;> rw [IOReturns, run] at released <;> exact io.leave _ m _ released
+  cases run : a.lock.unlock stopped <;> rw [IOReturns, run] at released <;>
+    exact io.leave _ id a.lock m stopped _ valid (by rw [run]; rfl) released
 
 /-- The segmented proof consumes these local child primitives. Validation
 chooses the actual pathname, open installs its own phase, and scan or close
