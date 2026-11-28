@@ -84,17 +84,13 @@ theorem interrupted (prims : Primitives s c origin disk stop) (path : Prefix (su
     (issued : Issued (successorDir s c) p a) (cut : stop a w d) : Frame c (disk origin) d :=
   (path.frame prims).trans (prims.stopped _ _ path _ issued _ cut)
 
-/-- The directory fsync between confirmed successor registration and
-publication can save that private name. Both outcomes retain old CONTROL.
-The open child is the one returned by this prepare and installed in the
-store's actual active slot. -/
+/-- The pending child returned by prepare remains local until after payload
+write. The next operation is the store directory fsync on that return world. -/
 theorem beforePublish (stop : ControlCutIO.Stops) (disk : W → Disk) (s : Store) (c : Control)
-    {child : SingleFile.Handle} (made : s.prepareChild c.policy (c.active + 1) origin = .ok child created)
-    (registered : (s.active.set (some (c.active + 1, child)) : IO Unit) created = .ok () w)
+    {child : SingleFile.Handle} (made : s.prepareChild c.policy (c.active + 1) origin = .ok child w)
     (before : Frame c (disk origin) (disk w)) (cut : stop (syncHandle s.directory) w d)
-    (sync : ∀ h t v, s.prepareChild c.policy (c.active + 1) origin = .ok h t →
-      (s.active.set (some (c.active + 1, h)) : IO Unit) t = .ok () v →
+    (sync : ∀ h v, s.prepareChild c.policy (c.active + 1) origin = .ok h v →
       ∀ after, stop (syncHandle s.directory) v after → Frame c (disk v) after) :
-    Frame c (disk origin) d := before.trans (sync _ _ _ made registered _ cut)
+    Frame c (disk origin) d := before.trans (sync _ _ made _ cut)
 
 end WalRecoverySlice.Segmented.Native.PrepareCutIO

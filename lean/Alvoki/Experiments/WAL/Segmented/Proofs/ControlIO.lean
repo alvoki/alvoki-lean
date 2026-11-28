@@ -107,18 +107,18 @@ theorem proposalAtRename (stageRun : (stage reports c).run initial = .ok (.ok ()
     (syncRun : (syncStage reports).run v = .ok (.ok ()) u) : u.disk.staged = some c := by
   simp only [stage, syncStage, ExceptT.run] at stageRun syncRun
   cases st : reports.stage initial.step with
-  | before abort => cases abort <;> simp_all [namespaceChange, outcome, st]
+  | before abort => cases abort <;> simp_all [namespaceChange, outcome]
   | after persist failed =>
     cases failed with
-    | some e => cases e <;> simp_all [namespaceChange, outcome, st]
+    | some e => cases e <;> simp_all [namespaceChange, outcome]
     | none =>
       simp [namespaceChange, outcome, st] at stageRun
       cases stageRun
       cases sy : reports.syncControl initial.tick.step with
-      | before abort => cases abort <;> simp_all [barrier, outcome, sy]
+      | before abort => cases abort <;> simp_all [barrier, outcome]
       | after failure =>
         cases failure with
-        | some abort => cases abort <;> simp_all [barrier, outcome, sy]
+        | some abort => cases abort <;> simp_all [barrier, outcome]
         | none => simp [barrier, outcome, sy] at syncRun; cases syncRun; rfl
 
 private theorem cleared (p : Primitives store c reports w s R) :
