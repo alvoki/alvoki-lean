@@ -142,4 +142,59 @@ theorem Store.recoverChild_post (s : Store) (c : Control) (history : List Bytes)
           exact ⟨by simp [sessionOf, rowsEq, selectedHistory_eq observed history upper, historyView], collected⟩
     · exact fun session _ frame => ⟨frame.1, frame.2⟩
 
+/-- The two phase allocations and the active-slot write only change memory.
+These frames are quantified over the actual allocated objects and worlds. -/
+structure InstallFrame (P : W → Prop) : Prop where
+  attach : ∀ (r : IO.Ref (Option (Nat × SingleFile.Handle))) id h w, P w →
+    P ((r.set (some (id, h)) : BaseIO Unit) w).state
+  phase : ∀ s session w, P w → P ((IO.mkRef (.ready s session : Phase Store) : BaseIO _) w).state
+  mutex : ∀ w, P w → P (Std.BaseMutex.new w).state
+
+private theorem IOReturns.atOk {a : IO α} (h : IOReturns a w ok fail) (run : a w = .ok x t) :
+    ok x t := by simpa only [IOReturns, run] using h
+
+private theorem IOReturns.atError {a : IO α} (h : IOReturns a w ok fail)
+    (run : a w = .error e t) : fail t := by simpa only [IOReturns, run] using h
+
+/-- Move the recovery post through registration, phase installation, and
+startup unwind. On the error path the slot is still empty; the store invokes
+its root unlock on the reached world after taking the slot. -/
+theorem openExisting_diskPost_of_worker (heap : PhaseMemory) (dir : FilePath)
+    (disk : W → Disk) (known : Contract.View) (Q : W → Prop) (owned : Store → W → Prop)
+    (acquire : IOReturns (acquireStore dir) w owned (fun t => Recoverable known none (disk t) ∧ Q t))
+    (worker : ∀ s u, owned s u → IOReturns s.recoverChild u
+      (fun out t => Installed out.1 (disk t) ∧ out.1.view = known ∧ Q t)
+      (fun t => heap.holds s.active none t ∧ Recoverable known none (disk t) ∧ Q t))
+    (install : ∀ session, InstallFrame (fun t => Installed session (disk t) ∧ Q t))
+    (take : ∀ (s : Store) t, Recoverable known none (disk t) ∧ Q t →
+      let next := ((s.active.swap none : BaseIO _) t).state
+      Recoverable known none (disk next) ∧ Q next)
+    (unlock : ∀ (s : Store) u, Recoverable known none (disk u) ∧ Q u →
+      IOReturns s.lock.unlock u (fun _ t => Recoverable known none (disk t) ∧ Q t)
+        (fun t => Recoverable known none (disk t) ∧ Q t)) :
+    IOReturns (openExisting dir) w
+      (fun h t => ∃ session, heap.Ready h session t ∧ Installed session (disk t) ∧ session.view = known ∧ Q t)
+      (fun t => Recoverable known none (disk t) ∧ Q t) := by
+  unfold IOReturns
+  cases opened : openExisting dir w with
+  | ok h t =>
+    obtain ⟨session, origin, ready⟩ := openExisting_ready heap dir opened
+    obtain ⟨s, u, child, v, raw, recovery, _, _, rfl⟩ := origin
+    obtain ⟨installed, eq, keep⟩ := IOReturns.atOk (worker s u (IOReturns.atOk acquire raw)) recovery
+    let F := install session
+    have final := F.mutex _ (F.phase s session _ (F.attach s.active session.control.active child _ ⟨installed, keep⟩))
+    exact ⟨session, ready, final.1, eq, final.2⟩
+  | error e t =>
+    rcases openExisting_failure dir opened with early | ⟨s, u, v, raw, err, rfl⟩
+    · exact IOReturns.atError acquire early
+    · obtain ⟨empty, offline⟩ := IOReturns.atError (worker s u (IOReturns.atOk acquire raw)) err
+      let slot := (s.active.swap none : BaseIO _) v
+      have isEmpty : slot.val = none := heap.swap none empty
+      have taken : (s.active.swap none : IO _) v = .ok none slot.state := by
+        change EST.Out.ok slot.val slot.state = EST.Out.ok none slot.state
+        rw [isEmpty]
+      rw [s.release_empty taken]
+      have freed := unlock s slot.state (take s v offline)
+      cases released : s.lock.unlock slot.state <;> rw [IOReturns, released] at freed <;> exact freed
+
 end WalRecoverySlice.Segmented.Native
