@@ -201,7 +201,7 @@ def Pull.Exact (read : Pull (EStateM ε σ) cursor row) (suffix : cursor → Lis
   ∀ pos start item reached, read pos start = .ok item reached →
     (Front.buffered item).remaining suffix = suffix pos
 
-private theorem fill_exact {read : Pull (EStateM ε σ) cursor row}
+theorem fill_exact {read : Pull (EStateM ε σ) cursor row}
     {suffix : cursor → List row} (exact : read.Exact suffix) {front : Front cursor row}
     {start reached : σ} {item : Option (row × cursor)}
     (ran : front.fill read start = .ok item reached) :
@@ -277,7 +277,7 @@ theorem next_preserves [LT key] [DecidableLT key] (keyOf : row → key)
       cases ran
       exact (frame oldFrame _ second).trans (frame newFrame _ first)
 
-private theorem choose_exact [LT key] [DecidableLT key] (keyOf : row → key)
+theorem choose_exact [LT key] [DecidableLT key] (keyOf : row → key)
     (newer : left → List row) (older : right → List row)
     (a : Option (row × left)) (b : Option (row × right)) :
     let before : Frontier left right row := ⟨.buffered a, .buffered b⟩

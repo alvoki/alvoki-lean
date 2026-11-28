@@ -9,8 +9,8 @@ fi
 
 merge=Alvoki.Experiments.SortedRun
 modules=(
-  "$merge".{Merge,Proofs,SSTable,SSTableProofs}
-  Alvoki.Experiments.SSTable.Proofs.NativeWrite
+  "$merge".{Merge,Proofs,SSTable,SSTableProofs,IOEffects,Refinement,NativeRefinement}
+  Alvoki.Experiments.SSTable.Proofs.{NativeWrite,UnifiedReadSafety}
   Alvoki.Checks.{Tests.SortedRunEffects,Audit.AxiomPolicy}
 )
 lake build "${modules[@]}" Alvoki.Experiments.Manifest.Basic Alvoki.Experiments.WAL.Segmented.Contract
@@ -20,6 +20,7 @@ done
 lake env lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Checks.Tests.SortedRunEffects
+import Alvoki.Experiments.SortedRun.NativeRefinement
 
 open SortedRun ImmutableSSTable.Unified
 #check_axioms merge_ordered
@@ -36,6 +37,16 @@ open SortedRun ImmutableSSTable.Unified
 #check_axioms buildFileWith_writeError
 #check_axioms buildMergedWith_refines
 #check_axioms checkedInputs_merge_checkedOutput
+#check_axioms Image.checkedOpenTable_next_scoped
+#check_axioms InputPrimitives.scopedSource
+#check_axioms CheckedInput.ofOpen
+#check_axioms effect_buildFileWith
+#check_axioms nativeNext_refines
+#check_axioms nativeNext_newerError
+#check_axioms nativeNext_olderError
+#check_axioms buildFileWith_inputError
+#check_axioms buildMergedFileSynced_success
+#check_axioms buildMergedFileSynced_inputError
 #check_axioms EffectsCheck.first_row
 #check_axioms EffectsCheck.read_error_after_row
 LEAN
