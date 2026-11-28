@@ -182,7 +182,7 @@ private theorem lifted_ok {a : IO α} (seen : (liftM a : F α).run w = .ok (.ok 
   | error e u => simp [Functor.map, instMonadEIO._aux_1, EST.bind, ran] at seen
   | ok v u => simpa [Functor.map, instMonadEIO._aux_1, EST.bind, EST.pure, ran] using seen
 
-private theorem rootLockFrom {dir : FilePath} (held : SingleFile.ConcreteRecovery.LockedAt dir w fd t) :
+theorem rootLockFrom {dir : FilePath} (held : SingleFile.ConcreteRecovery.LockedAt dir w fd t) :
     RootLockFrom dir fd w := by
   obtain ⟨u, opened, granted⟩ := held
   exact ⟨u, t, lifted_ok opened, lifted_ok granted⟩
