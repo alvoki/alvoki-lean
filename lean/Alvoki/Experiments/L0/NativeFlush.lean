@@ -25,7 +25,7 @@ theorem atRoot (root : System.FilePath) (ref : Ref) (s : Session) :
         let version : L0Manifest.Version := ⟨id :: s.version.tables, view.tail.toUInt64⟩
         publish root version
         return ⟨version, ∅⟩ : IO Session) := by
-  unfold flush
+  unfold flush flushTableWith
   split
   · rfl
   · rw [checked_bind]
@@ -39,6 +39,13 @@ open WalRecoverySlice.Segmented.Native (PhaseMemory)
 
 def store (root : System.FilePath) (image : Selected) (s : Session) : IO Session :=
   flushTableWith (createTable root) (publish root) s image.view.tail
+
+theorem store_eq (root : System.FilePath) (image : Selected) (s : Session) :
+    store root image s = (do
+      let id ← createTable root s.mem.toList
+      let version := proposal image s id
+      publish root version
+      return ⟨version, ∅⟩) := rfl
 
 def hidden (ref : Ref) (wal : Wal) (start : W) : W :=
   ((ref.swap (.updating wal) : BaseIO _) ((ref.get : BaseIO _) start).state).state
@@ -103,7 +110,7 @@ theorem dispatchAt {physical : W → Footprint inode}
     kept, run.trans ?_⟩
   apply congrArg (NativeWrite.afterWrite ref)
   by_cases fit : image.view.tail < UInt64.size <;>
-    simp [empty, fit, Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, store, proposal] <;> rfl
+    simp [empty, fit, Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, store, flushTableWith, proposal] <;> rfl
 
 /-- Reserve the actual online phase. Only a nonempty memtable reaches
 the WAL scan. Its exact rows and the observed tail determine the proposal. -/

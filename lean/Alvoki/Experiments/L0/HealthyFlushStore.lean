@@ -27,7 +27,8 @@ theorem healthy (io : Runtime physical root lock ref wal image s media manifest 
   obtain ⟨d,_⟩ := NativeFlushRestart.installedPublished valid saved.fresh.1 fits
   obtain ⟨t,pub,held,stable⟩ := NativeManifestPublish.healthyPublish (io.publish _ _ created)
     (reports _ created) r (io.reserved _ _ created r) pre.manifest d.unique
-  exact ⟨t,by simp [NativeFlush.store, Bind.bind, instMonadEIO._aux_13, EST.bind, created, NativeFlush.publish,
-    Native.checked, pub, Pure.pure, instMonadEIO._aux_5, EST.pure],held,stable⟩
+  refine ⟨t, ?_, held, stable⟩
+  simp [NativeFlush.store_eq, Bind.bind, instMonadEIO._aux_13, EST.bind, created, NativeFlush.publish,
+    Native.checked, pub, Pure.pure, instMonadEIO._aux_5, EST.pure]
 
 end ExperimentalL0.NativeFlushStore

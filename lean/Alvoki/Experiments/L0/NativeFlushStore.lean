@@ -76,7 +76,7 @@ theorem produce (io : Runtime physical root lock ref wal image s media manifest 
     Outcome physical root lock ref wal s image history media (NativeFlush.store root image s origin) := by
   have table := (NativeTableCreate.create io.table start fun _ p => ⟨p.live,p.durable⟩).returned
   change Post (NativeFlush.createTable root s.mem.toList) origin _ _ at table
-  unfold NativeFlush.store
+  rw [NativeFlush.store_eq]
   cases allocated : NativeFlush.createTable root s.mem.toList origin with
   | error e t =>
     rw [Post, allocated] at table

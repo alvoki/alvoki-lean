@@ -308,7 +308,7 @@ theorem flush_refines (laws : FlushEffects ops selected) (s : σ) (session : Ses
       cases made : ops.tables.create rows middle with
       | error error after =>
         rw [made, frame] at created
-        simp [flush, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made]
+        simp [flush, flushTableWith, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made]
         exact ⟨d.frame created.1 created.2.1 created.2.2⟩
       | ok id allocated =>
         rw [made, frame] at created
@@ -326,13 +326,13 @@ theorem flush_refines (laws : FlushEffects ops selected) (s : σ) (session : Ses
         cases published : ops.manifest.publish proposed allocated with
         | error error after =>
           rw [published] at issued
-          simp [flush, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal, published]
+          simp [flush, flushTableWith, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal, published]
           rcases issued with old | new
           · exact ⟨old ▸ stored⟩
           · exact ⟨new ▸ committed⟩
         | ok value after =>
           rw [published] at issued
-          simp [flush, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal,
+          simp [flush, flushTableWith, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal,
             published, Pure.pure, EStateM.pure]
           rw [issued]
           exact ⟨committed, rfl, rfl⟩
