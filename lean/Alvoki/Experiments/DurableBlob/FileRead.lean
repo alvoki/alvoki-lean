@@ -5,7 +5,7 @@ namespace FileRead
 abbrev World := Void IO.RealWorld
 
 /-- A read-only primitive may advance the runtime, including a descriptor
-cursor. It preserves the protected namespaces and the manifest state. -/
+cursor. It preserves the protected namespaces and their selected storage state. -/
 def Effect (owned : World → Prop) (state : World → σ)
     (action : IO α) (value : World → α → World → Prop) (start : World) : Prop :=
   match action start with
@@ -29,6 +29,7 @@ structure Primitives (path : System.FilePath) (owned : World → Prop)
   eof : ∀ h bytes pos acc w, owned w → source h bytes pos w →
     Effect owned state (h.readBinToEndInto acc) (fun _ result _ =>
       result = acc ++ bytes.extract pos bytes.size) w
+
 private theorem Effect.bind {a : IO α} {f : α → IO β}
     (step : Effect P state a q w)
     (next : ∀ x t, P t → state t = state w → q w x t →
@@ -89,5 +90,22 @@ theorem readBinFile (p : Primitives path P state contents) (start : P w) :
       exact congrArg contents mt
 
   by_cases positive : md.byteSize.toUSize > 0 <;> simpa only [positive, ite_true, ite_false] using continuation
+
+/-- The preallocation hint may be zero or larger than the first chunk.
+In either case the real stdlib operation resumes the EOF loop at the
+world and buffer returned by that branch. -/
+theorem readBinFile_atEOF {path : System.FilePath}
+    (metadata : path.metadata start = .ok md checked)
+    (openFile : IO.FS.Handle.mk path .read checked = .ok h entered)
+    (initial : (if md.byteSize.toUSize > 0 then h.read md.byteSize.toUSize
+      else pure (ByteArray.emptyWithCapacity 0) : IO ByteArray) entered = .ok acc filled) :
+    IO.FS.readBinFile path start = h.readBinToEndInto acc filled := by
+  unfold IO.FS.readBinFile
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, metadata, openFile]
+  change (if md.byteSize.toUSize > 0 then (h.read md.byteSize.toUSize >>= h.readBinToEndInto)
+    else ((pure (ByteArray.emptyWithCapacity 0) : IO ByteArray) >>= h.readBinToEndInto)) entered = _
+  by_cases test : md.byteSize.toUSize > 0 <;>
+    simp only [test, ite_true, ite_false] at initial ⊢ <;>
+    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, initial]
 
 end FileRead

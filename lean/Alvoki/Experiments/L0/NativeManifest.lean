@@ -59,6 +59,34 @@ theorem reopenBytes (p : Primitives dir P image) (start : P w) :
         rw [syncRun, same] at synced
         exact ⟨synced.1, read.2.2, synced.2⟩
 
+/-- Exact observed response from the byte backend. A filesystem error is
+preserved in the outer channel. Malformed live bytes become a typed error
+after the directory was synced. -/
+theorem decodeReached (dir : FilePath) (w : World) :
+    (backend dir).reopen.run w =
+      match (DurableBlob.native dir).reopen w with
+      | .error e t => .error e t
+      | .ok bytes t =>
+        match L0Manifest.decode bytes with
+        | some v => .ok (.ok v) t
+        | none => .ok (.error "invalid L0 manifest") t := by
+  unfold backend L0Manifest.backend
+  rw [ExceptT.run_bind]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind]
+  have liftRun : (liftM ((DurableBlob.native dir).reopen) : ExceptT String IO ByteArray).run w =
+      match (DurableBlob.native dir).reopen w with
+      | .ok bytes t => .ok (.ok bytes) t
+      | .error e t => .error e t := by
+    show (ExceptT.lift ((DurableBlob.native dir).reopen)).run w = _
+    simp only [ExceptT.lift, ExceptT.run, ExceptT.mk, Functor.map, instMonadEIO._aux_1, EST.bind]
+    cases (DurableBlob.native dir).reopen w <;> rfl
+  rw [liftRun]
+  cases ran : (DurableBlob.native dir).reopen w with
+  | error => rfl
+  | ok bytes t =>
+    dsimp only
+    cases L0Manifest.decode bytes <;> rfl
+
 /-- Selected manifest from the actual native read, including a barrier
 that took effect despite a reported error. -/
 theorem reopen (p : Primitives dir P image) (start : P w)
@@ -69,26 +97,43 @@ theorem reopen (p : Primitives dir P image) (start : P w)
     | .ok (.error _) t | .error _ t => P t ∧
         (image t = image w ∨ image t = (image w).barrier) := by
   have observed := reopenBytes p start
-  unfold backend L0Manifest.backend
-  rw [ExceptT.run_bind]
-  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind]
+  rw [decodeReached]
   cases ran : (DurableBlob.native dir).reopen w with
-  | error e t =>
-    rw [ran] at observed
-    have lifted : (liftM ((DurableBlob.native dir).reopen) : ExceptT String IO ByteArray).run w = .error e t := by
-      show (ExceptT.lift ((DurableBlob.native dir).reopen)).run w = _
-      simp [ExceptT.lift, ExceptT.run, ExceptT.mk, Functor.map, instMonadEIO._aux_1, EST.bind, ran]
-    rw [lifted]
-    exact observed
+  | error e t => simpa only [ran] using observed
   | ok bytes t =>
     rw [ran] at observed
-    have lifted : (liftM ((DurableBlob.native dir).reopen) : ExceptT String IO ByteArray).run w = .ok (.ok bytes) t := by
-      show (ExceptT.lift ((DurableBlob.native dir).reopen)).run w = _
-      simp [ExceptT.lift, ExceptT.run, ExceptT.mk, Functor.map, instMonadEIO._aux_1, EST.bind, ran]
-      rfl
-    simp only [lifted, observed.2.1.trans selected, decode_encode valid]
-    refine ⟨rfl, observed.1, observed.2.2, ?_⟩
+    simp only [observed.2.1.trans selected, decode_encode valid]
+    refine ⟨trivial, observed.1, observed.2.2, ?_⟩
     rw [observed.2.2]
     exact ⟨selected, congrArg List.singleton selected⟩
+
+/-- A reported directory sync is the last native effect of manifest
+reopen. Healthy completion and reported sync failure consume the same
+acquired handle and reached world. -/
+theorem reopen_atSync (p : Primitives dir P image) (start : P w)
+    (selected : (image w).active = L0Manifest.encode version) (valid : version.Valid)
+    (metadata : (dir / "BLOB").metadata w = .ok md checked)
+    (openBlob : IO.FS.Handle.mk (dir / "BLOB") .read checked = .ok file entered)
+    (initial : (if md.byteSize.toUSize > 0 then file.read md.byteSize.toUSize
+      else pure (ByteArray.emptyWithCapacity 0) : IO ByteArray) entered = .ok acc filled)
+    (eof : file.readBinToEndInto acc filled = .ok bytes afterRead)
+    (openDirectory : IO.FS.Handle.mk dir .read afterRead = .ok directory acquired) :
+    (backend dir).reopen.run w =
+      match syncHandle directory acquired with
+      | .error e t => .error e t
+      | .ok _ t => .ok (.ok version) t := by
+  have readRun := (FileRead.readBinFile_atEOF metadata openBlob initial).trans eof
+  have safe := FileRead.readBinFile p.file start
+  unfold FileRead.Effect at safe
+  rw [readRun] at safe
+  rw [decodeReached, native_reopen_schedule]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, readRun, openDirectory]
+  cases syncHandle directory acquired with
+  | error => rfl
+  | ok _ t =>
+    change (match L0Manifest.decode bytes with
+      | some v => EST.Out.ok (Except.ok v : Except String Version) t
+      | none => .ok (.error "invalid L0 manifest") t) = _
+    rw [safe.2.2.trans selected, decode_encode valid]
 
 end ExperimentalL0.NativeManifest
