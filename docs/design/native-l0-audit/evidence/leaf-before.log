@@ -1,0 +1,101 @@
+✔ [5/37] Built Alvoki.Experiments.WAL.Segmented.Contract (538ms)
+✔ [7/37] Built Alvoki.Experiments.DurableBlob.Contract (796ms)
+✔ [9/101] Built Alvoki.Experiments.WAL.Proofs.Marker (918ms)
+✔ [11/103] Built Alvoki.Experiments.WAL.CrashModel (1.1s)
+✔ [13/103] Built Alvoki.Experiments.DurableBlob.Protocol (578ms)
+✔ [14/103] Built Alvoki.Experiments.WAL.Contract (832ms)
+✔ [17/103] Built Alvoki.Experiments.WAL.Proofs.NativePost (621ms)
+✔ [19/111] Built Alvoki.Experiments.WAL.Proofs.ProcessExit (1.1s)
+✔ [21/113] Built Alvoki.Experiments.WAL.Writeback (910ms)
+✔ [23/113] Built Alvoki.Experiments.WAL.Segmented.Protocol (952ms)
+✔ [25/119] Built Alvoki.Experiments.DurableBlob.FileRead (867ms)
+✔ [26/119] Built Alvoki.Experiments.WAL.Proofs.Scan (3.5s)
+✔ [28/125] Built Alvoki.Experiments.WAL.Proofs.AppendWriteback (1.5s)
+✔ [32/135] Built Alvoki.Experiments.WAL.Proofs.Append (2.6s)
+✔ [34/135] Built Alvoki.Experiments.WAL.Proofs.ReopenWriteback (1.5s)
+✔ [36/135] Built Alvoki.Experiments.WAL.Segmented.ControlCodec (552ms)
+✔ [38/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Layout (1.3s)
+✔ [40/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.ControlCodec (1.1s)
+✔ [42/135] Built Alvoki.Experiments.WAL.Proofs.Persistence (2.4s)
+✔ [44/135] Built Alvoki.Experiments.WAL.Proofs.ScanRepair (2.7s)
+✔ [46/135] Built Alvoki.Experiments.WAL.Segmented.Native (2.9s)
+✔ [48/135] Built Alvoki.Experiments.WAL.Proofs.Client (775ms)
+✔ [50/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Model (495ms)
+✔ [52/135] Built Alvoki.Experiments.WAL.Proofs.Retry (1.6s)
+✔ [54/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Publication (446ms)
+✔ [56/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Collect (436ms)
+✔ [58/135] Built Alvoki.Experiments.WAL.Proofs.DirtyRetry (611ms)
+✔ [60/135] Built Alvoki.Experiments.WAL.Proofs.DirtyAppend (372ms)
+✔ [62/135] Built Alvoki.Experiments.WAL.Proofs.TornAppend (306ms)
+✔ [64/135] Built Alvoki.Experiments.WAL.Proofs.Execution (643ms)
+✔ [66/135] Built Alvoki.Experiments.WAL.Proofs.ScheduledExecution (676ms)
+✔ [68/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.ScheduledAppend (220ms)
+✔ [70/135] Built Alvoki.Experiments.WAL.Proofs.NativeRecovery (15s)
+✔ [72/135] Built Alvoki.Experiments.WAL.Proofs.NativeOpen (1.5s)
+✔ [74/135] Built Alvoki.Experiments.WAL.Proofs.NativeAppend (615ms)
+✔ [76/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.SegmentRecovery (456ms)
+✔ [78/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Child (551ms)
+✔ [80/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Invariant (621ms)
+✔ [82/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Rotation (522ms)
+✔ [84/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Discard (599ms)
+✔ [86/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Reopen (714ms)
+✔ [88/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Bootstrap (658ms)
+✔ [90/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Writeback (347ms)
+✔ [92/135] Built Alvoki.Experiments.WAL.Proofs.ConcreteRecovery (2.6s)
+✔ [94/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.Append (753ms)
+✔ [96/135] Built Alvoki.Experiments.WAL.Proofs.ConcreteOpen (1.9s)
+✔ [98/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.NativeReopen (2.7s)
+✔ [100/135] Built Alvoki.Experiments.WAL.Proofs.ConcreteAppend (1.3s)
+✔ [102/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.NativeControl (878ms)
+✔ [104/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.NativeRootIO (827ms)
+✔ [106/135] Built Alvoki.Experiments.WAL.Proofs.ConcreteCreate (1.4s)
+✔ [108/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.NativeChildIO (371ms)
+✔ [110/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.StoreAcquisition (634ms)
+✔ [112/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeDisk (1.8s)
+✔ [114/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeChild (1.0s)
+✔ [116/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeStoreOpen (718ms)
+✔ [118/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.NativeAppend (4.0s)
+✔ [120/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.AppendIO (436ms)
+✔ [122/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.ChildAuthority (550ms)
+✔ [124/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.ControlIO (733ms)
+✔ [126/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutIO (809ms)
+✔ [128/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.PrepareIO (1.0s)
+✔ [130/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.SuccessorIO (5.3s)
+✔ [132/135] Built Alvoki.Experiments.WAL.Segmented.Proofs.PrepareCutIO (539ms)
+✖ [134/135] Building Alvoki.Experiments.WAL.Segmented.Proofs.CreateCutIO (1.5s)
+trace: .> LEAN_PATH=/workspace/work/leaf/lean/.lake/build/lib/lean /workspace/work/lean-4.36.0-linux/bin/lean /workspace/work/leaf/lean/Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.lean -o /workspace/work/leaf/lean/.lake/build/lib/lean/Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.olean -i /workspace/work/leaf/lean/.lake/build/lib/lean/Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.ilean -c /workspace/work/leaf/lean/.lake/build/ir/Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.c --setup /workspace/work/leaf/lean/.lake/build/ir/Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.setup.json --json
+error: Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.lean:130:23: unsolved goals
+case next
+h : IO.FS.Handle
+origin : W
+acc : ByteArray
+w : W
+acc✝ : ByteArray
+w✝ : W
+bytes✝ : ByteArray
+t✝ : Void IO.RealWorld
+a✝ : ChunkPrefix h origin acc✝ w✝
+ran : h.read 1024 w✝ = EST.Out.ok bytes✝ t✝
+more : bytes✝.isEmpty = false
+ih : SingleFile.Internal.readChunks h ByteArray.empty origin = SingleFile.Internal.readChunks h acc✝ w✝
+⊢ (match WalRecoverySlice.SingleFile.checkedChunk✝ h 1024 w✝ with
+    | EST.Out.ok a s => (if a.isEmpty = true then pure acc✝ else SingleFile.Internal.readChunks h (acc✝ ++ a)) s
+    | EST.Out.error e s => EST.Out.error e s) =
+    SingleFile.Internal.readChunks h (acc✝ ++ bytes✝) t✝
+warning: Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.lean:132:53: This simp argument is unused:
+  ran
+
+Hint: Omit it from the simp argument list.
+  [apply] simp [Bind.bind, instMonadEIO._aux_13, EST.bind, more]
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: Alvoki/Experiments/WAL/Segmented/Proofs/CreateCutIO.lean:132:58: This simp argument is unused:
+  more
+
+Hint: Omit it from the simp argument list.
+  [apply] simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+Some required targets logged failures:
+- Alvoki.Experiments.WAL.Segmented.Proofs.CreateCutIO
+error: build failed

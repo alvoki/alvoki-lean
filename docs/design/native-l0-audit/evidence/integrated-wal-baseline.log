@@ -1,0 +1,5 @@
+✔ [2/5] Built Alvoki.Experiments.WAL.Recovery (495ms)
+✔ [4/5] Built Alvoki.Experiments.WAL.SingleFile (1.1s)
+Build completed successfully (5 jobs).
+injected positive short read (19) + EIO
+reopen success [[7]]

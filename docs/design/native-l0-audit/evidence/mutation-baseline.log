@@ -1,0 +1,86 @@
+../../MutatedBaseline.lean:113:73: error: unsolved goals
+ε : Type
+writer : Writer (EIO ε) ε
+state : BuilderState
+⊢ (do
+      let value ←
+        { crc := writer.crc, layout := writer.layout,
+                sink := { write := fun bytes => effect (writer.sink.write bytes), flush := pure () },
+                invalid := writer.invalid, options := writer.options }.flushData
+            state
+      let value ←
+        { crc := writer.crc, layout := writer.layout,
+                sink := { write := fun bytes => effect (writer.sink.write bytes), flush := pure () },
+                invalid := writer.invalid, options := writer.options }.flushLeaf
+            value
+      let value_1 ←
+        if value.root = #[] then pure (0, 0)
+          else
+            (fun a => (value.offset, a - value.offset)) <$>
+              { crc := writer.crc, layout := writer.layout,
+                    sink := { write := fun bytes => effect (writer.sink.write bytes), flush := pure () },
+                    invalid := writer.invalid, options := writer.options }.writePacket
+                3 value.offset (encodeIndex value.root)
+      effect
+          (writer.sink.write
+            (encodePacket writer.crc 0 4 0
+              (encodeFooterBody
+                { layout := writer.layout, count := value.count, rootOffset := value_1.fst, rootSize := value_1.snd })))
+      (fun a => value.count) <$> effect writer.sink.flush) =
+    do
+    let state ←
+      { crc := writer.crc, layout := writer.layout,
+              sink := { write := fun bytes => effect (writer.sink.write bytes), flush := pure () },
+              invalid := writer.invalid, options := writer.options }.flushData
+          state
+    let state ←
+      { crc := writer.crc, layout := writer.layout,
+              sink := { write := fun bytes => effect (writer.sink.write bytes), flush := pure () },
+              invalid := writer.invalid, options := writer.options }.flushLeaf
+          state
+    let __x ←
+      if state.root = #[] then pure (0, 0)
+        else
+          (fun a => (state.offset, a - state.offset)) <$>
+            { crc := writer.crc, layout := writer.layout,
+                  sink := { write := fun bytes => effect (writer.sink.write bytes), flush := pure () },
+                  invalid := writer.invalid, options := writer.options }.writePacket
+              3 state.offset (encodeIndex state.root)
+    (fun a => state.count) <$>
+        effect
+          (writer.sink.write
+            (encodePacket writer.crc 0 4 0
+              (encodeFooterBody
+                { layout := writer.layout, count := state.count, rootOffset := __x.fst, rootSize := __x.snd })))
+../../MutatedBaseline.lean:127:90: error: unsolved goals
+ε handle : Type
+ops : OutputOps (EIO ε) handle
+crc : Checksum
+path : System.FilePath
+layout : Layout
+supply : EIO ε (Option Entry)
+invalid : String → ε
+options : BuildOptions
+⊢ (do
+      let value ← effect (ops.openFile path IO.FS.Mode.writeNew)
+      tryCatchThe ε
+          (do
+            let value_1 ←
+              buildStream crc layout { write := fun bytes => effect (ops.append value bytes), flush := pure () }
+                  (effect supply) invalid options
+            (fun a => value_1) <$> effect (ops.sync value))
+          fun error => do
+          tryCatchThe ε (effect (ops.remove path)) fun error => pure ()
+          throwThe ε error) =
+    do
+    let handle_1 ← effect (ops.openFile path IO.FS.Mode.writeNew)
+    tryCatchThe ε
+        (do
+          let count ←
+            buildStream crc layout
+                { write := fun bytes => effect (ops.append handle_1 bytes), flush := effect (ops.flush handle_1) }
+                (effect supply) invalid options
+          (fun a => count) <$> effect (ops.sync handle_1))
+        fun error => do
+        tryCatchThe ε (effect (ops.remove path)) fun error => pure ()
+        throwThe ε error

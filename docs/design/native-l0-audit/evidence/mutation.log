@@ -1,0 +1,40 @@
+../../Mutated.lean:75:61: error: Application type mismatch: The argument
+  rfl
+has type
+  ?m.46 = ?m.46
+but is expected to have type
+  (transport invalid).rel false true sink.flush (effectSink sink).flush
+in the application
+  { append := fun x => rfl, flush := rfl }
+../../Mutated.lean:81:90: error: unsolved goals
+ε handle : Type
+ops : OutputOps (EIO ε) handle
+crc : Checksum
+path : System.FilePath
+layout : Layout
+supply : EIO ε (Option Entry)
+invalid : String → ε
+options : BuildOptions
+⊢ (do
+      let value ← effect (ops.openFile path IO.FS.Mode.writeNew)
+      tryCatchThe ε
+          (do
+            let value_1 ←
+              buildStream crc layout { write := fun bytes => effect (ops.append value bytes), flush := pure () }
+                  (effect supply) invalid options
+            (fun a => value_1) <$> effect (ops.sync value))
+          fun error => do
+          tryCatchThe ε (effect (ops.remove path)) fun error => pure ()
+          throwThe ε error) =
+    do
+    let handle_1 ← effect (ops.openFile path IO.FS.Mode.writeNew)
+    tryCatchThe ε
+        (do
+          let count ←
+            buildStream crc layout
+                { write := fun bytes => effect (ops.append handle_1 bytes), flush := effect (ops.flush handle_1) }
+                (effect supply) invalid options
+          (fun a => count) <$> effect (ops.sync handle_1))
+        fun error => do
+        tryCatchThe ε (effect (ops.remove path)) fun error => pure ()
+        throwThe ε error
