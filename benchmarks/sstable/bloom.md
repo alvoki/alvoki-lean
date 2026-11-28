@@ -27,3 +27,7 @@ Each hit added one filter read. Filter packets added 83,011–84,924 bytes
 per table, including checksum overhead. The scan issued no filter reads.
 The results describe this warm-cache workload. The implementation remains
 opt-in.
+
+The [placement and construction study](bloom-placement.md) compares
+complete table probes, startup reads and mask residency. It also isolates
+the current hashing, probe planning and bitset costs.

@@ -60,3 +60,8 @@ lean_exe immutableSSTableCheck where
 
 lean_exe recursiveSSTableCheck where
   root := `Alvoki.Experiments.SSTable.Recursive.Fixtures
+
+lean_lib Alvoki.Checks.Benchmarks.BloomWord
+
+lean_exe bloomPlacementCheck where
+  root := `Alvoki.Checks.Benchmarks.BloomPlacement

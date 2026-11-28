@@ -206,3 +206,8 @@ remaining writes and successful sync to establish this image for every
 build.
 
 [Filter benchmark and raw samples](../../benchmarks/sstable/bloom.md)
+
+The [Bloom placement experiment](../../benchmarks/sstable/bloom-placement.md)
+measures the whole table probe across leaf, coarse-range and table-level
+placements. It records startup, memory and construction costs and the
+proof boundary for a placement chosen in a later review.
