@@ -74,11 +74,30 @@ def Failed (disk : W → Disk) (heap : PhaseMemory) (Q : W → Prop) (wal : Hand
     (reg : Registration) (batch : Bytes) (w : W) : Prop :=
   Q w ∧ Recoverable reg.session.view (some (.append batch)) (disk w) ∧ ∃ slot, Custody heap wal reg.store slot w
 
+private theorem LocalIO.begin {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg batch w)
+    (entry : Active mem heap wal reg w) (framed : Q w) :
+    let c := inputContext mem heap Q op.cell reg
+    let begin := issuedWorld op.cell op.mutex reg.store w
+    ∃ phase, AppendReady reg.session (sourceState disk w reg phase) ∧
+      c.ReadyFile (some (reg.session.control.active,reg.child)) reg.session.control.active reg.child
+        begin (sourceState disk w reg phase) := by
+  obtain ⟨_,registered,a,phase,live,ready⟩ := entry
+  obtain ⟨sep,outer,slot⟩ := registered
+  have aligned : heap.separate op.cell reg.store.active := op.parts.1 ▸ sep
+  have base : (inputContext mem heap Q op.cell reg).Base (some (reg.session.control.active,reg.child))
+      (issuedWorld op.cell op.mutex reg.store w) (disk w) :=
+    ⟨op.memory.entry.frame framed,.ofWritebacks op.memory.entry.writes,heap.set _ _ _,
+      op.memory.slotSet _ _ _ aligned (heap.readFrame op.cell (heap.lock op.mutex slot))⟩
+  obtain ⟨hist, shape, layout, left, right, eq⟩ := ready
+  exact ⟨phase,⟨hist, shape, layout, left, right, eq⟩,
+    base,⟨a,op.memory.entry.live a live⟩,_,_,eq,rfl⟩
+
 theorem LocalIO.append {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg batch w)
     (entry : Active mem heap wal reg w) (framed : Q w) (size : batch.length ≤ 32)
     (room : reg.session.view.tail < Contract.maxPosition) (linux : System.Platform.isWindows = false) :
     IOReturns (Native.append wal batch) w (Succeeded mem heap Q wal reg batch) (Failed disk heap Q wal reg batch) := by
-  obtain ⟨root, held, a, phase, live, ready⟩ := entry
+  obtain ⟨phase,ready,typed⟩ := op.begin entry framed
+  obtain ⟨root, held, _⟩ := entry
   let c := inputContext mem heap Q op.cell reg
   let s := sourceState disk w reg phase
   let begin := issuedWorld op.cell op.mutex reg.store w
@@ -89,12 +108,7 @@ theorem LocalIO.append {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg
     exact ⟨separate,owns⟩
   let memIO := op.memory
   have get := heap.read (heap.lock op.mutex regFacts.2)
-  have base : c.Base (some (reg.session.control.active,reg.child)) begin s.1.disk :=
-    ⟨memIO.entry.frame framed, .ofWritebacks memIO.entry.writes, heap.set _ _ _,
-      memIO.slotSet _ _ _ regFacts.1 (heap.readFrame op.cell (heap.lock op.mutex slot))⟩
-  have typed : c.ReadyFile (some (reg.session.control.active,reg.child)) reg.session.control.active reg.child begin s := by
-    obtain ⟨hist, shape, layout, left, right, eq⟩ := ready
-    exact ⟨base, ⟨a, memIO.entry.live a live⟩, _, _, eq, rfl⟩
+  have base := typed.1
   have installed := ready.installed
   have bounds := Model.successor_controlRepresentable installed room
   have body := append_admitted op.reports reg.store reg.session op.parts w s get.1 ready rfl size room linux
@@ -170,5 +184,45 @@ theorem LocalIO.run {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg ba
       unfold IOReturns; rw [ran]; exact ⟨q,d,_,held⟩
   · obtain ⟨e,t,ran,q,d,held⟩ := op.rejected entry framed (.inl (Nat.lt_of_not_ge size))
     unfold IOReturns; rw [ran]; exact ⟨q,d,_,held⟩
+
+def healthyReports (batch : Bytes) (directory : Nat) (removal : Model.RootReports) : Reports batch :=
+  ⟨directory, removal, Model.healthy, {}, {}, fun _ _ => SingleFile.healthyAppendReports⟩
+
+/-- Healthy local primitive reports force an actual success on both
+branches. The returned registration carries the ready descriptor for a
+second operation, even when the client subsequently loses the reply. -/
+theorem LocalIO.healthy {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg batch w)
+    (entry : Active mem heap wal reg w) (framed : Q w) (size : batch.length ≤ 32)
+    (room : reg.session.view.tail < Contract.maxPosition) (linux : System.Platform.isWindows = false)
+    (healthy : op.reports = healthyReports batch directory removal) (removes : Model.HealthyRoot removal) :
+    ∃ pos t, Native.append wal batch w = .ok pos t ∧ Succeeded mem heap Q wal reg batch pos t := by
+  obtain ⟨phase,ready,file⟩ := op.begin entry framed
+  have bounds := Model.successor_controlRepresentable ready.installed room
+  let s := sourceState disk w reg phase
+  have body := appendSession op.reports reg.store reg.session size room
+    (fun ne => (op.inside phase ne file).assemble file.1 rfl ne)
+    (fun eq => (op.rotate phase eq file).assemble file bounds.1 bounds.2 eq linux)
+  obtain ⟨next,u,ran⟩ := Model.nativeAppendModel_healthy reg.store.root directory removal removes reg.session
+    s ready rfl size room linux (batch := batch)
+  have success : (op.reports.action reg.store reg.session).run s = .ok (.ok next) u := by
+    rw [healthy]; exact ran
+  unfold At at body
+  rw [success] at body
+  have read := heap.read (heap.lock op.mutex (op.parts.1 ▸ entry.2.1.2.1))
+  have output := op.append entry framed size room linux
+  unfold IOReturns at output
+  rw [append_ready_run op.parts batch w read.1] at output ⊢
+  dsimp only
+  cases real : reg.store.appendSession reg.session batch (issuedWorld op.cell op.mutex reg.store w) with
+  | error => rw [real] at body; contradiction
+  | ok x t =>
+    change reg.store.appendSession reg.session batch _ = .ok x t at real
+    rw [show ((op.cell.set (.poisoned reg.store) : BaseIO _)
+      ((op.cell.get : BaseIO _) (op.mutex.lock w).state).state).state = issuedWorld op.cell op.mutex reg.store w from rfl]
+    rw [real]
+    dsimp only at output
+    rw [show ((op.cell.set (.poisoned reg.store) : BaseIO _) ((op.cell.get : BaseIO _) (op.mutex.lock w).state).state).state = issuedWorld op.cell op.mutex reg.store w from rfl] at output
+    rw [real] at output
+    exact ⟨_,_,rfl,output⟩
 
 end WalRecoverySlice.Segmented.Native.AppendIO
