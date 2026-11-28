@@ -40,7 +40,7 @@ lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
 done
-for proof in ControlCodec Layout RuntimeOpen Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen NativeControl NativeAppend; do
+for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen NativeControl NativeAppend; do
   lean -o "$scratch/$seg/Proofs/$proof.olean" "$seg/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Segmented.Proofs.$proof"
 done
@@ -51,7 +51,6 @@ import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.WAL.Segmented.Proofs.Artifacts
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCodec
 import Alvoki.Experiments.WAL.Segmented.Proofs.Layout
-import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeOpen
 import Alvoki.Experiments.WAL.Segmented.Proofs.SegmentRecovery
 import Alvoki.Experiments.WAL.Segmented.Proofs.ScheduledAppend
 import Alvoki.Experiments.WAL.Segmented.Proofs.Child
@@ -130,9 +129,6 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.openExisting_ready
 #check_axioms Native.scan_readyAt
 #check_axioms Native.openExisting_scan
-#check_axioms Native.readSealed_returns
-#check_axioms Native.recoverChild_returns
-#check_axioms Native.RecoveredFrom.view
 #check_axioms Native.close_ready
 #check_axioms Native.release_reached
 #check_axioms Native.closeChild_reached

@@ -1,4 +1,4 @@
-import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeOpen
+import Alvoki.Experiments.WAL.Segmented.Proofs.Layout
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeRootIO
 import Alvoki.Experiments.WAL.Segmented.Proofs.Writeback
 
