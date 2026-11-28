@@ -99,12 +99,26 @@ theorem recovery_progress
     (catalog : namespaceState.Represents middle.2 (selected middle.2).tables)
     (openKeeps : ∀ checked view, (ops).reopenWal middle = .ok view checked →
       (tns).Keeps middle checked (selected middle.2).tables)
+    (walKeepsManifest : ∀ checked view, (ops).reopenWal middle = .ok view checked →
+      blob.image checked = blob.image middle)
+    (checkKeepsStorage : ∀ state id next, (ops).tables.check id state = .ok () next →
+      blob.image next = blob.image state ∧
+        wal.phase next = wal.phase state ∧ wal.diskState next = wal.diskState state)
     (tablePrimitives : ∀ state id rows, id ∈ (selected before).version.tables →
       (tns).Bound state id rows → NativeTableReads.HealthySource tns state id (reads.world state)) :
     ∃ session after, recover ops (Phase.opening, before) = .ok session after ∧
-      Installed session (selected after.2) history := by
+      Installed session (selected after.2) history ∧
+      namespaceState.Represents after.2 (selected after.2).tables ∧
+      (blob.image after).Stable (L0Manifest.encode (selected after.2).version) ∧
+      ∃ store walSession, wal.phase after = .ready store walSession ∧
+        store.activeId = walSession.control.active ∧
+        WalRecoverySlice.Segmented.Model.Installed walSession (wal.diskState after).disk ∧
+        walSession.view = (selected after.2).view := by
   obtain ⟨checked, opened, _⟩ :=
     wal.reopenHealthy middle binding rootOK childrenOK closeOK unlockOK representable
+  have walReached := wal.reopenReached middle
+  rw [opened] at walReached
+  obtain ⟨_, _, store, walSession, walPhase, active, walInstalled, walView, _⟩ := walReached
   have healthyManifest := blob.reopenHealthy (Phase.opening, before) readActive openDirectory syncDirectory
   have manifest : (ops).manifest.reopen (Phase.opening, before) = .ok (selected before).version middle :=
     middleInstalled.symm ▸ healthyManifest.1
@@ -122,9 +136,12 @@ theorem recovery_progress
   have healthy (ids : List UInt64) (included : ∀ id, id ∈ ids → id ∈ (selected before).version.tables)
       (state : Phase W × S) (same : selected state.2 = selected before)
       (catalog : (tns).Represents state (selected before).tables) :
-      ∃ after, checkTables (ops).tables ids state = .ok () after := by
+      ∃ after, checkTables (ops).tables ids state = .ok () after ∧
+        selected after.2 = selected before ∧
+        (tns).Represents after (selected before).tables ∧ blob.image after = blob.image state ∧
+        wal.phase after = wal.phase state ∧ wal.diskState after = wal.diskState state := by
     induction ids generalizing state with
-    | nil => exact ⟨state, rfl⟩
+    | nil => exact ⟨state, rfl, same, catalog, rfl, rfl, rfl⟩
     | cons id ids ih =>
       have member := included id (by simp)
       obtain ⟨rows, bound⟩ := durable.boundTable id member
@@ -136,14 +153,26 @@ theorem recovery_progress
       have kept : (tns).Represents next (selected before).tables := by
         apply catalog.frame
         simpa [Function.comp_apply, same] using keeps
-      obtain ⟨after, rest⟩ :=
+      obtain ⟨after, rest, selectedAfter, catalogAfter, imageAfter, phaseAfter, diskAfter⟩ :=
         ih (fun key member => included key (List.mem_cons_of_mem _ member))
           next (nextSelected.trans same) kept
-      exact ⟨after, by simp [checkTables, Bind.bind, EStateM.bind, first, rest]⟩
-  obtain ⟨after, tables⟩ := healthy (selected before).version.tables (fun _ member => member) checked
+      obtain ⟨imageFrame, phaseFrame, diskFrame⟩ := checkKeepsStorage state id next first
+      exact ⟨after, by simp [checkTables, Bind.bind, EStateM.bind, first, rest],
+        selectedAfter, catalogAfter, imageAfter.trans imageFrame, phaseAfter.trans phaseFrame, diskAfter.trans diskFrame⟩
+  obtain ⟨after, tables, selectedAfter, catalogAfter, imageAfter, phaseAfter, diskAfter⟩ := healthy (selected before).version.tables (fun _ member => member) checked
     selectedChecked boundCatalog
   obtain ⟨session, ran, ready⟩ := recover_progress (s := (Phase.opening, before)) evidence.effects durable manifest opened tables
-  exact ⟨session, after, ran, ready⟩
+  refine ⟨session, after, ran, ready, ?_, ?_, ?_⟩
+  · rw [selectedAfter]
+    exact catalogAfter
+  · rw [selectedAfter, imageAfter, walKeepsManifest _ _ opened, middleInstalled]
+    exact healthyManifest.2
+  · refine ⟨store, walSession, phaseAfter.trans walPhase, active, ?_, ?_⟩
+    · rw [diskAfter]
+      exact walInstalled
+    · have middleSelected : selected middle.2 = selected before := manifestEffect.2
+      rw [selectedAfter, ← middleSelected]
+      exact walView
 
 /-- Failed recovery records only an offline client step. Phase cleanup
 detaches the handle even when closing the WAL or releasing the lock fails. -/
