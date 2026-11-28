@@ -1,4 +1,5 @@
 import Alvoki.Experiments.SSTable.UnifiedNative
+import Alvoki.Experiments.SSTable.Proofs.BuilderRelation
 import Alvoki.Experiments.SSTable.Proofs.UnifiedBuilder
 
 namespace ImmutableSSTable.Unified
@@ -181,153 +182,21 @@ private structure SinkSimulation {handle inode : Type}
   append : ∀ bytes, Simulates observe bound bound (sink.write bytes) (modelSink.write bytes)
   flush : Simulates observe bound ready sink.flush modelSink.flush
 
-private def nativeWriter (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
-    (sink : Sink (EStateM ε σ)) : Writer (EStateM ε σ) ε :=
-  ⟨crc, layout, sink, invalid, options⟩
-
-private theorem writePacket_sim (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
-    {sink : Sink (EStateM ε σ)} {bound ready : σ → Prop}
-    (agreement : SinkSimulation observe sink bound ready) (kind : UInt64) (offset : Nat) (body : ByteArray) :
-    Simulates observe bound bound ((nativeWriter invalid crc layout options sink).writePacket kind offset body)
-      ((modelWriter crc layout options).writePacket kind offset body) := by
-  by_cases packet : body.size + checksumSize ≤ maxRowSize
-  · by_cases file : offset + (body.size + checksumSize) + footerPacketSize ≤ maxFileSize
-    · simp only [Writer.writePacket, packet, file, ↓reduceIte, nativeWriter, modelWriter]
-      exact (agreement.append _).bind (fun _ => .pure _)
-    · simp only [Writer.writePacket, packet, file, ↓reduceIte, nativeWriter, modelWriter]
-      intro before after value initial run
-      cases run
-  · simp only [Writer.writePacket, packet, ↓reduceIte, nativeWriter, modelWriter]
-    intro before after value initial run
-    cases run
-
-private theorem flushLeaf_sim (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
-    {sink : Sink (EStateM ε σ)} {bound ready : σ → Prop}
-    (agreement : SinkSimulation observe sink bound ready) (state : BuilderState) :
-    Simulates observe bound bound ((nativeWriter invalid crc layout options sink).flushLeaf state)
-      ((modelWriter crc layout options).flushLeaf state) := by
-  cases head : state.leaf[0]? with
-  | none => simpa only [Writer.flushLeaf, head] using (Simulates.pure (condition := bound) state)
-  | some first =>
-    cases tail : state.leaf.back? with
-    | none =>
-      simpa only [Writer.flushLeaf, head, tail] using (Simulates.pure (condition := bound) state)
-    | some last =>
-      by_cases fits : state.rootBytes + indexEntrySize last.lastKey + checksumSize ≤ maxRowSize
-      · simp only [Writer.flushLeaf, head, tail, fits, ↓reduceIte]
-        exact (writePacket_sim invalid crc layout options agreement 2 state.offset _).bind (fun _ => .pure _)
-      · simp only [Writer.flushLeaf, head, tail, fits, ↓reduceIte, nativeWriter]
-        intro before after value initial run
-        cases run
-
-private theorem flushData_sim (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
-    {sink : Sink (EStateM ε σ)} {bound ready : σ → Prop}
-    (agreement : SinkSimulation observe sink bound ready) (state : BuilderState) :
-    Simulates observe bound bound ((nativeWriter invalid crc layout options sink).flushData state)
-      ((modelWriter crc layout options).flushData state) := by
-  cases tail : state.data.back? with
-  | none => simpa only [Writer.flushData, tail] using (Simulates.pure (condition := bound) state)
-  | some last =>
-    simp only [Writer.flushData, tail,
-      show (nativeWriter invalid crc layout options sink).layout = layout from rfl,
-      show (modelWriter crc layout options).layout = layout from rfl,
-      show (nativeWriter invalid crc layout options sink).options = options from rfl,
-      show (modelWriter crc layout options).options = options from rfl]
-    apply Simulates.bind
-    · by_cases flush : (!state.leaf.isEmpty &&
-          decide (state.leafBytes + indexEntrySize last.key + checksumSize > options.leafTarget)) = true
-      · simpa only [flush, ↓reduceIte] using flushLeaf_sim invalid crc layout options agreement state
-      · simpa only [flush, Bool.false_eq_true, ↓reduceIte] using (Simulates.pure (condition := bound) state)
-    · intro current
-      exact (writePacket_sim invalid crc layout options agreement 1 current.offset _).bind (fun _ => .pure _)
-
-private theorem accept_sim (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
-    {sink : Sink (EStateM ε σ)} {bound ready : σ → Prop}
-    (agreement : SinkSimulation observe sink bound ready) (state : BuilderState) (row : Entry) :
-    Simulates observe bound bound ((nativeWriter invalid crc layout options sink).accept state row)
-      ((modelWriter crc layout options).accept state row) := by
-  have actualLayout : (nativeWriter invalid crc layout options sink).layout = layout := rfl
-  have modelLayout : (modelWriter crc layout options).layout = layout := rfl
-  have actualOptions : (nativeWriter invalid crc layout options sink).options = options := rfl
-  have modelOptions : (modelWriter crc layout options).options = options := rfl
-  cases check : state.checkRow layout row with
-  | error error =>
-    simp only [Writer.accept, actualLayout, modelLayout, check]
-    exact Simulates.throw _ _
-  | ok accepted =>
-    cases accepted
-    simp only [Writer.accept, actualLayout, modelLayout, actualOptions, modelOptions, check]
-    apply Simulates.bind
-    · by_cases flush : (!state.data.isEmpty &&
-          decide (dataSize layout (state.data.size + 1)
-            (state.payloadBytes + entrySize layout row) > options.dataTarget)) = true
-      · simpa only [flush, ↓reduceIte] using flushData_sim invalid crc layout options agreement state
-      · simpa only [flush, Bool.false_eq_true, ↓reduceIte] using (Simulates.pure (condition := bound) state)
-    · intro current
-      exact Simulates.pure _
-
-private theorem streamRows_sim (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
-    {sink : Sink (EStateM ε σ)} {bound ready : σ → Prop}
-    (agreement : SinkSimulation observe sink bound ready) (supply : EStateM ε σ (Option Entry))
-    (supplied : Simulates observe bound bound supply modelNext) (state : BuilderState) (room : Nat) :
-    Simulates observe bound bound ((nativeWriter invalid crc layout options sink).streamRows supply state room)
-      ((modelWriter crc layout options).streamRows modelNext state room) := by
-  induction room generalizing state with
-  | zero =>
-    simp only [Writer.streamRows]
-    exact supplied.bind fun option => by
-      cases option with
-      | none => exact Simulates.pure _
-      | some row =>
-        intro before after value initial run
-        cases run
-  | succ room induction =>
-    simp only [Writer.streamRows]
-    refine supplied.bind ?_
-    intro option
-    cases option with
-    | none => exact Simulates.pure _
-    | some row =>
-      exact (accept_sim invalid crc layout options agreement state row).bind
-        (fun current => induction current)
-
-private theorem finish_sim (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
-    {sink : Sink (EStateM ε σ)} {bound ready : σ → Prop}
-    (agreement : SinkSimulation observe sink bound ready) (state : BuilderState) :
-    Simulates observe bound ready ((nativeWriter invalid crc layout options sink).finish state)
-      ((modelWriter crc layout options).finish state) := by
-  simp only [Writer.finish]
-  refine (flushData_sim invalid crc layout options agreement state).bind fun afterData =>
-    (flushLeaf_sim invalid crc layout options agreement afterData).bind fun afterLeaf => ?_
-  apply Simulates.bind
-  · by_cases empty : afterLeaf.root.isEmpty = true
-    · simpa only [empty, ↓reduceIte] using
-        (Simulates.pure (condition := bound) ((0, 0) : Nat × Nat))
-    · simp only [empty]
-      exact (writePacket_sim invalid crc layout options agreement 3 afterLeaf.offset _).bind
-        (fun _ => .pure _)
-  · intro root
-    cases root
-    exact (agreement.append _).bind fun _ => agreement.flush.bind fun _ => .pure _
-
 private theorem buildStream_sim (invalid : String → ε) (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (EStateM ε σ)} {bound ready : σ → Prop}
     (agreement : SinkSimulation observe sink bound ready) (supply : EStateM ε σ (Option Entry))
     (supplied : Simulates observe bound bound supply modelNext) :
     Simulates observe bound ready (buildStream crc layout sink supply invalid options)
       (buildStream crc layout modelSink modelNext id options) := by
-  by_cases valid : layout.Valid
-  · by_cases targets : 0 < options.dataTarget ∧ options.dataTarget ≤ maxRowSize ∧
-        0 < options.leafTarget ∧ options.leafTarget ≤ maxRowSize
-    · simp only [buildStream, valid, targets, ↓reduceIte]
-      exact (streamRows_sim invalid crc layout options agreement supply supplied {} maxFileSize).bind
-        (fun current => finish_sim invalid crc layout options agreement current)
-    · simp only [buildStream, valid, targets, ↓reduceIte]
-      intro before after value initial run
-      cases run
-  · simp only [buildStream, valid, ↓reduceIte]
-    intro before after value initial run
-    cases run
+  let stage (flushed : Bool) := if flushed then ready else bound
+  let law : BuilderRelation.Rules (EStateM ε σ) ModelM invalid id :=
+    { rel := fun p q => Simulates observe (stage p) (stage q)
+      ret := Simulates.pure
+      seq := Simulates.bind
+      raise := fun e => Simulates.throw (invalid e) _
+      abort := fun _ _ _ _ _ _ _ ran => by cases ran }
+  exact BuilderRelation.stream crc layout options (law := law)
+    ⟨agreement.append, agreement.flush⟩ supply modelNext supplied
 
 /-- Cleanup cannot turn a failed write or sync into success. It starts from
 the reached state and keeps the primary error even if removal also fails. -/

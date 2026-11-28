@@ -850,6 +850,21 @@ def nativeReopenOps (root : FilePath) (r : RootReports)
     removeSegment := rootRemove root r
     openSegment := nativeChildRead root r childReports }
 
+/-- The model reports read the presence and member listing of exactly this
+successor. Its unlink reports are indexed by this original attempt clock. -/
+theorem nativeRemove_schedule (root : FilePath) (r : RootReports) (id : Nat) (s : State) :
+    ((nativeReopenOps root r (fun _ _ => {})).removeSegment id).run s =
+      (Native.removeSegmentWith (m := M)
+        (fun _ t => read none (match r.presenceFault s.step id with
+          | some cause => .error cause | none => .ok (decide (id ∈ s.disk.liveNames))) t)
+        (fun _ t => read none (r.members s.step id) t) _root_.id
+        (fun path t => read (r.unlinkFault s.step path) (.ok ()) t)
+        (fun _ t => namespaceChange (r.rmdir s.step id) (fun d p => d.remove id p) t)
+        root id).run s := by
+  unfold nativeReopenOps
+  change rootRemove root r id s = _
+  simp [rootRemove, rootPresent, Native.removeSegmentWith]
+
 theorem nativeRemove_framesEntry (root : FilePath) (r : RootReports) (id : Nat) :
     FramesEntry ((nativeReopenOps root r (fun _ _ => {})).removeSegment id) := by
   intro s

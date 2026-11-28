@@ -234,3 +234,27 @@ theorem ReadyLayout.rotate {control history before after} (ready : ReadyLayout c
     rwa [segmentHistory_next_empty ready.layout.upper]
 
 end WalRecoverySlice.Segmented
+
+namespace WalRecoverySlice.Segmented
+
+/-- With no uncertain request, a selectable control can only describe one
+history length. A pending append would also admit the one-batch extension. -/
+theorem RecoveryChoice.known {known : Contract.View} {control : Control} (choice : RecoveryChoice known none control disk) :
+    ∃ history, Readable control history none disk ∧ historyView control history = known := by
+  obtain ⟨history, pending, readable, permits⟩ := choice
+  have fixed (h) (ok : WalRecoverySlice.Contract.Permitted history pending h) :
+      historyView control h = known := by
+    rcases permits h ok with eq | impossible
+    · exact eq
+    · cases impossible
+  have first := fixed history (.inl rfl)
+  cases pending with
+  | none => exact ⟨history, readable, first⟩
+  | some batch =>
+    have second := fixed (history ++ [batch]) (.inr rfl)
+    have lengths := congrArg Contract.View.tail (first.trans second.symm)
+    have covered := readable.layout.discardedFits
+    rw [historyView_tail covered, historyView_tail (by simp; omega)] at lengths
+    simp at lengths
+
+end WalRecoverySlice.Segmented

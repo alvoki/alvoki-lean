@@ -8,27 +8,32 @@ namespace WalRecoverySlice.Segmented.Native
 open System
 
 @[extern "alvoki_fsync"]
-private opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
+opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_wal_unbuffered"]
-private opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
+opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_read_dir_checked"]
-private opaque entries (path : @& FilePath) : IO (Array IO.FS.DirEntry)
+opaque entries (path : @& FilePath) : IO (Array IO.FS.DirEntry)
 
-private def metadata? (path : FilePath) : IO (Option IO.FS.Metadata) := do
-  try return some (← path.symlinkMetadata) catch
-    | .noFileOrDirectory .. => return none
+def metadata? (path : FilePath) : IO (Option IO.FS.Metadata) :=
+  tryCatchThe IO.Error (some <$> path.symlinkMetadata) fun
+    | .noFileOrDirectory .. => pure none
     | err => throw err
 
-private def regular (path : FilePath) (md : IO.FS.Metadata) : IO Unit := do
+def regular (path : FilePath) (md : IO.FS.Metadata) : IO Unit := do
   unless md.type == .file && md.numLinks == 1 do
     throw <| IO.userError s!"expected singly linked regular file at {path}"
 
-private def removeRegular (path : FilePath) : IO Unit := do
-  if let some md ← metadata? path then
-    regular path md
-    IO.FS.removeFile path
+@[inline] abbrev removeRegularWith [Monad m]
+    (stat : FilePath → m (Option IO.FS.Metadata)) (check : FilePath → IO.FS.Metadata → m Unit)
+    (unlink : FilePath → m Unit) (path : FilePath) : m Unit := do
+  if let some md ← stat path then
+    check path md
+    unlink path
+
+def removeRegular (path : FilePath) : IO Unit :=
+  removeRegularWith metadata? regular IO.FS.removeFile path
 
 def segmentName (id : Nat) : String := "segment-" ++ id.repr
 
@@ -36,17 +41,22 @@ def segmentPath (root : FilePath) (id : Nat) := root / segmentName id
 
 def policyStamp (p : Policy) := if p == .boundary then "v3 boundary" else "v3 log"
 
-private def childName (name : String) : Bool :=
+def childName (name : String) : Bool :=
   ["lock", "policy", "segment", "commit.0", "commit.1"].contains name
 
-private def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) := do
-  unless (← dir.symlinkMetadata).type == .dir do throw <| IO.userError s!"expected segment directory at {dir}"
-  let names ← entries dir
+@[inline] abbrev inspectChildWith [Monad m] [MonadExceptOf IO.Error m]
+    (stat : FilePath → m IO.FS.Metadata) (list : FilePath → m (Array IO.FS.DirEntry))
+    (check : FilePath → IO.FS.Metadata → m Unit) (dir : FilePath) : m (Array IO.FS.DirEntry) := do
+  unless (← stat dir).type == .dir do throw <| IO.userError s!"expected segment directory at {dir}"
+  let names ← list dir
   for item in names do
     let path := dir / item.fileName
     unless childName item.fileName do throw <| IO.userError s!"unexpected child {path}"
-    regular path (← path.symlinkMetadata)
+    check path (← stat path)
   return names
+
+def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) :=
+  inspectChildWith FilePath.symlinkMetadata entries regular dir
 
 /-- Reclaim only recognized names after the shared protocol has established
 the ID is retired or was never published. A partial deletion is retryable. -/
@@ -59,7 +69,7 @@ the ID is retired or was never published. A partial deletion is retryable. -/
     members.forM fun item => unlink (dir / name item)
     rmdir dir
 
-private def removeSegment (root : FilePath) (id : Nat) : IO Unit :=
+def removeSegment (root : FilePath) (id : Nat) : IO Unit :=
   removeSegmentWith (fun dir => return (← metadata? dir).isSome)
     inspectChild (·.fileName) IO.FS.removeFile IO.FS.removeDir root id
 
@@ -75,19 +85,19 @@ private abbrev FileM := ExceptT String IO
   let granted ← tryLock lock
   if granted then pure lock else throw "segmented WAL already open"
 
-private def checked (a : FileM α) : IO α := do
+def checked (a : FileM α) : IO α := do
   match ← a.run with
   | .ok x => return x
   | .error e => throw <| IO.userError e
 
-private def acquireRoot (root : FilePath) : IO IO.FS.Handle :=
+def acquireRoot (root : FilePath) : IO IO.FS.Handle :=
   checked <| acquireRootWith
     (fun path => do
       let md ← metadata? path
       return md.map fun item => item.type == .file && item.numLinks == 1)
     (fun path mode => IO.FS.Handle.mk path mode) (fun handle => handle.tryLock) root
 
-private structure Store where
+structure Store where private mk ::
   root : FilePath
   lock : IO.FS.Handle
   directory : IO.FS.Handle
@@ -97,7 +107,7 @@ private structure Store where
     (close : child → m Unit) : m Unit := do
   if let some (_, child) ← take then close child
 
-private def Store.closeChild (s : Store) : IO Unit :=
+def Store.closeChild (s : Store) : IO Unit :=
   closeChildWith (s.active.swap none) SingleFile.close
 
 /-- A reported cleanup error never replaces the operation's primary error. -/
@@ -112,7 +122,7 @@ private def Store.closeChild (s : Store) : IO Unit :=
   cleanupOnError (error := error) closeChild unlock
   unlock
 
-private def Store.release (s : Store) : IO Unit := do
+def Store.release (s : Store) : IO Unit := do
   releaseWith (error := IO.Error) s.closeChild s.lock.unlock
 
 /-- Only an unpublished successor can already occupy this ID after an
@@ -125,7 +135,7 @@ interrupted rotation. Creation and the returned child use the same path. -/
   mkdir dir
   create dir p
 
-private def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle :=
+def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle :=
   prepareChildWith (removeSegment s.root) IO.FS.createDir SingleFile.create s.root p id
 
 @[inline] def registerPreparedWith [Monad m] (prepare : m child)
@@ -151,7 +161,7 @@ def requiredChildNames (p : Policy) : List String :=
       (← readPolicy (dir / "policy")) == expected do
     throw s!"segment policy mismatch at {id}"
 
-private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
+def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
   let dir := segmentPath s.root id
   checked <| validateChildWith
     (fun path => do return (← inspectChild path).map (·.fileName))
@@ -168,7 +178,7 @@ private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFi
   close child
   return batches
 
-private def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
+def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
   readSealedChildWith (error := IO.Error) (s.acquireChild p id) SingleFile.scan SingleFile.close
 
 /-- Transfer the child to the caller on success. Release it on a reported
@@ -191,7 +201,7 @@ def collectId (ids : List Nat) (name : String) : Except String (List Nat) :=
 @[inline] def listedIds (name : entry → String) (items : Array entry) : Except String (List Nat) :=
   items.foldlM (fun ids item => collectId ids (name item)) []
 
-private def Store.listIds (s : Store) : FileM (List Nat) := do
+def Store.listIds (s : Store) : FileM (List Nat) := do
   match listedIds (·.fileName) (← entries s.root) with
   | .ok ids => return ids
   | .error err => throw err
@@ -210,7 +220,7 @@ read of the same protected path. Its decode and checks are shared. -/
     | throw "invalid segmented WAL control"
   return control
 
-private def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
+def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
   let md ← path.symlinkMetadata
   return (md.type == .file && md.numLinks == 1, md.byteSize.toNat)
 
@@ -255,7 +265,7 @@ private def controlPrimitives : ControlPrimitives FileM IO.FS.Handle IO.FS.Handl
   rename stage active := liftM (IO.FS.rename stage active)
   syncDirectory directory := liftM (syncHandle directory)
 
-private def Store.callbacks (s : Store) : Ops FileM where
+def Store.callbacks (s : Store) : Ops FileM where
   prepareSegment p id := s.prepare p id
   syncRoot := syncRootWith (fun directory => liftM (syncHandle directory)) s.directory
   publishControl := publishControlWith controlPrimitives s.root s.directory
@@ -267,6 +277,45 @@ private def Store.callbacks (s : Store) : Ops FileM where
     SingleFile.append child batch
   listSegments := s.listIds
   removeSegment id := removeSegment s.root id
+
+/-- The native CONTROL transaction in IO. Its writer and held directory
+are the exact descriptions passed to the two different barriers. -/
+def Store.stageControl (s : Store) (c : Control) : IO IO.FS.Handle := do
+  let path := s.root / "CONTROL.next"
+  removeRegular path
+  let h ← IO.FS.Handle.mk path .writeNew
+  disableBuffering h
+  h.write (ControlCodec.encode c)
+  h.flush
+  return h
+
+private theorem checkedLift (a : IO α) : checked (liftM a) = a := by
+  funext w
+  have lifted : (liftM a : FileM α).run = (do return (Except.ok (← a) : Except String α) : IO _) := rfl
+  unfold checked
+  rw [lifted]
+  cases ran : a w <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
+private theorem checkedPure (x : α) : checked (pure x) = pure x := rfl
+
+private theorem checkedBind (a : FileM α) (f : α → FileM β) :
+    checked (a >>= f) = (checked a >>= fun x => checked (f x)) := by
+  funext w
+  unfold checked
+  rw [ExceptT.run_bind]
+  cases first : a.run w with
+  | error => simp [Bind.bind, instMonadEIO._aux_13, EST.bind, first]
+  | ok r t => cases r <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, first,
+      Pure.pure, instMonadEIO._aux_5, EST.pure, throw, throwThe, MonadExceptOf.throw,
+      instMonadExceptOfEIO._aux_1, EST.throw]
+
+theorem Store.publishControl_io (s : Store) (c : Control) (active : c.active ≤ ControlCodec.wordMax)
+    (discarded : c.discarded ≤ ControlCodec.wordMax) :
+    checked (s.callbacks.publishControl c) =
+      DurableBlob.publishWith (s.stageControl c) syncHandle
+        (IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")) (syncHandle s.directory) := by
+  simp [Store.callbacks, publishControlWith, controlPrimitives, DurableBlob.publishWith,
+    active, discarded, Store.stageControl, checkedBind, checkedLift, checkedPure]
 
 inductive Phase (store : Type) where
   | ready (owned : store) (session : Session)
@@ -301,7 +350,7 @@ structure Handle where private mk ::
   let lock ← lockRoot root
   allocate root directory lock
 
-private def acquireStore (dir : FilePath) : IO Store :=
+def acquireStore (dir : FilePath) : IO Store :=
   acquireStoreWith IO.FS.realPath IO.FS.Handle.mk acquireRoot (fun root directory lock => do
     let active ← IO.mkRef none
     return {root, directory, lock, active}) dir
@@ -318,6 +367,14 @@ private def acquireStore (dir : FilePath) : IO Store :=
   let owned ← storeActive (some (session.control.active, child))
   return .ready owned session
 
+def Store.recoverChild (store : Store) : IO (Session × SingleFile.Handle) :=
+  checked <| Segmented.reopenWith store.callbacks
+    (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
+      (store.acquireChild policy id) SingleFile.close (fun child => do
+        let batches ← SingleFile.scan child
+        checked (resume child batches)))
+    (fun session child => pure (session, child))
+
 /-- Check the acquired root before touching its initial child or CONTROL. -/
 @[inline] def createPhaseWith [Monad m] [MonadExceptOf error m]
     (invalid : String → error) (entries : FilePath → m (Array IO.FS.DirEntry))
@@ -332,13 +389,7 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handl
       createPhaseWith IO.userError entries store.root store
         (checked (Segmented.create store.callbacks policy cap))
     | none =>
-      let recovery := checked <| Segmented.reopenWith store.callbacks
-        (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
-          (store.acquireChild policy id) SingleFile.close (fun child => do
-            let batches ← SingleFile.scan child
-            checked (resume child batches)))
-        (fun session child => pure (session, child))
-      installReopenedWith recovery fun entry => do
+      installReopenedWith store.recoverChild fun entry => do
         store.active.set entry
         return store
 
@@ -404,13 +455,16 @@ before preparation. The successor goes into the store only on success. -/
   let next ← update
   return next.tailPosition
 
+/-- Operations on the store already selected by the public phase read. -/
+@[inline] def Store.appendSession (store : Store) (session : Session) (batch : Bytes) : IO Session :=
+  appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
+    IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
+    (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
+    SingleFile.append store.active.set
+
 /-- Return the absolute, one-based position only after the append schedule succeeds. -/
 def append (h : Handle) (batch : Bytes) : IO Nat :=
-  appendPositionWith <| update h fun store session =>
-    liftM <| appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
-      IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
-      (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
-      SingleFile.append store.active.set
+  appendPositionWith <| update h fun store session => liftM (store.appendSession session batch)
 
 def discardThrough (h : Handle) (k : Nat) : IO Unit := do
   let _ ← update h (fun store s => Segmented.discardThrough store.callbacks s k)
@@ -433,5 +487,414 @@ def scan (h : Handle) : IO Contract.View := h.locked do
 
 def close (h : Handle) : IO Unit := h.locked do
   closeWith h.state.swap Store.release
+
+/-- The runtime semantics of a held reference: allocation binds the value,
+a read consumes only a valid binding, and the mutex primitives frame it.
+This contract contains no WAL operation or abstract disk predicate. -/
+structure PhaseMemory where
+  holds : {α : Type} → IO.Ref α → α → Void IO.RealWorld → Prop
+  separate : {α β : Type} → IO.Ref α → IO.Ref β → Prop
+  fresh : ∀ {α β : Type} {live : IO.Ref α} {old w} (value : β),
+    holds live old w → separate ((IO.mkRef value : BaseIO (IO.Ref β)) w).val live
+  swap : ∀ {α : Type} {ref : IO.Ref α} {old w} (value : α),
+    holds ref old w → ((ref.swap value : BaseIO α) w).val = old
+  swapFrame : ∀ {α β : Type} {ref : IO.Ref α} {other : IO.Ref β} {value w} (next : α),
+    separate ref other → holds other value w → holds other value ((ref.swap next : BaseIO α) w).state
+  allocate : ∀ {α : Type} (value : α) w,
+    let r := (IO.mkRef value : BaseIO (IO.Ref α)) w
+    holds r.val value r.state
+  allocateFrame : ∀ {α β : Type} {ref : IO.Ref α} {value w} (fresh : β),
+    holds ref value w → holds ref value ((IO.mkRef fresh : BaseIO (IO.Ref β)) w).state
+  set : ∀ {α : Type} (ref : IO.Ref α) (value : α) w,
+    holds ref value ((ref.set value : BaseIO Unit) w).state
+  newMutex : ∀ {α : Type} {ref : IO.Ref α} {value w},
+    holds ref value w → holds ref value (Std.BaseMutex.new w).state
+  lock : ∀ {α : Type} {ref : IO.Ref α} {value w} (mutex : Std.BaseMutex),
+    holds ref value w → holds ref value (mutex.lock w).state
+  read : ∀ {α : Type} {ref : IO.Ref α} {value w},
+    holds ref value w →
+    let got := (ref.get : BaseIO α) w
+    got.val = value ∧ holds ref value got.state
+  readFrame : ∀ {α β : Type} {ref : IO.Ref α} {value w} (other : IO.Ref β),
+    holds ref value w → holds ref value ((other.get : BaseIO β) w).state
+  unlock : ∀ {α : Type} {ref : IO.Ref α} {value w} (mutex : Std.BaseMutex),
+    holds ref value w → holds ref value (mutex.unlock w).state
+
+/-- Concrete identities installed by the successful public open. -/
+structure Registration where
+  session : Session
+  store : Store
+  child : SingleFile.Handle
+
+/-- A fresh descriptor of this directory's lock file granted the lock on
+the world returned by its open. -/
+def RootLockFrom (dir : FilePath) (fd : IO.FS.Handle) (start : Void IO.RealWorld) : Prop :=
+  ∃ opened granted, IO.FS.Handle.mk (dir / "lock") .append start = .ok fd opened ∧
+    fd.tryLock true opened = .ok true granted
+
+def RootLockAt (dir : FilePath) (fd : IO.FS.Handle) : Prop := ∃ start, RootLockFrom dir fd start
+
+/-- Both observations start at the same public child open. The first lock
+pathname, acquired descriptor and returned handle therefore share one call. -/
+def ChildLockAt (dir : FilePath) (child : SingleFile.Handle) (fd : IO.FS.Handle) : Prop :=
+  ∃ start finish, SingleFile.openExisting dir start = .ok child finish ∧ RootLockFrom dir fd start
+
+theorem ChildLockAt.root (held : ChildLockAt dir child fd) : RootLockAt dir fd := by
+  obtain ⟨w, _, _, issued⟩ := held
+  exact ⟨w, issued⟩
+
+def LocksFrom (reg : Registration) : Prop :=
+  RootLockAt reg.store.root reg.store.lock ∧
+    ∃ fd, ChildLockAt (segmentPath reg.store.root reg.session.control.active) reg.child fd
+
+def PhaseMemory.Registered (heap : PhaseMemory) (handle : Handle) (reg : Registration)
+    (w : Void IO.RealWorld) : Prop :=
+  heap.separate handle.state reg.store.active ∧ heap.holds handle.state (.ready reg.store reg.session) w ∧
+    heap.holds reg.store.active (some (reg.session.control.active, reg.child)) w
+
+/-- The exact store and inner handle returned by recovery, slot publication
+and allocation of the public WAL handle. The worlds are those of this open. -/
+def Origin (dir : FilePath) (handle : Handle) (reg : Registration) (start finish : Void IO.RealWorld) : Prop :=
+  ∃ acquired recovered, acquireStore dir start = .ok reg.store acquired ∧
+    reg.store.recoverChild acquired = .ok (reg.session, reg.child) recovered ∧
+    let attached := (reg.store.active.set (some (reg.session.control.active, reg.child)) : BaseIO Unit) recovered
+    let cell := (IO.mkRef (.ready reg.store reg.session : Phase Store) : BaseIO _) attached.state
+    let mutex := Std.BaseMutex.new cell.state
+    handle.state = cell.val ∧ handle.mutex = mutex.val ∧ finish = mutex.state
+
+def PhaseMemory.Ready (heap : PhaseMemory) (handle : Handle) (session : Session)
+    (w : Void IO.RealWorld) : Prop :=
+  ∃ store child, heap.separate handle.state store.active ∧ heap.holds handle.state (.ready store session) w ∧
+    heap.holds store.active (some (session.control.active, child)) w
+
+theorem PhaseMemory.Registered.ready {heap : PhaseMemory} {reg : Registration} (h : heap.Registered handle reg w) : heap.Ready handle reg.session w :=
+  ⟨reg.store, reg.child, h⟩
+
+/-- The concrete recovery run that produced this session also returned the
+child stored under its active ID. The outer phase ref is allocated after
+that transfer, and the public handle uses that ref and the reached mutex. -/
+def ReturnedChild (dir : FilePath) (session : Session) (handle : Handle)
+    (start finish : Void IO.RealWorld) : Prop :=
+  ∃ store acquired child recovered,
+    acquireStore dir start = .ok store acquired ∧
+    store.recoverChild acquired = .ok (session, child) recovered ∧
+    let attached := (store.active.set (some (session.control.active, child)) : BaseIO Unit) recovered
+    let cell := (IO.mkRef (.ready store session : Phase Store) : BaseIO _) attached.state
+    let mutex := Std.BaseMutex.new cell.state
+    handle.state = cell.val ∧ handle.mutex = mutex.val ∧ finish = mutex.state
+
+private theorem base_out (a : BaseIO α) (w : Void IO.RealWorld) :
+    (liftM a : IO α) w = .ok (a w).val (a w).state := by
+  change BaseIO.toEIO a w = _
+  cases ran : a w
+  simp [BaseIO.toEIO, ran]
+
+def returnedWorld {ε α : Type} : EST.Out ε IO.RealWorld α → Void IO.RealWorld
+  | .ok _ w | .error _ w => w
+
+/-- Cut the actual public open at store acquisition, the scoped child
+recovery, active registration, phase installation and mutex allocation.
+After an inner error the release starts on the world left by recovery. -/
+theorem openExisting_run (dir : FilePath) (start : Void IO.RealWorld) :
+    openExisting dir start = match acquireStore dir start with
+      | .error e w => .error e w
+      | .ok store w => match store.recoverChild w with
+        | .error e stopped => .error e (returnedWorld (store.release stopped))
+        | .ok (session, child) recovered =>
+          let attached := (store.active.set (some (session.control.active, child)) : BaseIO Unit) recovered
+          let cell := (IO.mkRef (.ready store session : Phase Store) : BaseIO _) attached.state
+          let mutex := Std.BaseMutex.new cell.state
+          .ok ⟨cell.val, mutex.val⟩ mutex.state := by
+  cases acquired : acquireStore dir start with
+  | error e w =>
+    simp [openExisting, install, openWithStore, Bind.bind, instMonadEIO._aux_13, EST.bind, acquired]
+  | ok s w =>
+    cases recovery : s.recoverChild w with
+    | ok pair u =>
+      obtain ⟨session, child⟩ := pair
+      let attached := (s.active.set (some (session.control.active, child)) : BaseIO Unit) u
+      have wrote : (s.active.set (some (session.control.active, child)) : IO Unit) u =
+          .ok attached.val attached.state := base_out _ _
+      simp only [openExisting, install, openWithStore, installPhaseWith, installReopenedWith,
+        cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+        EST.tryCatch, Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, recovery, wrote,
+        base_out, Pure.pure, instMonadEIO._aux_5, EST.pure]
+      rfl
+    | error e stopped =>
+      cases release : s.release stopped <;>
+        simp [openExisting, install, openWithStore, installPhaseWith, installReopenedWith,
+          cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+          EST.tryCatch, Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, recovery, release,
+          returnedWorld, Pure.pure, instMonadEIO._aux_5, EST.pure, throw, throwThe,
+          MonadExceptOf.throw, instMonadExceptOfEIO._aux_1, EST.throw]
+
+theorem openExisting_ready (heap : PhaseMemory) (dir : FilePath)
+    (opened : openExisting dir start = .ok handle finish) :
+    ∃ session, ReturnedChild dir session handle start finish ∧ heap.Ready handle session finish := by
+  rw [openExisting_run] at opened
+  cases acquired : acquireStore dir start with
+  | error e u => simp [acquired] at opened
+  | ok s u =>
+    cases recovered : s.recoverChild u with
+    | error e v => simp [acquired, recovered] at opened
+    | ok pair v =>
+      obtain ⟨session, child⟩ := pair
+      simp only [acquired, recovered] at opened
+      cases opened
+      exact ⟨session, ⟨s, u, child, v, acquired, recovered, rfl, rfl, rfl⟩,
+        s, child, heap.fresh _ (heap.set _ _ _), heap.newMutex (heap.allocate _ _),
+        heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
+
+/-- Exact reached world of a ready scan, without exporting mutable handle projections. -/
+def scanWorld (handle : Handle) (w : Void IO.RealWorld) : Void IO.RealWorld :=
+  let locked := (handle.mutex.lock w).state
+  let got := ((handle.state.get : BaseIO (Phase Store)) locked).state
+  (handle.mutex.unlock got).state
+
+theorem scan_ready_world (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    scan handle w = .ok session.view (scanWorld handle w) ∧
+      heap.Ready handle session (scanWorld handle w) := by
+  obtain ⟨store, child, disjoint, owns, ownsChild⟩ := ready
+  let locked := handle.mutex.lock w
+  let got := (handle.state.get : BaseIO (Phase Store)) locked.state
+  let released := handle.mutex.unlock got.state
+  obtain ⟨value, stillHeld⟩ := heap.read (heap.lock handle.mutex owns)
+  refine ⟨?_, store, child, disjoint, heap.unlock _ stillHeld,
+    heap.unlock _ (heap.readFrame _ (heap.lock _ ownsChild))⟩
+  change got.val = .ready store session at value
+  have raw : (handle.state.get : IO (Phase Store)) locked.state =
+      .ok (.ready store session) got.state := by
+    change EST.Out.ok got.val got.state = _
+    rw [value]
+  have lockRun : (liftM handle.mutex.lock : IO Unit) w = .ok locked.val locked.state := base_out _ _
+  have unlockRun : (liftM handle.mutex.unlock : IO Unit) got.state =
+      .ok released.val released.state := base_out _ _
+  unfold scan Handle.locked
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, lockRun, tryFinally, tryFinally',
+    MonadFinally.tryFinally', instMonadFinallyEIO._aux_1, Functor.map, instMonadEIO._aux_1]
+  rw [raw]
+  have cached : checked (scanWith (.ready store session)) got.state = .ok session.view got.state := rfl
+  simp only [cached, unlockRun]
+  rfl
+
+theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    ∃ t, scan handle w = .ok session.view t ∧ heap.Ready handle session t :=
+  ⟨_, scan_ready_world heap ready⟩
+
+/-- Three local frames at the actual returning steps of this scan.
+The read concerns the handle's phase slot after acquiring its mutex. -/
+structure ScanFrames (handle : Handle) (w : Void IO.RealWorld)
+    (P : Void IO.RealWorld → Prop) : Prop where
+  lock : P w → P (handle.mutex.lock w).state
+  read : let locked := (handle.mutex.lock w).state
+    P locked → P ((handle.state.get : BaseIO (Phase Store)) locked).state
+  unlock : let locked := (handle.mutex.lock w).state
+    let got := ((handle.state.get : BaseIO (Phase Store)) locked).state
+    P got → P (handle.mutex.unlock got).state
+
+theorem scanWorld_frame (steps : ScanFrames handle w P) (start : P w) :
+    P (scanWorld handle w) := steps.unlock (steps.read (steps.lock start))
+
+/-- A reported failure comes from acquisition or the inner recovery on the
+acquired store. The outer release may change the world but keeps the error. -/
+theorem openExisting_failure (dir : FilePath)
+    (failed : openExisting dir start = .error error finish) :
+    acquireStore dir start = .error error finish ∨
+      ∃ store acquired stopped, acquireStore dir start = .ok store acquired ∧
+        store.recoverChild acquired = .error error stopped ∧
+        returnedWorld (store.release stopped) = finish := by
+  rw [openExisting_run] at failed
+  cases acquired : acquireStore dir start with
+  | error e w => exact Or.inl (by simpa [acquired] using failed)
+  | ok s u =>
+    cases recover : s.recoverChild u with
+    | error e v =>
+      simp [acquired, recover] at failed
+      obtain ⟨rfl, rfl⟩ := failed
+      exact Or.inr ⟨s, u, v, rfl, recover, rfl⟩
+    | ok pair v => cases pair; simp [acquired, recover] at failed
+
+theorem Store.release_empty (store : Store)
+    (taken : (store.active.swap none : IO _) w = .ok none t) :
+    store.release w = store.lock.unlock t := by
+  simp [Store.release, releaseWith, cleanupOnError, Store.closeChild, closeChildWith, tryCatchThe,
+    MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, Bind.bind,
+    instMonadEIO._aux_13, EST.bind, taken, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
+/-- The child close and root unlock happen on the same reached execution,
+including the unlock after a reported child error. The mutex unlock then
+runs as the finalizer of the concrete handle even if either close fails. -/
+def closeResult (child : SingleFile.Handle) (root : IO.FS.Handle) (mutex : Std.BaseMutex)
+    (taken : Void IO.RealWorld) : EST.Out IO.Error IO.RealWorld Unit :=
+  let closeResult := match SingleFile.close child taken with
+    | .ok _ u => root.unlock u
+    | .error e u => .error e (returnedWorld (root.unlock u))
+  match closeResult with
+  | .ok x v => .ok x (mutex.unlock v).state
+  | .error e v => .error e (mutex.unlock v).state
+
+private theorem locked_run (handle : Handle) (action : IO α) (w : Void IO.RealWorld) :
+    handle.locked action w =
+      match action (handle.mutex.lock w).state with
+      | .ok x t => EST.Out.ok x (handle.mutex.unlock t).state
+      | .error e t => .error e (handle.mutex.unlock t).state := by
+  unfold Handle.locked
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base_out, tryFinally,
+    tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+    Functor.map, instMonadEIO._aux_1]
+  cases action (handle.mutex.lock w).state <;> rfl
+
+/-- Expose the identity of the private phase and guard to proofs only. -/
+def Handle.Parts (h : Handle) (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) : Prop :=
+  h.state = cell ∧ h.mutex = mutex
+
+theorem Handle.parts (h : Handle) : ∃ cell mutex, h.Parts cell mutex := ⟨_, _, rfl, rfl⟩
+
+/-- The native guarded scan reads exactly one phase and releases the mutex,
+including when that phase reports an error. -/
+theorem scan_parts (h : Handle) (parts : h.Parts cell mutex) (w : Void IO.RealWorld) :
+    scan h w =
+      let phase := (cell.get : BaseIO _) (mutex.lock w).state
+      let t := (mutex.unlock phase.state).state
+      match phase.val with
+      | .ready _ s => .ok s.view t
+      | .poisoned _ => .error (IO.userError "segmented WAL requires reopen") t
+      | .closed => .error (IO.userError "segmented WAL closed") t := by
+  unfold scan
+  rw [locked_run, parts.1, parts.2]
+  let got := (cell.get : BaseIO _) (mutex.lock w).state
+  have ran : (cell.get : IO _) (mutex.lock w).state = .ok got.val got.state := rfl
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+  cases eq : got.val <;> rfl
+
+/-- On a ready handle the check, child mutation, and public reply all run
+after the same phase has been poisoned. Errors leave it poisoned. Success
+publishes the returned session before the guard releases the mutex. -/
+theorem append_ready_run {h : Handle} (parts : h.Parts cell mutex) (batch : Bytes) (w : Void IO.RealWorld)
+    (read : ((cell.get : BaseIO _) (mutex.lock w).state).val = .ready store session) :
+    append h batch w =
+      let got := (cell.get : BaseIO _) (mutex.lock w).state
+      let poisoned := ((cell.set (.poisoned store) : BaseIO Unit) got.state).state
+      match store.appendSession session batch poisoned with
+      | .error e t => .error e (mutex.unlock t).state
+      | .ok next t =>
+        let installed := ((cell.set (.ready store next) : BaseIO Unit) t).state
+        .ok next.tailPosition (mutex.unlock installed).state := by
+  obtain ⟨rfl, rfl⟩ := parts
+  let got := (h.state.get : BaseIO _) (h.mutex.lock w).state
+  let poisoned := ((h.state.set (.poisoned store) : BaseIO Unit) got.state).state
+  have readIO : (h.state.get : IO _) (h.mutex.lock w).state = .ok (.ready store session) got.state := by
+    change EST.Out.ok got.val got.state = _
+    rw [show got.val = _ from read]
+  have checkedLift {α : Type} (a : IO α) (t) : checked (liftM a) t = a t := by
+    unfold checked
+    change ((Except.ok <$> a : IO (Except String α)) >>= _) t = _
+    cases run : a t <;>
+      simp [Functor.map, instMonadEIO._aux_1, Bind.bind, instMonadEIO._aux_13, EST.bind,
+        Pure.pure, instMonadEIO._aux_5, EST.pure, run]
+  have setIO (p : Phase Store) (v) : (h.state.set p : IO Unit) v =
+      .ok () ((h.state.set p : BaseIO Unit) v).state := by
+    change EST.Out.ok ((h.state.set p : BaseIO Unit) v).val _ = _
+    rfl
+  unfold append appendPositionWith update
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, locked_run]
+  simp only [updateWith, Bind.bind, instMonadEIO._aux_13, EST.bind, readIO, setIO, checkedLift, Pure.pure, instMonadEIO._aux_5, EST.pure]
+  cases store.appendSession session batch poisoned <;> rfl
+
+/-- The child close starts on the output of the registered slot removal. -/
+def detachedWorld (wal : Handle) (reg : Registration) (w : Void IO.RealWorld) : Void IO.RealWorld :=
+  let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
+  ((reg.store.active.swap none : BaseIO _) closed.state).state
+
+/-- A segmented close removes its own store and its registered active slot.
+Only the stored directory lock and the child's actual phase lock can issue
+a file unlock, each at its particular syscall input. -/
+def CloseSites (childSite : SingleFile.Handle → Void IO.RealWorld → IO.FS.Handle → Void IO.RealWorld → Prop)
+    (wal : Handle) (reg : Registration) (w : Void IO.RealWorld) (fd : IO.FS.Handle) (t : Void IO.RealWorld) : Prop :=
+  let u := detachedWorld wal reg w
+  childSite reg.child u fd t ∨
+    (fd = reg.store.lock ∧ t = ((SingleFile.close reg.child).toBaseIO u).state)
+
+/-- The empty slot skips child close. The WAL file unlock still executes,
+and its mutex is released at the world returned by that syscall. -/
+def slotCloseResult (slot : Option (Nat × SingleFile.Handle)) (root : IO.FS.Handle) (mutex : Std.BaseMutex)
+    (taken : Void IO.RealWorld) : EST.Out IO.Error IO.RealWorld Unit :=
+  match slot with
+  | some (_, h) => closeResult h root mutex taken
+  | none => match root.unlock taken with
+    | .ok x t => .ok x (mutex.unlock t).state
+    | .error e t => .error e (mutex.unlock t).state
+
+theorem close_owned_slot (heap : PhaseMemory) {store : Store} {handle : Handle} (parts : handle.Parts cell mutex)
+    (distinct : heap.separate cell store.active) (phase : heap.holds cell old w)
+    (stored : old = .poisoned store ∨ ∃ session, old = .ready store session)
+    (registered : heap.holds store.active slot w) :
+    let locked := (mutex.lock w).state
+    let closed := (cell.swap .closed : BaseIO _) locked
+    let taken := (store.active.swap none : BaseIO _) closed.state
+    closed.val = old ∧ taken.val = slot ∧
+      close handle w = slotCloseResult slot store.lock mutex taken.state := by
+  obtain ⟨rfl, rfl⟩ := parts
+  intro locked closed taken
+  have phaseValue := heap.swap .closed (heap.lock handle.mutex phase)
+  have slotValue := heap.swap none (heap.swapFrame (w := locked) .closed distinct (heap.lock handle.mutex registered))
+  refine ⟨phaseValue, slotValue, ?_⟩
+  have removedPhase : (handle.state.swap .closed : IO _) locked = .ok old closed.state := by
+    change EST.Out.ok closed.val closed.state = _
+    rw [show closed.val = _ from phaseValue]
+  have removedChild : (store.active.swap none : IO _) closed.state = .ok slot taken.state := by
+    change EST.Out.ok taken.val taken.state = _
+    rw [show taken.val = _ from slotValue]
+  unfold close
+  rw [locked_run, show (handle.mutex.lock w).state = locked from rfl]
+  simp only [closeWith, Bind.bind, instMonadEIO._aux_13, EST.bind, removedPhase]
+  rcases stored with rfl | ⟨session, rfl⟩ <;>
+    simp only [Store.release, releaseWith, cleanupOnError, Store.closeChild, closeChildWith,
+      tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch,
+      Bind.bind, instMonadEIO._aux_13, EST.bind, removedChild, slotCloseResult]
+  all_goals
+    cases slot with
+    | none => dsimp only [Pure.pure, instMonadEIO._aux_5, EST.pure]; cases store.lock.unlock taken.state <;> rfl
+    | some pair =>
+      obtain ⟨id, child⟩ := pair
+      cases stopped : SingleFile.close child taken.state with
+      | ok x t => cases x; dsimp only [closeResult]; rw [stopped]; dsimp only; cases store.lock.unlock t <;> rfl
+      | error e t => dsimp only [closeResult]; rw [stopped]; dsimp only; cases store.lock.unlock t <;> rfl
+
+/-- The consuming close takes exactly the registered store and active child
+from its two typed heap cells. -/
+theorem close_registered (heap : PhaseMemory) {handle : Handle} {reg : Registration}
+    (held : heap.Registered handle reg w) :
+    let locked := (handle.mutex.lock w).state
+    let closed := (handle.state.swap .closed : BaseIO _) locked
+    let taken := (reg.store.active.swap none : BaseIO _) closed.state
+    closed.val = .ready reg.store reg.session ∧ taken.val = some (reg.session.control.active, reg.child) ∧
+      close handle w = closeResult reg.child reg.store.lock handle.mutex taken.state := by
+  exact close_owned_slot heap (show handle.Parts handle.state handle.mutex from ⟨rfl, rfl⟩)
+    held.1 held.2.1 (.inr ⟨_, rfl⟩) held.2.2
+
+theorem close_ready_releases (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    ∃ store child, heap.holds handle.state (.ready store session) w ∧
+      heap.holds store.active (some (session.control.active, child)) w ∧
+      let locked := (handle.mutex.lock w).state
+      let closed := (handle.state.swap .closed : BaseIO _) locked
+      let taken := (store.active.swap none : BaseIO _) closed.state
+      closed.val = .ready store session ∧ taken.val = some (session.control.active, child) ∧
+        close handle w = closeResult child store.lock handle.mutex taken.state := by
+  obtain ⟨store, child, separate, phase, slot⟩ := ready
+  refine ⟨store, child, phase, slot, ?_⟩
+  exact close_registered heap (reg := ⟨session, store, child⟩) ⟨separate, phase, slot⟩
+
+/-- Open and public scan agree on the recovered session using the original
+handle's mutex, phase cell and registered child, starting at the reached
+installation state. The byte/disk meaning of the inner recovery lives below
+ReturnedChild and is needed to identify this view with a client's history. -/
+theorem openExisting_scan (heap : PhaseMemory) (dir : FilePath)
+    (opened : openExisting dir start = .ok h installed) :
+    ∃ session t, ReturnedChild dir session h start installed ∧
+      scan h installed = .ok session.view t ∧ heap.Ready h session t := by
+  obtain ⟨session, returned, ready⟩ := openExisting_ready heap dir opened
+  obtain ⟨t, scanned, stillReady⟩ := scan_readyAt heap ready
+  exact ⟨session, t, returned, scanned, stillReady⟩
 
 end WalRecoverySlice.Segmented.Native

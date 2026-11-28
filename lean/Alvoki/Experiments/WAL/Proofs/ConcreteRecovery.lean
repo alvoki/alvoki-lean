@@ -1,0 +1,231 @@
+import Alvoki.Experiments.WAL.Proofs.NativeOpen
+
+namespace WalRecoverySlice.SingleFile.ConcreteRecovery
+open Persistence
+abbrev W := Void IO.RealWorld
+abbrev F := ExceptT String IO
+
+/-- Relate a returning Linux primitive to its persistence interpretation. A
+model interruption has no returned IO result. Reported errors may carry
+different diagnostics in the persistence interpreter. -/
+def Sim (state : W → σ → Prop) (actual : F α) (model : ExceptT String (EStateM Unit σ) β)
+    (same : α → β → Prop) : Prop :=
+  ∀ w s, state w s →
+    match actual.run w, model.run s with
+    | .ok (.ok a) t, .ok (.ok b) u => state t u ∧ same a b
+    | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => state t u
+    | _, _ => False
+
+/-- A pointwise primitive observation with separate continuations for
+returned values and errors. Each refers to both reached states. -/
+def At (a : F α) (b : ExceptT String (EStateM Unit σ) β) (w : W) (s : σ)
+    (ok : α → β → W → σ → Prop) (fail : W → σ → Prop) : Prop :=
+  match a.run w, b.run s with
+  | .ok (.ok x) t, .ok (.ok y) u => ok x y t u
+  | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => fail t u
+  | _, _ => False
+
+theorem At.bind {a : F α} {b : ExceptT String (EStateM Unit σ) β} {f : α → F γ} {g : β → ExceptT String (EStateM Unit σ) δ}
+    (first : At a b w s mid fail)
+    (next : ∀ x y t u, mid x y t u → At (f x) (g y) t u ok fail) :
+    At (a >>= f) (b >>= g) w s ok fail := by
+  unfold At at *
+  rw [ExceptT.run_bind, ExceptT.run_bind]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, EStateM.bind]
+  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at first ⊢
+  case ok.ok x t y u => cases x <;> cases y <;> first | contradiction | exact first | exact next _ _ _ _ first
+  case error.ok x t y u => cases y <;> first | contradiction | exact first
+  all_goals exact first
+
+inductive Op where
+  | readData
+  | readMarker (slot : Nat)
+  | syncData
+  | syncMarker (slot : Nat)
+  | truncate (size : Nat)
+  | append (bytes : Bytes)
+  | writeMarker (slot : Nat) (bytes : Bytes)
+
+def Op.Result : Op → Type
+  | .readData | .readMarker _ => Bytes
+  | _ => Unit
+
+def Op.eval (ops : Ops m) : (op : Op) → m op.Result
+  | .readData => ops.readData
+  | .readMarker k => ops.readMarker k
+  | .syncData => ops.syncData
+  | .syncMarker k => ops.syncMarker k
+  | .truncate n => ops.truncate n
+  | .append b => ops.append b
+  | .writeMarker k b => ops.writeMarker k b
+
+inductive Program (α : Type) where
+  | ret (a : α)
+  | stop (err : String)
+  | call (op : Op) (next : op.Result → Program α)
+
+def Program.bind (x : Program α) (f : α → Program β) : Program β :=
+  match x with
+  | .ret a => f a
+  | .stop err => .stop err
+  | .call op next => .call op (fun a => (next a).bind f)
+
+instance : Monad Program where
+  pure := Program.ret
+  bind := Program.bind
+
+def Program.catchError (p : Program α) (f : String → Program α) : Program α :=
+  match p with
+  | .ret v => .ret v
+  | .stop err => f err
+  | .call op next => .call op fun x => (next x).catchError f
+
+instance : MonadExceptOf String Program where
+  throw := Program.stop
+  tryCatch := Program.catchError
+
+def programOps : Ops Program where
+  readData := .call .readData .ret
+  readMarker k := .call (.readMarker k) .ret
+  syncData := .call .syncData .ret
+  syncMarker k := .call (.syncMarker k) .ret
+  truncate n := .call (.truncate n) .ret
+  append b := .call (.append b) .ret
+  writeMarker k b := .call (.writeMarker k b) .ret
+
+def Program.eval [Monad m] [MonadExceptOf String m] (ops : Ops m) : Program α → m α
+  | .ret a => pure a
+  | .stop err => throw err
+  | .call op next => op.eval ops >>= fun x => (next x).eval ops
+
+/-- The evaluator follows the very same generic decoder that the executable
+and persistence instance use. -/
+theorem eval_reopen [Monad m] [MonadExceptOf String m]
+    (ops : Ops m) (p : Policy)
+    (pureBind : ∀ {α β : Type} (x : α) (f : α → m β), (pure x >>= f) = f x)
+    (throwBind : ∀ {α β : Type} (e : String) (f : α → m β), (throw e >>= f) = throw e) : (WalRecoverySlice.reopen programOps p).eval ops = WalRecoverySlice.reopen ops p := by
+  have pureLaw {α : Type} (x : α) : (pure x : Program α).eval ops = pure x := rfl
+  have throwLaw {α : Type} (e : String) : (throw e : Program α).eval ops = throw e := rfl
+  have step {β : Type} (op : Op) (f : op.Result → Program β) (g : op.Result → m β)
+      (next : ∀ v, (f v).eval ops = g v) :
+      ((Program.call op Program.ret : Program op.Result) >>= f).eval ops = (op.eval ops >>= g) := by
+    change (op.eval ops >>= fun v => (f v).eval ops) = _
+    rw [funext next]
+  have noThrow {α β : Type} (e : String) (f : α → Program β) (g : α → m β) :
+      ((throw e : Program α) >>= f).eval ops = (throw e >>= g) := by rw [throwBind]; rfl
+  have lp {α β : Type} (x : α) (f : α → Program β) : (pure x >>= f) = f x := rfl
+  unfold WalRecoverySlice.reopen
+  dsimp only
+  repeat' first
+    | exact pureLaw _
+    | exact throwLaw _
+    | exact noThrow _ _ _
+    | apply step .readData; intro v
+    | apply step (.readMarker _); intro v
+    | apply step (.syncMarker _); intro v
+    | apply step (.truncate _); intro v
+    | apply step .syncData; intro v
+    | simp only [lp, pureBind, throwBind]
+    | split
+    | rfl
+
+/-- A strict prefix of successful issued calls. Every transition carries
+the actual and model return for that exact instruction. -/
+inductive Prefix (actual : Ops F) (model : Ops M) (entry : Program α) (start : W) (initial : Image) :
+    Program α → W → Image → Prop where
+  | initial : Prefix actual model entry start initial entry start initial
+  | next {op : Op} {cont : op.Result → Program α} {x : op.Result} :
+    Prefix actual model entry start initial (.call op cont) w i →
+    (op.eval actual).run w = .ok (.ok x) t → (op.eval model).run i = .ok (.ok x) u →
+    Prefix actual model entry start initial (cont x) t u
+
+/-- The previous successful segment read remains available across marker
+barriers, which leave the segment's live bytes unchanged. -/
+def Op.observed (old : Option Bytes) : (op : Op) → op.Result → Option Bytes
+  | .readData, bytes => some bytes
+  | .syncMarker _, _ => old
+  | _, _ => none
+
+def Op.shrinks (old : Option Bytes) : Op → Prop
+  | .truncate n => ∃ bytes, old = some bytes ∧ n < bytes.length
+  | _ => True
+
+def Program.shrinks (old : Option Bytes) : Program α → Prop
+  | .ret _ | .stop _ => True
+  | .call op next => op.shrinks old ∧ ∀ x, (next x).shrinks (op.observed old x)
+
+theorem reopen_shrinks (p : Policy) : (WalRecoverySlice.reopen programOps p).shrinks none := by
+  unfold WalRecoverySlice.reopen
+  dsimp only
+  repeat' first
+    | exact trivial
+    | exact ⟨_, rfl, by assumption⟩
+    | constructor
+    | intro v
+    | simp only [programOps, Bind.bind, Program.bind, Pure.pure,
+        Op.observed, throw]
+    | split
+
+def Observed (actual : Ops F) (i : Image) : Option Bytes → Prop
+  | none => True
+  | some bytes => (∃ w t, actual.readData.run w = .ok (.ok bytes) t) ∧
+    i.data.live = bytes ∧ bytes.length ≤ USize.size / 2
+
+/-- At an issued truncate the new offset is below the live extent reported
+by that same reader and fits the scalar Nat representation checked by the Linux adapter. -/
+def Op.legal (actual : Ops F) (i : Image) : Op → Prop
+  | .truncate n => ∃ bytes, (∃ w t, actual.readData.run w = .ok (.ok bytes) t) ∧
+    i.data.live = bytes ∧ n < bytes.length ∧ n < USize.size / 2
+  | _ => True
+
+structure ReadModel (model : Ops M) : Prop where
+  read : ∀ i bytes u, model.readData.run i = .ok (.ok bytes) u → u.data.live = bytes
+  marker : ∀ slot i x u, (model.syncMarker slot).run i = .ok (.ok x) u → u.data.live = i.data.live
+
+structure RecoveryOps (R : W → Image → Prop) (actual : Ops F) (model : Ops M)
+    (p : Policy) (start : W) (initial : Image) : Prop where
+  readSize : ∀ next w i bytes t,
+    Prefix actual model (WalRecoverySlice.reopen programOps p) start initial (.call .readData next) w i →
+    actual.readData.run w = .ok (.ok bytes) t → bytes.length ≤ USize.size / 2
+  issue : ∀ (op : Op) (next : op.Result → Program Decoded) w i,
+    Prefix actual model (WalRecoverySlice.reopen programOps p) start initial (.call op next) w i → op.legal actual i → R w i →
+    At (op.eval actual) (op.eval model) w i (fun x y t u => R t u ∧ x = y) R
+
+private theorem interpret (steps : RecoveryOps R actual model p start initial)
+    (disk : ReadModel model) (old : Option Bytes) (prog : Program Decoded) (prior : Prefix actual model (WalRecoverySlice.reopen programOps p) start initial prog w i)
+    (shape : prog.shrinks old) (seen : Observed actual i old) (frame : R w i) : At (prog.eval actual) (prog.eval model) w i (fun x y t u => R t u ∧ x = y) R := by
+  induction prog generalizing old w i with
+  | ret => exact ⟨frame, rfl⟩
+  | stop => exact frame
+  | call op next ih =>
+    change At (_ >>= _) (_ >>= _) _ _ _ _
+    have legal : op.legal actual i := by
+      cases op <;> try exact trivial
+      obtain ⟨bytes, rfl, shrink⟩ := shape.1
+      exact ⟨bytes, seen.1, seen.2.1, shrink, Nat.lt_of_lt_of_le shrink seen.2.2⟩
+    have leaf := steps.issue op next w i prior legal frame
+    apply At.bind (mid := fun x y t u => R t u ∧ x = y ∧
+      (op.eval actual).run w = .ok (.ok x) t ∧ (op.eval model).run i = .ok (.ok x) u)
+    · unfold At at leaf ⊢
+      cases a : (op.eval actual).run w <;> cases b : (op.eval model).run i <;> simp only [a, b] at leaf ⊢
+      case ok.ok x t y u => cases x <;> cases y <;> first | exact leaf | obtain ⟨r, rfl⟩ := leaf; exact ⟨r, rfl, rfl, rfl⟩
+      case error.ok _ _ y _ => cases y <;> exact leaf
+      all_goals exact leaf
+    · rintro x _ t u ⟨r, rfl, a, b⟩
+      apply ih x _ (prior.next a b) (shape.2 x) _ r
+      cases op <;> try exact trivial
+      case readData => exact ⟨⟨w, t, a⟩, disk.read _ _ _ b, steps.readSize _ _ _ _ _ prior a⟩
+      case syncMarker slot =>
+        cases old with
+        | none => exact trivial
+        | some bytes => exact ⟨seen.1, (disk.marker slot _ _ _ b).trans seen.2.1, seen.2.2⟩
+
+theorem reopen (steps : RecoveryOps R actual model p w i) (disk : ReadModel model) (frame : R w i) :
+    At (WalRecoverySlice.reopen actual p) (WalRecoverySlice.reopen model p) w i
+      (fun x y t u => R t u ∧ x = y) R := by
+  have nativeThrow {α β : Type} (e : String) (f : α → F β) : (throw e >>= f) = throw e := rfl
+  have modelThrow {α β : Type} (e : String) (f : α → M β) : (throw e >>= f) = throw e := rfl
+  rw [← eval_reopen actual p (fun _ _ => rfl) nativeThrow, ← eval_reopen model p (fun _ _ => rfl) modelThrow]
+  exact interpret steps disk none _ .initial (reopen_shrinks p) trivial frame
+
+end WalRecoverySlice.SingleFile.ConcreteRecovery

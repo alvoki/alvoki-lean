@@ -4,7 +4,7 @@ namespace DurableBlob
 open System
 
 @[extern "alvoki_fsync"]
-private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
+opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 
 /-- The Linux adapter's primitive operations. `files` below is shared by
 the IO binding and the filesystem-effect interpreter. -/
@@ -50,5 +50,12 @@ def nativeFiles (directory : FilePath) (syncStaged : IO.FS.Handle → IO Unit) :
 The active file is initialized by the caller before the first session. -/
 def native (directory : FilePath) : Backend IO ByteArray :=
   linux.backend directory
+
+/-- Keep the actual returned directory handle in the reduction of native reopen. -/
+theorem native_reopen_schedule (directory : FilePath) :
+    (native directory).reopen = (do
+      let bytes ← IO.FS.readBinFile (directory / "BLOB")
+      (do syncHandle (← IO.FS.Handle.mk directory .read))
+      return bytes) := rfl
 
 end DurableBlob

@@ -31,7 +31,7 @@ structure AppendReports (policy : Policy) (cursor : Cursor) (batch : Bytes) wher
   torn : Option {cut : TornAppend // cut.SameExtent batch ∧
     (policy = .logOnly → cut.Detected cursor.nextSeq)} := none
 
-private def appendWorker (files : AppendFiles OpenTarget)
+def appendWorker (files : AppendFiles OpenTarget)
     (reports : AppendReports policy cursor batch) : M Cursor :=
   let primitives := appendPrimitives reports.effects (reports.torn.map Subtype.val)
   appendBatch (scheduledOps (appendOps (appendEffectsIO primitives) files) reports.writebacks)
@@ -90,7 +90,7 @@ def appendModel (reports : ∀ cursor, AppendReports policy cursor batch) (s : A
 def appendReached : AppendResult → AppendImage
   | .ok _ after | .error _ after => after
 
-private theorem activeResult (reports : ∀ cursor, AppendReports policy cursor batch)
+theorem activeResult (reports : ∀ cursor, AppendReports policy cursor batch)
     (files : AppendFiles OpenTarget) (heldLock : OpenTarget) (cursor : Cursor) (known : List Bytes) (image : Image) :
     appendModel reports ⟨image, .active heldLock files cursor known⟩ =
       match (appendWorker files (reports cursor)).run image with

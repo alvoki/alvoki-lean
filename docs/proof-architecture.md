@@ -64,13 +64,13 @@ Pass established facts directly to the next proof. The SSTable reader uses
 the writer's proved `Image`. DurableBlob carries the exact staged writer
 through to its sync, preserving the inode binding. A WAL ready session carries
 the installed active child that supplies append authority, rather than making
-the consumer reconstruct which child was opened. In the open L0 PR #5,
-`flushPublicationChoices` establishes invariants for both manifest choices
-over the same catalog and WAL. The publication branches consume those facts
-in the flush proof under the component contracts. Native end-to-end
-composition remains open.
+the consumer reconstruct which child was opened. The L0 flush proof carries the newly synced table
+and durable directory name through manifest publication. Reboot selects
+the manifest, then the existing public recovery and read consume the
+corresponding files. The [review inventory](design/l0-native-review.md)
+identifies the source of each physical and logical handoff.
 [SSTable composition](../lean/Alvoki/Experiments/SSTable/Proofs/UnifiedNativeEndToEnd.lean)
-· [L0 flush proof](https://github.com/alvoki/alvoki-lean/blob/5bb259a0838c0b02025615ebce452c2582e7648c/lean/Alvoki/Experiments/L0/Refinement.lean#L242-L306)
+· [Native L0 flush](../lean/Alvoki/Experiments/L0/NativeFlushPublic.lean)
 
 Reuse local effect contracts and monadic composition rules that preserve
 the reached state on success and failure. Prefer existing Lean

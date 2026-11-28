@@ -7,27 +7,27 @@ namespace WalRecoverySlice.SingleFile
 open System
 
 @[extern "alvoki_fsync"]
-private opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
+opaque Internal.syncHandle (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_wal_unbuffered"]
-private opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
+opaque Internal.disableBuffering (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_read_dir_checked"]
-private opaque readDirChecked (path : @& FilePath) : IO (Array IO.FS.DirEntry)
+opaque Internal.readDirChecked (path : @& FilePath) : IO (Array IO.FS.DirEntry)
 
-private def openStream (file : FilePath) (mode : IO.FS.Mode) : IO IO.FS.Handle := do
+def Internal.openStream (file : FilePath) (mode : IO.FS.Mode) : IO IO.FS.Handle := do
   let h ← IO.FS.Handle.mk file mode
-  disableBuffering h
+  Internal.disableBuffering h
   return h
 
 private abbrev FileM := ExceptT String IO
 private def encodeBytes (xs : Bytes) : ByteArray := ⟨xs.toArray⟩
 
-private def writeAndSync (file : FilePath) (bytes : ByteArray) : IO Unit := do
-  let h ← openStream file .writeNew
+def Internal.writeAndSync (file : FilePath) (bytes : ByteArray) : IO Unit := do
+  let h ← Internal.openStream file .writeNew
   h.write bytes
   h.flush
-  syncHandle h
+  Internal.syncHandle h
 
 @[extern "alvoki_wal_truncate_at"]
 private opaque truncateAt (h : @& IO.FS.Handle) (count : @& Nat) : IO Unit
@@ -39,7 +39,7 @@ structure RecoveryIO (m : Type → Type) (handle : Type) where
   truncateAt : handle → Nat → m Unit
   sync : handle → m Unit
 
-private def markerHandle [Monad m] [MonadExceptOf String m]
+def markerHandle [Monad m] [MonadExceptOf String m]
     (markers : Option (handle × handle)) (slot : Nat) : m handle := do
   let some (a, b) := markers | throw "marker unavailable"
   return if slot == 0 then a else b
@@ -59,14 +59,25 @@ private def markerHandle [Monad m] [MonadExceptOf String m]
     (policy : Policy) : m Decoded :=
   reopen (recoveryOps io data markers) policy
 
+@[extern "alvoki_wal_read_chunk"]
+opaque Internal.checkedChunk (h : @& IO.FS.Handle) (count : USize) : IO ByteArray
+
+/-- The 1024-byte loop used by Lean's handle reader, with an unfoldable
+equation so an interrupted second or later read has its own operand. -/
+def Internal.readChunks (h : IO.FS.Handle) (acc : ByteArray) : IO ByteArray := do
+  let bytes ← Internal.checkedChunk h 1024
+  if bytes.isEmpty then return acc
+  readChunks h (acc ++ bytes)
+partial_fixpoint
+
 private def readFromStart (h : IO.FS.Handle) : IO Bytes := do
   h.rewind
-  return (← h.readBinToEnd).data.toList
+  return (← Internal.readChunks h .empty).data.toList
 
-private def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
+def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
   readFromStart h := readFromStart h
   truncateAt h n := truncateAt h n
-  sync h := syncHandle h
+  sync h := Internal.syncHandle h
 
 structure AppendFiles (handle : Type) where
   writer : handle
@@ -90,18 +101,65 @@ structure AppendIO (m : Type → Type) (handle : Type) where
   readMarker _ := throw "read during append"
   truncate _ := throw "truncate during append"
 
-private def writeFlushed (h : IO.FS.Handle) (bytes : Bytes) : IO Unit := do
-  h.write (encodeBytes bytes)
-  h.flush
+@[inline] abbrev writeFlushedWith [Monad m] (write flush : m Unit) : m Unit := do
+  write
+  flush
 
-private def nativeAppend : AppendIO FileM IO.FS.Handle where
+@[inline] abbrev writeFromStartWith [Monad m] (rewind writeFlushed : m Unit) : m Unit := do
+  rewind
+  writeFlushed
+
+private def writeFlushed (h : IO.FS.Handle) (bytes : Bytes) : IO Unit :=
+  writeFlushedWith (h.write (encodeBytes bytes)) h.flush
+
+def Internal.nativeAppend : AppendIO FileM IO.FS.Handle where
   appendFlushed h bytes := writeFlushed h bytes
-  writeFromStart h bytes := do
-    h.rewind
-    writeFlushed h bytes
-  sync h := syncHandle h
+  writeFromStart h bytes := writeFromStartWith (liftM h.rewind) (liftM (writeFlushed h bytes))
+  sync h := Internal.syncHandle h
 
-private def checked (action : FileM α) : IO α := do
+/-- Erase the typed append adapter at a reached writer or marker. These
+equations expose the actual rewind, write, flush, and fsync calls. -/
+theorem Internal.append_data_run (files : AppendFiles IO.FS.Handle) (b : Bytes) :
+    ((appendOps nativeAppend files).append b).run =
+      (do files.writer.write ⟨b.toArray⟩; files.writer.flush; return .ok ()) := by
+  funext w
+  change ((fun x => (Except.ok x : Except String Unit)) <$> writeFlushed files.writer b : IO _) w = _
+  simp only [writeFlushed,writeFlushedWith, Functor.map, instMonadEIO._aux_1, Bind.bind, instMonadEIO._aux_13, EST.bind]
+  cases run : files.writer.write ⟨b.toArray⟩ w <;> simp only [encodeBytes,run]
+  rename_i t
+  cases files.writer.flush t <;> rfl
+
+theorem Internal.append_marker_run (files : AppendFiles IO.FS.Handle) (hs : files.markers = some (a,b))
+    (slot : Nat) (bytes : Bytes) :
+    let h := if slot == 0 then a else b
+    ((appendOps nativeAppend files).writeMarker slot bytes).run =
+      (do h.rewind; h.write ⟨bytes.toArray⟩; h.flush; return .ok ()) := by
+  intro h
+  have picked : markerHandle files.markers slot = (pure h : FileM _) := by simp [markerHandle,hs,h]
+  change ((markerHandle files.markers slot >>= fun file => do
+    file.rewind; writeFlushed file bytes) : FileM Unit).run = _
+  have bindPure {α β} (v : α) (k : α → FileM β) : (pure v >>= k) = k v := rfl
+  rw [picked,bindPure,ExceptT.run_bind]
+  have liftRun (act : IO Unit) : (liftM act : FileM Unit).run = (do return Except.ok (← act) : IO (Except String Unit)) := rfl
+  simp only [liftRun]
+  funext w
+  simp only [writeFlushed,writeFlushedWith,encodeBytes,Bind.bind,instMonadEIO._aux_13,EST.bind,Pure.pure,instMonadEIO._aux_5,EST.pure]
+  cases h.rewind w <;> simp only [EST.bind]
+  rename_i t
+  cases h.write ⟨bytes.toArray⟩ t <;> simp only
+  rename_i u
+  cases h.flush u <;> rfl
+
+theorem Internal.append_sync_marker_run (files : AppendFiles IO.FS.Handle) (hs : files.markers = some (a,b))
+    (slot : Nat) :
+    ((appendOps nativeAppend files).syncMarker slot).run =
+      (do syncHandle (if slot == 0 then a else b); return .ok ()) := by
+  simp only [appendOps,nativeAppend,markerHandle,hs,ExceptT.run_bind]
+  funext w
+  change ((fun x => (Except.ok x : Except String Unit)) <$> syncHandle _ : IO _) w = _
+  cases syncHandle (if slot == 0 then a else b) w <;> rfl
+
+def checked (action : FileM α) : IO α := do
   match ← action.run with
   | .ok value => return value
   | .error error => throw <| IO.userError error
@@ -219,19 +277,19 @@ structure OpenFiles (handle : Type) where
     let _ ← attempt (io.unlock lock)
     rethrow err
 
-private def nativeOpen : OpenIO FileM IO.FS.Handle where
+def nativeOpen : OpenIO FileM IO.FS.Handle where
   openFile _ path mode := IO.FS.Handle.mk path mode
-  unbuffered h := disableBuffering h
+  unbuffered h := Internal.disableBuffering h
   readPolicy path h := do
-    let bytes ← h.readBinToEnd
+    let bytes ← Internal.readChunks h .empty
     match String.fromUTF8? bytes with
     | some text => return text
     | none => throw s!"Tried to read file '{path}' containing non UTF-8 data."
   tryLock h := h.tryLock
   unlock h := h.unlock
-  sync h := syncHandle h
+  sync h := Internal.syncHandle h
 
-private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
+def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
     (markers : Option (IO.FS.Handle × IO.FS.Handle)) : FileM Decoded :=
   recoverWith nativeRecovery reader markers policy
 
@@ -240,21 +298,39 @@ private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
   let state ← newRef ready.phase
   return (state, ← newMutex)
 
-private def installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
+def Internal.installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
   let (state, mutex) ← storeReadyWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
   return ⟨ready.policy, state, mutex⟩
 
-private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
+/-- The handle contains exactly the phase cell and mutex allocated by the
+install step; proofs compare this construction without exposing raw handles
+to clients as an executable constructor. -/
+def Handle.Assembled (h : Handle) (policy : Policy)
+    (ref : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle))) (mutex : Std.BaseMutex) : Prop :=
+  h = ⟨policy, ref, mutex⟩
 
-private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
-  checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= installReady
+theorem Handle.Assembled.unique {h : Handle} (one : h.Assembled p r m) (two : h.Assembled p' r' m') :
+    p = p' ∧ r = r' ∧ m = m' := Handle.mk.inj (one.symm.trans two)
+
+theorem installReady_run (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle))
+    (w : Void IO.RealWorld) :
+    let allocated := (IO.mkRef ready.phase : BaseIO _) w
+    let guard := Std.BaseMutex.new allocated.state
+    ∃ handle, Internal.installReady ready w = .ok handle guard.state ∧
+      Handle.Assembled handle ready.policy allocated.val guard.val :=
+  ⟨_, rfl, rfl⟩
+
+def Internal.acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
+
+def Internal.install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
+  checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= Internal.installReady
 
 /-- Open a previously initialized directory, holding a nonblocking exclusive file
 lock through recovery and until close. Failure releases the lock. -/
 def openExisting (dir : FilePath) : IO Handle :=
   checked <| openExistingWith nativeOpen
     (fun action => (checked action).toBaseIO)
-    (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => installReady ready) dir
+    (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => Internal.installReady ready) dir
 
 /-- Initialize the durable contents before the single-file installation
 schedule acquires its reader, writer and marker descriptions. -/
@@ -289,9 +365,9 @@ schedule acquires its reader, writer and marker descriptions. -/
 /-- Initialize an empty caller-owned directory. Existing files are never replaced;
 an interrupted initialization is not automatically retried. -/
 def create (dir : FilePath) (policy : Policy) : IO Handle :=
-  createWith (error := IO.Error) IO.userError (acquire dir) (·.unlock)
-    (fun path => do return (← readDirChecked path).map (·.fileName))
-    writeAndSync install dir policy
+  createWith (error := IO.Error) IO.userError (Internal.acquire dir) (·.unlock)
+    (fun path => do return (← Internal.readDirChecked path).map (·.fileName))
+    Internal.writeAndSync Internal.install dir policy
 
 @[inline] def appendWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload)
     (store : Phase handle payload → m Unit)
@@ -308,7 +384,56 @@ def create (dir : FilePath) (policy : Policy) : IO Handle :=
 /-- An ACK follows the required barriers. Errors leave the shared phase poisoned. -/
 def append (h : Handle) (payload : Bytes) : IO Unit := withMutex h do
   checked (appendWith (← h.state.get) h.state.set
-    (fun files cursor => appendBatch (appendOps nativeAppend files) h.policy cursor payload) payload)
+    (fun files cursor => appendBatch (appendOps Internal.nativeAppend files) h.policy cursor payload) payload)
+
+/-- Execution of a returned public append on the exact active ref. The
+phase becomes poisoned before the first write and is reinstalled only
+after the worker's completed barriers. The mutex is released on both channels. -/
+theorem append_active_run (bound : h.Assembled policy cell mutex) (start : Void IO.RealWorld)
+    (active : ((cell.get : BaseIO _) (mutex.lock start).state).val = .active fd files cursor entries)
+    (batch : Bytes) :
+    let read := (cell.get : BaseIO _) (mutex.lock start).state
+    let began := ((cell.set (.poisoned fd) : BaseIO Unit) read.state).state
+    append h batch start =
+      match (appendBatch (appendOps Internal.nativeAppend files) policy cursor batch).run began with
+      | .error e t => .error e (mutex.unlock t).state
+      | .ok (.error err) t => .error (IO.userError err) (mutex.unlock t).state
+      | .ok (.ok next) t =>
+        let stored := ((cell.set (.active fd files next (entries ++ [batch])) : BaseIO Unit) t).state
+        .ok () (mutex.unlock stored).state := by
+  subst h
+  let h : Handle := ⟨policy, cell, mutex⟩
+  let locked := (mutex.lock start).state
+  let read := (cell.get : BaseIO _) locked
+  let began := ((cell.set (.poisoned fd) : BaseIO Unit) read.state).state
+  have withMutex_run (a : IO Unit) : withMutex h a start =
+      match a locked with
+      | .ok x t => .ok x (h.mutex.unlock t).state
+      | .error e t => .error e (h.mutex.unlock t).state := by
+    have base (a : BaseIO Unit) (w : Void IO.RealWorld) :
+        (liftM a : IO Unit) w = .ok (a w).val (a w).state := by
+      change BaseIO.toEIO a w = _
+      cases ran : a w
+      simp [BaseIO.toEIO, ran]
+    unfold withMutex
+    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base, tryFinally,
+      tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+      Functor.map, instMonadEIO._aux_1]
+    cases a (h.mutex.lock start).state <;> rfl
+  dsimp only
+  unfold append
+  rw [withMutex_run]
+  have readRun : (cell.get : IO _) locked = .ok read.val read.state := rfl
+  have poison : (cell.set (.poisoned fd) : FileM Unit).run read.state = .ok (.ok ()) began := rfl
+  change read.val = _ at active
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, readRun, active, appendWith]
+  unfold checked
+  simp only [ExceptT.bind, ExceptT.mk, ExceptT.run, ExceptT.bindCont, Bind.bind, instMonadEIO._aux_13, EST.bind] at poison ⊢
+  rw [poison]
+  simp only
+  cases issued : (appendBatch (appendOps Internal.nativeAppend files) policy cursor batch).run began with
+  | error => simp only [ExceptT.run] at issued; dsimp only [began, read, locked] at issued ⊢; simp only [EST.bind, issued]; rfl
+  | ok response t => simp only [ExceptT.run] at issued; dsimp only [began, read, locked] at issued ⊢; simp only [EST.bind, issued, ExceptT.bindCont]; cases response <;> rfl
 
 def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload) : m (List Bytes) :=
   match phase with
@@ -326,7 +451,112 @@ def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload) :
 def scan (h : Handle) : IO (List Bytes) := withMutex h do
   checked (scanWith (← h.state.get))
 
+/-- A read of the allocated, active phase under its own mutex returns the
+stored scan and preserves the actual mutex finalizer's reached world. -/
+theorem scan_active_run (bound : h.Assembled policy cell mutex) (start : Void IO.RealWorld)
+    (active : ((cell.get : BaseIO _) (mutex.lock start).state).val =
+      Phase.active lock files cursor entries) :
+    scan h start = .ok entries
+      (mutex.unlock ((cell.get : BaseIO _) (mutex.lock start).state).state).state := by
+  subst h
+  let locked := (mutex.lock start).state
+  let read := (cell.get : BaseIO _) locked
+  have readRun : (cell.get : IO _) locked = .ok read.val read.state := rfl
+  have checkedRun : checked (scanWith read.val) read.state = .ok entries read.state := by
+    change read.val = _ at active
+    rw [active]
+    rfl
+  have base (a : BaseIO Unit) (w : Void IO.RealWorld) :
+      (liftM a : IO Unit) w = .ok (a w).val (a w).state := by
+    change BaseIO.toEIO a w = _
+    cases ran : a w
+    simp [BaseIO.toEIO, ran]
+  unfold scan withMutex
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base, tryFinally,
+    tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+    Functor.map, instMonadEIO._aux_1]
+  dsimp only [locked] at readRun
+  rw [readRun]
+  simp only
+  rw [checkedRun]
+  rfl
+
 def close (h : Handle) : IO Unit := withMutex h do
   checked (closeWith (← h.state.get) h.state.set (fun lock => lock.unlock))
+
+/-- Proof-only identification of the private phase and mutex. -/
+def Handle.Binds (h : Handle) (cell : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle)))
+    (mutex : Std.BaseMutex) : Prop := h.state = cell ∧ h.mutex = mutex
+
+theorem Handle.bindings (h : Handle) : ∃ cell mutex, h.Binds cell mutex := ⟨_, _, rfl, rfl⟩
+
+/-- Public close operates on the phase under the very same mutex. A live
+child is marked closed before unlocking its description. A previously
+closed child only reports the primary error. Both paths leave the mutex. -/
+theorem close_run {h : Handle} (binding : h.Binds cell mutex) (start : Void IO.RealWorld) :
+    close h start =
+      let locked := (mutex.lock start).state
+      let read := (cell.get : BaseIO _) locked
+      let release := fun (lock : IO.FS.Handle) =>
+        lock.unlock ((cell.set .closed : BaseIO Unit) read.state).state
+      let result := match read.val with
+        | .closed => EST.Out.error (IO.userError "WAL closed") read.state
+        | .active fd _ _ _ | .poisoned fd => release fd
+      match result with
+      | .ok x t => .ok x (mutex.unlock t).state
+      | .error e t => .error e (mutex.unlock t).state := by
+  obtain ⟨rfl, rfl⟩ := binding
+  let locked := (h.mutex.lock start).state
+  let read := (h.state.get : BaseIO _) locked
+  let call := fun (p : Phase IO.FS.Handle (AppendFiles IO.FS.Handle)) =>
+    checked (closeWith p h.state.set (fun lock => lock.unlock))
+  have withMutex_run (a : IO Unit) : withMutex h a start =
+      match a locked with
+      | .ok x t => .ok x (h.mutex.unlock t).state
+      | .error e t => .error e (h.mutex.unlock t).state := by
+    have base (a : BaseIO Unit) (w : Void IO.RealWorld) :
+        (liftM a : IO Unit) w = .ok (a w).val (a w).state := by
+      change BaseIO.toEIO a w = _
+      cases ran : a w
+      simp [BaseIO.toEIO, ran]
+    unfold withMutex
+    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base, tryFinally,
+      tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+      Functor.map, instMonadEIO._aux_1]
+    cases a (h.mutex.lock start).state <;> rfl
+  unfold close
+  rw [withMutex_run]
+  have readRun : (h.state.get : IO _) locked = .ok read.val read.state := rfl
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, readRun]
+  change (match call read.val read.state with
+    | .ok x t => EST.Out.ok x (h.mutex.unlock t).state
+    | .error e t => EST.Out.error e (h.mutex.unlock t).state) = _
+  dsimp only [locked, read]
+  cases phase : (h.state.get : BaseIO _) (h.mutex.lock start).state with
+  | mk p t =>
+    cases p with
+    | closed => rfl
+    | active fd files cursor entries | poisoned fd =>
+      let after := ((h.state.set .closed : BaseIO Unit) t).state
+      have setRun : (h.state.set .closed : FileM Unit).run t = .ok (.ok ()) after := rfl
+      have finish : checked ((h.state.set .closed : FileM Unit) >>= fun _ => (liftM fd.unlock : FileM Unit)) t =
+          fd.unlock after := by
+        unfold checked
+        rw [ExceptT.run_bind]
+        simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, setRun]
+        cases u : fd.unlock after with
+        | error e v =>
+          have lifted : (liftM fd.unlock : FileM Unit).run after = .error e v := by
+            change (Except.ok <$> fd.unlock : IO (Except String Unit)) after = _
+            simp [Functor.map, instMonadEIO._aux_1, EST.bind, u]
+          rw [lifted]
+        | ok x v =>
+          have lifted : (liftM fd.unlock : FileM Unit).run after = .ok (.ok x) v := by
+            change (Except.ok <$> fd.unlock : IO (Except String Unit)) after = _
+            simp [Functor.map, instMonadEIO._aux_1, EST.bind, EST.pure, u]
+          rw [lifted]
+          rfl
+      simp only [call, closeWith]
+      rw [finish]
 
 end WalRecoverySlice.SingleFile

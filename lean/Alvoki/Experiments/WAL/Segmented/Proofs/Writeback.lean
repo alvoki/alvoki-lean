@@ -33,4 +33,67 @@ theorem Recoverable.writeback {known request disk} (recoverable : Recoverable kn
   obtain ⟨d, durable, other⟩ := recoverable.durable
   exact ⟨⟨c, live, preserve chosen⟩, ⟨d, durable, preserve other⟩⟩
 
+inductive Writebacks (initial : Disk) :
+    Disk → Prop where
+  | nil : Writebacks initial initial
+  | next : Writebacks initial middle → ∀ id file, Writebacks initial (middle.writeback id file)
+
+theorem Writebacks.trans {finish : Disk} (a : Writebacks start middle) (b : Writebacks middle finish) :
+    Writebacks start finish := by
+  induction b with
+  | nil => exact a
+  | next _ id file ih => exact .next ih id file
+
+/-- Selected files of an installed WAL child are clean after open. Whole-file
+writeback on any other segment may change its durable bytes. -/
+theorem Writebacks.readyLayout (steps : Writebacks before after) (held : ReadyLayout c history before) :
+    ReadyLayout c history after := by
+  induction steps with
+  | nil => exact held
+  | @next middle _ id file ready =>
+    refine ready.frame (after := middle.writeback id file) ready.layout.names ?_ rfl
+    intro i selects
+    by_cases hit : i = id
+    · have le := selects.2
+      rcases Nat.eq_or_lt_of_le le with eq | lt
+      · simp only [Disk.writeback, hit, ite_true]
+        simpa only [← hit, eq] using ready.active.toSettled.writeback file
+      · simpa [Disk.writeback, hit] using
+          (ready.layout.sealed i selects lt).writeback file
+    · simp [Disk.writeback, hit]
+
+theorem Writebacks.installed (steps : Writebacks before after)
+    (held : Installed child before) : Installed child after := by
+  obtain ⟨hist, eq, ready, live, durable⟩ := held
+  refine ⟨hist, eq, steps.readyLayout ready, ?_, ?_⟩
+  · induction steps <;> assumption
+  · induction steps <;> assumption
+
+theorem Writebacks.live (steps : Writebacks before after) : after.liveControl = before.liveControl := by
+  induction steps <;> first | rfl | assumption
+
+theorem Writebacks.durable (steps : Writebacks before after) : after.durableControl = before.durableControl := by
+  induction steps <;> first | rfl | assumption
+
+theorem Writebacks.readable (steps : Writebacks before after) (entry : Readable c history pending before) :
+    Readable c history pending after := by
+  induction steps with
+  | nil => exact entry
+  | next _ id file ih => exact ih.writeback id file
+
+theorem Writebacks.recoverable (steps : Writebacks before after) (entry : Recoverable known request before) :
+    Recoverable known request after := by
+  induction steps with
+  | nil => exact entry
+  | next _ id file ih => exact ih.writeback id file
+
+theorem Writebacks.settled {id : Nat} (steps : Writebacks before after)
+    (clean : Child.Settled p (before.segment id) bs) : after.segment id = before.segment id := by
+  induction steps with
+  | nil => rfl
+  | next _ other file ih =>
+    by_cases hit : id = other
+    · subst other; simpa [Disk.writeback, ih] using clean.writeback file
+    · simpa [Disk.writeback, hit] using ih
+
 end WalRecoverySlice.Segmented

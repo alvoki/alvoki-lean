@@ -62,7 +62,7 @@ theorem Run.getError (prior : Run events (some session) (selected s))
   exact frame ▸ prior
 
 theorem Run.flushObserved (prior : Run events (some session) (selected s))
-    (laws : ComponentEffects ops selected) (ran : flush ops session s = result)
+    (laws : FlushEffects ops selected) (ran : flush ops session s = result)
     (observed : FlushObservation result) :
     Run (events ++ [observed.event]) observed.session
       (selected (match result with | .ok _ after | .error _ after => after)) := by
@@ -85,7 +85,7 @@ theorem Run.flushObserved (prior : Run events (some session) (selected s))
     | error error after => exact .flushUncertain prior effect
 
 theorem Run.recoverOk (prior : Run events none (selected s))
-    (laws : ComponentEffects ops selected) (ran : recover ops s = .ok session after) :
+    (laws : RecoveryEffects ops selected) (ran : recover ops s = .ok session after) :
     Run (events ++ [.reopened]) (some session) (selected after) := by
   refine .reopened prior (fun _ durable => ?_)
   have effect := recover_refines laws s durable
@@ -93,7 +93,7 @@ theorem Run.recoverOk (prior : Run events none (selected s))
   exact effect.2
 
 theorem Run.recoverError (prior : Run events none (selected s))
-    (laws : ComponentEffects ops selected) (ran : recover ops s = .error error after) :
+    (laws : RecoveryEffects ops selected) (ran : recover ops s = .error error after) :
     Run (events ++ [.openFailed]) none (selected after) := by
   refine .openFailed prior (fun _ durable => ?_)
   have effect := recover_refines laws s durable

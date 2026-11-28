@@ -71,7 +71,7 @@ theorem Durable.replay_pending (d : Durable image history) :
 
 variable {ops : Components (StorageM σ)} {selected : σ → Selected}
 
-private theorem check_frame (laws : ComponentEffects ops selected) (ids : List UInt64) (s : σ) :
+private theorem check_frame (laws : RecoveryEffects ops selected) (ids : List UInt64) (s : σ) :
     match checkTables ops.tables ids s with
     | .ok _ after | .error _ after => selected after = selected s := by
   induction ids generalizing s with
@@ -86,7 +86,7 @@ private theorem check_frame (laws : ComponentEffects ops selected) (ids : List U
       cases rest : checkTables ops.tables ids after <;>
         simp_all [checkTables, Bind.bind, EStateM.bind]
 
-theorem recover_refines (laws : ComponentEffects ops selected) (s : σ)
+theorem recover_refines (laws : RecoveryEffects ops selected) (s : σ)
     (d : Durable (selected s) history) :
     match recover ops s with
     | .ok session after => selected after = selected s ∧ Installed session (selected after) history
@@ -124,7 +124,7 @@ theorem recover_refines (laws : ComponentEffects ops selected) (s : σ)
 
 /-- Healthy recovery has no additional rejection once the reached
 manifest, WAL and required table checks report success. -/
-theorem recover_progress (laws : ComponentEffects ops selected)
+theorem recover_progress (laws : RecoveryEffects ops selected)
     (d : Durable (selected s) history)
     (opened : ops.manifest.reopen s = .ok version middle)
     (wal : ops.reopenWal middle = .ok view checked)
@@ -143,12 +143,21 @@ theorem recover_progress (laws : ComponentEffects ops selected)
   rw [ran] at result
   exact ⟨_, ran, result.2⟩
 
-private def Durable.append (d : Durable image history) (change : Change) :
+def Durable.append (d : Durable image history) (change : Change) :
     Durable (image.append (encode change)) (history ++ [change]) := by
   refine ⟨d.flushed, d.pending ++ [change], ?_, d.base, d.boundary, ?_, d.unique,
     d.runs, d.bindings, d.covered, d.ordered⟩
   · exact (congrArg (· ++ [change]) d.split).trans (List.append_assoc ..)
   · simp [Selected.append, Contract.View.append, d.wal, List.map_append, List.append_assoc]
+
+/-- Installing the inserted memtable agrees with the single WAL batch
+that represents this mutation. Shared by the model and the native write. -/
+theorem Installed.append (prior : Installed session image history) (change : Change) :
+    Installed {session with mem := insert session.mem change} (image.append (encode change)) (history ++ [change]) := by
+  obtain ⟨d, version, mem⟩ := prior
+  exact ⟨d.append change, version, by
+    change insert session.mem change = replay (d.pending ++ [change])
+    simp [mem, replay, List.foldl_append]⟩
 
 theorem write_refines (laws : ComponentEffects ops selected) (s : σ) (session : Session)
     (prior : Installed session (selected s) history) (change : Change) :
@@ -182,9 +191,7 @@ theorem write_refines (laws : ComponentEffects ops selected) (s : σ) (session :
         rw [issued, frame] at appended
         simp [write, Bind.bind, EStateM.bind, scanned, fit, issued, Pure.pure, EStateM.pure]
         rw [appended]
-        exact ⟨extended, version, by
-          change insert session.mem change = replay (d.pending ++ [change])
-          simp [mem, replay, List.foldl_append]⟩
+        exact Installed.append ⟨d, version, mem⟩ change
     · simp [write, Bind.bind, EStateM.bind, scanned, fit]
       exact Or.inl ⟨frame ▸ d⟩
 
@@ -276,7 +283,7 @@ def flushPublicationChoices {id : UInt64} (prior : Durable before history)
   let old := prior.frame view version created.2.2
   exact ⟨old, prior.flush old id rows created.1 created.2.1 version contents ordered fits⟩
 
-theorem flush_refines (laws : ComponentEffects ops selected) (s : σ) (session : Session)
+theorem flush_refines (laws : FlushEffects ops selected) (s : σ) (session : Session)
     (prior : Installed session (selected s) history) :
     match flush ops session s with
     | .ok next after => Installed next (selected after) history
@@ -301,7 +308,7 @@ theorem flush_refines (laws : ComponentEffects ops selected) (s : σ) (session :
       cases made : ops.tables.create rows middle with
       | error error after =>
         rw [made, frame] at created
-        simp [flush, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made]
+        simp [flush, flushTableWith, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made]
         exact ⟨d.frame created.1 created.2.1 created.2.2⟩
       | ok id allocated =>
         rw [made, frame] at created
@@ -319,13 +326,13 @@ theorem flush_refines (laws : ComponentEffects ops selected) (s : σ) (session :
         cases published : ops.manifest.publish proposed allocated with
         | error error after =>
           rw [published] at issued
-          simp [flush, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal, published]
+          simp [flush, flushTableWith, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal, published]
           rcases issued with old | new
           · exact ⟨old ▸ stored⟩
           · exact ⟨new ▸ committed⟩
         | ok value after =>
           rw [published] at issued
-          simp [flush, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal,
+          simp [flush, flushTableWith, empty, Bind.bind, EStateM.bind, scanned, fit, rows, made, sameProposal,
             published, Pure.pure, EStateM.pure]
           rw [issued]
           exact ⟨committed, rfl, rfl⟩

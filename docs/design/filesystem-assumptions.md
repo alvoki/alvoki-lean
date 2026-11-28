@@ -7,13 +7,21 @@ The component models and Linux adapters separate code facts from filesystem and 
 | One writer owns a stable directory namespace for the operation. | Name checks, rename, unlink, and descriptor acquisition refer to the intended files without an unmodeled concurrent replacement. |
 | A metadata check is tied to the descriptor later used, or the owner keeps the namespace stable between check and open. | A separate `stat` and `open` can otherwise refer to different inodes or follow a replaced symlink. |
 | An existing store has an admitted initialized image, and the caller supplies a durably named parent directory. | A bootstrap implementation must derive durability of its new contents and names from the barriers it actually issues. |
-| A successful component read supplies its required live bytes. | Native reads can return short chunks. The SSTable adapter checks required extents, and whole-file adapters read through EOF or propagate a reported error. |
+| A successful component read supplies its required live bytes. | The WAL checks the stream error flag on every chunk, including positive reads, and accepts a short chunk only at EOF. The SSTable adapter checks required extents, and whole-file adapters read through EOF or propagate a reported error. |
 | Buffered writes report an explicit flush result before sync. | A close or finalizer can perform more I/O after the write call, and its failure is not evidence that the earlier write was fully flushed. |
 | Append and tail repair preserve the already synchronized prefix. | Later writes or truncation cannot silently alter acknowledged data below the repair point. |
 | File sync and parent-directory sync are separate effects. | Syncing file contents does not make a rename, unlink, or newly created name durable; sync the containing directory after namespace changes, and sync its parent when the directory's own binding must survive. |
 | A sync may take effect even when its call reports an error. | Retry must consume both possible reached states; the error itself does not identify the durable image. |
 | Directory enumeration distinguishes clean end-of-directory from an error after partial results. | A partial listing cannot safely be treated as a complete view when recovery or collection selects names from it. |
 | Process exit and power loss have different persistence outcomes. | Process exit may retain cache-visible bytes; power loss selects an admitted joint image of file contents and directory entries. |
+
+For L0, the owned manifest staging inode is separate from the active
+manifest and the protected WAL and table inodes. A directory name by
+itself cannot establish this separation if a preinstalled hard link
+aliases an existing file. Each issued table primitive preserves the
+manifest path bindings. During publication, each manifest primitive
+frames the original table names, inode contents, WAL registration and
+admitted independent writebacks.
 
 ## Persistence after reported errors
 

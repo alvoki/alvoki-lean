@@ -9,7 +9,7 @@ abbrev ActiveAppendM := ExceptT String (EStateM Unit (State × SingleFile.Append
 /-- Interpret the native child call on the actual active image and phase.
 The child keeps its phase internally. The root model retains that phase
 and updates only the reached child slot. -/
-private def writeActive (policy : Policy) (id : Nat)
+def writeActive (policy : Policy) (id : Nat)
     (reports : ∀ cursor, SingleFile.AppendReports policy cursor batch) : ActiveAppendM Unit := fun s =>
   let update (child : SingleFile.AppendImage) (cursor : Cursor) :=
     ({s.1.tick with disk := s.1.disk.setSegment id child.image cursor}, child.phase)
@@ -22,7 +22,7 @@ private def writeActive (policy : Policy) (id : Nat)
   | .ok (.error err) child => .ok (.error err) (update child (s.1.disk.cursor id))
   | .error token child => .error token (update child (s.1.disk.cursor id))
 
-private theorem writeActive_success_active (policy : Policy) (id : Nat)
+theorem writeActive_success_active (policy : Policy) (id : Nat)
     (reports : ∀ cursor, SingleFile.AppendReports policy cursor batch)
     {before after : State × SingleFile.AppendPhase}
     (ran : (writeActive policy id reports).run before = .ok (.ok ()) after) :
@@ -42,7 +42,7 @@ private theorem writeActive_success_active (policy : Policy) (id : Nat)
 
 /-- Check the payload actually passed by the shared schedule before using
 the primitive reports for that request. -/
-private def writeRequested (policy : Policy) (id : Nat)
+def writeRequested (policy : Policy) (id : Nat)
     (reports : ∀ cursor, SingleFile.AppendReports policy cursor batch)
     (actual : Bytes) : ActiveAppendM Unit :=
   if actual = batch then writeActive policy id reports else throw "wrong append payload"
@@ -82,7 +82,7 @@ private def erasePhase (result : EStateM.Result Unit (State × SingleFile.Append
   | .ok value s => .ok value s.1
   | .error token s => .error token s.1
 
-private theorem writeActive_refines (c : Control) (history : List Bytes) (batch : Bytes)
+theorem writeActive_refines (c : Control) (history : List Bytes) (batch : Bytes)
     (s : State) (entry : ReadyLayout c history s.disk)
     (live : s.disk.liveControl = some c) (durable : s.disk.durableControl = some c)
     (room : history.length < (c.active + 1) * c.capacity) (size : batch.length ≤ 32)
@@ -396,7 +396,7 @@ theorem appendActiveModel_rejected (session : Session) (id : Nat)
 
 /-- Retain the outer phase alongside the reached child and disk. Phase
 writes are reference operations and have no disk effects. -/
-private abbrev PublicAppendM :=
+abbrev PublicAppendM :=
   ExceptT String (EStateM Unit ((State × SingleFile.AppendPhase) × Native.Phase Nat))
 
 def publicAppendActiveModel
@@ -870,12 +870,12 @@ theorem publishPreparedChild (root : System.FilePath) (held : Nat) (reports : Ef
       have finalDurable : after.disk.durableControl = some next := by rw [cuts]; rfl
       exact ⟨⟨history, rfl, keepNew frame, finalLive, finalDurable⟩, rfl, keepNew frame⟩
 
-private def liftRootAction (action : M α) : ActiveAppendM α := fun s =>
+def liftRootAction (action : M α) : ActiveAppendM α := fun s =>
   match action.run s.1 with
   | .ok response after => .ok response (after, s.2)
   | .error token after => .error token (after, s.2)
 
-private def closeActive (id : Nat) (policy : Policy) (reports : SingleFile.OpenReports) :
+def closeActive (id : Nat) (policy : Policy) (reports : SingleFile.OpenReports) :
     ActiveAppendM Unit := fun s =>
   match SingleFile.closeModel policy reports s.2 {image := s.1.disk.segment id, held := true} with
   | .ok response _ => .ok response ({s.1 with activeEntry := none}, .closed)
@@ -884,15 +884,15 @@ private def closeActive (id : Nat) (policy : Policy) (reports : SingleFile.OpenR
 /-- Local identities for the two different custody sources. The append
 schedule has at most one successor acquisition. In particular a handle read
 from the store is not the result of that acquisition at the same segment ID. -/
-private inductive AppendChild where
+inductive AppendChild where
   | stored (segment : Nat)
   | acquired (segment : Nat)
   deriving DecidableEq
 
-private def AppendChild.segment : AppendChild → Nat
+def AppendChild.segment : AppendChild → Nat
   | .stored id | .acquired id => id
 
-private def acquireSuccessor (root : System.FilePath) (removal : RootReports)
+def acquireSuccessor (root : System.FilePath) (removal : RootReports)
     (reports : Effects) (create : SingleFile.CreateReports) (policy : Policy)
     (id : Nat) : ActiveAppendM AppendChild := fun s =>
   match (prepareNativeChild root removal (fun step => reports.prepare step id) create policy id).run s.1 with
@@ -903,17 +903,17 @@ private def acquireSuccessor (root : System.FilePath) (removal : RootReports)
 private def storeActiveEntry (entry : Nat × Nat) : ActiveAppendM Unit := fun s =>
   .ok (.ok ()) ({s.1 with activeEntry := some entry.1}, s.2)
 
-private def registerSuccessor (expected : Nat) (entry : Option (Nat × AppendChild)) : ActiveAppendM Unit :=
+def registerSuccessor (expected : Nat) (entry : Option (Nat × AppendChild)) : ActiveAppendM Unit :=
   if entry = some (expected, .acquired expected) then fun s =>
     match s.2 with
     | .active .. => (storeActiveEntry (expected, expected)).run s
     | _ => .ok (.error "cannot register inactive child") s
   else throw "wrong successor registration"
 
-private def readActiveEntry : ActiveAppendM (Option (Nat × AppendChild)) := fun s =>
+def readActiveEntry : ActiveAppendM (Option (Nat × AppendChild)) := fun s =>
   .ok (.ok (s.1.activeEntry.map fun id => (id, .stored id))) s
 
-private def writeAs (session : Session)
+def writeAs (session : Session)
     (reports : ∀ cursor, SingleFile.AppendReports session.control.policy cursor batch)
     (expected child : AppendChild) (payload : Bytes) : ActiveAppendM Unit :=
   if child = expected then writeRequested session.control.policy child.segment reports payload
@@ -1074,7 +1074,7 @@ theorem readyAfterPublishingSuccessor (root : System.FilePath) (held : Nat) (eff
   exact ⟨⟨sessionOf (successor session) history, rfl, count, successorReady.2.1.trans visible.symm,
     successorReady.1⟩, authority⟩
 
-private theorem noAppend_pending {disk : Disk} {known : Contract.View} {batch : Bytes}
+theorem noAppend_pending {disk : Disk} {known : Contract.View} {batch : Bytes}
     (ready : Recoverable known none disk) : Recoverable known (some (.append batch)) disk := by
   obtain ⟨⟨c, l, h, p, readable, permits⟩, ⟨d, r, h', p', saved, permits'⟩⟩ := ready
   refine ⟨⟨c, l, h, p, readable, ?_⟩, ⟨d, r, h', p', saved, ?_⟩⟩
