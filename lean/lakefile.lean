@@ -57,3 +57,16 @@ lean_lib Alvoki.Checks.Tests.SSTableProducer
 
 lean_exe immutableSSTableCheck where
   root := `Alvoki.Experiments.SSTable.UnifiedFixtures
+
+target storageBenchMetricsO pkg : FilePath := do
+  let source ← inputTextFile (pkg.dir / "native" / "storage_bench_metrics.c")
+  let includeDir ← getLeanIncludeDir
+  buildO (pkg.buildDir / "native" / "storage_bench_metrics.o") source
+    #["-I", includeDir.toString] #["-O3", "-DNDEBUG", "-fPIC", "-Wall", "-Wextra"] "cc"
+
+lean_lib StorageBenchSupport where
+  roots := #[`Alvoki.Bench.Storage.Support]
+  moreLinkObjs := #[storageBenchMetricsO]
+
+lean_exe storageBench where
+  root := `Alvoki.Bench.Storage.Components
