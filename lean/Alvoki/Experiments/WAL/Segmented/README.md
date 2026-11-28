@@ -204,12 +204,15 @@ and the admissible recovery choices, and bounds the decoded CONTROL
 fields. Linux descriptor and name bindings and primitive outcomes,
 including interruption, remain the external interpretation boundary.
 
-Append authority currently distinguishes segment IDs and canonical child
-phases. It still needs an identity for the acquired child instance and
-custody carried through reported failures to close. A temporary adapter
-mutation closed the successful successor and installed a newly opened
-handle for the same path and ID. The append proofs still compiled.
-Process interruption has no post-stop cleanup schedule.
+The append interpretation distinguishes the child read from the store
+from the child produced by the single successor acquisition in a rotation.
+Writing checks that provenance; registration also checks the reached
+child phase is active. These are proof-only identities. Reported errors
+after the request guard include the reached active slot, which is empty
+after rotation and still holds the original entry after an in-place error.
+This slot result does not yet certify the actual release of the child lock
+or connect the reached resources to public close. Process interruption
+has no post-stop cleanup schedule.
 
 Public create validates the acquired root before running bootstrap. The
 internal bootstrap theorem certifies its returned session. Its composition

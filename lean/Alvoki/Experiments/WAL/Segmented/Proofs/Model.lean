@@ -185,4 +185,38 @@ def ops (effects : Effects) : Segmented.Ops M where
   removeSegment id := fun state =>
     namespaceChange (effects.remove state.step id) (fun disk persist => disk.remove id persist) state
 
+def FramesEntry (action : M α) : Prop :=
+  ∀ s, (reached (action.run s)).activeEntry = s.activeEntry
+
+theorem framesEntry_bind {a : M α} {b : α → M β}
+    (first : FramesEntry a) (next : ∀ value, FramesEntry (b value)) : FramesEntry (a >>= b) := by
+  intro s
+  have same := first s
+  simp only [ExceptT.run, ExceptT.bind, Bind.bind, ExceptT.mk, EStateM.bind] at same ⊢
+  cases ran : a s with
+  | error => rw [ran] at same; exact same
+  | ok reply after =>
+    rw [ran] at same
+    cases reply with
+    | error => exact same
+    | ok value => exact (next value after).trans same
+
+theorem namespace_framesEntry (effect : NamespaceEffect) (changeDisk : Disk → Bool → Disk)
+    (s : State) : (reached (namespaceChange effect changeDisk s)).activeEntry = s.activeEntry := by
+  cases effect with
+  | before fault => cases fault <;> rfl
+  | after _ stop =>
+    cases stop with
+    | none => rfl
+    | some fault => cases fault <;> rfl
+
+theorem barrier_framesEntry (effect : Primitive) (changeDisk : Disk → Disk) (s : State) :
+    (reached (barrier effect changeDisk s)).activeEntry = s.activeEntry := by
+  cases effect with
+  | before fault => cases fault <;> rfl
+  | after stop =>
+    cases stop with
+    | none => rfl
+    | some fault => cases fault <;> rfl
+
 end WalRecoverySlice.Segmented.Model

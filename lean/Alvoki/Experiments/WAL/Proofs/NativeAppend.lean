@@ -109,6 +109,27 @@ private theorem activeResult (reports : ∀ cursor, AppendReports policy cursor 
     simp [storeAppendPhase, liftWorker, h, Bind.bind, ExceptT.bind, ExceptT.bindCont,
       ExceptT.run, ExceptT.mk, EStateM.bind]
 
+/-- A successful append keeps a live phase for the same handle's bindings. -/
+theorem appendModel_success_active
+    (reports : ∀ cursor, AppendReports policy cursor batch) {before after : AppendImage}
+    (ran : appendModel reports before = .ok (.ok ()) after) :
+    ∃ heldLock files cursor history, after.phase = .active heldLock files cursor history := by
+  obtain ⟨image, phase⟩ := before
+  cases phase with
+  | closed => cases ran
+  | poisoned => cases ran
+  | active heldLock files cursor history =>
+    rw [activeResult] at ran
+    cases work : (appendWorker files (reports cursor)).run image with
+    | error => rw [work] at ran; cases ran
+    | ok response reached =>
+      rw [work] at ran
+      cases response with
+      | error => cases ran
+      | ok cursor =>
+        cases ran
+        exact ⟨_, _, _, _, rfl⟩
+
 def AppendGuarantee (policy : Policy) (known : List Bytes) (batch : Bytes)
     (result : AppendResult) : Prop :=
     Dirty policy known (some batch) (appendReached result).image ∧

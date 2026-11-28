@@ -850,6 +850,51 @@ def nativeReopenOps (root : FilePath) (r : RootReports)
     removeSegment := rootRemove root r
     openSegment := nativeChildRead root r childReports }
 
+theorem nativeRemove_framesEntry (root : FilePath) (r : RootReports) (id : Nat) :
+    FramesEntry ((nativeReopenOps root r (fun _ _ => {})).removeSegment id) := by
+  intro s
+  change (reached (rootRemove root r id s)).activeEntry = s.activeEntry
+  unfold rootRemove Native.removeSegmentWith
+  apply framesEntry_bind
+  · intro t
+    simp only [↓reduceIte, ExceptT.run]
+    cases rootPresent r s id <;> rfl
+  · intro found
+    simp only
+    cases found
+    · intro _; rfl
+    · apply framesEntry_bind
+      · intro t
+        simp only [↓reduceIte, ExceptT.run]
+        cases r.members s.step id <;> rfl
+      · intro names
+        apply framesEntry_bind
+        · have loop (items : List String) :
+              FramesEntry (items.foldlM (m := M) (fun (_ : Unit) (name : String) state =>
+                read (r.unlinkFault s.step (Native.segmentPath root id / name)) (.ok ()) state) ()) := by
+            induction items with
+            | nil => intro _; rfl
+            | cons item tail ih =>
+              apply framesEntry_bind
+              · intro t
+                change (reached (read (r.unlinkFault s.step (Native.segmentPath root id / item)) (.ok ()) t)).activeEntry = t.activeEntry
+                cases r.unlinkFault s.step (Native.segmentPath root id / item) with
+                | none => rfl
+                | some fault => cases fault <;> rfl
+              · intro done
+                cases done
+                exact ih
+          intro t
+          have framed := loop names.toList t
+          have eq := Array.foldlM_toList (m := M) (xs := names) (init := ())
+            (f := fun _ (name : String) state =>
+              read (r.unlinkFault s.step (Native.segmentPath root id / name)) (.ok ()) state)
+          rw [eq] at framed
+          exact framed
+        · intro _ t
+          simp only [↓reduceIte, ExceptT.run]
+          exact namespace_framesEntry _ _ _
+
 /-- A fault-free root does not require an empty retired directory. The
 checked listing may contain any number of members. -/
 structure HealthyRoot (r : RootReports) : Prop where
