@@ -231,6 +231,31 @@ theorem interrupted (ops : Primitives dir bytes start P image stop m) (startFram
   obtain ⟨post, effect⟩ := ops.interrupted _ _ pc pre operand _ cut
   exact ⟨post, stopped saved operand effect⟩
 
+theorem Before.admits (entry : Before p old proposed img) : img.Admits old (some proposed) := by
+  cases p <;> first | exact widen entry | exact entry.2
+
+theorem Prefix.report (pc : Prefix dir bytes start p w) (ops : Primitives dir bytes start P image stop m)
+    (startFrame : P start) (reserved : m.Private dir start) (valid : (image start).Stable old) :
+    match action dir bytes p w with
+    | .ok _ t | .error _ t => P t ∧ (image t).Admits old (some bytes) := by
+  obtain ⟨pre,operand,entry⟩ := pc.state ops startFrame reserved valid
+  have receipt := ops.returned _ _ pc pre operand
+  cases ran : action dir bytes p w with
+  | error e t =>
+    rw [ran] at receipt
+    exact ⟨receipt.1,(stopped entry operand receipt.2).admits⟩
+  | ok x t =>
+    rw [ran] at receipt
+    cases go : advance p x with
+    | some q => exact ⟨receipt.1,(continued entry operand receipt.2.1 go).admits⟩
+    | none =>
+      cases p <;> simp only [advance, reduceCtorEq] at go
+      rcases receipt.2.1 with ⟨wrong,_⟩ | stable
+      · contradiction
+      · have h : (image t).Stable bytes := entry.1 ▸ stable
+        exact ⟨receipt.1, Or.inr (congrArg some h.1.symm), fun z mem =>
+          Or.inr (congrArg some (show z = bytes by simpa [h.2] using mem).symm)⟩
+
 private theorem execute (ops : Primitives dir bytes start P image stop m) (pc : Prefix dir bytes start p w)
     (pre : P w) (operand : Operand m dir bytes w p) (entry : Before p old bytes (image w)) :
     match remaining dir bytes p w with
