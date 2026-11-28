@@ -20,7 +20,7 @@ private theorem Opening.recoverable {c h p active d known req} (o : Opening c h 
 
 /-- A choice in the active child extends the global history by precisely the
 same pending batch. Every sealed segment keeps its original byte interval. -/
-private theorem resolve_active {c h p disk decoded} (r : Readable c h p disk)
+theorem resolve_active {c h p disk decoded} (r : Readable c h p disk)
     (choice : WalRecoverySlice.Contract.Permitted (segmentHistory c.capacity c.active h) p decoded)
     (bounded : ∀ b ∈ decoded, b.length ≤ 32) :
     ∃ final, WalRecoverySlice.Contract.Permitted h p final ∧
@@ -165,13 +165,13 @@ structure OpenRootEffects (callbacks : Ops M) (healthyRoot : Prop) : Prop where
       (· = s.disk) (callbacks.readControl.run s)
   syncHealthy : ∀ s, healthyRoot → ∃ t, callbacks.syncRoot.run s = .ok (.ok ()) t
   collectHealthy : ∀ c s, healthyRoot →
-    ∃ t, (Segmented.collect callbacks c).run s = .ok (.ok ()) t
+    ∃ t, (Segmented.collect callbacks.toRootOps c).run s = .ok (.ok ()) t
 
 private theorem collect_step {c h k req callbacks healthyRoot}
     (root : OpenRootEffects callbacks healthyRoot) (s : State) (o : Opened c h s.disk)
     (permit : PermittedView k req (historyView c h)) :
     readOutcome (fun t => Opened c h t.disk) (fun t => Recoverable k req t.disk ∧ ¬ healthyRoot)
-      () ((Segmented.collect callbacks c).run s) := by
+      () ((Segmented.collect callbacks.toRootOps c).run s) := by
   have keep {d} (f : CollectionFrame c.firstNeeded s.disk d) : Opened c h d := by
     refine ⟨o.ready.frame (fun id chosen => ?_) (fun _ _ => by rw [f.segment]) (by rw [f.cursor]),
       f.liveControl.trans o.live, f.durableControl.elim (·.trans o.durable) (·.trans o.live)⟩
@@ -179,7 +179,7 @@ private theorem collect_step {c h k req callbacks healthyRoot}
     exact f.keepsNamed id chosen.1 live durable
   have frame := collectWith_cases root.collection c s
   have available := root.collectHealthy c s
-  cases eqn : (Segmented.collect callbacks c).run s with
+  cases eqn : (Segmented.collect callbacks.toRootOps c).run s with
   | error _ t =>
     rw [eqn] at frame available
     exact ⟨(keep frame).recoverable permit, fun eq => by obtain ⟨_, a⟩ := available eq; cases a⟩
@@ -196,20 +196,7 @@ def reopenOps (root : Effects) (openChild : Policy → Nat → M (List Bytes)) :
   { ops root with openSegment := openChild }
 
 private theorem collect_reopenOps (root : Effects) (openChild : Policy → Nat → M (List Bytes))
-    (c : Control) : Segmented.collect (reopenOps root openChild) c = Segmented.collect (ops root) c := by
-  have remove (ids : List Nat) :
-      Segmented.removeRetired (reopenOps root openChild) c.firstNeeded ids =
-        Segmented.removeRetired (ops root) c.firstNeeded ids := by
-    induction ids with
-    | nil => rfl
-    | cons id rest ih =>
-      simp only [Segmented.removeRetired, ih]
-      rfl
-  simp only [Segmented.collect]
-  congr 1
-  funext ids
-  rw [remove]
-  rfl
+    (c : Control) : Segmented.collect ((reopenOps root openChild).toRootOps) c = Segmented.collect ((ops root).toRootOps) c := rfl
 
 private theorem modelRootEffects (e : Effects) (call : Policy → Nat → M (List Bytes)) :
     OpenRootEffects (reopenOps e call) (e = healthy) where
@@ -328,7 +315,7 @@ private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEf
       | ok => exact proof
   · intro t o
     have proof := collect_step root t o (allow final permitted)
-    cases h : (Segmented.collect callbacks c).run t with
+    cases h : (Segmented.collect callbacks.toRootOps c).run t with
     | error => rw [h] at proof; exact ⟨proof.1, fun h => proof.2 h.1⟩
     | ok value _ =>
       rw [h] at proof

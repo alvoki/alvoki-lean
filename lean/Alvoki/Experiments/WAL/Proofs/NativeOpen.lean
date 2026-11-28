@@ -103,6 +103,12 @@ private theorem attempt_run (action : OpenM α) (s : OpenImage) :
 
 /-- The caller owns the expected policy and bindings of the existing segment.
     Each effect below is selected by the native schedule's reached arguments. -/
+private def openAttemptWith (dir : FilePath) (policy : Policy) (r : OpenReports)
+    (finish : Opened OpenTarget (AppendFiles OpenTarget) → OpenM α) (s : OpenImage) : OpenResult α :=
+  match (openExistingWith (openEffects policy r) attempt throw (workerEffect r) appendFiles finish dir).run s with
+  | .ok result after => .ok result after
+  | .error token after => .error token {after with held := false}
+
 private def openAttempt (dir : FilePath) (policy : Policy) (r : OpenReports)
     (s : OpenImage) : OpenResult (Opened OpenTarget (AppendFiles OpenTarget)) :=
   match (openExistingWith (openEffects policy r) attempt throw (workerEffect r) appendFiles pure dir).run s with
@@ -788,11 +794,11 @@ theorem openExisting_scanPhase (dir : FilePath) (policy : Policy) (r : OpenRepor
           cases ran
           exact installWith_scanPhase dir policy r .lock next installed
 
-private def storePhase (phase : Phase OpenTarget (AppendFiles OpenTarget)) : OpenM Unit :=
+private def storePhase (phase : Phase OpenTarget payload history) : OpenM Unit :=
   fun state => finish none () {state with closed := match phase with | .closed => true | _ => false}
 
 private theorem clear_run (s : OpenImage) :
-    (storePhase .closed).run s = .ok (.ok ()) {s with closed := true} := rfl
+    (storePhase (.closed : Phase OpenTarget (AppendFiles OpenTarget))).run s = .ok (.ok ()) {s with closed := true} := rfl
 
 def closeModel (policy : Policy) (r : OpenReports)
     (phase : Phase OpenTarget (AppendFiles OpenTarget)) (s : OpenImage) :=
@@ -859,5 +865,151 @@ theorem close_poisoned (policy : Policy) (r : OpenReports) (s : OpenImage) :
     after.closed = true ∧ after.held = false ∧ after.image = s.image := by
   simp only [closeModel, closeWith, runBind, clear_run, unlock_run]
   cases h : r.unlockError <;> simp_all [finish, postState] <;> rfl
+
+end WalRecoverySlice.SingleFile
+
+namespace WalRecoverySlice.SingleFile
+
+open Persistence
+
+/-- No second read is needed to install compact state or to construct the
+fold. This is the phase allocation used by the native success continuation. -/
+theorem compact_install_reached (dir : System.FilePath) (policy : Policy) (r : OpenReports)
+    (s : OpenImage) (free : s.held = false) (prior : Dirty policy known pending s.image)
+    (markers : policy = .logOnly → s.image.MarkersSettled)
+    (opened : openExistingModel dir policy r s = .ok (.ok ready) after)
+    (seed : α) (step : α → Nat → Bytes → α) :
+    ∃ history,
+      Contract.Permitted known pending history ∧
+      Ready policy after.image history ∧ after.held = true ∧
+      after.image.powerLoss = after.image ∧
+      (storeCompactWith (m := Id) pure (pure ()) ready).1 =
+        .active .lock ⟨appendFiles .writer .reader (markersFor policy), .reader⟩
+          (historyCursor history) () ∧
+      foldBatches ready.recovered.batches seed step = foldBatchesFrom step 0 seed history := by
+  have source := openExisting_refines dir policy r s free prior markers
+  rw [opened] at source
+  obtain ⟨_, _, lock, _, reader, writer, slots, held, _, _, allowed, cursor, installed, clean, _⟩ :=
+    source
+  refine ⟨ready.recovered.batches, allowed, installed, held, clean, ?_, rfl⟩
+  simp only [storeCompactWith, compactPhase, lock, reader, writer, slots, cursor]
+  rfl
+
+def mapOpenResult (f : α → β) : OpenResult α → OpenResult β
+  | .ok response after => .ok (response.map f) after
+  | .error token after => .error token after
+
+private theorem openAttemptWith_pure (dir : System.FilePath) (policy : Policy) (r : OpenReports)
+    (s : OpenImage) (f : Opened OpenTarget (AppendFiles OpenTarget) → α)
+    (complete : Opened OpenTarget (AppendFiles OpenTarget) → OpenM α)
+    (returns : ∀ ready state, (complete ready).run state = .ok (.ok (f ready)) state) :
+    openAttemptWith dir policy r complete s =
+      mapOpenResult f (openAttempt dir policy r s) := by
+  unfold openAttempt openAttemptWith openExistingWith
+  simp only [runBind]
+  cases h : (acquireWith (openEffects policy r) dir).run s with
+  | error => rfl
+  | ok response after =>
+    cases response with
+    | error => rfl
+    | ok acquired =>
+      simp only [runBind, attempt_run]
+      cases (installWith (openEffects policy r) (workerEffect r) appendFiles dir acquired).run after with
+      | error => rfl
+      | ok result reached =>
+        cases result with
+        | ok ready => simp [returns, run_pure, mapOpenResult, Except.map]
+        | error =>
+          simp only [runBind, attempt_run]
+          cases result : ((openEffects policy r).unlock acquired).run reached <;> rfl
+
+private def modelCompactPhase :=
+  compactPhase (handle := OpenTarget)
+
+def modelCompactResult (seed : α) (step : α → Nat → Bytes → α)
+    (ready : Opened OpenTarget (AppendFiles OpenTarget)) :=
+  finishCompactWith (m := Id) modelCompactPhase seed step ready
+
+def openCompactModel (dir : System.FilePath) (policy : Policy) (r : OpenReports) (s : OpenImage)
+    (seed : α) (step : α → Nat → Bytes → α) :=
+  settleResult r.afterWorker
+    (openAttemptWith dir policy r
+      (finishCompactWith (fun ready => pure (modelCompactPhase ready)) seed step)
+      (settleImage r.beforeWorker s))
+
+/-- The shared native continuation preserves every reported or interrupted
+open outcome and its reached disk. At success it changes only what is
+returned to the caller and installed in the cell. -/
+theorem openCompactModel_projects (dir : System.FilePath) (policy : Policy) (r : OpenReports) (s : OpenImage)
+    (seed : α) (step : α → Nat → Bytes → α) :
+    openCompactModel dir policy r s seed step =
+      mapOpenResult (modelCompactResult seed step) (openExistingModel dir policy r s) := by
+  unfold openCompactModel openExistingModel
+  rw [openAttemptWith_pure (f := modelCompactResult seed step)]
+  · cases openAttempt dir policy r (settleImage r.beforeWorker s) <;> rfl
+  · intro ready state
+    rfl
+
+def closeCompactModel (policy : Policy) (r : OpenReports)
+    (phase : Phase OpenTarget (CompactFiles OpenTarget) Unit) (s : OpenImage) :=
+  (closeWith phase storePhase (openEffects policy r).unlock).run s
+
+/-- Both installed descriptions call the same clearing and unlock
+schedule. The extra compact reader is released with that phase. -/
+theorem closeCompactModel_projects (ready : Opened OpenTarget (AppendFiles OpenTarget))
+    (r : OpenReports) (s : OpenImage)
+    (installed : ready.phase = .active ready.lock (appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches) :
+    closeCompactModel ready.policy r (compactPhase ready) s =
+      closeModel ready.policy r (storedPhase ready) s := by
+  simp only [closeCompactModel, closeModel, compactPhase, storedPhase_eq, installed]
+  rfl
+
+/-- Compact recovery preserves the reached retry image on every error or
+process stop. Success transfers the selected fold and exact phase. -/
+theorem openCompactModel_refines (dir : System.FilePath) (policy : Policy) (r : OpenReports)
+    (s : OpenImage) (free : s.held = false) (prior : Dirty policy known pending s.image)
+    (markers : policy = .logOnly → s.image.MarkersSettled)
+    (seed : α) (step : α → Nat → Bytes → α) :
+    let result := openCompactModel dir policy r s seed step
+    Dirty policy known pending (postState result).image ∧
+    (policy = .logOnly → (postState result).image.MarkersSettled) ∧
+    match result with
+    | .ok (.ok (phase, cursor, folded)) after =>
+      ∃ history, Contract.Permitted known pending history ∧ Ready policy after.image history ∧
+        after.held = true ∧ after.policyDurable = true ∧ after.namesDurable = true ∧
+        after.image.powerLoss = after.image ∧ cursor = historyCursor history ∧
+        phase = .active .lock ⟨appendFiles .writer .reader (markersFor policy), .reader⟩ cursor () ∧
+        folded = foldBatchesFrom step 0 seed history
+    | .ok (.error _) after | .error _ after => after.held = false := by
+  dsimp only
+  rw [openCompactModel_projects]
+  have facts := openExisting_refines dir policy r s free prior markers
+  unfold OpenGuarantee at facts
+  cases ran : openExistingModel dir policy r s with
+  | error =>
+    rw [ran] at facts
+    exact facts
+  | ok outcome after =>
+    rw [ran] at facts
+    cases outcome with
+    | error => exact facts
+    | ok ready =>
+      obtain ⟨dirty, markers, lock, _, reader, writer, slots, held, stamp, names, allowed, cursor,
+        installed, settled, _⟩ := facts
+      refine ⟨dirty, markers, ready.recovered.batches, allowed, installed, held, stamp, names,
+        settled, cursor, ?_, rfl⟩
+      simp only [modelCompactPhase, compactPhase, lock, reader, writer, slots]
+
+/-- Compact close clears the installed phase before unlocking the exact
+description, including when unlock itself reports an error. -/
+theorem closeCompactModel_active (policy : Policy) (r : OpenReports)
+    (files : CompactFiles OpenTarget) (cursor : Cursor) (s : OpenImage) :
+    closeCompactModel policy r (.active .lock files cursor ()) s =
+      .ok (if r.unlockError then .error "primitive error" else .ok ())
+        {s with closed := true, held := false} := by
+  unfold closeCompactModel closeWith
+  simp only [runBind, unlock_run]
+  cases r.unlockError <;> rfl
 
 end WalRecoverySlice.SingleFile

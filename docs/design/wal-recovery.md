@@ -23,3 +23,6 @@ The executable schedule needs explicit premises for exclusive stable directory o
 Keep framing, replay choice and the observable history contract explicit. Derive each filesystem premise from the operation and handle actually reached. Preserve failed and interrupted state so subsequent open attempts consume the real continuation. The segmented model and proofs compose rotation and release around the single-file recovery reasoning; see its [guide](../../lean/Alvoki/Experiments/WAL/Segmented/README.md).
 
 Run `bash scripts/check-wal-recovery-slice.sh` for the single-file proofs, torn-write and retry regressions, and native partial-write fixture. Run `bash scripts/check-segmented-wal.sh` for the segmented model, kernel, axiom, and native fixtures. The full retained suite is `bash scripts/reproduce.sh`.
+
+The [standalone compact WAL review](wal-compact-review.md) tracks the Linux
+prefix/drain contract, scoped scans and reached compact open obligations.

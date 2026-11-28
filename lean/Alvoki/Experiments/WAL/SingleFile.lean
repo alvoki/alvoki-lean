@@ -35,7 +35,8 @@ private opaque truncateAt (h : @& IO.FS.Handle) (count : @& Nat) : IO Unit
 /-- Recovery uses a read/write description for reading, truncating and syncing
 the segment. The separate append stream owns the append barriers. -/
 structure RecoveryIO (m : Type → Type) (handle : Type) where
-  readFromStart : handle → m Bytes
+  readData : handle → m Bytes
+  readMarker : handle → m Bytes
   truncateAt : handle → Nat → m Unit
   sync : handle → m Unit
 
@@ -46,8 +47,8 @@ private def markerHandle [Monad m] [MonadExceptOf String m]
 
 @[inline] def recoveryOps [Monad m] [MonadExceptOf String m]
     (io : RecoveryIO m handle) (data : handle) (markers : Option (handle × handle)) : Ops m where
-  readData := io.readFromStart data
-  readMarker slot := do io.readFromStart (← markerHandle markers slot)
+  readData := io.readData data
+  readMarker slot := do io.readMarker (← markerHandle markers slot)
   syncMarker slot := do io.sync (← markerHandle markers slot)
   truncate := io.truncateAt data
   syncData := io.sync data
@@ -59,12 +60,38 @@ private def markerHandle [Monad m] [MonadExceptOf String m]
     (policy : Policy) : m Decoded :=
   reopen (recoveryOps io data markers) policy
 
-private def readFromStart (h : IO.FS.Handle) : IO Bytes := do
-  h.rewind
-  return (← h.readBinToEnd).data.toList
+def drainChunk : Nat := 8192
+
+/-- Linux regular files have signed 64-bit offsets. A complete chunk
+advances the stream by 8192 bytes. This bound includes the EOF probe. -/
+def drainFuel : Nat := 2^50 + 1
+
+def drainWith [Monad m] [MonadExceptOf ε m] (exhausted : ε)
+    (read : Nat → m ByteArray) : Nat → m Unit
+  | 0 => throw exhausted
+  | fuel + 1 => do
+    let next ← read drainChunk
+    if next.size == drainChunk then drainWith exhausted read fuel
+
+/-- A short successful chunk certifies EOF. Drain after a full prefix
+before returning it, so errors in the unselected suffix remain visible. -/
+def readPrefixWith [Monad m] [MonadExceptOf ε m] (exhausted : ε)
+    (rewind : m Unit) (read : Nat → m ByteArray) (limit fuel : Nat) : m Bytes := do
+  rewind
+  let bytes ← read limit
+  if bytes.size == limit then drainWith exhausted read fuel
+  return bytes.data.toList
+
+@[extern "alvoki_wal_read_chunk"]
+private opaque readChunk (h : @& IO.FS.Handle) (count : USize) : IO ByteArray
+
+private def readPrefixFromStart (h : IO.FS.Handle) (limit : Nat) : IO Bytes :=
+  readPrefixWith (IO.userError "WAL drain exceeded Linux file extent")
+    h.rewind (fun n => readChunk h n.toUSize) limit drainFuel
 
 private def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
-  readFromStart h := readFromStart h
+  readData h := readPrefixFromStart h 65536
+  readMarker h := readPrefixFromStart h (markerSize + 1)
   truncateAt h n := truncateAt h n
   sync h := syncHandle h
 
@@ -106,15 +133,21 @@ private def checked (action : FileM α) : IO α := do
   | .ok value => return value
   | .error error => throw <| IO.userError error
 
-inductive Phase (handle payload : Type) where
-  | active (lock : handle) (stored : payload) (cursor : Cursor) (entries : List Bytes)
+inductive Phase (handle payload : Type) (history : Type := List Bytes) where
+  | active (lock : handle) (stored : payload) (cursor : Cursor) (entries : history)
   | poisoned (lock : handle)
   | closed
+
+structure CompactFiles (handle : Type) where
+  append : AppendFiles handle
+  reader : handle
+
+private abbrev NativeFiles := CompactFiles IO.FS.Handle
 
 /-- An alias of a handle shares its phase and mutex; closing any alias closes all. -/
 structure Handle where private mk ::
   private policy : Policy
-  private state : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle))
+  private state : IO.Ref (Phase IO.FS.Handle NativeFiles Unit)
   private mutex : Std.BaseMutex
 
 private def withMutex (h : Handle) (action : IO α) : IO α := do
@@ -240,8 +273,18 @@ private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
   let state ← newRef ready.phase
   return (state, ← newMutex)
 
+/-- The compact phase retains the descriptions reached by the same open. -/
+def compactPhase (ready : Opened handle (AppendFiles handle)) : Phase handle (CompactFiles handle) Unit :=
+  .active ready.lock ⟨appendFiles ready.writer ready.reader ready.markers, ready.reader⟩
+    ready.recovered.cursor ()
+
+@[inline] def storeCompactWith [Monad m] {ref mutex : Type} (newRef : Phase handle (CompactFiles handle) Unit → m ref)
+    (newMutex : m mutex) (ready : Opened handle (AppendFiles handle)) : m (ref × mutex) := do
+  let state ← newRef (compactPhase ready)
+  return (state, ← newMutex)
+
 private def installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
-  let (state, mutex) ← storeReadyWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
+  let (state, mutex) ← storeCompactWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
   return ⟨ready.policy, state, mutex⟩
 
 private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
@@ -249,12 +292,43 @@ private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith n
 private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
   checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= installReady
 
-/-- Open a previously initialized directory, holding a nonblocking exclusive file
-lock through recovery and until close. Failure releases the lock. -/
-def openExisting (dir : FilePath) : IO Handle :=
+/-- Fold validated batches strictly after the given base position. -/
+def foldBatchesFrom (step : α → Nat → Bytes → α) (base : Nat) (seed : α) : List Bytes → α
+  | [] => seed
+  | batch :: rest =>
+    let pos := base + 1
+    foldBatchesFrom step pos (step seed pos batch) rest
+
+def foldBatches (batches : List Bytes) (seed : α) (step : α → Nat → Bytes → α) : α :=
+  foldBatchesFrom step 0 seed batches
+
+private def openLoaded (dir : FilePath)
+    (finish : Opened IO.FS.Handle (AppendFiles IO.FS.Handle) → IO α) : IO α :=
   checked <| openExistingWith nativeOpen
     (fun action => (checked action).toBaseIO)
-    (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => installReady ready) dir
+    (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => finish ready) dir
+
+/-- Open a previously initialized directory with exclusive ownership.
+The recovery worker settles the selected image before the handle is returned. -/
+def openExistingPosition (dir : FilePath) : IO (Handle × Cursor) :=
+  openLoaded dir fun ready => do
+    return (← installReady ready, ready.recovered.cursor)
+
+def openExisting (dir : FilePath) : IO Handle :=
+  return (← openExistingPosition dir).1
+
+@[inline] def finishCompactWith [Monad m]
+    (install : Opened handle (AppendFiles handle) → m ready)
+    (seed : α) (step : α → Nat → Bytes → α)
+    (opened : Opened handle (AppendFiles handle)) : m (ready × Cursor × α) := do
+  let result := foldBatches opened.recovered.batches seed step
+  return (← install opened, opened.recovered.cursor, result)
+
+/-- Fold the recovered segment without retaining its batch list in the handle.
+The step is pure and its result is exposed only after successful recovery. -/
+def openExistingFold (dir : FilePath) (seed : α) (step : α → Nat → Bytes → α) :
+    IO (Handle × Cursor × α) :=
+  openLoaded dir (finishCompactWith installReady seed step)
 
 /-- Initialize the durable contents before the single-file installation
 schedule acquires its reader, writer and marker descriptions. -/
@@ -293,22 +367,28 @@ def create (dir : FilePath) (policy : Policy) : IO Handle :=
     (fun path => do return (← readDirChecked path).map (·.fileName))
     writeAndSync install dir policy
 
-@[inline] def appendWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload)
-    (store : Phase handle payload → m Unit)
-    (run : payload → Cursor → m Cursor)
-    (payload : Bytes) : m Unit := do
+@[inline] def appendStateWith [Monad m] [MonadExceptOf String m]
+    (phase : Phase handle payload history)
+    (store : Phase handle payload history → m Unit)
+    (run : payload → Cursor → m Cursor) (advance : history → history) : m Unit := do
   match phase with
   | .closed => throw "WAL closed"
   | .poisoned _ => throw "WAL poisoned; reopen required"
   | .active lock files cursor entries =>
-    store (.poisoned lock) >>= fun _ => do
-      let next ← run files cursor
-      store (.active lock files next (entries ++ [payload]))
+    store (.poisoned lock)
+    let next ← run files cursor
+    store (.active lock files next (advance entries))
+
+@[inline] def appendWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload)
+    (store : Phase handle payload → m Unit)
+    (run : payload → Cursor → m Cursor)
+    (payload : Bytes) : m Unit :=
+  appendStateWith phase store run (· ++ [payload])
 
 /-- An ACK follows the required barriers. Errors leave the shared phase poisoned. -/
 def append (h : Handle) (payload : Bytes) : IO Unit := withMutex h do
-  checked (appendWith (← h.state.get) h.state.set
-    (fun files cursor => appendBatch (appendOps nativeAppend files) h.policy cursor payload) payload)
+  checked (appendStateWith (← h.state.get) h.state.set
+    (fun files cursor => appendBatch (appendOps nativeAppend files.append) h.policy cursor payload) id)
 
 def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload) : m (List Bytes) :=
   match phase with
@@ -316,15 +396,71 @@ def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload) :
   | .closed => throw "WAL closed"
   | .poisoned _ => throw "WAL poisoned; reopen required"
 
-@[inline] def closeWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload)
-    (store : Phase handle payload → m Unit) (unlock : handle → m Unit) : m Unit := do
+@[inline] def closeWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload history)
+    (store : Phase handle payload history → m Unit) (unlock : handle → m Unit) : m Unit := do
   match phase with
   | .closed => throw "WAL closed"
   | .active lock _ _ _ | .poisoned lock => store .closed >>= fun _ => unlock lock
 
-/-- Return the confirmed history from the last successful recovery and appends. -/
-def scan (h : Handle) : IO (List Bytes) := withMutex h do
-  checked (scanWith (← h.state.get))
+@[extern "alvoki_wal_read_installed"]
+private opaque readInstalled (h : @& IO.FS.Handle) (count : USize) : IO ByteArray
+
+private def withReady (h : Handle) (run : NativeFiles → Cursor → IO α) : IO α := withMutex h do
+  match ← h.state.get with
+  | .active _ files cursor _ => run files cursor
+  | .closed => throw (IO.userError "WAL closed")
+  | .poisoned _ => throw (IO.userError "WAL poisoned; reopen required")
+
+def position (h : Handle) : IO Cursor := withReady h fun _ cursor => pure cursor
+
+def fromDecode [Monad m] [MonadExceptOf String m] (result : Except String α) : m α :=
+  match result with
+  | .ok value => pure value
+  | .error message => throw message
+
+def activeScanWith [Monad m] [MonadExceptOf String m] (read : Nat → m Bytes)
+    (cursor : Cursor) (seed : α) (step : α → Nat → Bytes → α) : m α := do
+  let bytes ← read cursor.endPos
+  let decoded ← fromDecode (WalRecoverySlice.scan bytes cursor.endPos .boundary)
+  if decoded.cursor ≠ cursor then throw "installed WAL cursor mismatch"
+  return foldBatches decoded.batches seed step
+
+/-- Read the installed extent on the reader acquired by open. Positional reads
+leave the descriptor offset alone. A failure leaves the active phase intact. -/
+def scanFold (h : Handle) (seed : α) (step : α → Nat → Bytes → α) : IO α :=
+  withReady h fun files cursor => checked <| activeScanWith
+    (fun n => do return (← readInstalled files.reader n.toUSize).data.toList) cursor seed step
+
+def scanMarkerWith [Monad m] [MonadExceptOf String m] (readFile : OpenTarget → m Bytes)
+    (policy : Policy) : m (Option Marker) := do
+  if policy == .boundary then
+    let a ← readFile .marker0
+    let b ← readFile .marker1
+    return some (← fromDecode (selectMarker a b))
+  else
+    return none
+
+def sealedScanWith [Monad m] [MonadExceptOf String m] (readFile : OpenTarget → m Bytes)
+    (policy : Policy) (count : Nat) (seed : α) (step : α → Nat → Bytes → α) : m α := do
+  let marker ← scanMarkerWith readFile policy
+  let bytes ← readFile .reader
+  let endPos := marker.map Marker.endPos |>.getD bytes.length
+  let decoded ← fromDecode (WalRecoverySlice.scan bytes endPos .boundary)
+  unless bytes.length == endPos && decoded.cursor.nextSeq == count + 1 &&
+      (marker.all fun selected => selected.lastSeq == count) do
+    throw "sealed WAL cursor mismatch"
+  return foldBatches decoded.batches seed step
+
+/-- Borrow only scoped read descriptions for a sealed child. -/
+def scanSealedFold (dir : FilePath) (policy : Policy) (count : Nat)
+    (seed : α) (step : α → Nat → Bytes → α) : IO α :=
+  checked <| sealedScanWith (fun role => do
+    let (path, _) := role.location dir
+    let limit := if role = .reader then 65536 else markerSize + 1
+    liftM (IO.FS.withFile path .read fun h => readPrefixFromStart h limit)) policy count seed step
+
+def scan (h : Handle) : IO (List Bytes) := do
+  return (← scanFold h [] (fun acc _ batch => batch :: acc)).reverse
 
 def close (h : Handle) : IO Unit := withMutex h do
   checked (closeWith (← h.state.get) h.state.set (fun lock => lock.unlock))

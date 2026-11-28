@@ -76,3 +76,55 @@ struct dirent *__wrap_readdir(DIR *directory) {
         listing_failure_countdown = 1;
     return entry;
 }
+
+static int fail_installed_read;
+
+lean_object *alvoki_test_fail_installed_read(b_lean_obj_arg unit) {
+    (void)unit;
+    fail_installed_read = 1;
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+lean_object *__real_alvoki_wal_read_installed(b_lean_obj_arg handle, size_t count);
+
+lean_object *__wrap_alvoki_wal_read_installed(b_lean_obj_arg handle, size_t count) {
+    if (fail_installed_read) {
+        fail_installed_read = 0;
+        return lean_io_result_mk_error(lean_decode_io_error(EIO, NULL));
+    }
+    return __real_alvoki_wal_read_installed(handle, count);
+}
+
+/* Inject a positive short fread with an error indicator on the second drain.
+   The first drain uses the real fread against the stable oversized fixture. */
+static unsigned failing_drain;
+static FILE *failed_stream;
+
+lean_object *alvoki_test_fail_late_drain(b_lean_obj_arg unit) {
+    (void)unit;
+    failing_drain = 2;
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+size_t __real_fread(void *output, size_t size, size_t count, FILE *stream);
+int __real_ferror(FILE *stream);
+
+size_t __wrap_fread(void *output, size_t size, size_t count, FILE *stream) {
+    if (size == 1 && count == 8192 && failing_drain && --failing_drain == 0) {
+        size_t copied = __real_fread(output, 1, 19, stream);
+        if (copied == 19) {
+            failed_stream = stream;
+            errno = EIO;
+        }
+        return copied;
+    }
+    return __real_fread(output, size, count, stream);
+}
+
+int __wrap_ferror(FILE *stream) {
+    if (stream == failed_stream) {
+        failed_stream = NULL;
+        return 1;
+    }
+    return __real_ferror(stream);
+}

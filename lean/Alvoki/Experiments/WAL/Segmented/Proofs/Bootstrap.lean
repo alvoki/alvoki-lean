@@ -20,7 +20,7 @@ theorem create_returns_ready (effects : Effects) (policy : Policy) {capacity : N
   change DiskPost _ _ ((Segmented.create (ops effects) policy capacity).run initial)
   have nonzero : capacity ≠ 0 := Nat.ne_of_gt positive
   have bounded : ¬capacity > 255 := Nat.not_lt.mpr fits
-  simp only [Segmented.create, nonzero, bounded, decide_false, Bool.false_or, Bool.false_eq_true,
+  simp only [Segmented.create, createControl, bind_assoc, pure_bind, nonzero, bounded, decide_false, Bool.false_or, Bool.false_eq_true,
     ↓reduceIte]
   apply bindPost (P := fun _ d => ∃ persist, d = initial.disk.prepare 0 persist)
   · apply namespacePost (effects.prepare initial.step 0) (fun d flag => d.prepare 0 flag) initial
@@ -37,8 +37,8 @@ theorem create_returns_ready (effects : Effects) (policy : Policy) {capacity : N
   intro _ u settled
   have cut := publish_cases effects c u
   apply bindPost (P := fun _ d => d = u.disk.published c)
-  · change DiskPost _ _ ((Segmented.publish (ops effects) c).run u)
-    generalize h : (Segmented.publish (ops effects) c).run u = result at cut ⊢
+  · change DiskPost _ _ ((Segmented.publish ((ops effects).toRootOps) c).run u)
+    generalize h : (Segmented.publish ((ops effects).toRootOps) c).run u = result at cut ⊢
     cases result with
     | error => trivial
     | ok x _ => cases x with
@@ -69,7 +69,7 @@ theorem create_healthy (policy : Policy) {capacity : Nat} (positive : 0 < capaci
       .ok (.ok (sessionOf (initialControl policy capacity) [])) state := by
   have nonzero : capacity ≠ 0 := Nat.ne_of_gt positive
   have bounded : ¬capacity > 255 := Nat.not_lt.mpr fits
-  simp only [Segmented.create, nonzero, bounded, decide_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte]
+  simp only [Segmented.create, createControl, bind_assoc, pure_bind, nonzero, bounded, decide_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte]
   simp only [sessionOf, segmentHistory, List.drop_nil, List.take_nil, List.length_nil, historyView]
   exact ⟨_, rfl⟩
 

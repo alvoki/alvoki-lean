@@ -151,13 +151,13 @@ def requiredChildNames (p : Policy) : List String :=
       (← readPolicy (dir / "policy")) == expected do
     throw s!"segment policy mismatch at {id}"
 
-private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
+private def Store.checkedChildPath (s : Store) (p : Policy) (id : Nat) : IO FilePath := do
   let dir := segmentPath s.root id
   checked <| validateChildWith
     (fun path => do return (← inspectChild path).map (·.fileName))
     (fun path => do return (← path.metadata).byteSize.toNat)
     (fun path => IO.FS.readFile path) dir p id
-  SingleFile.openExisting dir
+  return dir
 
 /-- A sealed child is closed locally. A failed scan stays primary. -/
 @[inline] def readSealedChildWith [Monad m] [MonadExceptOf error m]
@@ -167,9 +167,6 @@ private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFi
   let batches ← cleanupOnError (error := error) (scan child) (close child)
   close child
   return batches
-
-private def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
-  readSealedChildWith (error := IO.Error) (s.acquireChild p id) SingleFile.scan SingleFile.close
 
 /-- Transfer the child to the caller on success. Release it on a reported
 failure anywhere in the continuation, including scan or collection. -/
@@ -255,26 +252,21 @@ private def controlPrimitives : ControlPrimitives FileM IO.FS.Handle IO.FS.Handl
   rename stage active := liftM (IO.FS.rename stage active)
   syncDirectory directory := liftM (syncHandle directory)
 
-private def Store.callbacks (s : Store) : Ops FileM where
+private def Store.callbacks (s : Store) : RootOps FileM where
   prepareSegment p id := s.prepare p id
   syncRoot := syncRootWith (fun directory => liftM (syncHandle directory)) s.directory
   publishControl := publishControlWith controlPrimitives s.root s.directory
   readControl := readControlWith controlMetadata (fun file => IO.FS.readBinFile file) s.root
-  openSegment p id := s.readSealedChild p id
-  appendSegment _ id batch := do
-    let some (installed, child) ← s.active.get | throw "no active segment"
-    unless installed == id do throw "incorrect active segment"
-    SingleFile.append child batch
   listSegments := s.listIds
   removeSegment id := removeSegment s.root id
 
-inductive Phase (store : Type) where
-  | ready (owned : store) (session : Session)
+inductive Phase (store : Type) (session : Type := Session) where
+  | ready (owned : store) (state : session)
   | poisoned (owned : store)
   | closed
 
 structure Handle where private mk ::
-  private state : IO.Ref (Phase Store)
+  private state : IO.Ref (Phase Store CompactSession)
   private mutex : Std.BaseMutex
 
 @[inline] def openRootDirectoryWith [Monad m] (resolve : FilePath → m FilePath)
@@ -321,35 +313,110 @@ private def acquireStore (dir : FilePath) : IO Store :=
 /-- Check the acquired root before touching its initial child or CONTROL. -/
 @[inline] def createPhaseWith [Monad m] [MonadExceptOf error m]
     (invalid : String → error) (entries : FilePath → m (Array IO.FS.DirEntry))
-    (root : FilePath) (owned : store) (create : m Session) : m (Phase store) := do
+    (root : FilePath) (owned : store) (create : m session) : m (Phase store session) := do
   unless (← entries root).all (fun e => e.fileName == "lock") do
     throw (invalid "segmented WAL directory is not empty")
   return .ready owned (← create)
 
-private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
-  let load (store : Store) := match fresh with
+def retainedStep (c : Control) (id : Nat) (step : α → Nat → Bytes → α)
+    (acc : α) (localPos : Nat) (batch : Bytes) : α :=
+  let pos := id * c.capacity + localPos
+  if c.discarded < pos then step acc pos batch else acc
+
+private def Store.openChildFold (s : Store) (c : Control) (id : Nat)
+    (seed : α) (step : Option (α → Nat → Bytes → α)) : IO (SingleFile.Handle × Cursor × α) := do
+  let path ← s.checkedChildPath c.policy id
+  match step with
+  | some consume => SingleFile.openExistingFold path seed (retainedStep c id consume)
+  | none =>
+    let (handle, cursor) ← SingleFile.openExistingPosition path
+    return (handle, cursor, seed)
+
+/-- Visit the contiguous sealed IDs before borrowing the installed active child. -/
+def foldSealedWith [Monad m] (read : Nat → α → m α) (first : Nat) :
+    Nat → α → m α
+  | 0, acc => pure acc
+  | count + 1, acc => do
+    let next ← read first acc
+    foldSealedWith read (first + 1) count next
+
+def scanReadyWith [Monad m] (session : CompactSession) (seed : α)
+    (readSealed : Nat → α → m α) (readActive : α → m α) : m (Bounds × α) := do
+  let c := session.control
+  let acc ← foldSealedWith readSealed c.firstNeeded (c.active - c.firstNeeded) seed
+  return (session.bounds, ← readActive acc)
+
+def recoverSealedWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (capacity : Nat) (openChild : m (child × Cursor × α))
+    (close : child → m Unit) : m α := do
+  let (child, cursor, next) ← openChild
+  close child
+  unless cursor.nextSeq == capacity + 1 do throw (invalid "incomplete sealed segment")
+  return next
+
+def finishCompactRecoveryWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (collect : Control → m Unit) (register : Nat → child → m Unit)
+    (c : Control) (acquired : child × Cursor × α) : m (CompactSession × α) := do
+  let (child, cursor, folded) := acquired
+  let session : CompactSession := ⟨c, cursor.nextSeq - 1⟩
+  if session.activeCount > c.capacity then throw (invalid "oversized active segment")
+  if c.discarded > session.bounds.tail then throw (invalid "release beyond recovered data")
+  collect c
+  register c.active child
+  return (session, folded)
+
+/-- Shared recovery schedule. Child opening returns its reached cursor and
+accumulator. Only the active child can escape its scope. -/
+def recoverCompactWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (select : m Control)
+    (openChild : Control → Nat → α → m (child × Cursor × α))
+    (close : child → m Unit) (collect : Control → m Unit)
+    (register : Nat → child → m Unit) (seed : α) : m (CompactSession × α) := do
+  let c ← select
+  let acc ← foldSealedWith
+    (fun id acc => recoverSealedWith invalid c.capacity (openChild c id acc) close)
+    c.firstNeeded (c.active - c.firstNeeded) seed
+  withActiveChild (error := error) (openChild c c.active acc)
+    (fun acquired => close acquired.1) (finishCompactRecoveryWith invalid collect register c)
+
+private def Store.recoverFold (s : Store) (seed : α) (step : Option (α → Nat → Bytes → α)) :
+    IO (CompactSession × α) :=
+  recoverCompactWith IO.userError (checked (selectControl s.callbacks))
+    (fun c id acc => s.openChildFold c id acc step) SingleFile.close
+    (fun c => checked (collect s.callbacks c)) (fun id child => s.active.set (some (id, child))) seed
+
+@[inline] def loadCompactReadyWith [Monad m]
+    (owned : store) (recover : m (CompactSession × α)) : m (Phase store CompactSession × Bounds × α) := do
+  let (session, folded) ← recover
+  return (.ready owned session, session.bounds, folded)
+
+private def install (dir : FilePath) (fresh : Option (Policy × Nat))
+    (seed : α) (step : Option (α → Nat → Bytes → α)) : IO (Handle × Bounds × α) := do
+  let load (store : Store) : IO (Phase Store CompactSession × Bounds × α) := do
+    match fresh with
     | some (policy, cap) =>
-      createPhaseWith IO.userError entries store.root store
-        (checked (Segmented.create store.callbacks policy cap))
-    | none =>
-      let recovery := checked <| Segmented.reopenWith store.callbacks
-        (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
-          (store.acquireChild policy id) SingleFile.close (fun child => do
-            let batches ← SingleFile.scan child
-            checked (resume child batches)))
-        (fun session child => pure (session, child))
-      installReopenedWith recovery fun entry => do
-        store.active.set entry
-        return store
+      let phase ← createPhaseWith IO.userError entries store.root store do
+        let control ← checked (createControl store.callbacks policy cap)
+        return (⟨control, 0⟩ : CompactSession)
+      return (phase, ⟨0, 0⟩, seed)
+    | none => loadCompactReadyWith store (store.recoverFold seed step)
+  let ((state, bounds, result), mutex) ← openWithStore (error := IO.Error) (acquireStore dir) load
+    (fun (phase, bounds, result) => do return (← IO.mkRef phase, bounds, result))
+    (liftM Std.BaseMutex.new) Store.release
+  return (⟨state, mutex⟩, bounds, result)
 
-  let (state, mutex) ← openWithStore (error := IO.Error) (acquireStore dir) load
-    (fun phase => IO.mkRef phase) (liftM Std.BaseMutex.new) Store.release
-  return ⟨state, mutex⟩
+def create (dir : FilePath) (policy : Policy) (capacity : Nat) : IO Handle := do
+  let (handle, _, _) ← install dir (some (policy, capacity)) () none
+  return handle
 
-def create (dir : FilePath) (policy : Policy) (capacity : Nat) : IO Handle :=
-  install dir (some (policy, capacity))
+/-- Only a settled, registered child is transferred with the fold result. -/
+def openExistingFold (dir : FilePath) (seed : α) (step : α → Nat → Bytes → α) :
+    IO (Handle × Bounds × α) :=
+  install dir none seed (some step)
 
-def openExisting (dir : FilePath) : IO Handle := install dir none
+def openExisting (dir : FilePath) : IO Handle := do
+  let (handle, _, _) ← install dir none () none
+  return handle
 
 private def Handle.locked (h : Handle) (action : IO α) : IO α := do
   h.mutex.lock
@@ -359,8 +426,8 @@ private def Handle.locked (h : Handle) (action : IO α) : IO α := do
 phase and reply are derived from the same returned session. -/
 @[inline] def updateWith [Monad m] [MonadExceptOf error m]
     (invalid : String → error)
-    (get : m (Phase store)) (set : Phase store → m Unit)
-    (action : store → Session → m Session) : m Session := do
+    (get : m (Phase store session)) (set : Phase store session → m Unit)
+    (action : store → session → m session) : m session := do
   match ← get with
   | .ready store session =>
     set (.poisoned store)
@@ -370,21 +437,20 @@ phase and reply are derived from the same returned session. -/
   | .poisoned _ => throw (invalid "segmented WAL requires reopen")
   | .closed => throw (invalid "segmented WAL closed")
 
-private def update (h : Handle) (action : Store → Session → FileM Session) : IO Session :=
+private def update (h : Handle) (action : Store → CompactSession → FileM CompactSession) : IO CompactSession :=
   h.locked <| updateWith (m := IO) IO.userError (do h.state.get)
     (fun phase => do h.state.set phase) (fun store session => checked (action store session))
 
 /-- Acquire and consume a successor in one scope. The old child is released
 before preparation. The successor goes into the store only on success. -/
-@[inline] def appendOwnedWith [Monad m] [MonadExceptOf error m]
-    (session : Session) (batch : Bytes) (check : m Unit) (invalid : String → error)
+@[inline] def appendOwnedCore [Monad m] [MonadExceptOf error m]
+    (current : Control) (activeCount : Nat) (finish : Control → Nat → session) (batch : Bytes) (check : m Unit) (invalid : String → error)
     (getActive : m (Option (Nat × child))) (closeOld : m Unit)
     (prepare : Policy → Nat → m child) (close : child → m Unit)
     (syncRoot : m Unit) (publish : Control → m Unit)
-    (write : child → Bytes → m Unit) (install : Option (Nat × child) → m Unit) : m Session := do
+    (write : child → Bytes → m Unit) (install : Option (Nat × child) → m Unit) : m session := do
   check
-  let current := session.control
-  if session.activeCount = current.capacity then
+  if activeCount = current.capacity then
     let next := {current with active := current.active + 1}
     closeOld
     withActiveChild (error := error) (prepare next.policy next.active) close fun child => do
@@ -392,12 +458,22 @@ before preparation. The successor goes into the store only on success. -/
       publish next
       write child batch
       install (some (next.active, child))
-      pure ⟨next, 1, session.view.append batch⟩
+      pure (finish next 1)
   else
     let some (id, child) ← getActive | throw (invalid "no active segment")
     unless id == current.active do throw (invalid "incorrect active segment")
     write child batch
-    pure ⟨current, session.activeCount + 1, session.view.append batch⟩
+    pure (finish current (activeCount + 1))
+
+@[inline] def appendOwnedWith [Monad m] [MonadExceptOf error m]
+    (session : Session) (batch : Bytes) (check : m Unit) (invalid : String → error)
+    (getActive : m (Option (Nat × child))) (closeOld : m Unit)
+    (prepare : Policy → Nat → m child) (close : child → m Unit)
+    (syncRoot : m Unit) (publish : Control → m Unit)
+    (write : child → Bytes → m Unit) (install : Option (Nat × child) → m Unit) : m Session :=
+  appendOwnedCore session.control session.activeCount
+    (fun control count => ⟨control, count, session.view.append batch⟩) batch check invalid getActive
+    closeOld prepare close syncRoot publish write install
 
 /-- Return the absolute position from the session committed by the same update. -/
 @[inline] def appendPositionWith [Monad m] (update : m Session) : m Nat := do
@@ -405,15 +481,24 @@ before preparation. The successor goes into the store only on success. -/
   return next.tailPosition
 
 /-- Return the absolute, one-based position only after the append schedule succeeds. -/
-def append (h : Handle) (batch : Bytes) : IO Nat :=
-  appendPositionWith <| update h fun store session =>
-    liftM <| appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
+def append (h : Handle) (batch : Bytes) : IO Nat := do
+  let next ← update h fun store session => do
+    let check : IO Unit := do
+      if batch.length > 32 then throw (IO.userError "batch out of bounds")
+      if session.bounds.tail ≥ Contract.maxPosition then
+        throw (IO.userError "segmented WAL position exhausted")
+    liftM <| appendOwnedCore session.control session.activeCount CompactSession.mk batch check
       IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
       (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
       SingleFile.append store.active.set
+  return next.bounds.tail
 
 def discardThrough (h : Handle) (k : Nat) : IO Unit := do
-  let _ ← update h (fun store s => Segmented.discardThrough store.callbacks s k)
+  let _ ← update h fun store session => do
+    if k > session.bounds.tail then throw "discard past end"
+    if k ≤ session.control.discarded then return session
+    let control ← discardControl store.callbacks session.control k
+    return {session with control}
   pure ()
 
 def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase store) : m Contract.View :=
@@ -422,14 +507,37 @@ def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase store) : m Contra
   | .poisoned _ => throw "segmented WAL requires reopen"
   | .closed => throw "segmented WAL closed"
 
-@[inline] def closeWith [Monad m] (swap : Phase store → m (Phase store))
+@[inline] def closeWith [Monad m] (swap : Phase store session → m (Phase store session))
     (release : store → m Unit) : m Unit := do
   match ← swap .closed with
   | .ready owned _ | .poisoned owned => release owned
   | .closed => pure ()
 
-def scan (h : Handle) : IO Contract.View := h.locked do
-  checked (scanWith (← h.state.get))
+private def withReady (h : Handle) (run : Store → CompactSession → IO α) : IO α := h.locked do
+  match ← h.state.get with
+  | .ready store session => run store session
+  | .poisoned _ => throw (IO.userError "segmented WAL requires reopen")
+  | .closed => throw (IO.userError "segmented WAL closed")
+
+def bounds (h : Handle) : IO Bounds := withReady h fun _ session => pure session.bounds
+
+/-- Read a single owned snapshot. The pure step remains private and errors
+leave the installed phase, bindings, and disk untouched. -/
+def scanFold (h : Handle) (seed : α) (step : α → Nat → Bytes → α) : IO (Bounds × α) :=
+  withReady h fun store session => do
+    let c := session.control
+    let readSealed id acc := do
+      let path ← store.checkedChildPath c.policy id
+      SingleFile.scanSealedFold path c.policy c.capacity acc (retainedStep c id step)
+    let readActive acc := do
+      let some (id, child) ← store.active.get | throw (IO.userError "no active segment")
+      unless id == c.active do throw (IO.userError "incorrect active segment")
+      SingleFile.scanFold child acc (retainedStep c id step)
+    scanReadyWith session seed readSealed readActive
+
+def scan (h : Handle) : IO Contract.View := do
+  let (bounds, batches) ← scanFold h [] (fun acc _ batch => batch :: acc)
+  return ⟨bounds.base, batches.reverse⟩
 
 def close (h : Handle) : IO Unit := h.locked do
   closeWith h.state.swap Store.release

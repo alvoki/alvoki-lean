@@ -82,7 +82,7 @@ theorem modelCollectionEffects (effects : Effects) : CollectionEffects (ops effe
 private theorem removeRetired_cases {callbacks : Ops M} (effects : CollectionEffects callbacks) (first : Nat) (ids : List Nat) (s : State) :
     DiskPost (fun _ after => CollectionFrame first s.disk after ∧
       ∀ id ∈ ids, id < first → id ∉ after.liveNames)
-      (CollectionFrame first s.disk) (((Segmented.removeRetired callbacks first ids).run s)) := by
+      (CollectionFrame first s.disk) (((Segmented.removeRetired callbacks.toRootOps first ids).run s)) := by
   induction ids generalizing s with
   | nil => exact ⟨.refl first s.disk, by simp⟩
   | cons id ids ih =>
@@ -110,7 +110,7 @@ private theorem removeRetired_cases {callbacks : Ops M} (effects : CollectionEff
         · exact gone n member old survived
       · intro _ tail
         exact initialFrame.trans tail
-    · apply mapPost (result := ((Segmented.removeRetired callbacks first (id :: ids)).run s))
+    · apply mapPost (result := ((Segmented.removeRetired callbacks.toRootOps first (id :: ids)).run s))
         (ok := fun _ after => CollectionFrame first s.disk after ∧
           ∀ n ∈ ids, n < first → n ∉ after.liveNames)
       · simpa [Segmented.removeRetired, retired] using ih s
@@ -129,7 +129,7 @@ theorem collectWith_cases {callbacks : Ops M} (effects : CollectionEffects callb
     DiskPost (fun _ after => CollectionFrame c.firstNeeded s.disk after ∧
       after.durableControl = after.liveControl ∧ after.durableNames = after.liveNames ∧
       ∀ id ∈ after.liveNames, c.firstNeeded ≤ id)
-      (CollectionFrame c.firstNeeded s.disk) ((Segmented.collect callbacks c).run s) := by
+      (CollectionFrame c.firstNeeded s.disk) ((Segmented.collect callbacks.toRootOps c).run s) := by
   unfold Segmented.collect
   apply bindPost (P := fun ids after => (∀ id ∈ s.disk.liveNames, id ∈ ids) ∧ after = s.disk)
   · apply mapPost (effects.list s)
@@ -162,7 +162,7 @@ theorem collect_cases (effects : Effects) (c : Control) (s : State) :
     DiskPost (fun _ after => CollectionFrame c.firstNeeded s.disk after ∧
       after.durableControl = after.liveControl ∧ after.durableNames = after.liveNames ∧
       ∀ id ∈ after.liveNames, c.firstNeeded ≤ id)
-      (CollectionFrame c.firstNeeded s.disk) ((Segmented.collect (ops effects) c).run s) :=
+      (CollectionFrame c.firstNeeded s.disk) ((Segmented.collect ((ops effects).toRootOps) c).run s) :=
   collectWith_cases (modelCollectionEffects effects) c s
 
 private theorem run_bind_ok {a : M α} {next : α → M β} {before after : State} {value : α}
@@ -173,7 +173,7 @@ private theorem run_bind_ok {a : M α} {next : α → M β} {before after : Stat
   rfl
 
 private theorem removeRetired_healthy (first : Nat) (ids : List Nat) (s : State) :
-    ∃ after, ((Segmented.removeRetired (ops healthy) first ids).run s) = .ok (.ok ()) after := by
+    ∃ after, ((Segmented.removeRetired ((ops healthy).toRootOps) first ids).run s) = .ok (.ok ()) after := by
   induction ids generalizing s with
   | nil => exact ⟨s, rfl⟩
   | cons id ids ih =>
@@ -185,7 +185,7 @@ private theorem removeRetired_healthy (first : Nat) (ids : List Nat) (s : State)
     · simpa [Segmented.removeRetired, retired] using ih s
 
 theorem collect_healthy (c : Control) (s : State) :
-    ∃ after, ((Segmented.collect (ops healthy) c).run s) = .ok (.ok ()) after := by
+    ∃ after, ((Segmented.collect ((ops healthy).toRootOps) c).run s) = .ok (.ok ()) after := by
   unfold Segmented.collect
   rw [run_bind_ok (show (ops healthy).listSegments.run s = .ok (.ok s.disk.liveNames) s.tick from rfl)]
   obtain ⟨pruned, removed⟩ := removeRetired_healthy c.firstNeeded s.disk.liveNames s.tick

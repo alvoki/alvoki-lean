@@ -22,7 +22,7 @@ lean -o "$scratch/$wal/Contract.olean" "$wal/Contract.lean"
 leanchecker Alvoki.Experiments.WAL.Contract
 lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 leanchecker Alvoki.Experiments.WAL.Writeback
-for proof in AppendWriteback Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution ReopenWriteback ScheduledExecution Policy NativeRecovery NativeOpen NativeAppend; do
+for proof in AppendWriteback Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry BoundedRead LinuxBoundedRead DirtyAppend TornAppend Execution ReopenWriteback ScheduledExecution Policy NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Proofs.$proof"
 done
@@ -30,6 +30,8 @@ audit=Alvoki/Checks/Audit/AxiomPolicy
 lean -o "$scratch/$audit.olean" "$audit.lean"
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
+import Alvoki.Experiments.WAL.Proofs.BoundedRead
+import Alvoki.Experiments.WAL.Proofs.LinuxBoundedRead
 import Alvoki.Experiments.WAL.Proofs.Scan
 import Alvoki.Experiments.WAL.Proofs.Marker
 import Alvoki.Experiments.WAL.Proofs.Execution
@@ -86,13 +88,27 @@ open WalRecoverySlice
 #check_axioms decodeMarker_encode
 #check_axioms selectMarker_one
 #check_axioms selectMarker_both
+#check_axioms boundedMarker_decode
+#check_axioms boundedData_scan
+#check_axioms SingleFile.readPrefixWith_model
+#check_axioms SingleFile.marker_after_checked_read
+#check_axioms SingleFile.boundary_after_checked_read
+#check_axioms SingleFile.logOnly_after_checked_read
+#check_axioms SingleFile.oversizedLog_after_checked_read
+#check_axioms SingleFile.compact_install_reached
+#check_axioms SingleFile.openCompactModel_projects
+#check_axioms SingleFile.openCompactModel_refines
+#check_axioms SingleFile.closeCompactModel_projects
+#check_axioms SingleFile.closeCompactModel_active
+#check_axioms boundedData_needsRepair
+#check_axioms Persistence.Dirty.logOnly_liveFits
 LEAN
 lean --run Alvoki/Checks/Tests/WalRecoverySlice.lean
 lean -c "$scratch/files.c" Alvoki/Checks/Tests/WalRecoveryFiles.lean
 # PIC keeps Lean's initialized runtime globals shared with libleanshared.
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" "$scratch/files.c" \
   native/fsync.c native/read_dir_checked.c native/wal_recovery_fixture.c \
-  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir \
+  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir -Wl,--wrap=alvoki_wal_read_installed -Wl,--wrap=fread -Wl,--wrap=ferror \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/files"
 "$scratch/files"

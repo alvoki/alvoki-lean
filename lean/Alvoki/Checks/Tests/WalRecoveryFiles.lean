@@ -77,6 +77,73 @@ private def fixture (dir : FilePath) (policy : Policy) : IO Unit := do
     unless r matches .error (.userError "damaged batch") do throw <| IO.userError "opened with damaged published bytes"
     unless (← IO.FS.readBinFile path) == damaged do throw <| IO.userError "destructive failed open"
 
+@[extern "alvoki_test_fail_installed_read"]
+private opaque failInstalledRead (_ : Unit) : IO Unit
+
+private def scanFailure (dir : FilePath) (policy : Policy) : IO Unit := do
+  let h ← SingleFile.create dir policy
+  SingleFile.append h [4]
+  let before ← SingleFile.position h
+  let bytes ← IO.FS.readBinFile (dir / "segment")
+  failInstalledRead ()
+  let failed ← (SingleFile.scan h).toBaseIO
+  unless failed matches .error (.hardwareFault _ _) do
+    throw (IO.userError "expected read-only scan I/O error")
+  unless (← SingleFile.position h) == before && (← IO.FS.readBinFile (dir / "segment")) == bytes do
+    throw (IO.userError "failed scan changed cursor or data")
+  let duplicate ← (SingleFile.openExisting dir).toBaseIO
+  unless duplicate matches .error _ do throw (IO.userError "failed scan released custody")
+  SingleFile.append h [9]
+  SingleFile.close h
+  let (h, cursor, seen) ← SingleFile.openExistingFold dir []
+    (fun acc index batch => (index, batch) :: acc)
+  unless cursor.nextSeq == 3 && seen == [(2, [9]), (1, [4])] do
+    throw (IO.userError "recovery fold changed the installed history")
+  SingleFile.close h
+
+@[extern "alvoki_test_fail_late_drain"]
+private opaque failLateDrain (_ : Unit) : IO Unit
+
+private def lateDrainError (dir : FilePath) : IO Unit := do
+  let h ← SingleFile.create dir .boundary
+  SingleFile.append h [7]
+  SingleFile.close h
+  let path := dir / "segment"
+  let good ← IO.FS.readBinFile path
+  let oversized := good ++ ⟨Array.replicate 100000 0⟩
+  IO.FS.writeBinFile path oversized
+  failLateDrain ()
+  let attempted ← (SingleFile.openExisting dir).toBaseIO
+  unless attempted matches .error (.hardwareFault _ _) do
+    throw (IO.userError "a positive short fread hid a late drain error")
+  unless (← IO.FS.readBinFile path) == oversized do
+    throw (IO.userError "a failed drain reached WAL repair")
+  for _ in [:2] do
+    let h ← SingleFile.openExisting dir
+    unless (← SingleFile.scan h) == [[7]] && (← IO.FS.readBinFile path) == good do
+      throw (IO.userError "recovery changed the selected survivor after a failed drain")
+    SingleFile.close h
+
+private def boundedRecovery (dir : FilePath) (policy : Policy) : IO Unit := do
+  let h ← SingleFile.create dir policy
+  SingleFile.append h [7]
+  SingleFile.close h
+  let path := dir / "segment"
+  let confirmed ← IO.FS.readBinFile path
+  let oversized := confirmed ++ ⟨Array.replicate 70000 0⟩
+  IO.FS.writeBinFile path oversized
+  if policy == .boundary then
+    let (h, _, seen) ← SingleFile.openExistingFold dir [] (fun acc _ batch => batch :: acc)
+    unless seen == [[7]] && (← IO.FS.readBinFile path) == confirmed do
+      throw (IO.userError "bounded reader did not repair suffix beyond its buffer")
+    SingleFile.close h
+  else
+    let failed ← (SingleFile.openExisting dir).toBaseIO
+    unless failed matches .error (.userError "damaged header") do
+      throw (IO.userError "oversized log-only corruption was treated as a torn tail")
+    unless (← IO.FS.readBinFile path) == oversized do
+      throw (IO.userError "bounded reader changed a rejected segment")
+
 private def handleRegressions (dir : FilePath) (policy : Policy) : IO Unit := do
   let h ← SingleFile.create dir policy
   let failed ← (SingleFile.append h (List.replicate 33 42)).toBaseIO
@@ -243,9 +310,12 @@ def main (args : List String) : IO Unit := do
   for policy in [WalRecoverySlice.Policy.logOnly, .boundary] do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.fixture dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.handleRegressions dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.scanFailure dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.boundedRecovery dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.lateOpenFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
+  IO.FS.withTempDir WalRecoveryFiles.lateDrainError
   IO.FS.withTempDir WalRecoveryFiles.lostMarkerReply
   IO.FS.withTempDir WalRecoveryFiles.refuseNonempty
   IO.FS.withTempDir WalRecoveryFiles.refuseFailedListing

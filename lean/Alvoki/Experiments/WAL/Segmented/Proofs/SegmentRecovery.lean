@@ -187,6 +187,61 @@ theorem Recoverable.nativeReopenTwice (dir : System.FilePath)
   have allowed := againFact.2.2.2.2.1
   exact ⟨permitted, by simpa [WalRecoverySlice.Contract.Permitted] using allowed⟩
 
+/-- Successful compact retries start at the exact outcome of the compact
+close and select the same history, even for unrelated fold accumulators. -/
+theorem Recoverable.compactReopenTwice (dir : System.FilePath)
+    (first cleanup second : SingleFile.OpenReports)
+    (start : SingleFile.OpenImage) (free : start.held = false)
+    (entry : Recoverable policy known pending start.image)
+    (seed : α) (step : α → Nat → Bytes → α) (seed' : β) (step' : β → Nat → Bytes → β)
+    (opened : SingleFile.openCompactModel dir policy first start seed step =
+      .ok (.ok (phase, cursor, folded)) after)
+    (reopened : SingleFile.openCompactModel dir policy second
+      (SingleFile.postState (SingleFile.closeCompactModel policy cleanup phase after)) seed' step' =
+      .ok (.ok (phase', cursor', folded')) final) :
+    ∃ history, Contract.Permitted known pending history ∧ cursor = historyCursor history ∧
+      cursor' = cursor ∧ folded = SingleFile.foldBatchesFrom step 0 seed history ∧
+      folded' = SingleFile.foldBatchesFrom step' 0 seed' history := by
+  rw [SingleFile.openCompactModel_projects] at opened
+  cases firstRan : SingleFile.openExistingModel dir policy first start with
+  | error token reached => simp [firstRan, SingleFile.mapOpenResult] at opened
+  | ok report reached =>
+    cases report with
+    | error error => simp [firstRan, SingleFile.mapOpenResult, Except.map] at opened
+    | ok ready =>
+      have old := SingleFile.openExisting_refines dir policy first start free entry.dirty entry.markers
+      rw [firstRan] at old
+      have retryDirty := old.1
+      have retryMarkers := old.2.1
+      obtain ⟨_, _, _, readyPolicy, _, _, _, _, _, _, _, readyCursor, _, _, installed⟩ := old
+      simp only [firstRan, SingleFile.mapOpenResult, Except.map] at opened
+      cases opened
+      change SingleFile.openCompactModel dir policy second
+        (SingleFile.postState (SingleFile.closeCompactModel policy cleanup
+          (SingleFile.compactPhase ready) after)) seed' step' = _ at reopened
+      rw [← readyPolicy, SingleFile.closeCompactModel_projects ready cleanup after installed,
+        readyPolicy, SingleFile.openCompactModel_projects] at reopened
+      generalize secondDef : SingleFile.openExistingModel dir policy second
+        (SingleFile.postState (SingleFile.closeModel policy cleanup (SingleFile.storedPhase ready) after)) = result at reopened
+      cases result with
+      | error token stop => simp [SingleFile.mapOpenResult] at reopened
+      | ok response stop =>
+        cases response with
+        | error error => simp [SingleFile.mapOpenResult, Except.map] at reopened
+        | ok again =>
+          simp only [SingleFile.mapOpenResult, Except.map] at reopened
+          cases reopened
+          have closed := entry.nativeCloseAfterOpen dir first cleanup start free firstRan
+          have equivalent := entry.nativeReopenTwice dir first cleanup second start free firstRan secondDef
+          have found := SingleFile.openExisting_refines dir policy second _
+            closed.2.1 (closed.2.2.symm ▸ retryDirty) (fun log => closed.2.2.symm ▸ retryMarkers log)
+          rw [secondDef] at found
+          obtain ⟨_, _, _, _, _, _, _, _, _, _, _, againCursor, _, _, _⟩ := found
+          exact ⟨ready.recovered.batches, equivalent.1, readyCursor,
+            againCursor.trans (congrArg historyCursor equivalent.2 |>.trans readyCursor.symm),
+            rfl, by change SingleFile.foldBatchesFrom step' 0 seed' again.recovered.batches = _
+                    rw [equivalent.2]⟩
+
 /-- Ordinary errors close the original poisoned phase on the reached image.
 A process exit or power loss instead drops the lock on termination, using
 the standard restart image. The subsequent open consumes the same invariant. -/
