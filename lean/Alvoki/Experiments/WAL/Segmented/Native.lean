@@ -11,7 +11,7 @@ open System
 opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_wal_unbuffered"]
-private opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
+opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_read_dir_checked"]
 opaque entries (path : @& FilePath) : IO (Array IO.FS.DirEntry)
@@ -25,7 +25,7 @@ def regular (path : FilePath) (md : IO.FS.Metadata) : IO Unit := do
   unless md.type == .file && md.numLinks == 1 do
     throw <| IO.userError s!"expected singly linked regular file at {path}"
 
-private def removeRegular (path : FilePath) : IO Unit := do
+def removeRegular (path : FilePath) : IO Unit := do
   if let some md ← metadata? path then
     regular path md
     IO.FS.removeFile path
@@ -267,6 +267,45 @@ def Store.callbacks (s : Store) : Ops FileM where
     SingleFile.append child batch
   listSegments := s.listIds
   removeSegment id := removeSegment s.root id
+
+/-- The native CONTROL transaction in IO. Its writer and held directory
+are the exact descriptions passed to the two different barriers. -/
+def Store.stageControl (s : Store) (c : Control) : IO IO.FS.Handle := do
+  let path := s.root / "CONTROL.next"
+  removeRegular path
+  let h ← IO.FS.Handle.mk path .writeNew
+  disableBuffering h
+  h.write (ControlCodec.encode c)
+  h.flush
+  return h
+
+private theorem checkedLift (a : IO α) : checked (liftM a) = a := by
+  funext w
+  have lifted : (liftM a : FileM α).run = (do return (Except.ok (← a) : Except String α) : IO _) := rfl
+  unfold checked
+  rw [lifted]
+  cases ran : a w <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
+private theorem checkedPure (x : α) : checked (pure x) = pure x := rfl
+
+private theorem checkedBind (a : FileM α) (f : α → FileM β) :
+    checked (a >>= f) = (checked a >>= fun x => checked (f x)) := by
+  funext w
+  unfold checked
+  rw [ExceptT.run_bind]
+  cases first : a.run w with
+  | error => simp [Bind.bind, instMonadEIO._aux_13, EST.bind, first]
+  | ok r t => cases r <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, first,
+      Pure.pure, instMonadEIO._aux_5, EST.pure, throw, throwThe, MonadExceptOf.throw,
+      instMonadExceptOfEIO._aux_1, EST.throw]
+
+theorem Store.publishControl_io (s : Store) (c : Control) (active : c.active ≤ ControlCodec.wordMax)
+    (discarded : c.discarded ≤ ControlCodec.wordMax) :
+    checked (s.callbacks.publishControl c) =
+      DurableBlob.publishWith (s.stageControl c) syncHandle
+        (IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")) (syncHandle s.directory) := by
+  simp [Store.callbacks, publishControlWith, controlPrimitives, DurableBlob.publishWith,
+    active, discarded, Store.stageControl, checkedBind, checkedLift, checkedPure]
 
 inductive Phase (store : Type) where
   | ready (owned : store) (session : Session)
