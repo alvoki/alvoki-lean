@@ -38,7 +38,7 @@ theorem acquireRoot_io (root : FilePath) {P failed : W → Prop}
       simp only [path] at run
       rw [run] at stat
       cases e <;> simp [tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, path,
-        Functor.map, instMonadEIO._aux_1, EST.bind, EST.pure, run, throw, throwThe, MonadExceptOf.throw,
+        Functor.map, instMonadEIO._aux_1, EST.bind, run, throw, throwThe, MonadExceptOf.throw,
         instMonadExceptOfEIO._aux_1, EST.throw] <;> first | exact stat | exact bad _ stat
   apply Returns.bind (middle := fun _ t => P t)
   · apply Returns.bind (Returns.liftIO md)

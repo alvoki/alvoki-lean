@@ -121,6 +121,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeReadRelease.root_released
 #check_axioms NativeRecoverAt.withOpen_manifestStatError
 #check_axioms WithOpenReads.withOpen
+#check_axioms WithOpenReads.readMany_two
+#check_axioms WithOpenReads.caught_then_got
 #check_axioms keyCodec_roundtrips
 #check_axioms keyCodec_preservesOrder
 #check_axioms mutationCodec_roundtrips

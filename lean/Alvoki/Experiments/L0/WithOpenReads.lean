@@ -16,7 +16,7 @@ structure Runtime (physical : W → Footprint inode) (root : FilePath) (lock : I
   manifest : ∀ start, NativeRecoverAt.Opening physical root lock ref image start →
     NativeManifest.Primitives (root / "manifest") (NativeRecoverAt.ManifestFrame physical root image.tables start)
       (fun w => (physical w).manifest)
-  wal : WalRecoverySlice.Segmented.Native.OpenIO heap (root / "wal") (fun w => (physical w).disk)
+  wal : WalRecoverySlice.Segmented.Native.LocalOpenIO heap (root / "wal") (fun w => (physical w).disk)
     image.view (NativeRecoverAt.Held physical root lock ref image .opening)
   phase : NativeRecoverAt.PhasePrimitives physical root lock ref image
   scan : ∀ wal w, NativeRecoverAt.Attached physical root lock ref image wal w →
@@ -34,8 +34,11 @@ structure Finished (physical : W → Footprint inode) (root : FilePath) (image :
     (life : Lifetime) (events : List Event) (keys : List UInt64) (replies : List Reply) (w : W) : Prop where
   trace : Execution.Run (eventsAfter events keys replies) none image
   client : ∃ state, Client.Allows (eventsAfter events keys replies) state ∧ Execution.Represents none image state
-  callback : ∃ lock ref handle entered, Native.Handle.AtRoot handle root ref ∧
-    (readMany handle keys entered).val = replies ∧ allReleased life ref (root / "tables") handle keys entered ∧
+  callback : ∃ lock ref wal session history handle entered, Native.Handle.AtRoot handle root ref ∧
+    Online physical root lock ref wal session image history entered ∧
+    (readMany handle keys entered).val = replies ∧
+    Online physical root lock ref wal session image history (readMany handle keys entered).state ∧
+    allReleased life ref (root / "tables") handle keys entered ∧
     NativeReadRelease.Closed physical root lock ref image w
 
 inductive Failure (physical : W → Footprint inode) (root : FilePath) (image : Selected)
@@ -65,7 +68,7 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
   let ops := runtime lock ref
   have safe (actual) (D : Durable image actual) :=
     NativeRecoverAt.recoverAt D opening bytes (ops.manifest _ opening) heap ops.cleanup.cached
-      ops.wal ops.phase ops.scan (fun wal t a => ops.tables wal t a.1.owned)
+      ops.wal.toOpenIO ops.phase ops.scan (fun wal t a => ops.tables wal t a.1.owned)
   unfold Post
   cases recovery : Native.recoverAt root ref w with
   | error e t =>
@@ -88,7 +91,7 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
     have stopped := trace.stop
     have finish (u) (closed : NativeReadRelease.Closed physical root lock ref image u) :
         Finished physical root image life events keys result.val u :=
-      ⟨stopped, stopped.refines, lock, ref, handle, entered, binding, rfl, released, closed⟩
+      ⟨stopped, stopped.refines, lock, ref, wal, session, history, handle, entered, binding, online, rfl, reached, released, closed⟩
     have release := NativeReadRelease.onlineTo ops.cleanup reached finish (fun _ u h => Failure.cleanup (finish u h))
     unfold NativeScope.Callback Post
     change (match readMany handle keys entered with | ⟨xs, v⟩ => _)
@@ -96,5 +99,25 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
     generalize eq : readMany handle keys entered = r at *
     cases r
     exact release
+
+/-- The two-read callback used in the fault witness is the two-element
+instance of the public client, including the world after the second get. -/
+theorem readMany_two (handle : Native.Handle) (a b : UInt64) (w : W) :
+    let r := readTwice handle a b w
+    readMany handle [a, b] w = ⟨[r.val.1, r.val.2], r.state⟩ := rfl
+
+/-- The first read's caught error leaves the observed trace unchanged. The
+next result is recorded, and the public scope has finished cleanup. -/
+theorem caught_then_got {finish : W} (entry : Entry physical path root image) (files : Files physical root image start)
+    (heap : Heap) (runtime : ∀ lock ref, Runtime physical root lock ref image life heap)
+    (prior : Execution.Run events none image)
+    (returned : Native.withOpen path (fun h => (readMany h [first, second] : IO (List Reply))) start =
+      .ok [.error e, .ok value] finish) :
+    Execution.Run (((events ++ [.reopened]) ++ [.got second value]) ++ [.stop]) none image ∧
+    ∃ lock ref, NativeReadRelease.Closed physical root lock ref image finish := by
+  have observed := withOpen entry files heap runtime prior [first, second]
+  rw [Post, returned] at observed
+  obtain ⟨lock, ref, _, _, _, _, _, _, _, _, _, _, closed⟩ := observed.callback
+  exact ⟨by simpa [eventsAfter, readEvents, readEvent] using observed.trace, lock, ref, closed⟩
 
 end ExperimentalL0.WithOpenReads
