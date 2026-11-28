@@ -92,9 +92,24 @@ lean -c "$scratch/files.c" Alvoki/Checks/Tests/WalRecoveryFiles.lean
 # PIC keeps Lean's initialized runtime globals shared with libleanshared.
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" "$scratch/files.c" \
   native/fsync.c native/read_dir_checked.c native/wal_recovery_fixture.c \
-  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir \
+  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir -Wl,--wrap=fread -Wl,--wrap=ferror \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/files"
 "$scratch/files"
 # Bash counts 1024-byte blocks outside POSIX mode. Convert SIGXFSZ into EFBIG.
 ( set +o posix; trap '' XFSZ; ulimit -f 1; "$scratch/files" --partial-write )
+
+# The EOF+EIO case must reject an adapter that ignores the error indicator.
+sed 's/ferror(stream) || //' native/fsync.c > "$scratch/unchecked.c"
+cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" "$scratch/files.c" \
+  "$scratch/unchecked.c" native/read_dir_checked.c native/wal_recovery_fixture.c \
+  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir -Wl,--wrap=fread -Wl,--wrap=ferror \
+  -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
+  -o "$scratch/unchecked"
+if "$scratch/unchecked" > "$scratch/unchecked.log" 2>&1 ||
+    ! grep -Fxq 'uncaught exception: reopen accepted an incomplete WAL read' "$scratch/unchecked.log"; then
+  cat "$scratch/unchecked.log"
+  echo "WAL read negative control did not detect the ignored stream error" >&2
+  exit 1
+fi
+echo "WAL read negative control passed"

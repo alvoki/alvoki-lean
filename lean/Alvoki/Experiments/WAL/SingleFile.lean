@@ -59,9 +59,20 @@ private def markerHandle [Monad m] [MonadExceptOf String m]
     (policy : Policy) : m Decoded :=
   reopen (recoveryOps io data markers) policy
 
+@[extern "alvoki_wal_read_chunk"]
+opaque Internal.checkedChunk (h : @& IO.FS.Handle) (count : USize) : IO ByteArray
+
+/-- The 1024-byte loop used by Lean's handle reader, with an unfoldable
+equation so an interrupted second or later read has its own operand. -/
+def Internal.readChunks (h : IO.FS.Handle) (acc : ByteArray) : IO ByteArray := do
+  let bytes ← Internal.checkedChunk h 1024
+  if bytes.isEmpty then return acc
+  readChunks h (acc ++ bytes)
+partial_fixpoint
+
 private def readFromStart (h : IO.FS.Handle) : IO Bytes := do
   h.rewind
-  return (← h.readBinToEnd).data.toList
+  return (← Internal.readChunks h .empty).data.toList
 
 private def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
   readFromStart h := readFromStart h
@@ -223,7 +234,7 @@ private def nativeOpen : OpenIO FileM IO.FS.Handle where
   openFile _ path mode := IO.FS.Handle.mk path mode
   unbuffered h := disableBuffering h
   readPolicy path h := do
-    let bytes ← h.readBinToEnd
+    let bytes ← Internal.readChunks h .empty
     match String.fromUTF8? bytes with
     | some text => return text
     | none => throw s!"Tried to read file '{path}' containing non UTF-8 data."
