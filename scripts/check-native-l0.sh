@@ -47,12 +47,12 @@ compile "$l0/TableAllocationProofs" proof
 for module in NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads; do
   compile "$l0/$module" proof
 done
-compile Alvoki/Experiments/WAL/Segmented/Proofs/NativeRootIO proof
+compile Alvoki/Experiments/WAL/Segmented/Proofs/RuntimeChild proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
-for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Segmented.Proofs.NativeRootIO; do
+for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Proofs.ConcreteRecovery WAL.Proofs.ConcreteOpen WAL.Segmented.Proofs.NativeRootIO WAL.Segmented.Proofs.NativeChildIO WAL.Segmented.Proofs.StoreAcquisition WAL.Segmented.Proofs.RuntimeOpen WAL.Segmented.Proofs.RuntimeStoreOpen WAL.Segmented.Proofs.RuntimeChild WAL.Segmented.Proofs.RuntimeDisk; do
   leanchecker "Alvoki.Experiments.$module"
 done
 lean --stdin <<'LEAN'
@@ -70,8 +70,21 @@ import Alvoki.Experiments.L0.NativeRecovery
 import Alvoki.Experiments.L0.WithOpenReads
 import Alvoki.Experiments.L0.NativeTableCheck
 import Alvoki.Experiments.L0.PublicationCut
-import Alvoki.Experiments.WAL.Segmented.Proofs.NativeRootIO
+import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeChild
+import Alvoki.Experiments.L0.WalProducerHandoff
 open ExperimentalL0 ExperimentalL0.NativeBridge
+#check_axioms WalProducerHandoff.reopenAuthority
+#check_axioms WalProducerHandoff.reportedWrite
+#check_axioms WalProducerHandoff.retry
+#check_axioms WalRecoverySlice.SingleFile.ConcreteRecovery.openExisting
+#check_axioms WalRecoverySlice.Segmented.Native.acquireStore_io
+#check_axioms WalRecoverySlice.Segmented.Native.ChildPrimitives.access
+#check_axioms WalRecoverySlice.Segmented.Native.StoreIO.recoverChild_disk
+#check_axioms WalRecoverySlice.Segmented.Native.openExisting_diskPost
+#check_axioms NativeRecoverAt.recoverAt
+#check_axioms NativeRead.publishOnline
+#check_axioms NativeReadRelease.onlineTo
+#check_axioms NativeReadRelease.failedTo
 #check_axioms FileRead.readBinFile
 #check_axioms FileRead.readBinFile_atEOF
 #check_axioms WalRecoverySlice.Segmented.Native.Store.readControl_fromFile

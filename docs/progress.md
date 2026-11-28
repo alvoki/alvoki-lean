@@ -1,30 +1,39 @@
 # Current handoff
 
-**Current direction.** Alvoki is being simplified around independent Lean storage components. DurableBlob, Manifest, immutable SSTable, and segmented WAL retain their contracts, models, proofs, and selected native fixtures. L0 integration and native WAL refinement remain active follow-up work. The retired `DiskTable` engine was a separate implementation and is no longer the baseline for those components.
+The segmented WAL milestone was reviewed and merged in PR #26 at
+`a375c871879e51558be60661d86f73b9cbaa904c`. PR #5 includes the
+tested integration handoff `791940352e0068a9e303236c8b50b22d638fa139`.
+Its [L0 producer checks](../lean/Alvoki/Experiments/L0/WalProducerHandoff.lean)
+recover the registered active child and append authority, pass a reported
+append through close on the reached disk, and pin the recovered choice
+across two opens. The operations in these checks run on the WAL proof
+model. [WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 
-**Single-file WAL.** Public native recovery settles and installs the selected
-history (#8). The append producer uses the same installed writer and marker
-roles, preserves the sole submitted batch as the retry choice after an
-uncertain result, and composes with the existing segmented child contract.
-[Native proofs and premises](../lean/Alvoki/Experiments/WAL/Proofs/README.md)
+The native L0 read scope is being integrated on PR #5. The concrete
+[public scope theorem](../lean/Alvoki/Experiments/L0/WithOpenReads.lean)
+follows root acquisition, manifest and WAL recovery, phase publication,
+each public read and cleanup on their reached IO worlds. It starts with
+an initialized root, a represented table catalog, the selected manifest
+bytes and a WAL recoverable at a known view. The [recovery proof](../lean/Alvoki/Experiments/L0/NativeRecoverAt.lean)
+obtains the session by replay, and publication supplies the online state
+used by the first read. Caught read errors leave the next read on the same
+owned session. A successful read contributes a client event. The cleanup
+proof retains the actual root-unlock response even when an earlier error
+determines the public reply. The failed-`fdopen` limitation on Lean 4.36
+is recorded in the [filesystem contract](design/filesystem-assumptions.md).
 
-**Segmented WAL recovery.** The public open proof connects the installed active
-child to the single-file append producer on the reached disk. The reported
-failure case proves scoped child release and root unlock while preserving the
-primary error and recoverable disk. The native CONTROL interpretation supplies the existing publication cuts,
-including the joint CONTROL and child-name root barrier. Its discard
-continuation preserves the permitted view through a failed publication,
-a failed reopen, and two successful opens. The append candidate composes native child creation, CONTROL publication,
-and both append paths. Its public postcondition carries the ready session
-and the child authority at the exact reached disk. The create and reopen
-producers establish that authority, and successful append returns it.
-The recovery continuation selects and pins a view from the reached disk;
-bounded admissible views supply CONTROL representability. The candidate
-still needs integration review.
-[Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
-· [WAL fault assumptions](design/wal-recovery.md)
+Milestone 1 requires the entire scope theorem to consume realizable
+per-primitive contracts, including correct cursor, lock and writeback
+timing during child recovery. A native fixture exercises a one-shot table
+size error without changing file contents or directory bindings and reads
+again before and after closing. The [L0 guide](../lean/Alvoki/Experiments/L0/README.md)
+describes the remaining consumers of the earlier model bridge.
 
-**Verification baseline.** The integrated recovery candidate for #8 passed
-`bash scripts/reproduce.sh` on the repository after the legacy-engine
-cleanup. The command checks the kernel and axioms, modeled fault schedules,
-and selected native fixtures. [Checks](../lean/Alvoki/Checks/README.md)
+Milestone 2 connects the public append, lost reply and close to the WAL
+producers above and reopens twice on the disk returned by the previous
+operation. Milestone 3 follows table creation, directory sync and manifest
+publication through the admissible interruption prefixes into survivor
+selection and a recovered read. Both deliver their observations to
+`Client.Step`, `Client.Allows` and `Execution.Run.refines`. PR #30 at
+`876256a6005d0845519b15aada3b224275dbf3db` remains the reviewed
+research reference.
