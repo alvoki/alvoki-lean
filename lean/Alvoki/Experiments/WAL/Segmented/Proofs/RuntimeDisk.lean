@@ -176,7 +176,7 @@ theorem openExisting_unwind_error (dir : FilePath) (s : Store)
 /-- Move the recovery post through registration, phase installation, and
 startup unwind. On the error path the slot is still empty; the store invokes
 its root unlock on the reached world after taking the slot. -/
-theorem openExisting_diskPost_of_worker (heap : PhaseMemory) (dir : FilePath)
+theorem openExisting_registered_of_worker (heap : PhaseMemory) (dir : FilePath)
     (disk : W → Disk) (known : Contract.View) (Q : W → Prop) (owned lease : Store → W → Prop)
     (acquire : IOReturns (acquireStore dir) w owned (fun t => Recoverable known none (disk t) ∧ Q t))
     (worker : ∀ s u, owned s u → IOReturns s.recoverChild u
@@ -190,17 +190,24 @@ theorem openExisting_diskPost_of_worker (heap : PhaseMemory) (dir : FilePath)
       IOReturns s.lock.unlock u (fun _ t => Recoverable known none (disk t) ∧ Q t)
         (fun t => Recoverable known none (disk t) ∧ Q t)) :
     IOReturns (openExisting dir) w
-      (fun h t => ∃ session, heap.Ready h session t ∧ Installed session (disk t) ∧ session.view = known ∧ Q t)
+      (fun h t => ∃ reg, Origin dir h reg w t ∧ heap.Registered h reg t ∧
+        Installed reg.session (disk t) ∧ reg.session.view = known ∧ Q t)
       (fun t => Recoverable known none (disk t) ∧ Q t) := by
   unfold IOReturns
   cases opened : openExisting dir w with
   | ok h t =>
-    obtain ⟨session, origin, ready⟩ := openExisting_ready heap dir opened
-    obtain ⟨s, u, child, v, raw, recovery, _, _, rfl⟩ := origin
+    obtain ⟨session, origin, _⟩ := openExisting_ready heap dir opened
+    obtain ⟨s, u, child, v, raw, recovery, stateEq, mutexEq, rfl⟩ := origin
     obtain ⟨installed, eq, keep⟩ := IOReturns.atOk (worker s u (IOReturns.atOk acquire raw)) recovery
     let F := install session
     have final := F.mutex _ (F.phase s session _ (F.attach s.active session.control.active child _ ⟨installed, keep⟩))
-    exact ⟨session, ready, final.1, eq, final.2⟩
+    let registration : Registration := ⟨session, s, child⟩
+    refine ⟨registration, ?_, ?_, final.1, eq, final.2⟩
+    · exact ⟨u, v, raw, recovery, stateEq, mutexEq, rfl⟩
+    · unfold PhaseMemory.Registered
+      rw [stateEq]
+      exact ⟨heap.fresh _ (heap.set _ _ _), heap.newMutex (heap.allocate _ _),
+        heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
   | error e t =>
     rcases openExisting_failure dir opened with early | ⟨s, u, v, raw, err, rfl⟩
     · exact IOReturns.atError acquire early

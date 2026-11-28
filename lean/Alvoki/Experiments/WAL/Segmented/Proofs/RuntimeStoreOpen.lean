@@ -80,12 +80,13 @@ def LocalOpenIO.toOpenIO (localIO : LocalOpenIO heap dir disk known Q) : OpenIO 
 /-- Actual store acquisition produces the canonical path, held lock, directory,
 and freshly allocated empty child slot. The worker consumes those resources;
 every failed episode still carries the slot needed by the outer unwinder. -/
-theorem openExisting_diskPost (ops : OpenIO heap dir disk known Q) (start : Waiting known disk Q w) :
+theorem openExisting_registered_diskPost (ops : OpenIO heap dir disk known Q) (start : Waiting known disk Q w) :
     IOReturns (openExisting dir) w
-      (fun h t => ∃ c, heap.Ready h c t ∧ Installed c (disk t) ∧ c.view = known ∧ Q t)
+      (fun h t => ∃ reg, Origin dir h reg w t ∧ heap.Registered h reg t ∧
+        Installed reg.session (disk t) ∧ reg.session.view = known ∧ Q t)
       (Waiting known disk Q) := by
   let openIO := ops.acquire
-  apply openExisting_diskPost_of_worker heap dir disk known Q
+  apply openExisting_registered_of_worker heap dir disk known Q
     (StoreAt heap openIO.canonical openIO.directory openIO.locked (Waiting known disk Q)) openIO.Lease
     (acquireStore_io heap dir openIO.canonical (openIO.resolve w start) openIO.openDir openIO.stat
       openIO.opened openIO.openLock openIO.tryLock openIO.fresh) _ ops.install ops.take ops.unlock
