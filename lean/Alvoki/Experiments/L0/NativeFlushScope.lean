@@ -99,23 +99,23 @@ private theorem failed {physical : W → Footprint inode}
 
 /-- The component consumer on the actually reserved and scanned world.
 The concrete filesystem producer supplies the store postcondition. -/
-theorem callback_of_store {physical : W → Footprint inode}
-    (online : Online physical root lock ref wal s image history start)
-    (binding : Native.Handle.AtRoot handle root ref) (grant : Grant root lock ref)
+theorem callback {physical : W → Footprint inode}
+    (reached : SessionAt physical root lock ref wal s image history t (.updating wal))
+    (called : Native.flush handle start = NativeWrite.afterWrite ref
+      (if s.mem.isEmpty then .ok s t else if image.view.tail < UInt64.size then store root image s t
+       else .error (IO.userError "absolute WAL position exhausted") t))
+    (grant : Grant root lock ref)
     (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
     (phase : ∀ img, NativeRecoverAt.PhasePrimitives physical root lock ref img)
     (cleanup : ∀ img, NativeReadRelease.Laws heap physical root lock ref img)
     (release : ∀ img, NativeWriteRelease.Laws heap none physical root lock ref img)
-    (scan : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
-      NativeRecoverAt.ScanPrimitives physical root wal image.tables w)
     (run : Execution.Run (before ++ [.reopened]) (some s) image)
-    (storage : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
+    (storage :
       s.mem.isEmpty = false → image.view.tail < UInt64.size →
-      Post (store root image s) w (Stored physical root lock ref wal s image history)
+      Post (store root image s) t (Stored physical root lock ref wal s image history)
         (fun _ => Uncertain physical root lock ref wal s image)) :
     Callback ref lock (Native.flush handle) start
       (fun _ => Finished physical root (before ++ [.reopened]) image) (fun _ => Failed physical root before image) := by
-  obtain ⟨t, reached, called⟩ := dispatch online binding heap cached (phase image) scan
   cases empty : s.mem.isEmpty with
   | true =>
     simp only [empty, ↓reduceIte] at called
@@ -124,7 +124,7 @@ theorem callback_of_store {physical : W → Footprint inode}
     simp only [empty, Bool.false_eq_true, ↓reduceIte] at called
     by_cases fits : image.view.tail < UInt64.size
     · simp only [fits, ↓reduceIte] at called
-      have post := storage t reached empty fits
+      have post := storage empty fits
       cases ret : store root image s t with
       | ok next u =>
         rw [ret] at called
