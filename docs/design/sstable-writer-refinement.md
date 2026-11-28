@@ -54,7 +54,15 @@ builder passes. Each mutant below is rejected by the general proof.
 ## Review boundaries
 
 The success theorem checks the depth and byte limits along every successful
-run. Healthy progress has a separate contract. The recursive index writer
+run. The separate height proof establishes a minimum of two to the power of
+the rank rows per regularly promoted reference. Finalization may carry one
+short rightmost reference and keeps the higher pending pages regular. The
+whole-builder proof follows supplier reads, data flushes and finalization
+to exclude height exhaustion. Physical packet and file-extent progress
+under an input capacity bound remains a separate obligation.
+[Promotion and finalization height](../../lean/Alvoki/Experiments/SSTable/Recursive/WriterHeight.lean)
+
+The recursive index writer
 and reader retain their existing runtime and wire behavior. The ALVSST05
 producer and the L0 consumer continue to use their existing format and
 interfaces.

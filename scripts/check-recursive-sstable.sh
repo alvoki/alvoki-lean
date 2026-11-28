@@ -8,7 +8,7 @@ if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
 fi
 
 root=Alvoki.Experiments.SSTable.Recursive
-modules=("$root".{Invariants,Image,WriterProofs,NativeReadProofs,NativeWriteProofs}
+modules=("$root".{Invariants,Image,WriterHeight,WriterProofs,NativeReadProofs,NativeWriteProofs}
   Alvoki.Checks.Tests.RecursiveSSTableProducer)
 lake build "${modules[@]}" Alvoki.Checks.Audit.AxiomPolicy
 for module in "${modules[@]}"; do
@@ -33,7 +33,10 @@ open ImmutableSSTable.Recursive
 #check_axioms Image.open_represents
 #check_axioms descend_framed
 #check_axioms checkedNativeLookup
+#check_axioms Writer.push_ranked
+#check_axioms Writer.finishPages_height
 #check_axioms modelBuild_ok
+#check_axioms modelBuild_ne_heightError
 #check_axioms buildFileWith_exact
 #check_axioms buildFileWith_refines
 #check_axioms buildFileWith_syncError
@@ -43,6 +46,7 @@ open ImmutableSSTable.Recursive
 #check_axioms buildFileWith_lookup_footerError
 #check_axioms Vertical.durableMultiLevelOpens
 #check_axioms Vertical.durableMultiLevelLookup
+#check_axioms Vertical.durableMultiLevelFooterError
 LEAN
 
 lake exe recursiveSSTableCheck

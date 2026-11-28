@@ -1,4 +1,5 @@
 import Alvoki.Experiments.SSTable.Recursive.WriterPages
+import Alvoki.Experiments.SSTable.Recursive.WriterHeight
 import Alvoki.Experiments.SSTable.Proofs.UnifiedBuilder
 
 namespace ImmutableSSTable.Recursive
@@ -314,12 +315,13 @@ private structure StateAt (layout : Layout) (crc : Checksum) (rows : List Entry)
   keyFits : ∀ row ∈ state.data.toList, indexEntrySize row.key + checksumSize ≤ maxRowSize
   pages : PendingPages layout crc file.bytes rows state.offset 0
     (state.count - state.data.size) state.pages
+  ranked : RankedPages 0 0 (state.count - state.data.size) state.pages
   empty : state.count = 0 → file.bytes = .empty
 
 private theorem StateAt.initial (layout : Layout) (crc : Checksum) (rows : List Entry) :
     StateAt layout crc rows { rows } {} := by
   refine ⟨rfl, by decide, Nat.zero_le _, Nat.zero_le _, ?_, rfl, ⟨[], rfl⟩,
-    by simp, by simp, .nil, by simp⟩
+    by simp, by simp, .nil, .nil, by simp⟩
   simp [Ordered]
 
 private theorem StateAt.dataSize (inv : StateAt layout crc rows file state) :
@@ -421,6 +423,12 @@ private theorem flushData_ok {layout : Layout} {crc : Checksum} {options : Build
     obtain ⟨⟨off, pages⟩, afterPush, pushRan, done⟩ := bind_ok remaining
     change ((modelWriter crc layout options).push 1 position ref state.pages maxHeight).run mid =
       .ok ((off, pages), afterPush) at pushRan
+    have rank := Writer.push_ranked crc layout options position state.pages ref mid inv.ranked dataPos
+      (rowEnd.symm ▸ capacity)
+    change (match ((modelWriter crc layout options).push 1 position ref state.pages maxHeight).run mid with
+      | .error message => message ≠ "SSTable index height exceeds format limit"
+      | .ok ((_, pages), _) => RankedPages 0 0 (ref.firstRow + ref.count) pages) at rank
+    rw [pushRan] at rank
     rw [pos] at pushRan
     obtain ⟨put, newPages⟩ := push_ok oldPages child (Nat.le_refl _) rfl
       (by change Ordered (rows.take (ref.firstRow + ref.count)); rw [rowEnd]; exact inv.ordered) target (by omega) pushRan
@@ -428,9 +436,10 @@ private theorem flushData_ok {layout : Layout} {crc : Checksum} {options : Build
     have beforePush : Appended file mid position :=
       ⟨by rw [disk], pos, ⟨payload, payloadEq⟩, space⟩
     refine ⟨⟨put.position, put.room, inv.count, capacity, inv.ordered, inv.lastKey,
-      ⟨rows.take state.count, by simp⟩, by simp, by simp, ?_, ?_⟩,
+      ⟨rows.take state.count, by simp⟩, by simp, by simp, ?_, ?_, ?_⟩,
       beforePush.trans put, rfl, rfl, rfl⟩
     · simpa [ref, put.position, Nat.sub_add_cancel dataFits] using newPages
+    · simpa [rowEnd] using rank
     · intro zero
       change state.count = 0 at zero
       omega
@@ -502,7 +511,7 @@ private theorem accept_ok {layout : Layout} {crc : Checksum} {options : BuildOpt
       rw [← oldKey, post.lastKey, show (rows.take ready.count).getLast? = some old from last]
       rfl
     refine ⟨⟨post.offset, post.room, by dsimp; omega, by simpa [size] using room,
-      orderNext, ?_, ?_, ?_, ?_, ?_, by simp⟩, by simp [size], supplier⟩
+      orderNext, ?_, ?_, ?_, ?_, ?_, ?_, by simp⟩, by simp [size], supplier⟩
     · simp [takenPlus]
     · obtain ⟨earlier, cut⟩ := post.data
       refine ⟨earlier, ?_⟩
@@ -519,6 +528,8 @@ private theorem accept_ok {layout : Layout} {crc : Checksum} {options : BuildOpt
       · exact keyWidth
     · simpa only [Array.size_push, show ready.count + 1 - (ready.data.size + 1) =
         ready.count - ready.data.size by omega] using post.pages
+    · simpa only [Array.size_push, show ready.count + 1 - (ready.data.size + 1) =
+        ready.count - ready.data.size by omega] using post.ranked
 
 
 private theorem streamRows_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
@@ -557,7 +568,7 @@ private theorem streamRows_ok {layout : Layout} {crc : Checksum} {options : Buil
       rw [List.head?_drop] at actual
       have consumedInv : StateAt layout crc rows ⟨rest, bytes⟩ state :=
         ⟨inv.offset, inv.room, inv.count, inv.countLimit, inv.ordered, inv.lastKey,
-         inv.data, inv.dataFits, inv.keyFits, inv.pages, inv.empty⟩
+         inv.data, inv.dataFits, inv.keyFits, inv.pages, inv.ranked, inv.empty⟩
       obtain ⟨post, count, tail⟩ := accept_ok consumedInv actual.symm (by omega) target one
       have remaining : mid.rows = rows.drop ready.count := by
         have eq := congrArg List.tail supplier
@@ -684,5 +695,247 @@ theorem modelBuild_ok {crc : Checksum} {layout : Layout} {options : BuildOptions
         cases run
     · simp only [buildStream, layoutValid, ↓reduceIte] at run
       cases run
+
+
+private def heightFailure : String := "SSTable index height exceeds format limit"
+
+private theorem flushData_height
+    (inv : StateAt layout crc rows file state) (options : BuildOptions) :
+    ((modelWriter crc layout options).flushData state).run file ≠ .error heightFailure := by
+  intro failed
+  cases back : state.data.back? with
+  | none =>
+    simp [Writer.flushData, back, StateT.run, Pure.pure, StateT.pure, Except.pure] at failed
+  | some last =>
+    simp only [Writer.flushData, back] at failed
+    let write := (modelWriter crc layout options).writePacket dataKind maxRowSize state.offset
+      (encodeData layout state.data)
+    change (write.run file).bind _ = _ at failed
+    cases step : write.run file with
+    | error error =>
+      rw [step] at failed
+      have same : error = heightFailure := Except.error.inj failed
+      subst error
+      let size := (encodeData layout state.data).size + checksumSize
+      by_cases packet : size ≤ maxRowSize
+      · by_cases extent : state.offset + size + footerPacketSize ≤ maxFileSize
+        · simp only [write, Writer.writePacket, size, packet, extent, ↓reduceIte] at step
+          change Except.ok _ = Except.error heightFailure at step
+          cases step
+        · simp only [write, Writer.writePacket, size, packet, extent, ↓reduceIte] at step
+          change Except.error "SSTable file exceeds signed offset limit" = Except.error heightFailure at step
+          exact (by decide : "SSTable file exceeds signed offset limit" ≠ heightFailure) (Except.error.inj step)
+      · simp only [write, Writer.writePacket, size, packet, ↓reduceIte] at step
+        change Except.error "SSTable packet exceeds size limit" = Except.error heightFailure at step
+        exact (by decide : "SSTable packet exceeds size limit" ≠ heightFailure) (Except.error.inj step)
+    | ok result =>
+      obtain ⟨position, written⟩ := result
+      rw [step] at failed
+      let ref : Ref := ⟨last.key, state.offset, position - state.offset,
+        state.count - state.data.size, state.data.size⟩
+      have dataPos : 0 < state.data.size := by
+        have nz : state.data.size ≠ 0 := by
+          intro zero
+          simp [Array.size_eq_zero_iff.mp zero] at back
+        omega
+      have bound : ref.firstRow + ref.count ≤ maxFileSize := by
+        change state.count - state.data.size + state.data.size ≤ maxFileSize
+        have := inv.dataSize
+        have := inv.countLimit
+        omega
+      have preserved := Writer.push_height crc layout options position state.pages ref written inv.ranked
+        dataPos bound
+      change (((modelWriter crc layout options).push 1 position ref state.pages maxHeight).run written).bind _
+        = _ at failed
+      cases pushRan : ((modelWriter crc layout options).push 1 position ref state.pages maxHeight).run
+          written with
+      | error error =>
+        rw [pushRan] at failed
+        have same : error = heightFailure := Except.error.inj failed
+        subst error
+        exact preserved pushRan
+      | ok result =>
+        obtain ⟨⟨off, pages⟩, after⟩ := result
+        rw [pushRan] at failed
+        cases failed
+
+private theorem accept_height
+    (inv : StateAt layout crc rows file state) (options : BuildOptions) (row : Entry) :
+    ((modelWriter crc layout options).accept state row).run file ≠ .error heightFailure := by
+  intro failed
+  cases checked : ({ lastKey := state.lastKey } : Unified.BuilderState).checkRow layout row with
+  | error error =>
+    simp only [Writer.accept, modelWriter, checked] at failed
+    change Except.error error = Except.error heightFailure at failed
+    have same := Except.error.inj failed
+    subst error
+    unfold Unified.BuilderState.checkRow at checked
+    split at checked
+    · simp [heightFailure] at checked
+    · split at checked
+      · simp [heightFailure] at checked
+      · split at checked
+        · simp [heightFailure] at checked
+        · split at checked <;> simp [heightFailure] at checked
+  | ok result =>
+    cases result
+    simp only [Writer.accept, modelWriter, checked] at failed
+    split at failed
+    · change (((modelWriter crc layout options).flushData state).run file).bind _ = _ at failed
+      cases step : ((modelWriter crc layout options).flushData state).run file with
+      | error error =>
+        rw [step] at failed
+        have same : error = heightFailure := Except.error.inj failed
+        subst error
+        exact flushData_height inv options step
+      | ok result =>
+        obtain ⟨ready, written⟩ := result
+        rw [step] at failed
+        cases failed
+    · cases failed
+
+private theorem streamRows_height
+    (inv : StateAt layout crc rows file state) (supplier : file.rows = rows.drop state.count)
+    (target : options.indexTarget ≤ maxRowSize) (room : state.count + fuel ≤ maxFileSize) :
+    ((modelWriter crc layout options).streamRows modelNext state fuel).run file ≠
+      .error heightFailure := by
+  induction fuel generalizing file state with
+  | zero =>
+    intro failed
+    obtain ⟨available, bytes⟩ := file
+    cases available with
+    | nil => cases failed
+    | cons row rest =>
+      change Except.error "SSTable row count exceeds format limit" = Except.error heightFailure at failed
+      exact (by decide : "SSTable row count exceeds format limit" ≠ heightFailure) (Except.error.inj failed)
+  | succ fuel ih =>
+    intro failed
+    obtain ⟨available, bytes⟩ := file
+    cases available with
+    | nil => cases failed
+    | cons row rest =>
+      change (((modelWriter crc layout options).accept state row).run ⟨rest, bytes⟩).bind _
+        = _ at failed
+      have consumedInv : StateAt layout crc rows ⟨rest, bytes⟩ state :=
+        ⟨inv.offset, inv.room, inv.count, inv.countLimit, inv.ordered, inv.lastKey,
+         inv.data, inv.dataFits, inv.keyFits, inv.pages, inv.ranked, inv.empty⟩
+      cases accepted : ((modelWriter crc layout options).accept state row).run ⟨rest, bytes⟩ with
+      | error error =>
+        rw [accepted] at failed
+        have same : error = heightFailure := Except.error.inj failed
+        subst error
+        exact accept_height consumedInv options row accepted
+      | ok result =>
+        obtain ⟨ready, mid⟩ := result
+        rw [accepted] at failed
+        have actual := congrArg List.head? supplier
+        change some row = (rows.drop state.count).head? at actual
+        rw [List.head?_drop] at actual
+        obtain ⟨post, count, tail⟩ := accept_ok consumedInv actual.symm (by omega) target accepted
+        have remaining : mid.rows = rows.drop ready.count := by
+          have eq := congrArg List.tail supplier
+          change rest = (rows.drop state.count).tail at eq
+          rw [List.tail_drop] at eq
+          exact tail.trans (eq.trans (by rw [count]))
+        exact ih post remaining (by omega) failed
+
+private theorem finish_height
+    (inv : StateAt layout crc rows file state) (target : options.indexTarget ≤ maxRowSize) :
+    (do
+      let ready ← (modelWriter crc layout options).flushData state
+      let (height, offset, size) ←
+        (modelWriter crc layout options).finishPages 1 ready.offset ready.pages maxHeight
+      let footer : Footer := ⟨⟨layout, ready.count, offset, size⟩, height⟩
+      modelSink.write (encodePacket crc 0 footerKind 0 (encodeFooter footer))
+      modelSink.flush
+      return ready.count : ModelM Nat).run file ≠ .error heightFailure := by
+  intro failed
+  let writer := modelWriter crc layout options
+  change ((writer.flushData state).run file).bind _ = _ at failed
+  cases flushed : (writer.flushData state).run file with
+  | error error =>
+    rw [flushed] at failed
+    have same : error = heightFailure := Except.error.inj failed
+    subst error
+    exact flushData_height inv options flushed
+  | ok result =>
+    obtain ⟨ready, mid⟩ := result
+    rw [flushed] at failed
+    obtain ⟨post, _, emptyData, _, _⟩ := flushData_ok inv target flushed
+    have ranked := post.ranked
+    rw [emptyData] at ranked
+    simp only [Array.size_empty, Nat.sub_zero] at ranked
+    have progress := Writer.finishPages_height crc layout options ready.offset ready.count
+      ready.pages mid ranked post.countLimit
+    change ((writer.finishPages 1 ready.offset ready.pages maxHeight).run mid).bind _ = _ at failed
+    change (match (writer.finishPages 1 ready.offset ready.pages maxHeight).run mid with
+      | .error error => error ≠ "SSTable index height exceeds format limit"
+      | .ok ((height, _, _), _) => height ≤ maxHeight) at progress
+    cases finished : (writer.finishPages 1 ready.offset ready.pages maxHeight).run mid with
+    | error error =>
+      rw [finished] at failed progress
+      exact progress (Except.error.inj failed)
+    | ok result =>
+      obtain ⟨⟨height, offset, size⟩, body⟩ := result
+      rw [finished] at failed
+      cases failed
+
+private theorem streamThen_height (inv : StateAt layout crc rows file state)
+    (supplier : file.rows = rows.drop state.count) (target : options.indexTarget ≤ maxRowSize)
+    (room : state.count + fuel ≤ maxFileSize) (finish : BuilderState → ModelM Nat)
+    (safe : ∀ state reached, StateAt layout crc rows reached state →
+      (finish state).run reached ≠ .error heightFailure) :
+    (((modelWriter crc layout options).streamRows modelNext state fuel >>= finish).run file) ≠
+      .error heightFailure := by
+  intro failed
+  change (((modelWriter crc layout options).streamRows modelNext state fuel).run file).bind _ = _ at failed
+  cases streamed : ((modelWriter crc layout options).streamRows modelNext state fuel).run file with
+  | error error =>
+    rw [streamed] at failed
+    have same : error = heightFailure := Except.error.inj failed
+    subst error
+    exact streamRows_height inv supplier target room streamed
+  | ok result =>
+    obtain ⟨last, reached⟩ := result
+    rw [streamed] at failed
+    obtain ⟨post, _, _⟩ := streamRows_ok inv supplier target room streamed
+    exact safe last reached post failed
+
+private theorem buildStream_height (crc : Checksum) (layout : Layout)
+    (rows : List Entry) (options : BuildOptions) :
+    (buildStream crc layout modelSink modelNext id options).run { rows } ≠ .error heightFailure := by
+  by_cases layoutValid : layout.Valid
+  · by_cases targets : 0 < options.dataTarget ∧ options.dataTarget ≤ maxRowSize ∧
+        0 < options.indexTarget ∧ options.indexTarget ≤ maxRowSize
+    · simp only [buildStream, layoutValid, targets, ↓reduceIte]
+      exact streamThen_height (StateAt.initial layout crc rows) rfl targets.2.2.2 (by simp) _
+        (fun _ _ post => finish_height post targets.2.2.2)
+    · simp only [buildStream, layoutValid, targets, ↓reduceIte]
+      intro failed
+      change Except.error "invalid SSTable packet targets" = Except.error heightFailure at failed
+      exact (by decide : "invalid SSTable packet targets" ≠ heightFailure) (Except.error.inj failed)
+  · simp only [buildStream, layoutValid, ↓reduceIte]
+    intro failed
+    change Except.error "invalid SSTable layout" = Except.error heightFailure at failed
+    exact (by decide : "invalid SSTable layout" ≠ heightFailure) (Except.error.inj failed)
+
+/-- The row bound and the two-child promotion rule exclude height exhaustion
+for the whole executable build, including when the terminal fringe is short.
+The physical packet and file-extent guards have independent outcomes. -/
+theorem modelBuild_ne_heightError (crc : Checksum) (layout : Layout)
+    (rows : List Entry) (options : BuildOptions) :
+    modelBuild crc layout rows options ≠ .error "SSTable index height exceeds format limit" := by
+  intro failed
+  unfold modelBuild at failed
+  cases run : (buildStream crc layout modelSink modelNext id options).run { rows } with
+  | error error =>
+    rw [run] at failed
+    have same : error = heightFailure := Except.error.inj failed
+    subst error
+    exact buildStream_height crc layout rows options run
+  | ok result =>
+    obtain ⟨count, file⟩ := result
+    rw [run] at failed
+    cases failed
 
 end ImmutableSSTable.Recursive

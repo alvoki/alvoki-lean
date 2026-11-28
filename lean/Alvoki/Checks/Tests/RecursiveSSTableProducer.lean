@@ -76,4 +76,33 @@ theorem durableMultiLevelOpens :
         table.table.Represents rows :=
   ⟨published, writes, rfl, writtenImage.open_represents (Source.memory_serves bytes)⟩
 
+private def footerFault : ReadPrimitives (ReadM Nat) Unit where
+  openFile _ _ := fun start => .ok () (start + 1)
+  size _ := fun start => .ok bytes.size (start + 1)
+  pread _ _ _ := fun start => .error "footer read fault" (start + 1)
+
+private theorem footerFault_reads (identity : Nat) (actual : ByteArray)
+    (sync : published.durable = some (identity, actual)) :
+    ReadEffects footerFault name (7 ≤ ·) (fun _ _ => some 17 = some identity) actual := by
+  have content : (17, bytes) = (identity, actual) := Option.some.inj sync
+  have sameIdentity := congrArg Prod.fst content
+  have sameBytes := congrArg Prod.snd content
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · intro start initial
+    exact ⟨by omega, trivial⟩
+  · intro _ _ _ _ _
+    exact congrArg some sameIdentity
+  · intro _ start initial
+    exact ⟨⟨by have := initial.1; omega, initial.2⟩, congrArg ByteArray.size sameBytes⟩
+  · intro _ _ _ start initial
+    exact ⟨by have := initial.1; omega, initial.2⟩
+
+/-- The actual modeled writer reaches the sync state used by the checked
+reader. A later footer fault keeps the original failure and reached frame. -/
+theorem durableMultiLevelFooterError :
+    (openCheckedWith footerFault crc name layout.tableId >>= fun handle => handle.table.lookup a.key) 7 =
+      .error "footer read fault" 10 ∧ 7 ≤ 10 :=
+  buildFileWith_lookup_footerError SSTableProducerCheck.effects writes
+    (inodeAt := fun _ _ => some 17) footerFault_reads (by decide) rfl rfl (by decide) rfl
+
 end ImmutableSSTable.Recursive.Vertical
