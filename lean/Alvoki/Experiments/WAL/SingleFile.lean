@@ -251,6 +251,14 @@ def Handle.Assembled (h : Handle) (policy : Policy)
     (ref : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle))) (mutex : Std.BaseMutex) : Prop :=
   h = ⟨policy, ref, mutex⟩
 
+theorem installReady_run (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle))
+    (w : Void IO.RealWorld) :
+    let allocated := (IO.mkRef ready.phase : BaseIO _) w
+    let guard := Std.BaseMutex.new allocated.state
+    ∃ handle, installReady ready w = .ok handle guard.state ∧
+      Handle.Assembled handle ready.policy allocated.val guard.val :=
+  ⟨_, rfl, rfl⟩
+
 private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
 
 private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
