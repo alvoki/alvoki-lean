@@ -6,6 +6,19 @@ namespace ExperimentalL0
 open ManifestComposition DurableBlob
 open WalRecoverySlice.Segmented
 
+/-- Before manifest publication, the old selection is still a recovery
+candidate. A reached prefix can leave an orphan without changing the history
+or the physical bindings the old manifest needs. -/
+theorem retainRecoverySelection {selected : σ → Selected} {ns : TableNamespace σ}
+    (prior : Durable (selected before) history)
+    (catalog : ns.Represents before (selected before).tables)
+    (same : selected after = selected before)
+    (keeps : ns.Keeps before after (selected before).tables) :
+    Nonempty (Durable (selected after) history) ∧
+      ns.Represents after (selected after).tables := by
+  rw [same]
+  exact ⟨⟨prior⟩, catalog.frame keeps⟩
+
 /-- The reached create in the nonempty flush path supplies both proposals
 against one installed catalog. -/
 theorem flushChoicesAtCreate {tableId : UInt64}
