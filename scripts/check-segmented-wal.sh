@@ -204,7 +204,8 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.sealedScanWith_reads
 #check_axioms Native.scanReadyWith_fileReads
 #check_axioms Native.recoverCompactWith_delivers
-#check_axioms Native.withActiveChild_reportedFailure
+#check_axioms Native.recoverCompactWith_reached
+#check_axioms Native.finishCompactRecoveryWith_disk
 #check_axioms Native.scanReadyWith_selected
 #check_axioms Native.ReadOutcome.healthy
 LEAN

@@ -354,6 +354,17 @@ def recoverSealedWith [Monad m] [MonadExceptOf error m]
   unless cursor.nextSeq == capacity + 1 do throw (invalid "incomplete sealed segment")
   return next
 
+def finishCompactRecoveryWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (collect : Control → m Unit) (register : Nat → child → m Unit)
+    (c : Control) (acquired : child × Cursor × α) : m (CompactSession × α) := do
+  let (child, cursor, folded) := acquired
+  let session : CompactSession := ⟨c, cursor.nextSeq - 1⟩
+  if session.activeCount > c.capacity then throw (invalid "oversized active segment")
+  if c.discarded > session.bounds.tail then throw (invalid "release beyond recovered data")
+  collect c
+  register c.active child
+  return (session, folded)
+
 /-- Shared recovery schedule. Child opening returns its reached cursor and
 accumulator. Only the active child can escape its scope. -/
 def recoverCompactWith [Monad m] [MonadExceptOf error m]
@@ -366,13 +377,7 @@ def recoverCompactWith [Monad m] [MonadExceptOf error m]
     (fun id acc => recoverSealedWith invalid c.capacity (openChild c id acc) close)
     c.firstNeeded (c.active - c.firstNeeded) seed
   withActiveChild (error := error) (openChild c c.active acc)
-    (fun acquired => close acquired.1) fun (child, cursor, next) => do
-      let session : CompactSession := ⟨c, cursor.nextSeq - 1⟩
-      if session.activeCount > c.capacity then throw (invalid "oversized active segment")
-      if c.discarded > session.bounds.tail then throw (invalid "release beyond recovered data")
-      collect c
-      register c.active child
-      return (session, next)
+    (fun acquired => close acquired.1) (finishCompactRecoveryWith invalid collect register c)
 
 private def Store.recoverFold (s : Store) (seed : α) (step : Option (α → Nat → Bytes → α)) :
     IO (CompactSession × α) :=

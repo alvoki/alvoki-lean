@@ -68,9 +68,15 @@ subsequent opens agree on the survivor.
   collection and registration reports, it returns the exact active
   child authority and the folded retained suffix. The abstract segment
   layout determines the active count and the pre-existing bounds theorem
-  relates it to base and tail. `withActiveChild_reportedFailure` checks
-  that the active scope calls close on the reached error state and
-  preserves the primary error when close itself reports an error.
+  relates it to base and tail. `recoverCompactWith_reached` accounts for
+  every reported or interrupted stage. The active scope closes the
+  exact child on a reported error using the reached state and preserves
+  the primary error if close also reports an error. A process stop
+  propagates to the process-exit resource contract.
+  After the active cursor passes validation,
+  `finishCompactRecoveryWith_disk` derives the reached disk frame from
+  the checked collection loop, including partial collection and a root
+  sync whose effect takes place before a failed acknowledgement.
 - `scanReadyWith_fileReads` starts from a ready layout and per-file
   scope/read reports. The sealed worker uses two scoped marker reads
   in boundary mode and a scoped data read. Marker selection follows
@@ -96,10 +102,12 @@ state, bytes and locks.
 ## Acceptance gate and producer migration
 
 General segmented compact recovery refinement is still open. The
-compact recovery stage theorem needs an interpretation of the
-actual root selection and collection reports, child allocation/release
-and installation cell across every failure or interruption. It must
-return the selected ghost history and the reached disk together.
+segmented producer still needs to instantiate the root and child
+reports and compose their reached outcomes with outer installation.
+The collection stage has a disk frame. The next proof must carry the
+selected prefix across the sealed scopes, get the active cursor and
+ghost suffix from the same compact child open, and thread the resulting
+disk and authorities through release and installation.
 The existing history-based `publicOpenModel_refines`,
 `reopensWithAppendAuthority` and retry theorems still prove the
 fault cases for their shared history-model schedules. The healthy
@@ -110,6 +118,11 @@ Linux drain fixture supplies concrete retry evidence for one such cut.
 Once the compact producer supplies that composition, replace the native
 cached-view handoffs `scan_opened`, `scanActiveModel` and the
 history-bearing `installScopedModel` result in the acceptance chain.
+The compact append path carries a cursor, descriptor bindings and
+metadata. It avoids a proof that an executable history changes in
+lockstep with the ghost history. On-demand scan adds distinct read and
+scope obligations. The overall proof cost can be assessed once the
+old cached-view handoffs are removed.
 Keep the old logical history, `Ready`/`Dirty`, `Installed`, prefix/segment
 partition and CONTROL publication proofs as abstract correctness
 evidence. The descriptor-level prefix/drain, canonical boundary selection,
