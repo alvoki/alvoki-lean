@@ -81,6 +81,16 @@ def pendingPacketBytes : List Page → Nat
   | [] => 0
   | page :: upper => page.bytes + checksumSize + pendingPacketBytes upper
 
+theorem PendingPages.pendingPacketBytes_le
+    (pending : PendingPages layout crc image rows offset height stop pages) :
+    pendingPacketBytes pages ≤ maxIndexSize * pages.length := by
+  induction pending with
+  | nil => simp [pendingPacketBytes]
+  | cons upper current ih =>
+    have one := current.packetBound
+    simp only [pendingPacketBytes, List.length_cons, Nat.mul_succ]
+    omega
+
 private def modelWriter (crc : Checksum) (layout : Layout) (options : BuildOptions) :
     Writer ModelM String :=
   ⟨crc, layout, modelSink, id, options⟩
@@ -165,13 +175,18 @@ theorem Writer.flushData_progress (crc : Checksum) (layout : Layout) (options : 
       pendingPacketBytes state.pages + footerPacketSize ≤ maxFileSize) :
     ∃ next out, ((⟨crc, layout, modelSink, id, options⟩ : Writer ModelM String).flushData state).run
       file = .ok (next, out) ∧ next.offset = out.bytes.size ∧ next.count = state.count ∧
-      next.data = #[] ∧ out.rows = file.rows := by
+      next.data = #[] ∧ out.rows = file.rows ∧
+      next.offset ≤ (file.bytes.size + ((encodeData layout state.data).size + checksumSize)) +
+        pendingPacketBytes state.pages ∧ (state.data ≠ #[] → next.payloadBytes = 0) := by
   let writer := modelWriter crc layout options
   cases back : state.data.back? with
   | none =>
-    refine ⟨state, file, ?_, position, rfl, Array.back?_eq_none_iff.mp back, rfl⟩
-    simp only [Writer.flushData, back]
-    rfl
+    have empty := Array.back?_eq_none_iff.mp back
+    refine ⟨state, file, ?_, position, rfl, empty, rfl, by omega, ?_⟩
+    · simp only [Writer.flushData, back]
+      rfl
+    · intro nonempty
+      exact False.elim (nonempty empty)
   | some last =>
     let body := encodeData layout state.data
     let payload := encodePacket crc layout.tableId dataKind file.bytes.size body
@@ -192,10 +207,10 @@ theorem Writer.flushData_progress (crc : Checksum) (layout : Layout) (options : 
       pending.extend payload (by rw [cursor]; omega) (Nat.le_refl _)
     have addRoom : mid.bytes.size + pendingPacketBytes state.pages + footerPacketSize ≤ maxFileSize :=
       cursor.symm ▸ room
-    obtain ⟨stop, pages, out, pushed, endEq, _, preserves⟩ :=
+    obtain ⟨stop, pages, out, pushed, endEq, stopBound, preserves⟩ :=
       Writer.push_progress crc layout options above ref maxHeight levels addRoom
     refine ⟨{ state with offset := stop, data := #[], payloadBytes := 0, pages := pages },
-      out, ?_, endEq, rfl, rfl, preserves⟩
+      out, ?_, endEq, rfl, rfl, preserves, by simpa [cursor, size, body] using stopBound, fun _ => rfl⟩
     change (writer.flushData state).run file = _
     simp only [Writer.flushData, back, position]
     change ((writer.writePacket dataKind maxRowSize file.bytes.size body).run file).bind _ = _
