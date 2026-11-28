@@ -1053,16 +1053,16 @@ private theorem acquireActiveModel_project (root : FilePath) (r : RootReports)
     · simp only [child, named, ↓reduceIte]
       rfl
 
-private def scanActiveModel (ready : ReadyChild) : M (List Bytes) := fun s =>
+private def scanActiveModel (index : Nat) (ready : ReadyChild) : M (List Bytes) := fun s =>
   match (SingleFile.scanWith (SingleFile.storedPhase ready) : SingleFile.OpenM _).run
-      {image := Persistence.freshImage} with
+      {image := s.disk.segment index, held := true} with
   | .ok response _ => .ok response s
   | .error token _ => .error token s
 
-private theorem scanActiveModel_eq (ready : ReadyChild)
+private theorem scanActiveModel_eq (index : Nat) (ready : ReadyChild)
     (phase : ready.phase = .active ready.lock (SingleFile.appendFiles ready.writer ready.reader ready.markers)
       ready.recovered.cursor ready.recovered.batches) :
-    scanActiveModel ready = pure ready.recovered.batches := by
+    scanActiveModel index ready = pure ready.recovered.batches := by
   funext s
   unfold scanActiveModel
   rw [SingleFile.scan_opened ready _ phase]
@@ -1135,7 +1135,7 @@ private def reopenScopedModel (root : FilePath) (r : RootReports)
   Segmented.reopenWith (nativeReopenOps root r reports)
     (fun policy index resume =>
       Native.withActiveChild (error := String) (acquireActiveModel root r reports policy index)
-        (projectedChildClose index closeError) fun ready => do resume ready (← scanActiveModel ready))
+        (projectedChildClose index closeError) fun ready => do resume ready (← scanActiveModel index ready))
     (fun session ready => pure (session, ready))
 
 /-- Erasing the returned child gives exactly the original disk run. A
@@ -1150,7 +1150,7 @@ private theorem reopenScopedModel_project (root : FilePath) (r : RootReports)
       (live : s.disk.liveControl = some c) :
       ((Native.withActiveChild (error := String) (acquireActiveModel root r reports c.policy c.active)
         (projectedChildClose c.active closeError) (fun ready => do
-          let batches ← scanActiveModel ready
+          let batches ← scanActiveModel c.active ready
           let session ← Segmented.finishReopen ops c sealed batches
           pure (session, ready)) >>= fun value => pure value.1).run s) =
         ((ops.openSegment c.policy c.active >>= Segmented.finishReopen ops c sealed).run s) := by
@@ -1174,7 +1174,7 @@ private theorem reopenScopedModel_project (root : FilePath) (r : RootReports)
     rw [same]
     let finish := Segmented.finishReopen (nativeReopenOps root r reports) c sealed
     let resume (ready : ReadyChild) : M (Session × ReadyChild) := do
-      let batches ← scanActiveModel ready
+      let batches ← scanActiveModel c.active ready
       let session ← finish batches
       pure (session, ready)
     change ((Native.withActiveChild (error := String) acquire (projectedChildClose c.active closeError) resume >>=
@@ -1195,7 +1195,7 @@ private theorem reopenScopedModel_project (root : FilePath) (r : RootReports)
               | .ok (.error err) t => .ok (.error err) t
               | .error token t => .error token t := by
           have phase := (acquireActive_scanPhase root r reports c.policy c.active s opened).2
-          simp only [resume, scanActiveModel_eq ready phase, pure_bind]
+          simp only [resume, scanActiveModel_eq c.active ready phase, pure_bind]
           simp only [Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind]
           cases finish ready.recovered.batches afterOpen with
           | error => rfl
@@ -1325,7 +1325,7 @@ private theorem reopenScopedModel_delivered (root : FilePath) (r : RootReports)
       obtain ⟨c, sealed⟩ := selection
       let acquire := acquireActiveModel root r reports c.policy c.active
       let resume (handle : ReadyChild) : M (Session × ReadyChild) := do
-        let batches ← scanActiveModel handle
+        let batches ← scanActiveModel c.active handle
         let session ← Segmented.finishReopen callbacks c sealed batches
         pure (session, handle)
       change (Native.withActiveChild (error := String) (ExceptT.mk acquire.run) (projectedChildClose c.active closeError) resume).run before =
@@ -1351,7 +1351,7 @@ private theorem reopenScopedModel_delivered (root : FilePath) (r : RootReports)
                 disk := before.disk.setSegment c.active childAfter.image handle.recovered.cursor}
               dsimp only at ran
               have phase := (SingleFile.openExisting_scanPhase _ _ _ _ rfl single).2
-              simp only [resume, id_eq, scanActiveModel_eq handle phase, pure_bind] at ran
+              simp only [resume, id_eq, scanActiveModel_eq c.active handle phase, pure_bind] at ran
               simp only [Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind] at ran
               cases finished : (Segmented.finishReopen callbacks c sealed handle.recovered.batches) opened with
               | error => simp only [opened] at finished; rw [finished] at ran; cases ran
