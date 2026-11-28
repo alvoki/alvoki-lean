@@ -1,4 +1,4 @@
-import Alvoki.Experiments.SSTable.Recursive.Reader
+import Alvoki.Experiments.SSTable.Recursive.BlockIterator
 
 namespace ImmutableSSTable.Recursive
 
@@ -319,5 +319,229 @@ theorem checkedLookup_framed (h : ImageReads frame source image)
     ReadPost frame (openChecked source crc id >>= (·.lookup key)) (fun value =>
       (openChecked (exactSource image) crc id >>= (·.lookup key)) () = .ok value ()) :=
   (Sim.bind (open_sim h crc id) (fun _ _ same => lookup_sim h same key)).result
+
+namespace BlockIterator
+
+private theorem position_sim (h : ImageReads frame source image)
+    (same : SameHandle actual expected source image) (before : Ref → Bool)
+    (ref : Ref) (parent : Nat) (path : List Frame) (height : Nat) :
+    Sim frame (descend actual before ref parent path height)
+      (descend expected before ref parent path height) Eq := by
+  induction height generalizing ref parent path with
+  | zero =>
+    unfold descend
+    apply Sim.bind (data_sim h same _ _)
+    rintro a _ rfl
+    exact Sim.pure rfl
+  | succ depth ih =>
+    have ⟨src, refSource, layout, crc, _, _, _, _⟩ := same
+    unfold descend
+    rw [src, refSource, layout, crc]
+    apply Sim.bind (index_sim h _ _ _ _ _)
+    rintro raw _ rfl
+    apply Sim.bind (Sim.decode _)
+    rintro children _ rfl
+    split
+    · exact ih _ _ _
+    · exact Sim.error _ _
+
+private theorem root_sim (h : ImageReads frame source image)
+    (same : SameHandle actual expected source image) (before : Ref → Bool) (child : Ref) :
+    Sim frame (fromRoot actual before child) (fromRoot expected before child) Eq := by
+  have ⟨_, _, _, _, root, height, _, _⟩ := same
+  unfold fromRoot
+  rw [root, height]
+  exact position_sim h same _ _ _ _ _
+
+private theorem boundary_sim (h : ImageReads frame source image)
+    (same : SameHandle actual expected source image) (index : Nat) (path : List Frame) :
+    Sim frame (atBoundary actual index path) (atBoundary expected index path) Eq := by
+  induction path with
+  | nil =>
+    have ⟨_, _, _, _, _, _, root, _⟩ := same
+    unfold atBoundary
+    rw [root]
+    dsimp only
+    split
+    · exact root_sim h same _ _
+    · exact Sim.error _ _
+  | cons _ _ ih =>
+    unfold atBoundary
+    split
+    · dsimp only
+      split
+      · exact position_sim h same _ _ _ _ _
+      · exact Sim.error _ _
+    · exact ih
+
+end BlockIterator
+
+/-- Both cursors use identically checked packets from the same immutable image.
+Only the real descriptor's source can perform effects or return I/O errors. -/
+def BlockCursor.SameImage (actual : BlockCursor (ReadM world)) (expected : BlockCursor (ReadM Unit))
+    (source : Source (ReadM world)) (image : ByteArray) : Prop :=
+  SameHandle actual.handle expected.handle source image ∧
+    actual.index = expected.index ∧ actual.position = expected.position
+
+private theorem BlockCursor.prepare_sim (h : ImageReads frame source image)
+    (same : BlockCursor.SameImage actual expected source image) :
+    Sim frame actual.prepare expected.prepare Eq := by
+  obtain ⟨handleEq, indexEq, positionEq⟩ := same
+  unfold BlockCursor.prepare
+  rw [positionEq, indexEq]
+  split
+  · exact BlockIterator.boundary_sim h handleEq _ _
+  · split
+    · exact Sim.pure rfl
+    · exact BlockIterator.boundary_sim h handleEq _ _
+
+private def SameItem (source : Source (ReadM world)) (image : ByteArray) :
+    Option (Entry × BlockCursor (ReadM world)) → Option (Entry × BlockCursor (ReadM Unit)) → Prop
+  | none, none => True
+  | some (next, actual), some (expected, reference) =>
+      next = expected ∧ actual.SameImage reference source image
+  | _, _ => False
+
+private theorem BlockCursor.pull_sim (h : ImageReads frame source image)
+    (same : BlockCursor.SameImage actual expected source image) :
+    Sim frame actual.pull expected.pull (SameItem source image) := by
+  have ⟨handleEq, indexEq, _⟩ := same
+  unfold BlockCursor.pull
+  -- Keep the cursors inside the prepare actions unchanged.
+  have guard : (actual.handle.rowCount ≤ actual.index) =
+      (expected.handle.rowCount ≤ expected.index) := by rw [handleEq.2.2.2.2.2.2.2, indexEq]
+  by_cases done : actual.handle.rowCount ≤ actual.index
+  · have doneRef : expected.handle.rowCount ≤ expected.index := guard ▸ done
+    simp only [done, doneRef, ↓reduceIte]
+    exact Sim.pure trivial
+  · have doneRef : ¬ expected.handle.rowCount ≤ expected.index := guard ▸ done
+    simp only [done, doneRef, ↓reduceIte]
+    apply Sim.bind (BlockCursor.prepare_sim h same)
+    rintro position _ rfl
+    rw [indexEq]
+    apply Sim.bind (Sim.decode _)
+    rintro row _ rfl
+    exact Sim.pure ⟨rfl, handleEq, rfl, rfl⟩
+
+private theorem seekCursor_sim (h : ImageReads frame source image)
+    (same : SameHandle actual expected source image) (key : ByteArray) :
+    Sim frame (actual.seekCursor key) (expected.seekCursor key)
+      (fun a b => a.SameImage b source image) := by
+  have ⟨_, _, _, _, _, _, root, count⟩ := same
+  unfold Handle.seekCursor
+  rw [root]
+  dsimp only
+  split
+  · apply Sim.bind (BlockIterator.root_sim h same _ _)
+    rintro position _ rfl
+    apply Sim.bind (seek_sim _ _ _ _)
+    rintro index _ rfl
+    split
+    · exact Sim.pure ⟨same, rfl, rfl⟩
+    · exact Sim.reject _ _ _
+  · exact Sim.pure ⟨same, count, rfl⟩
+
+/-- A framed checked open yields a cold cursor refining the exact image. -/
+theorem checkedCursor_framed (h : ImageReads frame source image)
+    (exact : Image layout crc image rows) (index : Nat) :
+    ReadPost frame (openChecked source crc layout.tableId >>= fun held => pure (held.cursorAt index))
+      (fun actual => ∃ expected, actual.SameImage expected source image ∧ expected.Observes image rows) := by
+  have simulation := Sim.bind (open_sim h crc layout.tableId) fun a b same =>
+    Sim.pure (frame := frame) (rel := fun x y => BlockCursor.SameImage x y source image)
+      (a := a.cursorAt index) (b := b.cursorAt index) ⟨same, rfl, rfl⟩
+  intro start within
+  have run := simulation start within
+  cases ran : (openChecked source crc layout.tableId >>= fun held => pure (held.cursorAt index)) start with
+  | error _ _ => simpa [ran] using run
+  | ok actual reached =>
+    rw [ran] at run
+    obtain ⟨kept, _, agrees, same⟩ := run
+    obtain ⟨expected, opened, observes⟩ := exact.open_observes (Source.memory_serves (m := ReadM Unit) image)
+    change ((openChecked (exactSource image) crc layout.tableId >>= fun held =>
+      pure (held.cursorAt index)) ()) = _ at agrees
+    change openChecked (exactSource image) crc layout.tableId = pure expected at opened
+    rw [opened, pure_bind] at agrees
+    cases agrees
+    exact ⟨kept, _, same, Handle.cursorAt_observes observes index⟩
+
+/-- A framed seek retains the same checked packets as the exact reader. -/
+theorem seekCursor_framed (h : ImageReads frame source image)
+    (exact : Image layout crc image rows) (key : ByteArray) :
+    ReadPost frame (openChecked source crc layout.tableId >>= (·.seekCursor key))
+      (fun actual => ∃ expected, actual.SameImage expected source image ∧ expected.Observes image rows ∧
+        LowerBound (fun i => (rowAt rows i).key) rows.length key actual.index) := by
+  have simulation := Sim.bind (open_sim h crc layout.tableId) fun _ _ same =>
+    seekCursor_sim h same key
+  intro start within
+  have run := simulation start within
+  cases ran : (openChecked source crc layout.tableId >>= (·.seekCursor key)) start with
+  | error _ _ => simpa [ran] using run
+  | ok actual reached =>
+    rw [ran] at run
+    obtain ⟨kept, _, agrees, same⟩ := run
+    obtain ⟨reference, opened, observes⟩ := exact.open_observes (Source.memory_serves (m := ReadM Unit) image)
+    obtain ⟨index, lower⟩ := Unified.exists_lowerBound exact.ordered key
+    obtain ⟨expected, sought, atIndex, cursorOk⟩ := observes.seekCursor lower
+    change ((openChecked (exactSource image) crc layout.tableId >>= (·.seekCursor key)) ()) = _ at agrees
+    change openChecked (exactSource image) crc layout.tableId = pure reference at opened
+    rw [opened, pure_bind, sought] at agrees
+    cases agrees
+    exact ⟨kept, _, same, cursorOk, by simpa [same.2.1, atIndex] using lower⟩
+
+/-- With the native source framed, each successful result refines the exact
+suffix, and the last world of a failed read still preserves the frame. -/
+theorem BlockCursor.pull_framed (h : ImageReads frame source image)
+    (same : BlockCursor.SameImage actual expected source image)
+    (observed : expected.Observes image rows) :
+    ReadPost frame actual.pull (fun result =>
+      match result with
+      | none => rows.drop actual.index = []
+      | some (row, next) => ∃ reference, next.SameImage reference source image ∧
+          reference.Observes image rows ∧ next.index = actual.index + 1 ∧
+          rows.drop actual.index = row :: rows.drop next.index) := by
+  intro start within
+  have run := BlockCursor.pull_sim h same start within
+  cases ran : actual.pull start with
+  | error _ _ => simpa [ran] using run
+  | ok result reached =>
+    rw [ran] at run
+    obtain ⟨kept, item, agrees, related⟩ := run
+    refine ⟨kept, ?_⟩
+    rw [same.2.1]
+    have step := observed.pull
+    cases suffix : rows.drop expected.index with
+    | nil =>
+      rw [suffix] at step
+      rw [step] at agrees
+      cases agrees
+      cases result <;> simp_all [SameItem]
+    | cons row tail =>
+      rw [suffix] at step
+      obtain ⟨next, advance, cursorOk, offset, rest⟩ := step
+      rw [advance] at agrees
+      cases agrees
+      cases result with
+      | none => exact related.elim
+      | some item =>
+        obtain ⟨a, nextActual⟩ := item
+        obtain ⟨rfl, nextSame⟩ := related
+        exact ⟨next, nextSame, cursorOk, nextSame.2.1.trans offset,
+          by simp [nextSame.2.1, rest]⟩
+
+/-- Returning an error from any boundary read leaves the cursor unadvanced and
+passes the same error and reached world to the consumer. -/
+theorem BlockCursor.pull_prepare_error {cursor : BlockCursor (ReadM world)}
+    (notDone : cursor.index < cursor.handle.rowCount)
+    (failed : cursor.prepare start = .error error reached) :
+    cursor.pull start = .error error reached := by
+  simp [BlockCursor.pull, Nat.not_le_of_gt notDone, Bind.bind, EStateM.bind, failed]
+
+theorem BlockCursor.pull_row_error {cursor : BlockCursor (ReadM world)}
+    {position : BlockIterator.Position}
+    (notDone : cursor.index < cursor.handle.rowCount)
+    (prepared : cursor.prepare start = .ok position middle)
+    (failed : position.read (m := ReadM world) cursor.index middle = .error error reached) :
+    cursor.pull start = .error error reached := by
+  simp [BlockCursor.pull, Nat.not_le_of_gt notDone, Bind.bind, EStateM.bind, prepared, failed]
 
 end ImmutableSSTable.Recursive

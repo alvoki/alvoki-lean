@@ -198,9 +198,9 @@ theorem Handle.Observes.represents [Monad m] [LawfulMonad m] [MonadExceptOf Stri
         picked, read, row, liftDecode]
     · simp [Handle.next, Contents.next, observed.count, inside, Nat.le_of_not_gt inside]
 
-theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+theorem Image.open_observes [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {source : Source m} (exact : Image layout crc image rows) (served : source.Serves image) :
-    ∃ handle, openChecked source crc layout.tableId = pure handle ∧ handle.table.Represents rows := by
+    ∃ handle, openChecked source crc layout.tableId = pure handle ∧ handle.Observes image rows := by
   obtain ⟨footer, valid, layoutEq, count, packetFits, footerBytes, root⟩ := exact.root
   let endAt := image.size - footerPacketSize
   have enough : endAt + footerPacketSize = image.size := Nat.sub_add_cancel packetFits
@@ -224,7 +224,7 @@ theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
         ↓reduceIte]
       exact ⟨_, rfl, rfl, rfl, rfl, rfl⟩
     obtain ⟨handle, ran, src, lay, size, refs⟩ := opened
-    refine ⟨handle, ran, Handle.Observes.represents (image := image) ?_ exact.ordered⟩
+    refine ⟨handle, ran, ?_⟩
     refine ⟨src ▸ served, lay ▸ layoutValid, size, ?_, ?_⟩
     · rw [refs]
       exact ⟨by simp, by simp, by simp, by omega⟩
@@ -251,12 +251,18 @@ theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
         ↓reduceIte, bytes, node.checked, liftDecode]
       exact ⟨_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
     obtain ⟨handle, ran, src, lay, checksum, size, refs, offset, depth⟩ := opened
-    refine ⟨handle, ran, Handle.Observes.represents (image := image) ?_ exact.ordered⟩
+    refine ⟨handle, ran, ?_⟩
     refine ⟨src ▸ served, lay ▸ layoutValid, size.trans count, ?_, ?_⟩
     · rw [refs]
       simpa only [Footer.rootRef, count] using node.coverage
     · intro child member
       rw [offset, depth, h, Nat.succ_sub_one, lay, checksum, layoutEq]
       exact below child (refs ▸ member)
+
+theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+    {source : Source m} (exact : Image layout crc image rows) (served : source.Serves image) :
+    ∃ handle, openChecked source crc layout.tableId = pure handle ∧ handle.table.Represents rows := by
+  obtain ⟨handle, opened, observes⟩ := exact.open_observes served
+  exact ⟨handle, opened, observes.represents exact.ordered⟩
 
 end ImmutableSSTable.Recursive

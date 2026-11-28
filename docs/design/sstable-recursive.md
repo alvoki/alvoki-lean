@@ -132,12 +132,31 @@ does not authenticate arbitrary bytes. Measure FPR independently.
 
 ## Iterator and measurements
 
-A later stateful cursor can hold the validated data packet and index path.
-It advances inside that packet and climbs to the next sibling at the
-boundary. Its proof should erase the path and retain the logical row
-index and the protected read frame. Keep stateless arbitrary-index
-iteration available. Compression, prefix-compressed data, direct I/O,
-general caching and concurrency stay out of this candidate.
+The separate block iterator stores the checked data packet and the
+checked index pages on the path to it. The root remains in the handle.
+A pull inside the packet runs the existing row-span decoder. Crossing a
+packet boundary climbs to the nearest cached page covering the next
+ordinal, descends through newly needed pages, and replaces the data packet.
+Checked seek keeps the path and packet it used for the lower bound.
+The row-index cursor remains available.
+
+The cursor proof identifies the exact logical suffix, including progress,
+EOF and transitions. The fallible reader simulates the exact image reader
+with the same cached packets and preserves the protected frame at the world
+reached by a reported error. The writer composition binds a cold cursor to
+the successful supplier's durable image and the acquired descriptor. The
+native fixture exercises all four layouts, split index reads, injected
+index and data errors, a CRC failure, and retry from the preceding cursor.
+The separate benchmark checks SortedRun compatibility and uses its streaming
+merge callback against the native synced writer.
+[Block iterator benchmark and raw trials](../../benchmarks/sstable/block-iterator.md)
+
+The cursor establishes a useful boundary for a future packet cache.
+Retain the decoded packet with the immutable file identity, table ID, offset,
+size and packet kind. On reuse, the parent edge still has to agree with the
+cached page's reference, row range, and fence. This allows scoped sequential
+reuse today and leaves shared admission, eviction and resource bounds for
+the cache design.
 
 Use the existing native benchmark's deterministic workloads and correctness
 oracles. Compare equal layouts, packet targets, warm-up and release settings.

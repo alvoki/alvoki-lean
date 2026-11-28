@@ -8,7 +8,7 @@ if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
 fi
 
 root=Alvoki.Experiments.SSTable.Recursive
-modules=("$root".{Invariants,Image,WriterHeight,WriterProgress,WriterProofs,NativeReadProofs,NativeWriteProofs,WriterStreamingProgress,WriterFinalProgress,WriterEffectsProgress,WriterHealthy}
+modules=("$root".{Invariants,Image,BlockIterator,ReadSafety,WriterHeight,WriterProgress,WriterProofs,NativeReadProofs,NativeWriteProofs,WriterStreamingProgress,WriterFinalProgress,WriterEffectsProgress,WriterHealthy}
   Alvoki.Checks.Tests.RecursiveSSTableProducer)
 lake build "${modules[@]}" Alvoki.Checks.Audit.AxiomPolicy
 for module in "${modules[@]}"; do
@@ -31,6 +31,14 @@ open ImmutableSSTable.Recursive
 #check_axioms IndexPacketAt.read
 #check_axioms TreeInImage.descend
 #check_axioms Image.open_represents
+#check_axioms BlockCursor.Observes.pull
+#check_axioms Handle.Observes.seekCursor
+#check_axioms BlockCursor.pull_cached
+#check_axioms BlockCursor.pull_framed
+#check_axioms BlockCursor.pull_prepare_error
+#check_axioms BlockCursor.pull_row_error
+#check_axioms checkedCursor_framed
+#check_axioms seekCursor_framed
 #check_axioms descend_framed
 #check_axioms checkedNativeLookup
 #check_axioms Writer.push_ranked
@@ -54,6 +62,7 @@ open ImmutableSSTable.Recursive
 #check_axioms buildFileWith_of_modelBuild_ok
 #check_axioms buildFileWith_healthy
 #check_axioms buildFileWith_open_represents
+#check_axioms buildFileWith_open_cursor
 #check_axioms buildFileWith_open_typed_represents
 #check_axioms buildFileWith_lookup_framed
 #check_axioms buildFileWith_lookup_footerError

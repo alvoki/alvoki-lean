@@ -676,6 +676,36 @@ theorem buildFileWith_open_represents [DecidableEq inode]
     .ok handle acquired
   simp [openCheckedWith, Bind.bind, EStateM.bind, accepted, checked, EStateM.pure, Pure.pure]
 
+/-- The cursor's healthy suffix is that of the supplier whose image was
+synced on the selected inode. Starting at an arbitrary ordinal performs no
+additional reads after checked open. -/
+theorem buildFileWith_open_cursor [DecidableEq inode]
+    {outputOps : OutputOps (NativeWriteM writer inode) writer}
+    {path readPath : System.FilePath} {nextRow : NativeWriteM writer inode (Option Entry)}
+    {crc : Checksum} {layout : Layout} {options : BuildOptions}
+    {before after : NativeWriteState writer inode} {count : Nat}
+    {acquire : System.FilePath → IO.FS.Mode → ReadM σ reader}
+    {start acquired : σ} {held : reader} {inodeAt : reader → Option inode}
+    (effects : NativeWriteEffects outputOps path nextRow)
+    (built : (buildFileWith outputOps crc path layout nextRow id options).run before = .ok count after)
+    (opened : acquire readPath .read start = .ok held acquired)
+    (selected : ∀ output identity, after.BoundTo path output identity → inodeAt held = some identity)
+    (index : Nat) :
+    ∃ cursor, (openCheckedWith ((after.readSnapshot inodeAt).primitives acquire)
+        crc readPath layout.tableId >>= fun handle => pure (handle.cursorAt index)) start =
+      .ok cursor acquired ∧ cursor.Observes after.appended before.rows := by
+  obtain ⟨_, _, _, image, output, identity, bound, _, durable⟩ := buildFileWith_refines effects built
+  let snapshot := after.readSnapshot inodeAt
+  have contents : snapshot.contents identity = some after.appended := by
+    simp [snapshot, NativeWriteState.readSnapshot, durable]
+  have observed := snapshot.readsExactly acquire (selected output identity bound) contents image.extent
+  obtain ⟨handle, checked, represents⟩ := image.open_observes (observed.source_serves image.extent)
+  refine ⟨handle.cursorAt index, ?_, Handle.cursorAt_observes represents index⟩
+  have accepted : (snapshot.primitives acquire).openFile readPath .read start = .ok held acquired := opened
+  change (openCheckedWith (snapshot.primitives acquire) crc readPath layout.tableId >>= fun actual =>
+    pure (actual.cursorAt index)) start = .ok (handle.cursorAt index) acquired
+  simp [openCheckedWith, Bind.bind, EStateM.bind, accepted, checked, EStateM.pure, Pure.pure]
+
 theorem buildFileWith_open_typed_represents [DecidableEq κ] [DecidableEq inode]
     {outputOps : OutputOps (NativeWriteM writer inode) writer}
     {path readPath : System.FilePath} {nextRow : NativeWriteM writer inode (Option Entry)}
