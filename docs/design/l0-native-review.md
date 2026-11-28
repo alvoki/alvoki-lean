@@ -2,7 +2,7 @@
 
 PR #5 has one integrated executable candidate. The starting points for
 review are the [flush scope](../../lean/Alvoki/Experiments/L0/NativeFlushPublic.lean),
-the [interrupted flush](../../lean/Alvoki/Experiments/L0/NativeFlushInterrupted.lean)
+the [interrupted flush](../../lean/Alvoki/Experiments/L0/NativeFlushObserver.lean)
 and the [same-handle mutation sequence](../../lean/Alvoki/Experiments/L0/MutationSequenceRoot.lean).
 The [client contract](../../lean/Alvoki/Experiments/L0/Client.lean) and
 [`Execution.Run.refines`](../../lean/Alvoki/Experiments/L0/Execution.lean)
@@ -44,6 +44,12 @@ Lean-level loops over returned entries and the WAL's read-to-EOF loop
 expose each iteration. In particular the second and later 1,024-byte
 reads have their own issued operands. Pure code between two observable
 effects uses the same physical world as their common boundary.
+
+For flush, `NativeFlushObserver.erase` relates the observer to the
+actual public IO result and world. Its reverse theorem `classify` takes
+a raw cut at that callback and recovers its position in reservation,
+storage or finalization. `interrupted` passes that position to the
+survivor proof and then to the public read.
 
 ## What changes at a flush cut
 
