@@ -1,4 +1,5 @@
 import Alvoki.Experiments.L0.Native
+import Std.Async.System
 
 open ExperimentalL0 System
 
@@ -15,6 +16,29 @@ private def initializeRoot (root : FilePath) : IO Unit := do
   let wal ← WalRecoverySlice.Segmented.Native.create (root / "wal") .boundary 2
   WalRecoverySlice.Segmented.Native.close wal
   (DurableBlob.native (root / "manifest")).publish (L0Manifest.encode .empty)
+
+private def oneShotTableRead : IO Unit := IO.FS.withTempDir fun dir => do
+  let root ← IO.FS.realPath dir
+  initializeRoot root
+  Native.withOpen root fun db => do
+    Native.put db 7 10
+    Native.flush db
+  let descriptorCount := do return (← (FilePath.mk "/proc/self/fd").readDir).size
+  let outside ← descriptorCount
+  let escaped ← Native.withOpen root fun db => do
+    let online ← descriptorCount
+    let target := tablePath (root / "tables") 0
+    Std.Async.System.setEnvVar "ALVOKI_L0_FAIL_TABLE_SIZE" target.toString
+    expectError (Native.get db 7)
+    check ((← descriptorCount) == online) "size error retained a table descriptor"
+    check ((← Native.get db 7) == some 10) "get after the caught size error lost the value"
+    check ((← descriptorCount) == online) "second get retained a table descriptor"
+    return db
+  check ((← descriptorCount) == outside) "withOpen retained a descriptor after the caught size error"
+  expectError (Native.get escaped 7)
+  Native.withOpen root fun db => do
+    check ((← Native.get db 7) == some 10) "reopen after the size error lost the value"
+  check ((← descriptorCount) == outside) "reopened scope retained a descriptor"
 
 private def interruption (executable library cut : String) : IO Unit :=
   IO.FS.withTempDir fun root => do
@@ -137,12 +161,19 @@ private def nativeSchedule : IO Unit := IO.FS.withTempDir fun root => do
 
 def main (args : List String) : IO Unit := do
   match args with
+  | ["read-fault"] => oneShotTableRead
   | ["flush", root] =>
     Native.withOpen (FilePath.mk root) Native.flush
     IO.println "flushed"
   | [library] =>
     nativeSchedule
     let executable ← IO.appPath
+    let proc ← IO.Process.output {
+      cmd := executable.toString
+      args := #["read-fault"]
+      env := #[("LD_PRELOAD", some library)]
+    }
+    check (proc.exitCode == 0) s!"one-shot table read fixture failed: {proc.stderr}"
     interruption executable.toString library "table"
     interruption executable.toString library "rename"
   | _ => throw (IO.userError "expected the process-interruption fixture library")

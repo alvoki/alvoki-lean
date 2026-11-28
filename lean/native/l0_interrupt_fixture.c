@@ -1,6 +1,11 @@
-/* Test-only cuts after a completed syscall, before the caller can continue. */
+/* Test-only syscall faults and process cuts for the native L0 fixture. */
 #define _GNU_SOURCE
+#define _FILE_OFFSET_BITS 64
 #include <dlfcn.h>
+#include <errno.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,4 +37,22 @@ int rename(const char *from, const char *to) {
     if (result == 0 && cut && strcmp(cut, "rename") == 0 && name && strcmp(name, "/BLOB") == 0)
         _exit(73);
     return result;
+}
+
+/* Fail the checked reader's size call once on the requested open inode. */
+int fstat(int fd, struct stat *st) {
+    static atomic_bool fired;
+    const char *target = getenv("ALVOKI_L0_FAIL_TABLE_SIZE");
+    if (target) {
+        char link[64], path[4096];
+        snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+        ssize_t n = readlink(link, path, sizeof(path));
+        if (n >= 0 && (size_t)n == strlen(target) && memcmp(path, target, n) == 0 &&
+            !atomic_exchange(&fired, true)) {
+            errno = EIO;
+            return -1;
+        }
+    }
+    int (*real_fstat)(int, struct stat *) = dlsym(RTLD_NEXT, "fstat64");
+    return real_fstat(fd, st);
 }
