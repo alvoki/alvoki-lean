@@ -107,4 +107,64 @@ theorem failed (laws : Laws heap physical root lock ref image)
     Release ref lock w (Closed physical root lock ref image) (fun _ => Closed physical root lock ref image) :=
   failedTo laws failure (fun _ h => h) (fun _ _ h => h)
 
+/-- The public read callback returns a list of closed data/error values. The
+root descriptor appears only in tryLock and in the cleanup continuation.
+Record the actual withFile return independently of lock release status. -/
+structure RootCall where
+  path : FilePath
+  keys : List UInt64
+  start : NativeScope.W
+
+def RootCall.run (c : RootCall) : IO (List Reply) :=
+  Native.withOpen c.path (fun h => (readMany h c.keys : IO (List Reply)))
+
+structure RootExit (c : RootCall) where
+  root : FilePath
+  checked : NativeScope.W
+  lock : IO.FS.Handle
+  entered : NativeScope.W
+  resolved : Native.validatedRoot c.path c.start = .ok root checked
+  opened : IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock entered
+  /-- Reached scope body with the exact acquired descriptor. On a grant,
+  the assembled callback gets the phase reference and the unlock is the
+  release continuation of the concrete scope. -/
+  body : match lock.tryLock true entered with
+    | .error e t => c.run c.start = .error e t
+    | .ok false t => c.run c.start = .error (IO.userError "L0 already open") t
+    | .ok true t =>
+        let fresh := IO.mkRef (.opening : Phase NativeScope.Wal) t
+        ∃ h, h.AtRoot root fresh.val ∧ c.run c.start =
+          (Native.phaseCell fresh.val).withSession (IO.userError "L0 cannot publish a session")
+            (Native.recoverAt root fresh.val) (readMany h c.keys : IO (List Reply))
+            WalRecoverySlice.Segmented.Native.close lock.unlock fresh.state
+
+def RootCall.exit (c : RootCall)
+    (resolved : Native.validatedRoot c.path c.start = .ok root checked)
+    (opened : IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock entered) : RootExit c :=
+  ⟨root, checked, lock, entered, resolved, opened, by
+    have reached := Native.withOpen_reached c.path (fun h => (readMany h c.keys : IO (List Reply))) c.start
+    cases taken : lock.tryLock true entered with
+    | error e t => simpa only [resolved, opened, taken, RootCall.run] using reached
+    | ok yes t =>
+      cases yes <;> simpa only [resolved, opened, taken, RootCall.run] using reached⟩
+
+/-- The runtime gives a private descriptor on a successful lock-file open.
+At return from its labelled withFile scope, destruction of its last Lean
+reference closes it, including after a tryLock or unlock error. This
+contract excludes aliases retained by FFI. Failure during fdopen on Lean
+4.36 precedes creation of the labelled exit and lies outside this law. -/
+structure RootLifetime where
+  privateBorrow : IO.FS.Handle → NativeScope.W → Prop
+  liveAtReturn : {c : RootCall} → RootExit c → IO.FS.Handle → Prop
+  acquire : ∀ (root : FilePath) w h t, IO.FS.Handle.mk (root / "l0.lock") .append w = .ok h t →
+    privateBorrow h t
+  lastDrop : ∀ {c : RootCall} (exit : RootExit c), privateBorrow exit.lock exit.entered →
+    ¬ liveAtReturn exit exit.lock
+
+theorem root_released (c : RootCall) (life : RootLifetime)
+    (resolved : Native.validatedRoot c.path c.start = .ok root checked)
+    (opened : IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock entered) :
+    ¬ life.liveAtReturn (c.exit resolved opened) lock :=
+  life.lastDrop (c.exit resolved opened) (life.acquire _ _ _ _ opened)
+
 end ExperimentalL0.NativeReadRelease
