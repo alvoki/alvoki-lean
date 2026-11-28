@@ -50,6 +50,11 @@ lean_lib CRC32C where
   roots := #[`Alvoki.Codec.CRC32C]
   moreLinkObjs := #[crc32cArchive]
 
+lean_exe recursiveSSTableCheck where
+  root := `Alvoki.Experiments.SSTable.Recursive.Fixtures
+
+lean_lib Alvoki.Checks.Tests.RecursiveSSTableProducer
+
 lean_exe crc32cCheck where
   root := `Alvoki.Checks.Tests.CRC32C
 

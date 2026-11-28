@@ -24,6 +24,7 @@ cd ..
 bash scripts/check-experimental-manifest.sh
 bash scripts/check-wal-recovery-slice.sh
 bash scripts/check-segmented-wal.sh
+bash scripts/check-recursive-sstable.sh
 bash scripts/check-immutable-sstable.sh
 bash scripts/check-sorted-run.sh
 if [[ -f scripts/check-native-l0.sh ]]; then

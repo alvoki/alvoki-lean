@@ -195,3 +195,7 @@ reuse a validated leaf and data packet across successive rows. Compare scan
 time and read counts to the current indexed cursor and preserve its logical
 order and end-of-table behavior. Measure packet alignment separately on
 the target filesystem.
+
+The independent [ALVSST06 candidate](../../../../docs/design/sstable-recursive.md)
+records the recursive index architecture, proof handoff and open producer
+obligation.
