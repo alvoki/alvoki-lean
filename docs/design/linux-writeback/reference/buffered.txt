@@ -1,0 +1,14 @@
+IO_MODE=buffered
+baseline backing: A=4096 B=0 other=0
+writer pwrite: ret=4096 errno=0
+writer first fsync: ret=-1 errno=5
+cached after failure: A=0 B=4096 other=0
+page after failed I/O: dirty=0 writeback=0 first=B
+backing after failure: A=4096 B=0 other=0
+writer retry fsync: ret=0 errno=0
+fresh description fsync: ret=0 errno=0
+peer opened before fault fsync: ret=-1 errno=5
+cached after retry: A=0 B=4096 other=0
+backing after retry: A=4096 B=0 other=0
+after page eviction: A=4096 B=0 other=0
+backing after rewrite: A=0 B=4096 other=0

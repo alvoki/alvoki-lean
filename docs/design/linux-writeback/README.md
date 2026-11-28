@@ -19,10 +19,18 @@ to keep a run. For a TLS-inspecting network, pass a trusted CA bundle with
 docker build -t alvoki-writeback-research:local .
 for fs in ext4 xfs; do
   for mode in buffered dsync direct direct-dsync; do
-    bash run.sh "$fs" "$mode" > "$fs-$mode.log" || exit
+    bash run.sh "$fs" "$mode" --compare > "$fs-$mode.log" || exit
   done
 done
 ```
+
+A run without `--compare` succeeds when the guest reaches
+`PROBE_COMPLETE` and the runner exits successfully. With `--compare`, it
+also compares the observed return values, error codes, byte counts and
+page flags against the [reference observations](reference). The same
+references apply to both filesystems. A completed run with different
+observations exits with status 3 and prints a unified diff on stderr.
+The full serial log goes to stdout in either mode.
 
 The pinned Alpine packages provide Linux `6.18.65-0-virt` (`linux-virt
 6.18.65-r0`), QEMU 11.0.3, device-mapper 2.03.35, e2fsprogs 1.47.4 and

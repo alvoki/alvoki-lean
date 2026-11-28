@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# != 2 ]]; then
-  echo "Usage: bash run.sh {ext4|xfs} {buffered|dsync|direct|direct-dsync}" >&2
+if [[ $# != 2 && ! ( $# == 3 && $3 == --compare ) ]]; then
+  echo "Usage: bash run.sh {ext4|xfs} {buffered|dsync|direct|direct-dsync} [--compare]" >&2
   exit 2
 fi
 fs=$1
@@ -26,7 +26,19 @@ timeout 120s docker run --rm --name "$container" --network none \
   -kernel /guest/kernel -initrd /guest/initramfs \
   -append "console=ttyS0 rdinit=/init panic=1 alvoki.writeback=1 fs=$fs io=$mode loglevel=4" \
   -drive file=/experiment/disk.img,if=virtio,format=raw,cache=none > "$scratch/serial.log" 2>&1 || status=$?
-tr -d '\r' < "$scratch/serial.log"
-if [[ $status != 0 ]] || ! grep -q '^PROBE_COMPLETE' "$scratch/serial.log"; then
+tr -d '\r' < "$scratch/serial.log" > "$scratch/serial.txt"
+cat "$scratch/serial.txt"
+if [[ $status != 0 ]] || ! grep -qx 'PROBE_COMPLETE' "$scratch/serial.txt"; then
   exit 1
+fi
+
+if [[ ${3:-} == --compare ]]; then
+  reference="$(dirname -- "${BASH_SOURCE[0]}")/reference/$mode.txt"
+  # Compare the measurements and leave variable kernel diagnostics and offsets in the full log.
+  grep -E '^(IO_MODE=|(baseline backing|writer pwrite|writer first fsync|cached after failure|page after failed I/O|backing after failure|writer retry fsync|fresh description fsync|peer opened before fault fsync|cached after retry|backing after retry|after page eviction|backing after rewrite):)'     "$scratch/serial.txt" > "$scratch/observed.txt" || true
+  if ! diff -u --label "reference ($mode)" --label "observed ($fs $mode)"       "$reference" "$scratch/observed.txt" >&2; then
+    echo "Probe completed with different observations. The full serial log is on stdout." >&2
+    exit 3
+  fi
+  echo "Probe observations match the reference ($fs $mode)." >&2
 fi
