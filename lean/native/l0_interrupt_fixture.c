@@ -13,19 +13,29 @@
 
 static atomic_bool published_successor;
 
+static bool matches_fd(int fd, const char *target) {
+    if (!target)
+        return false;
+    char link[64], path[4096];
+    snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+    ssize_t n = readlink(link, path, sizeof(path));
+    return n >= 0 && (size_t)n == strlen(target) && memcmp(path, target, n) == 0;
+}
+
 int fsync(int fd) {
     int (*real_fsync)(int) = dlsym(RTLD_NEXT, "fsync");
     static atomic_bool failed_wal;
     const char *target = getenv("ALVOKI_L0_FAIL_WAL_SYNC");
-    if (target && (!getenv("ALVOKI_L0_AFTER_CONTROL") || atomic_load(&published_successor))) {
-        char link[64], path[4096];
-        snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
-        ssize_t n = readlink(link, path, sizeof(path));
-        if (n >= 0 && (size_t)n == strlen(target) && memcmp(path, target, n) == 0 &&
-            !atomic_exchange(&failed_wal, true)) {
-            errno = EIO;
-            return -1;
-        }
+    if ((!getenv("ALVOKI_L0_AFTER_CONTROL") || atomic_load(&published_successor)) &&
+        matches_fd(fd, target) && !atomic_exchange(&failed_wal, true)) {
+        errno = EIO;
+        return -1;
+    }
+    static atomic_bool failed_flush;
+    if (matches_fd(fd, getenv("ALVOKI_L0_FAIL_FLUSH_SYNC")) &&
+        !atomic_exchange(&failed_flush, true)) {
+        errno = EIO;
+        return -1;
     }
     int result = real_fsync(fd);
     const char *cut = getenv("ALVOKI_L0_CUT");
@@ -64,15 +74,9 @@ int rename(const char *from, const char *to) {
 int fstat(int fd, struct stat *st) {
     static atomic_bool fired;
     const char *target = getenv("ALVOKI_L0_FAIL_TABLE_SIZE");
-    if (target) {
-        char link[64], path[4096];
-        snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
-        ssize_t n = readlink(link, path, sizeof(path));
-        if (n >= 0 && (size_t)n == strlen(target) && memcmp(path, target, n) == 0 &&
-            !atomic_exchange(&fired, true)) {
-            errno = EIO;
-            return -1;
-        }
+    if (matches_fd(fd, target) && !atomic_exchange(&fired, true)) {
+        errno = EIO;
+        return -1;
     }
     int (*real_fstat)(int, struct stat *) = dlsym(RTLD_NEXT, "fstat64");
     return real_fstat(fd, st);

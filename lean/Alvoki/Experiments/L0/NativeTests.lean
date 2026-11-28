@@ -52,7 +52,29 @@ private def oneShotTableRead : IO Unit := IO.FS.withTempDir fun dir => do
     check ((← Native.get db 7) == some 10) "reopen after the size error lost the value"
   check ((← descriptorCount) == outside) "reopened scope retained a descriptor"
 
-private def interruption (executable library cut : String) : IO Unit :=
+private def flushChild (root : FilePath) (mode : String) : IO Unit := do
+  let root ← IO.FS.realPath root
+  if mode == "lost" then
+    Native.withOpen root Native.flush
+    IO.Process.exit 74
+  let target := match mode with
+    | "table-file" => some (tablePath (root / "tables") 1)
+    | "tables-dir" => some (root / "tables")
+    | "staged-manifest" => some (root / "manifest" / "BLOB.next")
+    | "manifest-dir" => some (root / "manifest")
+    | _ => none
+  match target with
+  | some path =>
+    expectError (Native.withOpen root fun db => do
+      Std.Async.System.setEnvVar "ALVOKI_L0_FAIL_FLUSH_SYNC" path.toString
+      Native.flush db)
+  | none =>
+    Native.withOpen root fun db => do
+      Std.Async.System.setEnvVar "ALVOKI_L0_CUT" mode
+      Native.flush db
+    IO.println "flushed"
+
+private def flushRetry (executable library mode : String) : IO Unit :=
   IO.FS.withTempDir fun root => do
     initializeRoot root
     Native.withOpen root fun db => do
@@ -62,19 +84,26 @@ private def interruption (executable library cut : String) : IO Unit :=
       Native.put db 8 20
     let proc ← IO.Process.output {
       cmd := executable
-      args := #["flush", root.toString]
-      env := #[("LD_PRELOAD", some library), ("ALVOKI_L0_CUT", some cut)]
+      args := #["flush", root.toString, mode]
+      env := #[("LD_PRELOAD", some library)]
     }
-    check (proc.exitCode == 73) s!"missed process cut {cut}: {proc.stderr}"
-    check proc.stdout.isEmpty "interrupted flush emitted an acknowledgement"
+    let expectedExit := if ["table", "rename"].contains mode then 73 else if mode == "lost" then 74 else 0
+    check (proc.exitCode == expectedExit) s!"flush {mode}: {proc.stderr}"
+    check proc.stdout.isEmpty s!"flush {mode} emitted an acknowledgement"
+    let newVersion := ["rename", "manifest-dir", "lost"].contains mode
     let active := root / "manifest" / "BLOB"
     let expected : L0Manifest.Version :=
-      if cut == "table" then ⟨[0], 1⟩ else ⟨[1, 0], 3⟩
+      if newVersion then ⟨[1, 0], 3⟩ else ⟨[0], 1⟩
     check (L0Manifest.decode (← IO.FS.readBinFile active) == some expected)
       "interruption reached the wrong manifest binding"
     let prepared := tablePath (root / "tables") 1
-    check ((← prepared.symlinkMetadata).type == .file) "interruption lost the prepared table name"
-    let required := tablePath (root / "tables") (if cut == "table" then 0 else 1)
+    let orphan := !newVersion && mode != "table-file"
+    if mode == "table-file" then
+      check (!(← prepared.pathExists)) "failed output fsync left the reserved table name"
+    else
+      check ((← prepared.symlinkMetadata).type == .file) "flush lost the prepared table name"
+    if orphan then IO.FS.writeBinFile prepared ⟨#[0xff]⟩
+    let required := tablePath (root / "tables") (if newVersion then 1 else 0)
     let hidden := root / "tables" / "hidden-required"
     let published ← IO.mkRef false
     IO.FS.rename required hidden
@@ -87,11 +116,10 @@ private def interruption (executable library cut : String) : IO Unit :=
           "reopen selected the wrong manifest"
         check ((← Native.get db 7).isNone) "interruption lost the tombstone"
         check ((← Native.get db 8) == some 20) "interruption lost the acknowledged value"
-    if cut == "table" then
-      let orphan := root / "tables" / "table-1"
-      let bytes ← IO.FS.readBinFile orphan
+    if orphan then
+      let bytes ← IO.FS.readBinFile prepared
       Native.withOpen root Native.flush
-      check ((← IO.FS.readBinFile orphan) == bytes) "retry overwrote the orphan"
+      check ((← IO.FS.readBinFile prepared) == bytes) "retry overwrote the orphan"
       check (L0Manifest.decode (← IO.FS.readBinFile active) == some ⟨[2, 0], 3⟩)
         "retry reused the orphan's ID"
 
@@ -216,9 +244,7 @@ def main (args : List String) : IO Unit := do
   match args with
   | ["read-fault"] => oneShotTableRead
   | ["append", root, mode, branch] => appendChild (FilePath.mk root) mode (branch == "rotate")
-  | ["flush", root] =>
-    Native.withOpen (FilePath.mk root) Native.flush
-    IO.println "flushed"
+  | ["flush", root, mode] => flushChild (FilePath.mk root) mode
   | [library] =>
     nativeSchedule
     sameHandleRotation
@@ -233,6 +259,6 @@ def main (args : List String) : IO Unit := do
       for mode in ["lost", "error", "data", "marker"] do appendRetry executable.toString library mode rotate
     appendRetry executable.toString library "control" true
     appendRetry executable.toString library "published-error" true
-    interruption executable.toString library "table"
-    interruption executable.toString library "rename"
+    for mode in ["table", "rename", "table-file", "tables-dir", "staged-manifest", "manifest-dir", "lost"] do
+      flushRetry executable.toString library mode
   | _ => throw (IO.userError "expected the process-interruption fixture library")
