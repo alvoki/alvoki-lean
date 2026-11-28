@@ -145,21 +145,26 @@ private theorem rows_sim (io : Primitives ns durable P id rows start) (ref : IO.
     intro _ _ current
     exact .pure ⟨{file with rows := tail.map (Entry.encode keyCodec mutationCodec)},by simp [StateT.run,modelNext,eq],tail,rfl,current⟩
 
+private theorem sinkAgreement (io : Primitives ns durable P id rows start) (ref : IO.Ref Rows) (fd : IO.FS.Handle) (inode : ns.inode)
+    (acquired : io.out.Acquired id rows start ref fd inode) :
+    BuilderRelation.SinkAgreement (rules io.out P id ref fd inode) (ops.sink fd) modelSink := by
+  constructor
+  · rintro bytes w file ⟨rs,eq,held⟩
+    apply (Safe.leaf (.write fd bytes) held.1 (io.write ref fd inode rs file.bytes w acquired held bytes)).weaken
+    · intro _ _ current; exact ⟨_,rfl,rs,eq,current⟩
+    · exact fun _ _ => _root_.id
+  · rintro w file ⟨rs,eq,held⟩
+    apply (Safe.leaf (.flush fd) held.1 (io.flush ref fd inode rs file.bytes w acquired held)).weaken
+    · intro _ _ current; exact ⟨file,rfl,rs,eq,current⟩
+    · exact fun _ _ => _root_.id
+
 private theorem stream (io : Primitives ns durable P id rows start) (ref : IO.Ref Rows) (fd : IO.FS.Handle) (inode : ns.inode)
     (acquired : io.out.Acquired id rows start ref fd inode) :
     Sim io.out P id ref fd inode false true
       (buildStream Alvoki.CRC32C.extend (tableLayout id) (ops.sink fd) (supply ref) IO.userError {})
       (buildStream Alvoki.CRC32C.extend (tableLayout id) modelSink modelNext _root_.id {}) := by
   apply BuilderRelation.stream (law := rules io.out P id ref fd inode)
-  · constructor
-    · rintro bytes w file ⟨rs,eq,held⟩
-      apply (Safe.leaf (.write fd bytes) held.1 (io.write ref fd inode rs file.bytes w acquired held bytes)).weaken
-      · intro _ _ current; exact ⟨_,rfl,rs,eq,current⟩
-      · exact fun _ _ => _root_.id
-    · rintro w file ⟨rs,eq,held⟩
-      apply (Safe.leaf (.flush fd) held.1 (io.flush ref fd inode rs file.bytes w acquired held)).weaken
-      · intro _ _ current; exact ⟨file,rfl,rs,eq,current⟩
-      · exact fun _ _ => _root_.id
+  · exact sinkAgreement io ref fd inode acquired
   · exact rows_sim io ref fd inode acquired
 
 private theorem writer (io : Primitives ns durable P id rows start) (ref : IO.Ref Rows) (fd : IO.FS.Handle) (inode : ns.inode)
@@ -206,5 +211,136 @@ theorem build (io : Primitives ns durable P id rows start) (entry : P start) :
     apply Safe.bind (mid := fun _ t => P t) _ (fun _ _ h => .fail h)
     apply Safe.caught (Safe.leaf (.remove _) failed.1 (io.remove ref fd inode t acquired failed))
     exact fun _ _ h => .pure h
+
+
+/-- Successful local reports from the primitives this invocation actually
+visits. No return condition is placed on a whole build or on a future site. -/
+def Reports (a : Observed α) (w : W) : Prop :=
+  ∀ leaf t, a.visits w leaf t → ∃ x u, leaf.action t = .ok x u
+
+abbrev Healthy (path : FilePath) (id : UInt64) (rows : Rows) (w : W) :=
+  Reports (schedule path id rows) w
+
+private theorem Reports.first (h : Reports (a >>= f) w) : Reports a w :=
+  fun l t v => h l t (.inl v)
+
+private theorem Reports.next (h : Reports (a >>= f) w) (ran : a.run w = .ok x u) : Reports (f x) u :=
+  fun l t v => h l t (.inr ⟨x,u,ran,v⟩)
+
+private theorem Reports.body (h : Reports (tryCatchThe IO.Error a f) w) : Reports a w :=
+  fun l t v => h l t (.inl v)
+
+private theorem Reports.leaf {leaf : Leaf} (h : Reports (issue leaf) w) : ∃ x u, leaf.action w = .ok x u :=
+  h _ _ ⟨rfl,rfl⟩
+
+private def Progress (out : Output ns) (P : W → Prop) (id : UInt64) (ref : IO.Ref Rows) (fd : IO.FS.Handle)
+    (inode : ns.inode) (p q : Bool) (a : Observed α) (b : ModelM α) : Prop :=
+  ∀ w file, Matches out P id ref fd inode p w file → Reports a w →
+    ∀ x result, b.run file = .ok (x,result) → ∃ t, a.run w = .ok x t ∧ Matches out P id ref fd inode q t result
+
+private def progressRules (out : Output ns) (P : W → Prop) (id : UInt64) (ref : IO.Ref Rows) (fd : IO.FS.Handle)
+    (inode : ns.inode) : BuilderRelation.Rules Observed ModelM IO.userError _root_.id where
+  rel := Progress out P id ref fd inode
+  ret _ w file init _ x result model := by cases model; exact ⟨w,rfl,init⟩
+  seq := by
+    intro α β p q r a b f g first next w file init reports x result model
+    change (b.run file).bind _ = _ at model
+    cases observed : b.run file with
+    | error => simp [observed,Except.bind] at model
+    | ok pair =>
+      obtain ⟨y,mid⟩ := pair
+      rw [observed] at model
+      obtain ⟨v,ran,atMid⟩ := first w file init reports.first y mid observed
+      obtain ⟨t,done,last⟩ := next y v mid atMid (reports.next ran) x result model
+      exact ⟨t, by simpa only [Bind.bind,instMonadObserved,instMonadEIO._aux_13,EST.bind,ran] using done,last⟩
+  raise _ _ _ _ _ _ _ model := by cases model
+  abort _ _ _ _ _ _ _ _ _ model := by cases model
+
+private theorem fromSuccess (safe : Sim out P id ref fd inode p q a b)
+    (returns : ∀ w, Reports a w → ∃ x t, a.run w = .ok x t) :
+    Progress out P id ref fd inode p q a b := by
+  intro w file init healthy x after model
+  obtain ⟨y,t,ran⟩ := returns w healthy
+  have kept := (safe w file init).1
+  rw [Post,ran] at kept
+  obtain ⟨seen,agreement,held⟩ := kept
+  rw [model] at agreement
+  cases agreement
+  exact ⟨_,ran,held⟩
+
+private theorem boundOk {a : Observed α} {f : α → Observed β}
+    (first : a.run w = .ok x t) (next : (f x).run t = .ok y u) : (a >>= f).run w = .ok y u := by
+  simpa only [Bind.bind,instMonadObserved,instMonadEIO._aux_13,EST.bind,first] using next
+
+private theorem supplyReturns (ref : IO.Ref Rows) (w : W) (reports : Reports (supply ref) w) :
+    ∃ x t, (supply ref).run w = .ok x t := by
+  unfold supply nextTableRow at reports ⊢
+  obtain ⟨rs,t,read⟩ := reports.first.leaf
+  have readAt : (issue (.readRows ref)).run w = .ok rs t := read
+  have later := reports.next readAt
+  cases rs with
+  | nil => exact ⟨_,t,boundOk readAt rfl⟩
+  | cons row xs =>
+    obtain ⟨v,u,advance⟩ := later.first.leaf
+    have ran : (issue (.advance ref xs)).run t = .ok v u := advance
+    exact ⟨_,u,boundOk readAt (boundOk ran rfl)⟩
+
+private theorem streamProgress (io : Primitives ns durable P id rows start) (ref : IO.Ref Rows) (fd : IO.FS.Handle)
+    (inode : ns.inode) (acquired : io.out.Acquired id rows start ref fd inode) :
+    Progress io.out P id ref fd inode false true
+      (buildStream Alvoki.CRC32C.extend (tableLayout id) (ops.sink fd) (supply ref) IO.userError {})
+      (buildStream Alvoki.CRC32C.extend (tableLayout id) modelSink modelNext _root_.id {}) := by
+  have sink := sinkAgreement io ref fd inode acquired
+  apply BuilderRelation.stream (law := progressRules io.out P id ref fd inode)
+  · exact ⟨fun bytes => fromSuccess (sink.append bytes) (fun _ h => Reports.leaf (leaf := .write fd bytes) h),
+      fromSuccess sink.flush (fun _ h => Reports.leaf (leaf := .flush fd) h)⟩
+  · exact fromSuccess (rows_sim io ref fd inode acquired) (supplyReturns ref)
+
+private theorem caughtOk {a : Observed α} {f : IO.Error → Observed α} (ran : a.run w = .ok x t) :
+    (tryCatchThe IO.Error a f).run w = .ok x t := by
+  change (tryCatchThe IO.Error a.run (fun e => (f e).run)) w = _
+  simp only [tryCatchThe,MonadExceptOf.tryCatch,instMonadExceptOfEIO._aux_3,EST.tryCatch,ran]
+
+/-- On any bounded input accepted by the pure format, positive reports from
+the actual leaves force the native writer to succeed on its original fd. -/
+theorem healthy (io : Primitives ns durable P id rows start) (entry : P start)
+    (valid : modelBuild Alvoki.CRC32C.extend (tableLayout id) (rows.map (Entry.encode keyCodec mutationCodec)) {} = .ok (count,bytes))
+    (reports : Healthy (tablePath ns.directory id) id rows start) :
+    ∃ t, Native.buildSynced (tablePath ns.directory id) id rows start = .ok () t ∧ P t ∧ Prepared ns durable id rows t := by
+  let path := tablePath ns.directory id
+  change Reports (schedule path id rows) start at reports
+  unfold schedule at reports
+  obtain ⟨ref,w,allocated⟩ := reports.first.leaf
+  have alloc : (issue (.allocate rows)).run start = .ok ref w := allocated
+  have active := io.allocate entry
+  rw [Post,allocated] at active
+  have building := (reports.next alloc).first
+  unfold buildFileWith withFreshOutputWith at building
+  obtain ⟨fd,u,opened⟩ := building.first.leaf
+  have created : (issue (.openFile path .writeNew)).run w = .ok fd u := opened
+  have fresh := io.openFile ref w allocated active.1 active.2
+  change IO.FS.Handle.mk path .writeNew w = .ok fd u at opened
+  rw [Post,opened] at fresh
+  obtain ⟨inode,held⟩ := fresh
+  have acquired : io.out.Acquired id rows start ref fd inode := ⟨w,u,allocated,opened,held.2.1⟩
+  have body := (building.next created).body
+  let input : ModelFile := ⟨rows.map (Entry.encode keyCodec mutationCodec),.empty⟩
+  let model := buildStream Alvoki.CRC32C.extend (tableLayout id) modelSink modelNext _root_.id {}
+  change (model.run input).bind _ = _ at valid
+  cases run : model.run input with
+  | error e => simp [run,Except.bind] at valid
+  | ok result =>
+    obtain ⟨n,file⟩ := result
+    obtain ⟨v,built,_⟩ := streamProgress io ref fd inode acquired u input ⟨rows,rfl,held⟩ body.first n file run
+    have synching := body.next built
+    obtain ⟨value,t,synced⟩ := synching.first.leaf
+    have sync : (issue (.sync fd)).run v = .ok value t := synced
+    have actual : (schedule path id rows).run start = .ok () t := by
+      unfold schedule buildFileWith withFreshOutputWith
+      exact boundOk alloc (boundOk (boundOk created (caughtOk (boundOk built (boundOk sync rfl)))) rfl)
+    rw [erase] at actual
+    have safe := (build io entry).1
+    rw [Post,actual] at safe
+    exact ⟨_,actual,safe⟩
 
 end ExperimentalL0.NativeTableWriter
