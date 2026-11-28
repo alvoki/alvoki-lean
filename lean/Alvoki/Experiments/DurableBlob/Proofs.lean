@@ -285,6 +285,45 @@ theorem publishUncertainAdmits (directory : FilePath) (reports : Reports)
     rw [result] at effect
     exact ⟨.uncertain, effect⟩
 
+/-- A successful read and directory barrier return the live value and
+pin that binding for the next crash or reopen. -/
+theorem reopenHealthy (directory : FilePath) (reports : Reports) (before : Image)
+    (read : reports.readActive = true) (opened : reports.openDirectory = true)
+    (synced : reports.syncDirectory = .ok) :
+    (backend directory reports).reopen before = .ok before.active before.barrier := by
+  rw [reopen_eq]
+  simp [Reports.directoryEffect, read, opened, synced, Files.backend, model, perform,
+    Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
+
+/-- Reopen never changes the live binding. A successful reply settles it. -/
+theorem reopenBinding (directory : FilePath) (reports : Reports) (before : Image) :
+    match (backend directory reports).reopen before with
+    | .ok bytes after => bytes = before.active ∧ after.Stable bytes
+    | .error _ after => after.active = before.active := by
+  rw [reopen_eq]
+  cases r : reports.readActive <;> cases o : reports.openDirectory <;>
+    cases d : reports.syncDirectory <;>
+      simp [o, d, Reports.directoryEffect, Files.backend, model, perform,
+        Image.Stable, Image.barrier, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
+
+/-- The live binding can only move to the proposal. The offline
+survivor guarantee additionally requires the ready precondition. -/
+theorem publishActive (directory : FilePath) (reports : Reports) (before : Image)
+    (proposed : ByteArray) :
+    match (backend directory reports).publish proposed before with
+    | .ok _ after => after.Stable proposed
+    | .error _ after => Permitted before.active (some proposed) after.active := by
+  rw [publish_eq]
+  let report := reports.publication
+  change match (model report true).backend.publish proposed before with
+    | .ok _ after => after.Stable proposed
+    | .error _ after => Permitted before.active (some proposed) after.active
+  cases w : report .writeStaged <;> cases s : report .syncStaged <;>
+    cases r : report .renameStaged <;> cases d : report .syncDirectory <;>
+    simp [Files.backend, publishWith, model, perform, w, s, r, d, Image.recordWrite, Image.syncWriter,
+      Image.replace, Image.barrier, Bind.bind, Pure.pure, EStateM.bind,
+      Image.Stable, Permitted]
+
 theorem reopenFailedAdmits (directory : FilePath) (reports : Reports)
     (admitted : before.Admits old pending)
     (returned : (backend directory reports).reopen before = .error err after) :
@@ -382,6 +421,15 @@ theorem Run.refines {initial : ByteArray} (run : Run initial events online image
       exact ⟨_, trace.next .stop, rfl, by simpa [Image.Admits, Image.settled] using chosen⟩
     · exact ⟨_, trace.next .stopAgain, rfl, by
         simpa [Image.Admits, Image.settled] using h.2 _ survived⟩
+
+/-- A returned session exposes the exact active bytes of its modeled image. -/
+theorem Run.refinesReady {initial : ByteArray} (run : Run initial events true image) :
+    Allows initial events (.ready image.active) := by
+  obtain ⟨_ | _, allowed, represented⟩ := run.refines
+  · have same := represented.2.1
+    rw [same]
+    exact allowed
+  · exact False.elim (Bool.noConfusion represented.1)
 
 theorem Run.healthy_open {initial : ByteArray} (run : Run initial events false image) :
     Run initial (events ++ [.opened image.active]) true image.barrier :=

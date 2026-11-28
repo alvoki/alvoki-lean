@@ -22,11 +22,15 @@ import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.DurableBlob.Proofs
 import Alvoki.Experiments.Manifest.Proofs
 #check_axioms DurableBlob.Run.refines
+#check_axioms DurableBlob.Run.refinesReady
 #check_axioms DurableBlob.Run.healthy_open
 #check_axioms DurableBlob.LinuxEffects.reopen
+#check_axioms DurableBlob.LinuxEffects.reopenBinding
+#check_axioms DurableBlob.LinuxEffects.reopenHealthy
 #check_axioms DurableBlob.LinuxEffects.reopenSettles
 #check_axioms DurableBlob.LinuxEffects.reopenInterrupted
 #check_axioms DurableBlob.LinuxEffects.publish
+#check_axioms DurableBlob.LinuxEffects.publishActive
 #check_axioms DurableBlob.LinuxEffects.publishUncertain
 #check_axioms DurableBlob.LinuxEffects.publishUncertainAdmits
 #check_axioms DurableBlob.LinuxEffects.reopenFailedAdmits
