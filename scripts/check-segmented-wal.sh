@@ -36,7 +36,7 @@ lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
 done
-for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution; do
+for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen; do
   lean -o "$scratch/$seg/Proofs/$proof.olean" "$seg/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Segmented.Proofs.$proof"
 done
@@ -61,6 +61,7 @@ import Alvoki.Experiments.WAL.Segmented.Proofs.Writeback
 import Alvoki.Experiments.WAL.Segmented.Proofs.Retention
 import Alvoki.Experiments.WAL.Segmented.Proofs.Discard
 import Alvoki.Experiments.WAL.Segmented.Proofs.Execution
+import Alvoki.Experiments.WAL.Segmented.Proofs.NativeReopen
 open WalRecoverySlice.Segmented
 #check_axioms Recoverable.withUnselectedArtifact
 #check_axioms ControlCodec.decode_encode
@@ -92,6 +93,8 @@ open WalRecoverySlice.Segmented
 #check_axioms rotateIfFull_refines
 #check_axioms appendActive_refines
 #check_axioms append_refines
+#check_axioms append_exhausted
+#check_axioms append_returned_representable
 #check_axioms append_returned_position
 #check_axioms Model.reopen_refines
 #check_axioms Model.reopen_healthy
@@ -105,4 +108,37 @@ open WalRecoverySlice.Segmented
 #check_axioms Run.acknowledged_retained
 #check_axioms Run.acknowledged_discard_persists
 #check_axioms Run.healthy_open
+#check_axioms Native.readControl_canonical
+#check_axioms Native.acquireRoot_selects
+#check_axioms Child.Recoverable.nativeCloseAfterOpen
+#check_axioms Native.acquireStore_bind
+#check_axioms Native.openWithStore_reached
+#check_axioms Native.withActiveChild_reached
+#check_axioms Model.nativeAcquireBinding_ok
+#check_axioms Native.scan_ready
+#check_axioms Native.close_ready
+#check_axioms Native.release_reached
+#check_axioms Native.closeChild_reached
+#check_axioms Native.closePhase_reached
+#check_axioms Native.openRootDirectory_usesCanonicalPath
+#check_axioms Native.segmentId_sound
+#check_axioms Native.segmentId_canonical
+#check_axioms Native.listedIds_exact
+#check_axioms Native.installPhase_reached
+#check_axioms Model.nativeRemoveSegment
+#check_axioms Model.nativeRootBarrier
+#check_axioms Model.reopen_nativeRoot
+#check_axioms Model.reopen_nativeHealthy
+#check_axioms Model.reopenScopedModel_refines
+#check_axioms Model.reopenScopedModel_healthy
+#check_axioms Model.nativeAppendAfterTransfer
+#check_axioms Model.installScopedModel_healthy
+#check_axioms Model.publicOpenModel_refines
+#check_axioms Model.sealedChildReport
+#check_axioms Model.publicOpenModel_append
+#check_axioms Model.publicOpenModel_healthy
+#check_axioms Model.repeatOpenAfterFailedDiscard
+#check_axioms Model.nativeChild_recoverable
+#check_axioms Model.nativeChild_sealed
+#check_axioms Model.nativeChild_selected
 LEAN

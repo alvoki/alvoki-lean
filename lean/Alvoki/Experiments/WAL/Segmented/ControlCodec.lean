@@ -2,7 +2,7 @@ import Alvoki.Experiments.WAL.Segmented.Protocol
 
 namespace WalRecoverySlice.Segmented.ControlCodec
 
-def wordMax : Nat := 18446744073709551615
+def wordMax : Nat := Contract.maxPosition
 
 def digit (n : Nat) : UInt8 := (48 + n % 10).toUInt8
 

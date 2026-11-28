@@ -7,7 +7,10 @@ filesystem and owns it exclusively for the lifetime of the handle.
 `Native.create dir policy capacity` creates a WAL with 1–255 batches per segment.
 `Native.openExisting dir` opens one. `append`, `discardThrough`, `scan`, and `close`
 operate on the returned handle. A successful append returns its one-based absolute position,
-which can be passed to `discardThrough` within its native UInt64 range, including after rotation or earlier release. Recovery materializes the retained history in memory, and each
+which can be passed to `discardThrough` after rotation or earlier release. The public
+contract caps absolute positions at UInt64.max. At that tail, append rejects before
+rotation or child writes, so recovery cannot select the rejected batch. Recovery
+materializes the retained history in memory, and each
 append updates the cached session view. This experimental API is not a bounded-memory
 WAL reader. Positions are absolute: batches start at one and
 `scan` returns the last discarded position `base` plus the retained batches. Release
@@ -119,10 +122,9 @@ state are outside this experiment.
 
 The public single-file recovery schedule supplies the child
 `Recoverable` and `Installed` facts and the cached scan result from local
-primitive effects. Native segmented recovery still needs to bind that
-child to the root session that `openExisting` and `scan` expose to L0.
-The single-file append producer composes with that child recovery result
-on its stored writer and marker descriptions. Native rotation and CONTROL
+primitive effects. Segmented reopen binds that child to its root session.
+The single-file append producer consumes its stored writer and marker
+descriptions. Native rotation and CONTROL
 publication remain segmented responsibilities.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
@@ -134,6 +136,115 @@ the root barrier also settles the successor's directory entry.
 Keep segment creation, prefix release and collection under the
 existing WAL invariants. Coordinate the adapter change with the L0
 branch when taking up that work.
+
+[Native reopen proofs](Proofs/NativeReopen.lean) compose the single-file
+producer with the shared root operations. The root directory descriptor
+selects both directory barriers. A barrier that takes effect settles the
+CONTROL binding and child directory names together, including on a reported
+failure. Root enumeration decodes only canonical segment IDs. Reclamation
+addresses entries beneath the selected directory and changes its projected
+root binding only at rmdir. Prefix unlinks affect private artifacts of a
+retired segment. The existing collection proof keeps every selected name.
+
+The root interpreter takes local effects for CONTROL reads, enumeration,
+directory sync, inspection, unlink and rmdir. It assumes stable bindings
+under the cooperating root lock. Successful enumeration covers the visible
+canonical bindings, and an absent metadata result means the canonical name
+is absent. Child inspection uses complete relative basenames and singly
+linked regular files. Unlink on a retired child can affect those inodes
+and its directory; rmdir controls the root binding independently.
+The public install schedule acquires one store and passes it to both
+phase installation and failure cleanup. The acquisition proof follows the
+same resolved root through directory open, lock lookup and store allocation.
+Its primitive premises are canonical path resolution, descriptor-to-inode
+binding and lock acquisition on that description. The binding interpreter
+retains the acquired descriptor identities in the ready phase. A reported
+acquisition error leaves the disk recoverable.
+
+The native sealed reader releases each child after scanning it. The active
+child is carried through scan, validation and collection by the shared
+`reopenWith` schedule. A reported error in that scope closes the acquired
+child before the outer store cleanup unlocks the root. On success, the
+schedule returns the session and that same child. The shared installer
+constructs the active entry from the session's segment ID and returned
+child. The native adapter passes that entry to the reference setter.
+Append takes its writer authority from that stored child. Root unlock follows child close even when close reports an error.
+
+### Public open contract for the append consumer
+
+For a recoverable disk and a root acquired under the primitive assumptions
+above, the interpreted public open must establish one postcondition on the
+same reached disk and resources:
+
+- On return, the public phase contains the acquired store and the installed
+  `Session`. Both CONTROL and the held directory descriptor bind to the
+  same root as the lock. The store owns the child returned at
+  `segmentPath root session.control.active`. That exact child's phase and
+  the reached segment image provide the writer and marker authority used
+  by the next append. The installed history and cursor agree with the
+  session, and public scan returns its view.
+- On a reported error, the exact reached disk remains recoverable for
+  the same request. The attempt retains no published phase or owned child
+  or root lock. Cleanup consumes the child actually reached, including
+  one opened before a scan or collection error. Release still attempts
+  root unlock after a child close error. A process interruption uses the
+  process-stop premises for acquired resources.
+- Healthy primitive and runtime effects, with a representable CONTROL
+  binding, reach the successful case. Bootstrap and publication must
+  eventually supply representability.
+
+The value-only model uses the same `reopenWith` schedule and erases the
+active payload. `reopenScopedModel_project` proves this erasure preserves
+the session or primary error and the reached disk, also when child close
+reports an error. Both the existing disk proof and healthy progress
+therefore apply to the run carrying the child.
+
+`publicOpenModel_refines` follows the shared outer install and release
+schedules and reports the ready store and held root, or a released root and
+a recoverable reached disk. Its reported-error case also carries
+`ScopedFailureReleased`. If the active child was acquired, this identifies the
+failed continuation on that child and the close on the same reached segment
+image. The single-file phase is closed and its lock is no longer held even
+when unlock reports an error. `publicOpenModel_append` consumes the exact
+stored child and the active image on that reached disk. Its input
+precondition comes from the shared prefix proof, and collection frames the
+child image before append. `publicOpenModel_healthy` lifts progress to the
+ready resource result. Reported cleanup errors preserve the primary error.
+Process interruption drops process-owned resources under the runtime
+premises.
+
+Child validation consumes the checked listing of the selected segment
+directory and the metadata and text of its policy file. The shared
+validator rejects missing required names, wrong policies and reported
+inspection errors before opening the child. The listing primitive must
+reflect the protected namespace, including the native no-follow type and
+single-link checks. Healthy listings may use any enumeration order.
+
+The sealed and active paths consume the handle from the same child producer.
+The value-only disk interpretation projects its batches and cursor. Both
+scans use the returned single-file phase, and the sealed path runs the shared
+close schedule on that child. A reported sealed close failure leaves the exact reached disk
+and carries no child authority. An active scope that acquired a child but
+fails later closes that child on the reached image. Single-file close
+supplies the ownership drop even when unlock reports an error. Before
+the ready phase is installed, the outer store has no active child, so
+failure cleanup only needs to release the root. A successful open
+transfers the sole active child into the store.
+
+Rotation still prepares a successor in the store. Its refinement should
+transfer the new child explicitly through publication and installation.
+
+The DurableBlob publication schedule can carry the staged CONTROL writer
+through its fsync, rename, and root barrier. Its directory effect must be
+framed with the WAL root's child bindings. Before CONTROL can select a new
+segment, that segment and its name need their own durability argument.
+Reclamation must respect both admissible CONTROL choices until the barrier.
+The native CONTROL adapter uses the writer custody from PR #5: the stage
+writer is consumed by its own fsync and cleared on cleanup. The recovery
+composition theorem covers a reported discard error, another reported open
+error, and two successful opens with the same view. It uses the shared
+root publication model and interpreted native reopen effects. Linking the
+actual CONTROL publication to that model remains open.
 
 ## Roadmap
 

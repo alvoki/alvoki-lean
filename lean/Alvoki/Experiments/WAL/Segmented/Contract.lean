@@ -4,6 +4,9 @@ namespace WalRecoverySlice.Segmented.Contract
 
 abbrev Batch := List UInt8
 
+/-- Largest absolute position representable by the durable release boundary. -/
+def maxPosition : Nat := 18446744073709551615
+
 structure View where
   base : Nat
   batches : List Batch
@@ -23,7 +26,7 @@ inductive Request where
 
 def Request.apply (r : Request) (v : View) : Option View :=
   match r with
-  | .append p => some (v.append p)
+  | .append p => if v.tail < maxPosition then some (v.append p) else none
   | .discardThrough k => if k ≤ v.tail then some (v.discardThrough k) else none
 
 inductive Event where
