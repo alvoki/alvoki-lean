@@ -196,6 +196,32 @@ theorem Tail.Prefix.finish (path : Tail) (w : W) : Prefix path w .done (path.run
   | done => exact .here
   | call op next ih => exact .step (ih (op w).val _)
 
+/-- A store action can be plugged into the updating recipe while exposing
+both continuations at its actual return. Cuts inside that action are
+handled by its own primitive schedule. -/
+def observing (op : IO α) : PathM α := fun ok err =>
+  .call op.toBaseIO fun report => match report with | .ok v => ok v | .error e => err e
+
+/-- The reached suffix is an actual subtree of the updating callback,
+including when the store failed. No observation of a finalizer or of the
+end of the scope is needed to locate it. -/
+theorem afterStore_source (ref : Ref) (lock : IO.FS.Handle) (operation : Session → IO Session)
+    (read : ((ref.get : BaseIO _) w).val = .online wal s) :
+    let hidden := ((ref.swap (.updating wal) : BaseIO _) ((ref.get : BaseIO _) w).state).state
+    let result := operation s hidden
+    Tail.Prefix (updateTree ref lock (fun s => observing (operation s))) w
+      (afterStore ref lock s result) (WalRecoverySlice.Segmented.Native.returnedWorld result) := by
+  intro hidden result
+  rw [updateTree_eq]
+  apply Tail.Prefix.step
+  simp only [read, Phase.beginUpdate]
+  apply Tail.Prefix.step
+  apply Tail.Prefix.step
+  rw [← show hidden = ((ref.swap (.updating wal) : BaseIO _) ((ref.get : BaseIO _) w).state).state from rfl]
+  dsimp only [result]
+  cases ran : operation s hidden <;>
+    simp only [EIO.toBaseIO,ran,afterStore,WalRecoverySlice.Segmented.Native.returnedWorld] <;> exact .here
+
 abbrev LeafStop := {α : Type} → BaseIO α → W → W → Prop
 
 /-- Ordinary boundaries include pure guard rejections and the completed
