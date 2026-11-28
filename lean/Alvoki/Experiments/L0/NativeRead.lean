@@ -396,7 +396,8 @@ theorem firstSizeError {id : UInt64} (root : System.FilePath) (ref : IO.Ref (Pha
     (regular : isTableFile md = true)
     (opened : IO.FS.Handle.mk (tablePath (root / "tables") id) .read checked = .ok h entered)
     (failed : (handleSource h).size entered = .error e after) :
-    Native.get handle key start = .error (IO.userError e) after := by
+    Native.get handle key start = .error (IO.userError e) after ∧
+      publicCalls ref (root / "tables") key start = [⟨root / "tables", id, .lookup key, w⟩] := by
   have action : withTableSource (handleSource h) id (·.lookup key) entered = .error e after := by
     simp [withTableSource, openTableChecked, openChecked, readFooter, Bind.bind,
       instMonadEIO._aux_13, EST.bind, failed]
@@ -405,9 +406,20 @@ theorem firstSizeError {id : UInt64} (root : System.FilePath) (ref : IO.Ref (Pha
     rw [nativeTableAt_acquired stat regular opened]
     change (BaseIO.toEIO (withTableSource (handleSource h) id (·.lookup key)).toBaseIO) entered = _
     simp [EIO.toBaseIO, BaseIO.toEIO, action]
+  constructor
+  · rw [Native.get_atRoot binding phase (readOps (root / "tables")) rfl]
+    simp only [get, miss, first, lookupTables, readOps, ExceptT.run_bind]
+    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, lookupError]
+    rfl
+  · simp [publicCalls, phase, get, miss, first, lookupTables, logged, lower, lookupError,
+      Bind.bind, EStateM.bind, calls]
+
+theorem memHit (ref : IO.Ref (Phase Wal)) (binding : Native.Handle.AtRoot handle root ref)
+    (phase : (ref.get : IO (Phase Wal)) w = .ok (.online wal session) entered)
+    (hit : session.mem[key]? = some mutation) :
+    Native.get handle key w = .ok mutation.value entered := by
   rw [Native.get_atRoot binding phase (readOps (root / "tables")) rfl]
-  simp only [get, miss, first, lookupTables, readOps, ExceptT.run_bind]
-  simp [Bind.bind, instMonadEIO._aux_13, EST.bind, lookupError]
+  simp only [get, hit]
   rfl
 
 /-- The caller catches each reported read error and tries the next key on the
