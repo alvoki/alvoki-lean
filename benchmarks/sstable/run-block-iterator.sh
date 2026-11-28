@@ -21,10 +21,14 @@ for module in Merge Proofs; do
   git -C "$repo" show "$pin:$sorted/$module.lean" > "$scratch/Alvoki/Experiments/SortedRun/$module.lean"
 done
 cp "$repo/benchmarks/sstable/BlockIterator.lean" "$scratch/BlockIteratorBenchmark.lean"
-cat >> "$scratch/lakefile.lean" <<'LAKE'
+if ! grep -Fq 'Alvoki.Experiments.SortedRun.+' "$scratch/lakefile.lean"; then
+  cat >> "$scratch/lakefile.lean" <<'LAKE'
 
 lean_lib SortedRunBenchmarkContract where
   globs := #[`Alvoki.Experiments.SortedRun.+]
+LAKE
+fi
+cat >> "$scratch/lakefile.lean" <<'LAKE'
 
 lean_exe blockIteratorBenchmark where
   root := `BlockIteratorBenchmark
