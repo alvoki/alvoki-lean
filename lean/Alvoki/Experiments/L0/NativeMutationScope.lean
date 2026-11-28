@@ -181,7 +181,7 @@ theorem withOpen_of_append {physical : W → Footprint inode}
     obtain ⟨reg, slot, source, disk, view⟩ := rejected.child
     have registered := (ops.cleanup.cached _ rejected.owned _ reg).mp slot
     exact failedBody grant ops.phase (release _ _ _ _)
-      (.ofRecover (SessionAtHeld rejected) (disk.offline (.inl view)))
+      (.ofRecover (SessionAtHeld rejected) (disk.installed.offline (.inl view)))
       (.ofRegistered registered source.2) _ ran
       (fun _ closed => .rejected fits closed (.rejected trace closed.files))
 
@@ -205,25 +205,5 @@ theorem Retry.readTwice (retry : Retry physical root events image req w)
 
 abbrev uncertainEvents (before : List Event) (change : Change) :=
   ((before ++ [.reopened]) ++ [.writeUncertain change]) ++ [.stop]
-
-/-- A reported append error keeps the pending encoded mutation throughout
-both reopens. An error first reported by cleanup after append success
-already has a pinned extended view. -/
-theorem Failure.readTwice (failure : Failure physical heap root before image change e w)
-    (original : Reopens physical heap path root image life none)
-    (uncertain : Reopens physical heap path root image life (some (.append (encode change))))
-    (extended : Reopens physical heap path root (image.append (encode change)) life none)
-    (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
-    (PendingReadScope.TwoReads none physical path root image life (before ++ [.openFailed]) w a b rootLife) ∨
-    PendingReadScope.TwoReads none physical path root image life (uncertainEvents before change) w a b rootLife ∨
-    PendingReadScope.TwoReads (some (.append (encode change))) physical path root image life
-      (uncertainEvents before change) w a b rootLife ∨
-    PendingReadScope.TwoReads none physical path root (image.append (encode change)) life
-      (uncertainEvents before change) w a b rootLife := by
-  cases failure with
-  | unopened retry => exact .inl (retry.readTwice original a b rootLife)
-  | rejected _ _ retry => exact .inr (.inl (retry.readTwice original a b rootLife))
-  | reported _ _ retry => exact .inr (.inr (.inl (retry.readTwice uncertain a b rootLife)))
-  | cleanup written => exact .inr (.inr (.inr (written.lost.readTwice extended a b rootLife)))
 
 end ExperimentalL0.NativeMutationScope

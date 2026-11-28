@@ -48,17 +48,17 @@ for module in NativeManifest NativeRead NativeReadClient NativeRecovery NativeTa
   compile "$l0/$module" proof
 done
 compile Alvoki/Experiments/WAL/Segmented/Proofs/RuntimeChild proof
-for module in AppendReopens NativeMutationScope; do
+for module in AppendReopens NativeMutation NativeAppendCut; do
   compile "$l0/$module" proof
 done
-for module in AppendRotationIO ControlCutIO; do
+for module in PreparedFile ControlCutIO PrepareCutIO ChildCutIO CutSchedule; do
   compile "Alvoki/Experiments/WAL/Segmented/Proofs/$module" proof
 done
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendReopens AppendRecovery NativeWrite NativeWriteRelease NativeMutationScope NativeRecoverSelected PendingReadScope NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendReopens AppendRecovery NativeWrite NativeWriteRelease NativeMutation NativeMutationScope NativeMutationReopens NativeAppendCut NativeRecoverSelected PendingReadScope NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
-for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Proofs.ConcreteRecovery WAL.Proofs.ConcreteOpen WAL.Segmented.Proofs.NativeRootIO WAL.Segmented.Proofs.NativeChildIO WAL.Segmented.Proofs.StoreAcquisition WAL.Segmented.Proofs.RuntimeStoreOpen WAL.Segmented.Proofs.RuntimeChild WAL.Segmented.Proofs.RuntimeDisk WAL.Segmented.Proofs.HealthyEmpty WAL.Proofs.ConcreteAppend WAL.Proofs.ConcreteCreate WAL.Segmented.Proofs.AppendIngress WAL.Segmented.Proofs.AppendRotationIO WAL.Segmented.Proofs.ControlCutIO; do
+for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Proofs.ConcreteRecovery WAL.Proofs.ConcreteOpen WAL.Segmented.Proofs.NativeRootIO WAL.Segmented.Proofs.NativeChildIO WAL.Segmented.Proofs.StoreAcquisition WAL.Segmented.Proofs.RuntimeStoreOpen WAL.Segmented.Proofs.RuntimeChild WAL.Segmented.Proofs.RuntimeDisk WAL.Segmented.Proofs.HealthyEmpty WAL.Proofs.ConcreteAppend WAL.Proofs.ConcreteCreate WAL.Segmented.Proofs.AppendIngress WAL.Segmented.Proofs.AppendRotationIO WAL.Segmented.Proofs.ControlCutIO WAL.Segmented.Proofs.PrepareCutIO WAL.Segmented.Proofs.PreparedFile WAL.Segmented.Proofs.AppendRuntime WAL.Segmented.Proofs.CutSchedule WAL.Segmented.Proofs.ChildCutIO WAL.Proofs.ConcreteAppendCut; do
   leanchecker "Alvoki.Experiments.$module"
 done
 lean --stdin <<'LEAN'
@@ -73,7 +73,10 @@ import Alvoki.Experiments.L0.TableProofs
 import Alvoki.Experiments.L0.TableAllocationProofs
 import Alvoki.Experiments.L0.NativeManifest
 import Alvoki.Experiments.L0.NativeRecovery
-import Alvoki.Experiments.L0.NativeMutationScope
+import Alvoki.Experiments.L0.NativeMutation
+import Alvoki.Experiments.L0.NativeAppendCut
+import Alvoki.Experiments.WAL.Segmented.Proofs.ChildCutIO
+import Alvoki.Experiments.WAL.Segmented.Proofs.PreparedFile
 import Alvoki.Experiments.L0.AppendReopens
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutIO
 import Alvoki.Experiments.WAL.Segmented.Proofs.AppendRotationIO
@@ -140,7 +143,12 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeWriteRelease.afterError
 #check_axioms NativeWriteRelease.outerOffline
 #check_axioms NativeMutationScope.withOpen_of_append
-#check_axioms NativeMutationScope.Failure.readTwice
+#check_axioms NativeMutationScope.mutationThenReadTwice
+#check_axioms NativeReadRelease.mutation_released
+#check_axioms NativeAppendCut.Restarted.uncertain
+#check_axioms WalRecoverySlice.Segmented.Native.AppendIO.LocalIO.healthy
+#check_axioms WalRecoverySlice.Segmented.Native.PrepareIO.selectedOnly_counterexample
+#check_axioms WalRecoverySlice.Segmented.Native.PrepareIO.Successor.healthy
 #check_axioms PendingReadScope.twice
 #check_axioms NativeRecoverAt.recoverAt_selected_checks
 #check_axioms WalProducerHandoff.reportedWriteTwice

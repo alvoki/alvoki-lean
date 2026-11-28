@@ -131,6 +131,7 @@ structure Runtime (req : Option WalRecoverySlice.Segmented.Contract.Request) (ph
       (fun w => (physical w).manifest)
   wal : WalRecoverySlice.Segmented.Native.LocalOpenIO heap (root / "wal") (fun w => (physical w).disk)
     image.view (NativeRecoverAt.Held physical root lock ref image .opening) req
+  childCache : NativeRecoverAt.ChildCache physical root lock ref wal.toOpenIO
   cached : NativeRecoverAt.Cached heap physical root lock ref
   phase : NativeRecoverAt.PhasePrimitives physical root lock ref image
   scan : ∀ view wal w, PermittedView image.view req view →
@@ -163,7 +164,7 @@ theorem withOpen (entry : RestartEntry req physical path root image) (files : Re
   let opening : NativeRecoverAt.Opening physical root lock ref image w req :=
     ⟨owned, phase, persistent.catalog, persistent.disk⟩
   have post := NativeRecoverAt.recoverAt_selected_checks durable opening persistent.manifest
-    (ops.manifest w opening) heap ops.cached ops.wal.toOpenIO ops.phase ops.scan
+    (ops.manifest w opening) heap ops.cached ops.wal.toOpenIO ops.childCache ops.phase ops.scan
     (fun _ wal t _ a => ops.tables wal t a.1.owned)
   unfold Post
   cases ran : Native.recoverAt root ref w with
