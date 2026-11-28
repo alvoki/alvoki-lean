@@ -17,11 +17,11 @@ private def creation (stop : ControlCutIO.Stops) (dir : FilePath) (p : Policy) :
 
 /-- The source chooses the dirent order, metadata and policy guards, exact
 unlink operands, mkdir and create. Returned failures stop before continuation. -/
-def program (s : Store) (c : Control) (stop : ControlCutIO.Stops) : Observed SingleFile.Handle :=
+def program (s : Store) (policy : Policy) (id : Nat) (stop : ControlCutIO.Stops) : Observed SingleFile.Handle :=
   prepareChildWith (removeSegmentWith
     (fun dir => ⟨PrepareIO.presenceIO dir, stop dir.symlinkMetadata⟩) (inspect stop) (·.fileName)
     (fun path => leaf stop (IO.FS.removeFile path)) (fun dir => leaf stop (IO.FS.removeDir dir)) s.root)
-    (fun dir => leaf stop (IO.FS.createDir dir)) (creation stop) s.root c.policy (c.active + 1)
+    (fun dir => leaf stop (IO.FS.createDir dir)) (creation stop) s.root policy id
 
 abbrev Witness (dir : FilePath) (policy : Policy) (stop : ControlCutIO.Stops) (origin : W) (d : Disk) :=
   (∃ (p : Point) (t : W) (α : Type) (a : IO α), Prefix dir origin p t ∧ Issued dir p a ∧ stop a t d) ∨
@@ -130,9 +130,9 @@ private theorem present (dir : FilePath) (w : W) :
   | ok => rfl
   | error e => cases e <;> rfl
 
-theorem covered (hit : (program s c stop).cuts w d) : Witness (successorDir s c) c.policy stop w d := by
+theorem covered (hit : (program s c.policy (c.active + 1) stop).cuts w d) : Witness (successorDir s c) c.policy stop w d := by
   let dir := successorDir s c
-  suffices all : SafeAt dir c.policy stop w (program s c stop) w (fun _ _ => True) from all.cut d hit
+  suffices all : SafeAt dir c.policy stop w (program s c.policy (c.active + 1) stop) w (fun _ _ => True) from all.cut d hit
   unfold program prepareChildWith removeSegmentWith
   apply Safe.bind (mid := fun _ t => Prefix dir w .mkdir t)
   · apply Safe.bind (mid := fun present t => Prefix dir w (if present then .dirStat else .mkdir) t)

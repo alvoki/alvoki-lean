@@ -31,7 +31,7 @@ def program (s : Store) (c : Control) (stop : Stops) : Observed Unit :=
     syncWriter := fun h => leaf stop (syncHandle h)
     rename := fun a b => leaf stop (IO.FS.rename a b)
     syncDirectory := fun h => leaf stop (syncHandle h)
-  } s.root s.directory (next c)
+  } s.root s.directory c
 
 abbrev Witness (s : Store) (c : Control) (stop : Stops) (origin : W) (d : Disk) : Prop :=
   ∃ (p : Point) (t : W) (α : Type) (a : IO α) (k : OpKind),
@@ -109,7 +109,7 @@ private theorem clearSafe (s : Store) (c : Control) (stop : Stops) (origin : W) 
         · intro _ _ impossible; contradiction
 
 private theorem stageSafe (s : Store) (c : Control) (stop : Stops) (origin : W) :
-    SafeAt s c stop origin (program s c stop) origin (fun _ t => Prefix s c origin .done t) := by
+    SafeAt s c stop origin (program s (next c) stop) origin (fun _ t => Prefix s c origin .done t) := by
   unfold program publishControlWith DurableBlob.publishWith
   apply Safe.bind (mid := fun h t => Prefix s c origin (.syncWriter h) t)
   · dsimp only
@@ -135,7 +135,7 @@ private theorem stageSafe (s : Store) (c : Control) (stop : Stops) (origin : W) 
     intro _ _ r
     exact callSafe stop r (.directory h) (fun _ _ ran => Prefix.more r (.settled ran))
 
-theorem covered (hit : (program s c stop).cuts w d) : Witness s c stop w d :=
+theorem covered (hit : (program s (next c) stop).cuts w d) : Witness s c stop w d :=
   (stageSafe s c stop w).cut d hit
 
 end WalRecoverySlice.Segmented.Native.ControlCutIO

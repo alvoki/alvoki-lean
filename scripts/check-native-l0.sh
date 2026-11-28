@@ -42,7 +42,8 @@ flush_proofs=(
   NativeFlushScope NativeFlushStore NativeFlushPublic HealthyFlushStore HealthyFlush
   NativeTableAllocation NativeTableDirectory TableWriterSchedule NativeTableWriter NativeTableCreate
   TableCreateSchedule NativeManifestPublish ManifestPublishSchedule ReserveScanCut NativeFlushInterrupted
-  MutationSequence MutationSequenceRoot ExitSchedule ReserveScanSource NativeFlushStoreCut
+  MutationSequence MutationSequenceRoot ExitSchedule ReserveScanSource NativeFlushStoreCut NativeFlushBodyRestart
+  HealthyTableRead MutationIngressCut
 )
 for module in "${flush_proofs[@]}"; do
   compile "$l0/$module" proof
@@ -93,7 +94,7 @@ component_proofs=(
   WAL.Segmented.Proofs.ChildHeapCut WAL.Segmented.Proofs.AppendCutBody
   WAL.Segmented.Proofs.CutRuntime WAL.Segmented.Proofs.PublicAppendCut
   WAL.Segmented.Proofs.CutSite WAL.Segmented.Proofs.CutFrame WAL.Segmented.Proofs.CutLeafFrames
-  WAL.Segmented.Proofs.CutFrameMemory SSTable.Proofs.BuilderRelation
+  WAL.Segmented.Proofs.CutFrameMemory SSTable.Proofs.BuilderRelation SSTable.Proofs.UnifiedReaderRelation
   WAL.Segmented.Proofs.ChildCutCoverage WAL.Segmented.Proofs.CloseCutCoverage
   WAL.Segmented.Proofs.ControlCutCoverage WAL.Segmented.Proofs.PrepareCutCoverage
 )
@@ -103,7 +104,9 @@ done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.HealthyFlush
-import Alvoki.Experiments.L0.NativeFlushStoreCut
+import Alvoki.Experiments.L0.NativeFlushBodyRestart
+import Alvoki.Experiments.L0.MutationIngressCut
+import Alvoki.Experiments.L0.HealthyTableRead
 import Alvoki.Experiments.L0.ReserveScanSource
 import Alvoki.Experiments.L0.NativeFlushInterrupted
 import Alvoki.Experiments.L0.MutationSequenceRoot
@@ -162,6 +165,11 @@ open ExperimentalL0
 #check_axioms NativeFlushRestart.finishedPublishedLookup
 #check_axioms NativeFlushRestart.orphanIgnored
 #check_axioms NativeFlushInterrupted.ingress
+#check_axioms NativeFlushInterrupted.anyCut
+#check_axioms NativeFlushInterrupted.duringStore
+#check_axioms MutationIngressCut.beforeAppend
+#check_axioms MutationIngressCut.source
+#check_axioms MutationExitCut.afterStore_source
 #check_axioms NativeFlushInterrupted.beforeStore
 #check_axioms NativeFlushInterrupted.afterStoreCut
 #check_axioms WalRecoverySlice.Segmented.Native.AppendCut.publicProgram_run
@@ -227,6 +235,15 @@ open ExperimentalL0
 #check_axioms NativeReadRelease.mutation_released
 #check_axioms NativeAppendCut.Restarted.uncertain
 #check_axioms InterruptedMutation.Prefix.beforeAppend
+#check_axioms InterruptedMutation.Worker.Observation.entry
+#check_axioms MutationExitCut.Tail.Prefix.finish
+#check_axioms MutationExitCut.Cut.frame
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.oldCloseCovered
+#check_axioms WalRecoverySlice.Segmented.Native.ChildCutIO.sourceCovered
+#check_axioms WalRecoverySlice.Segmented.Native.ChildCutIO.terminalCovered
+#check_axioms WalRecoverySlice.Segmented.Native.ControlCutIO.covered
+#check_axioms WalRecoverySlice.Segmented.Native.PrepareCutIO.covered
+#check_axioms WalRecoverySlice.Segmented.Native.CreateCutIO.ChunkPrefix.remaining
 #check_axioms InterruptedMutation.Worker.interrupted
 #check_axioms InterruptedMutation.Worker.beforeReopens
 #check_axioms InterruptedMutation.Worker.afterSuccessReopens

@@ -27,8 +27,8 @@ inductive PublicStop (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (stor
 proof below transforms them into the prefix evidence used by the disk model. -/
 def sourceSites (s : Store) (session : Session) (stop : Stop) : Sites s :=
   { sites s session stop with
-    prepare := fun _ _ => (PrepareCutIO.program s session.control stop).cuts
-    publish := fun _ => (ControlCutIO.program s session.control stop).cuts
+    prepare := fun policy id => (PrepareCutIO.program s policy id stop).cuts
+    publish := fun control => (ControlCutIO.program s control stop).cuts
     write := ChildCutIO.source stop
     close := closeSource stop
     oldClose := (oldCloseProgram s stop).cuts }
