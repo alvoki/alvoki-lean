@@ -347,7 +347,8 @@ def ActiveFrame (children : ChildAccess s disk Q) (c : Control) (history : List 
     (h : SingleFile.Handle) (w : W) : Prop :=
   children.owns h (segmentHistory c.capacity c.active history) w ∧ Q w ∧ Installed (sessionOf c history) (disk w)
 
-structure StoreIO (s : Store) (disk : W → Disk) (Q : W → Prop) where
+structure StoreOperations (s : Store) (disk : W → Disk) (Q : W → Prop)
+    (child : Type) (access : child → ChildAccess s disk Q) where
   controlBytes : W → ByteArray
   controlBound : ∀ w, Q w → ControlCodec.decode (controlBytes w) = (disk w).liveControl
   metadata : ∀ w, Q w → IOReturns (s.root / "CONTROL").symlinkMetadata w
@@ -357,9 +358,12 @@ structure StoreIO (s : Store) (disk : W → Disk) (Q : W → Prop) where
   sync : ∀ w, Q w → IOReturns (syncHandle s.directory) w
     (fun _ t => Q t ∧ Writebacks (disk w).syncRoot (disk t))
     (fun t => Q t ∧ (Writebacks (disk w) (disk t) ∨ Writebacks (disk w).syncRoot (disk t)))
-  children : ChildAccess s disk Q
-  cleanup : ∀ c history h, CollectionIO s.root c.firstNeeded (ActiveFrame children c history h)
-  cleanupSync : ∀ c history h, Keeps (ActiveFrame children c history h) (syncHandle s.directory)
+  children : child
+  cleanup : ∀ c history h, CollectionIO s.root c.firstNeeded (ActiveFrame (access children) c history h)
+  cleanupSync : ∀ c history h, Keeps (ActiveFrame (access children) c history h) (syncHandle s.directory)
+
+abbrev StoreIO (s : Store) (disk : W → Disk) (Q : W → Prop) :=
+  StoreOperations s disk Q (ChildAccess s disk Q) id
 
 private theorem decode_bounds {raw : ByteArray} (parsed : ControlCodec.decode raw = some c) :
     c.active ≤ ControlCodec.wordMax ∧ c.discarded ≤ ControlCodec.wordMax := by

@@ -1,4 +1,4 @@
-import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeDisk
+import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeChild
 import Alvoki.Experiments.WAL.Segmented.Proofs.StoreAcquisition
 
 namespace WalRecoverySlice.Segmented.Native
@@ -31,16 +31,44 @@ abbrev Waiting (known : Contract.View) (disk : W → Disk) (Q : W → Prop) (w :
 /-- Inputs for an actual public open, grouped by their corresponding
 runtime or filesystem primitives. The worker starts with the specific
 directory, exclusive lock and typed empty slot produced by acquisition. -/
-structure OpenIO (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk)
-    (known : Contract.View) (Q : W → Prop) where
+structure OpenOperations (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk)
+    (known : Contract.View) (Q : W → Prop) (workerInputs : Store → (W → Prop) → Type) where
   acquire : AcquireIO dir (Waiting known disk Q)
   worker : ∀ s : Store, s.root = acquire.canonical →
-    StoreIO s disk (fun t => acquire.directory s.directory t ∧ acquire.locked s.lock t ∧
+    workerInputs s (fun t => acquire.directory s.directory t ∧ acquire.locked s.lock t ∧
       heap.holds s.active none t ∧ Q t)
   install : ∀ c, InstallFrame (fun t => Installed c (disk t) ∧ Q t)
   take : ∀ (s : Store) t, Waiting known disk Q t →
     Waiting known disk Q ((s.active.swap none : BaseIO _) t).state
   unlock : ∀ (s : Store), Keeps (Waiting known disk Q) s.lock.unlock
+
+abbrev OpenIO (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk) (known : Contract.View) (Q : W → Prop) :=
+  OpenOperations heap dir disk known Q (fun s P => StoreIO s disk P)
+
+/-- Supply only the selected child's primitive interpretation to the root
+adapter. The checked child assembly constructs all three operation laws. -/
+abbrev LocalStoreIO (s : Store) (disk : W → Disk) (Q : W → Prop) :=
+  StoreOperations s disk Q (ChildPrimitives s disk Q) ChildPrimitives.access
+
+def LocalStoreIO.toStoreIO (localIO : LocalStoreIO s disk Q) : StoreIO s disk Q where
+  controlBytes := localIO.controlBytes
+  controlBound := localIO.controlBound
+  metadata := localIO.metadata
+  file := localIO.file
+  sync := localIO.sync
+  children := localIO.children.access
+  cleanup := localIO.cleanup
+  cleanupSync := localIO.cleanupSync
+
+abbrev LocalOpenIO (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk) (known : Contract.View) (Q : W → Prop) :=
+  OpenOperations heap dir disk known Q (fun s P => LocalStoreIO s disk P)
+
+def LocalOpenIO.toOpenIO (localIO : LocalOpenIO heap dir disk known Q) : OpenIO heap dir disk known Q where
+  acquire := localIO.acquire
+  worker s canonical := (localIO.worker s canonical).toStoreIO
+  install := localIO.install
+  take := localIO.take
+  unlock := localIO.unlock
 
 /-- Actual store acquisition produces the canonical path, held lock, directory,
 and freshly allocated empty child slot. The worker consumes those resources;
