@@ -23,6 +23,41 @@ def program (s : Store) (policy : Policy) (id : Nat) (stop : ControlCutIO.Stops)
     (fun path => leaf stop (IO.FS.removeFile path)) (fun dir => leaf stop (IO.FS.removeDir dir)) s.root)
     (fun dir => leaf stop (IO.FS.createDir dir)) (creation stop) s.root policy id
 
+private theorem inspect_run (stop : ControlCutIO.Stops) (dir : FilePath) : (inspect stop dir).run = inspectChild dir := by
+  unfold inspect inspectChild inspectChildWith
+  rw [Observed.run_bind]
+  apply congrArg (Bind.bind dir.symlinkMetadata)
+  funext md
+  split
+  · rw [Observed.run_bind]
+    apply congrArg (Bind.bind (entries dir))
+    funext xs
+    rw [Observed.run_bind, ← Array.forIn_toList, Observed.run_forIn, Array.forIn_toList]
+    congr 2
+    funext entry _
+    dsimp only
+    split <;> rfl
+  · rfl
+
+theorem program_run (s : Store) (policy : Policy) (id : Nat) (stop : ControlCutIO.Stops) :
+    (program s policy id stop).run = s.prepareChild policy id := by
+  unfold program Store.prepareChild prepareChildWith removeSegment removeSegmentWith
+  simp only [Observed.run_bind]
+  congr 1
+  apply congrArg (Bind.bind (PrepareIO.presenceIO (segmentPath s.root id)))
+  funext present
+  split
+  · rw [Observed.run_bind, inspect_run]
+    apply congrArg (Bind.bind (inspectChild (segmentPath s.root id)))
+    funext xs
+    cases xs with
+    | mk items =>
+      change (forM items.toArray _ >>= _ : Observed Unit).run = (forM items.toArray _ >>= _ : IO Unit)
+      rw [List.forM_toArray,List.forM_toArray,Observed.run_bind]
+      exact congrArg (fun op : IO PUnit => op >>= fun _ => IO.FS.removeDir (segmentPath s.root id))
+        (Observed.run_forM items (fun item => leaf stop (IO.FS.removeFile (segmentPath s.root id / item.fileName))))
+  · rfl
+
 abbrev Witness (dir : FilePath) (policy : Policy) (stop : ControlCutIO.Stops) (origin : W) (d : Disk) :=
   (∃ (p : Point) (t : W) (α : Type) (a : IO α), Prefix dir origin p t ∧ Issued dir p a ∧ stop a t d) ∨
     ∃ v leaf t, Prefix dir origin .create v ∧ (CreateCutIO.program dir policy).visits v leaf t ∧ stop leaf.action t d

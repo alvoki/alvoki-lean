@@ -30,6 +30,13 @@ def finallyUnlock (body : Observed α) (mutex : Std.BaseMutex) (stop : {α : Typ
   run := try body.run finally mutex.unlock
   cuts w d := body.cuts w d ∨ stop (liftM mutex.unlock : IO Unit) (returnedWorld (body.run w)) d
 
+theorem finallyUnlock_run (body : Observed α) (mu : Std.BaseMutex) (stop) (w : W) :
+    (finallyUnlock body mu stop).run w = match body.run w with
+      | .ok x t => .ok x (mu.unlock t).state | .error e t => .error e (mu.unlock t).state := by
+  simp only [finallyUnlock,tryFinally,tryFinally',MonadFinally.tryFinally',instMonadFinallyEIO._aux_1,
+    Functor.map,instMonadEIO._aux_1,EST.bind]
+  cases body.run w <;> rfl
+
 theorem bindCuts (a : Observed α) (f : α → Observed β) (w : W) (d : Disk) :
     (a >>= f).cuts w d ↔ a.cuts w d ∨
       match a.run w with | .ok x t => (f x).cuts t d | .error .. => False := by
@@ -48,6 +55,28 @@ theorem bindRun (a : Observed α) (f : α → Observed β) (w : W) :
       | .ok x t => (f x).run t | .error e t => .error e t := by
   change (a.run >>= fun x => (f x).run) w = _
   cases ran : a.run w <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+
+theorem run_bind (a : Observed α) (f : α → Observed β) :
+    (a >>= f).run = (a.run >>= fun x => (f x).run) := rfl
+
+theorem run_forIn (xs : List α) (seed : β) (f : α → β → Observed (ForInStep β)) :
+    (forIn xs seed f).run = forIn xs seed (fun x v => (f x v).run) := by
+  induction xs generalizing seed with
+  | nil => rfl
+  | cons x xs ih =>
+    rw [List.forIn_cons, List.forIn_cons, run_bind]
+    apply congrArg (Bind.bind (f x seed).run)
+    funext step
+    cases step with
+    | done => rfl
+    | yield b => exact ih b
+
+theorem run_forM (xs : List α) (f : α → Observed PUnit) :
+    (forM xs f).run = forM xs (fun x => (f x).run) := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+    rw [List.forM_cons,List.forM_cons,run_bind,ih]
 
 end Observed
 

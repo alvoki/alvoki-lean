@@ -243,6 +243,11 @@ open ExperimentalL0
 #check_axioms InterruptedMutation.Worker.Observation.entry
 #check_axioms MutationExitCut.Tail.Prefix.finish
 #check_axioms MutationExitCut.Cut.frame
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.oldCloseProgram_run
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.closeProgram_run
+#check_axioms WalRecoverySlice.Segmented.Native.ChildCutIO.childProgram_run
+#check_axioms WalRecoverySlice.Segmented.Native.ControlCutIO.program_run
+#check_axioms WalRecoverySlice.Segmented.Native.PrepareCutIO.program_run
 #check_axioms WalRecoverySlice.Segmented.Native.AppendCut.oldCloseCovered
 #check_axioms WalRecoverySlice.Segmented.Native.ChildCutIO.sourceCovered
 #check_axioms WalRecoverySlice.Segmented.Native.ChildCutIO.terminalCovered

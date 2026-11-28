@@ -33,6 +33,21 @@ def program (s : Store) (c : Control) (stop : Stops) : Observed Unit :=
     syncDirectory := fun h => leaf stop (syncHandle h)
   } s.root s.directory c
 
+private theorem clear_run (stop : Stops) (path : FilePath) : (clear stop path).run = removeRegular path := by
+  unfold clear removeRegular removeRegularWith
+  rw [Observed.run_bind]
+  apply congrArg (Bind.bind (metadata? path))
+  funext value
+  cases value <;> rfl
+
+theorem program_run (s : Store) (c : Control) (stop : Stops) (active : c.active ≤ ControlCodec.wordMax)
+    (discarded : c.discarded ≤ ControlCodec.wordMax) :
+    (program s c stop).run = checked (s.callbacks.publishControl c) := by
+  rw [s.publishControl_io c active discarded]
+  simp only [program,publishControlWith,active,discarded,decide_true,Bool.and_self,↓reduceIte,
+    DurableBlob.publishWith,Observed.run_bind, Store.stageControl,clear_run]
+  rfl
+
 abbrev Witness (s : Store) (c : Control) (stop : Stops) (origin : W) (d : Disk) : Prop :=
   ∃ (p : Point) (t : W) (α : Type) (a : IO α) (k : OpKind),
     Prefix s c origin p t ∧ Issued s c p a k ∧ stop a t d

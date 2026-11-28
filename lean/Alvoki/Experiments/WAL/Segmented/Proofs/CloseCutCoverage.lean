@@ -18,6 +18,21 @@ def closeProgram (stop : Stop) (cell : PhaseRef) (mutex : Std.BaseMutex) : Obser
   let _ ← leaf stop (liftM mutex.lock : IO Unit)
   finallyUnlock (closeBody stop cell) mutex stop
 
+theorem closeProgram_run (bound : h.Binds cell mu) (stop : Stop) (w : W) :
+    (closeProgram stop cell mu).run w = SingleFile.close h w := by
+  rw [SingleFile.close_run bound]
+  let got := (cell.get : BaseIO _) (mu.lock w).state
+  have lock : (leaf stop (liftM mu.lock : IO Unit)).run w = .ok () (mu.lock w).state := rfl
+  have read : (leaf stop (cell.get : IO _)).run (mu.lock w).state = .ok got.val got.state := rfl
+  simp only [closeProgram,closeBody,Observed.bindRun,lock,Observed.finallyUnlock_run,read]
+  dsimp only [got]
+  cases ((cell.get : BaseIO _) (mu.lock w).state).val with
+  | closed => rfl
+  | active fd _ _ _ | poisoned fd =>
+    have set (v : W) : (cell.set .closed : IO Unit) v = .ok () ((cell.set .closed : BaseIO Unit) v).state := rfl
+    simp only [SingleFile.closeWith,Observed.bindRun,Observed.leaf,set]
+    cases fd.unlock ((cell.set .closed : BaseIO Unit) ((cell.get : BaseIO _) (mu.lock w).state).state).state <;> rfl
+
 def closeSource (stop : Stop) (h : SingleFile.Handle) (w : W) (d : Disk) : Prop :=
   ∃ cell mutex, h.Binds cell mutex ∧ (closeProgram stop cell mutex).cuts w d
 
@@ -76,6 +91,15 @@ theorem closeCovered (cut : closeSource stop h w d) :
 def oldCloseProgram (s : Store) (stop : Stop) : Observed Unit :=
   closeChildWith (leaf stop (s.active.swap none : IO _))
     (fun h => ⟨SingleFile.close h, closeSource stop h⟩)
+
+theorem oldCloseProgram_run (s : Store) (stop : Stop) : (oldCloseProgram s stop).run = s.closeChild := by
+  unfold oldCloseProgram Store.closeChild closeChildWith
+  rw [Observed.run_bind]
+  apply congrArg (Bind.bind (s.active.swap none : IO _))
+  funext slot
+  cases slot with
+  | none => rfl
+  | some pair => cases pair; rfl
 
 theorem oldCloseCovered (cut : (oldCloseProgram s stop).cuts w d) :
     ∃ (α : Type) (a : IO α) (t : W), OldClose s w a t ∧ stop a t d := by

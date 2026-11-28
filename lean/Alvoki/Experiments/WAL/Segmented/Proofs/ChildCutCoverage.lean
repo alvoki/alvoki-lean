@@ -134,13 +134,17 @@ private noncomputable def phaseBody (policy : Policy) (cell : SingleFile.Concret
   SingleFile.appendWith (← Observed.leaf stop (cell.get : IO _))
     (fun ph => Observed.leaf stop (cell.set ph : IO Unit)) (fileWorker policy batch stop) batch
 
+noncomputable def childProgram (policy : Policy) (cell : SingleFile.ConcreteAppend.PhaseRef)
+    (mutex : Std.BaseMutex) (batch : Bytes) (stop : Stop) : Observed Unit := do
+  let _ ← Observed.leaf stop (liftM mutex.lock : IO Unit)
+  Observed.finallyUnlock (phaseBody policy cell batch stop) mutex stop
+
 /-- Only the private identity of the public child is part of this
 observation. Its phase read, every guard, and whether the finalizer follows
 an error are determined by the same executable appendWith. -/
 def source (stop : Stop) (h : SingleFile.Handle) (batch : Bytes) (w : W) (d : Disk) : Prop :=
   ∃ p r m, h.Assembled p r m ∧
-    (Observed.leaf stop (liftM m.lock : IO Unit) >>= fun _ =>
-      Observed.finallyUnlock (phaseBody p r batch stop) m stop).cuts w d
+    (childProgram p r m batch stop).cuts w d
 
 private theorem checkedOut (a : ExceptT String IO α) (w : W) :
     checked a w = match a.run w with
@@ -151,6 +155,24 @@ private theorem checkedOut (a : ExceptT String IO α) (w : W) :
   cases ran : a.run w with
   | error => simp [Bind.bind,instMonadEIO._aux_13,EST.bind,ran]
   | ok answer => cases answer <;> simp [Bind.bind,instMonadEIO._aux_13,EST.bind,ran] <;> rfl
+
+theorem childProgram_run (bound : h.Assembled p r m) (batch : Bytes) (stop : Stop)
+    (active : (SingleFile.ConcreteAppend.readAt r m w).val = .active fd files pos known) :
+    (childProgram p r m batch stop).run w = SingleFile.append h batch w := by
+  rw [SingleFile.append_active_run bound w active]
+  let got := SingleFile.ConcreteAppend.readAt r m w
+  have read : (Observed.leaf stop (r.get : IO _)).run (m.lock w).state =
+      .ok (.active fd files pos known) got.state := by rw [← active]; rfl
+  have lock : (Observed.leaf stop (liftM m.lock : IO Unit)).run w = .ok () (m.lock w).state := rfl
+  have poison : (Observed.leaf stop (r.set (.poisoned fd) : IO Unit)).run got.state =
+      .ok () ((r.set (.poisoned fd) : BaseIO Unit) got.state).state := rfl
+  simp only [childProgram,Observed.bindRun,lock,Observed.finallyUnlock_run,phaseBody,read,SingleFile.appendWith,poison,
+    fileWorker,SingleFile.ConcreteAppend.eval_append (nativeOps files) p pos batch (fun _ _ => rfl),checkedOut]
+  dsimp only [got, SingleFile.ConcreteAppend.readAt]
+  cases (appendBatch (nativeOps files) p pos batch).run
+      ((r.set (.poisoned fd) : BaseIO Unit) ((r.get : BaseIO _) (m.lock w).state).state).state with
+  | error => rfl
+  | ok answer => cases answer <;> rfl
 
 theorem sourceCovered (rawCut : source stop h batch w d) (owned : Nonempty (Operand h w)) :
     ChildStop stop h batch w d := by
@@ -164,6 +186,7 @@ theorem sourceCovered (rawCut : source stop h batch w d) (owned : Nonempty (Oper
     unfold SingleFile.Handle.Assembled at bound
     unfold SingleFile.Handle.Binds
     constructor <;> apply congrArg _ bound
+  unfold childProgram at hit
   rw [Observed.bindCuts] at hit
   rcases hit with lock | portion
   · exact .entry (.mutex binds) lock

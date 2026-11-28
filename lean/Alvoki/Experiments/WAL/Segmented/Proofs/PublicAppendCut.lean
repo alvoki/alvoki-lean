@@ -148,13 +148,7 @@ theorem publicProgram_run {wal : Handle} (parts : wal.Parts cell mu) (stop : Sto
   simp only [bindRun]
   have held : (leaf stop (liftM mu.lock : IO Unit)).run w = .ok () (mu.lock w).state := rfl
   simp only [held]
-  have cleanup (act : IO Session) (t : W) :
-      (try act finally mu.unlock : IO Session) t =
-      match act t with
-      | .ok x u => .ok x (mu.unlock u).state | .error e u => .error e (mu.unlock u).state := by
-    simp only [tryFinally, tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1, Functor.map, instMonadEIO._aux_1, EST.bind]
-    cases act t <;> rfl
-  simp only [finallyUnlock, cleanup, updateOutput cell mu stop batch w ready]
+  simp only [Observed.finallyUnlock_run, updateOutput cell mu stop batch w ready]
   simp only [issuedWorld]
   cases s.appendSession session batch ((cell.set (.poisoned s) : BaseIO _) ((cell.get : BaseIO _) (mu.lock w).state).state).state <;> rfl
 
