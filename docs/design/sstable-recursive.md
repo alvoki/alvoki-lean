@@ -145,3 +145,25 @@ Collect per-operation native samples, read calls and bytes, root depth,
 construction throughput and process peak RSS. Record platform and raw data.
 For filters also sample realistic in-range misses to estimate FPR and data
 read avoidance. Test small-target deep trees separately from default targets.
+
+## Candidate evidence
+
+The native fixture writes the exact image through the existing synced
+descriptor schedule and opens it with the expected ID. It covers every
+layout, multiple heights, all cursors and key-boundary observations, a
+reported read error followed by another lookup, and a root self-edge
+with its CRC recomputed. It also forces two maximum-size fences into a
+single logical page and reads it through the native adapter.
+
+Lean proves the per-edge extents, two-reference capacity, metadata
+round-trip and split reads. One induction over height routes both key
+search and row-index cursors. The resulting `Image.open_represents`
+proves public lookup, seek and arbitrary cursor behavior from the exact
+recursive image. `checkedNativeLookup` uses the acquired descriptor and
+gives the public lookup result on success with a preserved frame on
+every returned outcome. Its `Image` premise still needs a universal
+producer theorem for the recursive builder at the reached durable
+inode. The native fixture exercises that handoff on concrete inputs.
+
+The paired measurements are recorded separately.
+[Reproduction and raw measurements](../../benchmarks/sstable/recursive.md)

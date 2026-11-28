@@ -1,4 +1,5 @@
 import Alvoki.Experiments.SSTable.UnifiedNative
+import Alvoki.Experiments.SSTable.Recursive.Native
 
 open ImmutableSSTable
 
@@ -354,6 +355,7 @@ private structure BenchmarkCase where
   leaves : Nat := 0
   blocks : Nat := 0
   fileBytes : Nat := 0
+  depth : Option Nat := none
 
 private structure ReadStats where
   indexCalls : Nat := 0
@@ -363,7 +365,8 @@ private structure ReadStats where
 
 private def report (configuration : BenchmarkCase) (operation : String)
     (items trial elapsed : Nat) (sample : ReadStats := {}) : IO Unit :=
-  IO.println s!"{configuration.label},{configuration.layoutName},{configuration.dataTarget},{configuration.leafTarget},{configuration.leaves},{configuration.blocks},{configuration.fileBytes},{operation},{items},{trial},{elapsed},{sample.indexCalls},{sample.indexBytes},{sample.dataCalls},{sample.dataBytes}"
+  let depth := configuration.depth.elim "" (fun n => s!",{n}")
+  IO.println s!"{configuration.label},{configuration.layoutName},{configuration.dataTarget},{configuration.leafTarget},{configuration.leaves},{configuration.blocks},{configuration.fileBytes},{operation},{items},{trial},{elapsed},{sample.indexCalls},{sample.indexBytes},{sample.dataCalls},{sample.dataBytes}{depth}"
 
 private def measure (configuration : BenchmarkCase) (operation : String) (items : Nat)
     (action traced : EIO String UInt64) (expected : UInt64) (stats : IO.Ref ReadStats) : IO Unit := do
@@ -379,8 +382,8 @@ private def measure (configuration : BenchmarkCase) (operation : String) (items 
     report configuration operation items trial elapsed sample
 
 private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCase)
-    (layout : Unified.Layout) (rows : Nat) (isIndex : Nat → Bool) (scanSum : UInt64) :
-    IO Unit := do
+    (layout : Unified.Layout) (rows : Nat) (isIndex : Nat → Bool) (scanSum : UInt64)
+    (recursive : Bool := false) : IO Unit := do
   let file ← IO.FS.Handle.mk path .read
   let source := handleSource file
   let stats ← IO.mkRef ({} : ReadStats)
@@ -395,7 +398,9 @@ private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCas
       source.readAt offset count
   }
   let openFor := fun input => do
-    let table ← Unified.openTableChecked input Alvoki.CRC32C.extend layout.tableId
+    let table ← if recursive then
+        (·.table) <$> Recursive.openChecked input Alvoki.CRC32C.extend layout.tableId
+      else Unified.openTableChecked input Alvoki.CRC32C.extend layout.tableId
     return (table.lookup, table.next)
   for trial in [:3] do
     let start ← IO.monoNanosNow
@@ -408,30 +413,74 @@ private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCas
     measure configuration label queries.size (lookups lookup queries) (lookups traceLookup queries) expected stats
   measure configuration "scan-next" rows (scan next rows) (scan traceNext rows) scanSum stats
 
-def benchmark : IO Unit := IO.FS.withTempDir fun dir => do
+private def recursiveInventory (crc : Unified.Checksum) (id : UInt64)
+    (source : Source (EIO String)) (refs : Array Unified.Ref) :
+    Nat → EIO String (Array Nat × Nat)
+  | 0 => pure (#[], refs.size)
+  | height + 1 => do
+    let mut indexOffsets := #[]
+    let mut blocks := 0
+    for ref in refs do
+      let raw ← Recursive.readIndexPacket source crc id (height + 1) ref maxFileSize
+      let children ← liftDecode (Recursive.pageChildren raw ref true)
+      let (below, count) ← recursiveInventory crc id source children height
+      indexOffsets := (indexOffsets.push ref.offset) ++ below
+      blocks := blocks + count
+    return (indexOffsets, blocks)
+
+private def benchmarkBuild (path : System.FilePath) (layout : Unified.Layout)
+    (rows dataTarget indexTarget : Nat) (recursive : Bool) : IO Nat := do
+  let provider ← benchRows layout rows
+  if recursive then
+    Recursive.buildFileWith (nativeOutputOps (fun _ => pure ())) Alvoki.CRC32C.extend
+      path layout provider IO.userError ⟨dataTarget, indexTarget⟩
+  else Unified.buildFile path layout provider ⟨dataTarget, indexTarget⟩
+
+def benchmarkBuildOnly (recursive : Bool) (rows : Nat) : IO Unit := IO.FS.withTempDir fun dir => do
+  let path := dir / "writer"
+  let layout : Unified.Layout := ⟨some 8, some 8, 84⟩
+  let start ← IO.monoNanosNow
+  let count ← benchmarkBuild path layout rows 4096 1024 recursive
+  let elapsed := (← IO.monoNanosNow) - start
+  check (count == rows) "RSS benchmark row count"
+  IO.println s!"{if recursive then "ALVSST06" else "ALVSST05"},{count},{elapsed}"
+
+def benchmark (paired : Bool := false) : IO Unit := IO.FS.withTempDir fun dir => do
   let rows := 65537
   let scanSum := (List.range rows).foldl (fun hash index => mix hash (index + 1).toUInt64) 0
-  IO.println "format,layout,data_target,leaf_target,leaf_blocks,data_blocks,file_bytes,operation,items,trial,elapsed_ns,index_reads,index_bytes,data_reads,data_bytes"
+  let depthColumn := if paired then ",index_depth" else ""
+  IO.println s!"format,layout,data_target,leaf_target,leaf_blocks,data_blocks,file_bytes,operation,items,trial,elapsed_ns,index_reads,index_bytes,data_reads,data_bytes{depthColumn}"
   for (name, keyWidth, valueWidth) in [
       ("fixed-fixed", some 8, some 8), ("fixed-variable", some 8, none),
       ("variable-fixed", none, some 8), ("variable-variable", none, none)] do
     let layout : Unified.Layout := ⟨keyWidth, valueWidth, 84⟩
-    for (dataTarget, leafTarget) in [(1024, 1024), (4096, 1024), (16384, 1024), (4096, 4096)] do
-      let path := dir / s!"{name}-{dataTarget}-{leafTarget}"
-      let provider ← benchRows layout rows
-      let start ← IO.monoNanosNow
-      let count ← Unified.buildFile path layout provider { dataTarget, leafTarget }
-      let buildTime := (← IO.monoNanosNow) - start
-      check (count == rows) "benchmark build count"
-      let image ← IO.FS.readBinFile path
-      let (leaves, blocks) ← readIndexes image
-      let configuration : BenchmarkCase :=
-        ⟨"ALVSST05", name, dataTarget, leafTarget,
-          leaves.size, blocks.size, image.size⟩
-      report configuration "build" rows 0 buildTime
-      let isIndex : Nat → Bool := fun offset => leaves.any (·.offset == offset)
-      benchmarkCase path configuration layout rows isIndex scanSum
-      IO.FS.removeFile path
+    for (dataTarget, indexTarget) in [(1024, 1024), (4096, 1024), (16384, 1024), (4096, 4096)] do
+      for recursive in (if paired then [false, true] else [false]) do
+        let path := dir / s!"{name}-{dataTarget}-{indexTarget}"
+        let start ← IO.monoNanosNow
+        let count ← benchmarkBuild path layout rows dataTarget indexTarget recursive
+        let buildTime := (← IO.monoNanosNow) - start
+        check (count == rows) "benchmark build count"
+        let image ← IO.FS.readBinFile path
+        let (indexOffsets, blocks, depth) ← if recursive then do
+          let source : Source (EIO String) :=
+            ⟨pure image.size, fun offset size => pure (image.extract offset (offset + size))⟩
+          let crc := Alvoki.CRC32C.extend
+          let handle ← ok (Recursive.openChecked source crc layout.tableId)
+          let (offsets, blocks) ← ok (recursiveInventory crc layout.tableId source handle.root
+            (handle.height - 1))
+          pure (offsets, blocks, handle.height)
+        else do
+          let (leaves, blocks) ← readIndexes image
+          pure (leaves.map (·.offset), blocks.size, 2)
+        let configuration : BenchmarkCase :=
+          ⟨if recursive then "ALVSST06" else "ALVSST05", name, dataTarget, indexTarget,
+            indexOffsets.size, blocks, image.size, if paired then some depth else none⟩
+        report configuration "build" rows 0 buildTime
+        let offsets : Std.HashSet Nat := Std.HashSet.ofArray indexOffsets
+        benchmarkCase path configuration layout rows (fun offset => offsets.contains offset)
+          scanSum recursive
+        IO.FS.removeFile path
 
 end ImmutableSSTable.UnifiedFixtures
 
@@ -439,4 +488,9 @@ def main (args : List String) : IO Unit :=
   match args with
   | [] => ImmutableSSTable.UnifiedFixtures.run
   | ["--bench"] => ImmutableSSTable.UnifiedFixtures.benchmark
-  | _ => throw (IO.userError "usage: test-unified-sstable [--bench]")
+  | ["--bench-paired"] => ImmutableSSTable.UnifiedFixtures.benchmark true
+  | ["--bench-build", format, count] => do
+    unless format == "05" || format == "06" do throw (IO.userError "expected format 05 or 06")
+    let some rows := count.toNat? | throw (IO.userError "expected row count")
+    ImmutableSSTable.UnifiedFixtures.benchmarkBuildOnly (format == "06") rows
+  | _ => throw (IO.userError "usage: immutableSSTableCheck [--bench | --bench-paired | --bench-build FORMAT ROWS]")

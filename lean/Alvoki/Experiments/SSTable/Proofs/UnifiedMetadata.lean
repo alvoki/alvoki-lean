@@ -63,6 +63,11 @@ private theorem encodeFooterBody_as_words (footer : Footer) :
   rw [appendWords]
   rfl
 
+theorem encodeFooterBody_magic (footer : Footer) :
+    (encodeFooterBody footer).extract 0 8 = magic := by
+  rw [encodeFooterBody_as_words]
+  exact ByteArray.extract_append_eq_left rfl
+
 @[simp] theorem encodeFooterBody_size (footer : Footer) :
     (encodeFooterBody footer).size = footerBodySize := by
   simp [encodeFooterBody_as_words, footerWords, footerBodySize, show magic.size = 8 from rfl]
@@ -227,7 +232,7 @@ private theorem extractRefKey (initial tail : ByteArray) (ref : Ref) :
 
 private theorem decodeRefs_encoded (initial : ByteArray) (out : Array Ref) (remaining : List Ref)
     (fuel : Nat) (valid : ValidRefsAfter out.back? remaining) (enough : remaining.length ≤ fuel)
-    (fits : (initial ++ indexBytes remaining).size ≤ maxRowSize) :
+    (fits : (initial ++ indexBytes remaining).size ≤ maxFileSize) :
     decodeRefs (initial ++ indexBytes remaining) initial.size out fuel =
       .ok (out ++ remaining.toArray) := by
   induction remaining generalizing initial out fuel with
@@ -244,10 +249,8 @@ private theorem decodeRefs_encoded (initial : ByteArray) (out : Array Ref) (rema
         have positive : 0 < refPrefixSize := by decide
         omega
       have keyFits : ref.lastKey.size ≤ bytes.size - (initial.size + refPrefixSize) := by omega
-      have byteBound : bytes.size ≤ maxRowSize := fits
-      have keyBound : ref.lastKey.size ≤ maxFileSize := by
-        have limit : maxRowSize ≤ maxFileSize := by decide
-        omega
+      have byteBound : bytes.size ≤ maxFileSize := fits
+      have keyBound : ref.lastKey.size ≤ maxFileSize := by omega
       obtain ⟨⟨sizePos, offsetSpan, countPos, rowSpan⟩, precedes, later⟩ := valid
       have offsetWord : (word bytes (initial.size + 0)).toNat = ref.offset := by
         rw [wordRef initial (indexBytes rest) ref 0 (by decide)]
@@ -292,20 +295,26 @@ private theorem decodeRefs_encoded (initial : ByteArray) (out : Array Ref) (rema
         simp only [p]
         exact step
 
+theorem encodeIndex_minSize (refs : Array Ref) (nonempty : 0 < refs.size) :
+    refPrefixSize ≤ (encodeIndex refs).size := by
+  rw [encodeIndex_as_bytes]
+  have count : 1 ≤ refs.toList.length := by simpa using Nat.succ_le_of_lt nonempty
+  exact Nat.le_trans (by simpa using Nat.mul_le_mul_left refPrefixSize count)
+    (indexBytes_minSize refs.toList)
+
+theorem decodeRefs_encodeIndex (refs : Array Ref) (adjacent : ValidRefsAfter none refs.toList)
+    (fits : (encodeIndex refs).size ≤ maxFileSize) :
+    decodeRefs (encodeIndex refs) 0 #[] ((encodeIndex refs).size / refPrefixSize) = .ok refs := by
+  rw [encodeIndex_as_bytes] at fits ⊢
+  have fuel : refs.toList.length ≤ (indexBytes refs.toList).size / refPrefixSize := by
+    exact (Nat.le_div_iff_mul_le (by decide)).mpr
+      (by simpa [Nat.mul_comm] using indexBytes_minSize refs.toList)
+  simpa using decodeRefs_encoded ByteArray.empty #[] refs.toList
+    ((indexBytes refs.toList).size / refPrefixSize) adjacent fuel (by simpa using fits)
+
 @[simp] theorem decodeIndex_encodeIndex (refs : Array Ref) (valid : ValidRefs refs) :
     decodeIndex (encodeIndex refs) = .ok refs := by
-  have minSize := indexBytes_minSize refs.toList
-  have firstRefFits : refPrefixSize ≤ (indexBytes refs.toList).size := by
-    have count : 1 ≤ refs.toList.length := by
-      simpa only [Array.length_toList] using Nat.succ_le_of_lt valid.nonempty
-    exact Nat.le_trans (by simpa using Nat.mul_le_mul_left refPrefixSize count) minSize
-  have fits : (indexBytes refs.toList).size ≤ maxRowSize := by
-    simpa only [encodeIndex_as_bytes] using valid.fits
-  have fuel : refs.toList.length ≤ (indexBytes refs.toList).size / refPrefixSize := by
-    exact (Nat.le_div_iff_mul_le (by decide)).mpr (by simpa [Nat.mul_comm] using minSize)
-  rw [encodeIndex_as_bytes]
-  simp only [decodeIndex, firstRefFits, fits, and_self, ↓reduceIte]
-  simpa using decodeRefs_encoded ByteArray.empty #[] refs.toList
-    ((indexBytes refs.toList).size / refPrefixSize) valid.adjacent fuel (by simpa using fits)
+  simp only [decodeIndex, encodeIndex_minSize refs valid.nonempty, valid.fits, and_self, ↓reduceIte]
+  exact decodeRefs_encodeIndex refs valid.adjacent (Nat.le_trans valid.fits (by decide))
 
 end ImmutableSSTable.Unified

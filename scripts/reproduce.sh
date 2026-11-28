@@ -25,6 +25,7 @@ bash scripts/check-experimental-manifest.sh
 bash scripts/check-wal-recovery-slice.sh
 bash scripts/check-segmented-wal.sh
 bash scripts/check-immutable-sstable.sh
+bash scripts/check-recursive-sstable.sh
 if [[ -f scripts/check-native-l0.sh ]]; then
   bash scripts/check-native-l0.sh
 fi

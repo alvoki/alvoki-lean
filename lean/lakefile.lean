@@ -57,3 +57,6 @@ lean_lib Alvoki.Checks.Tests.SSTableProducer
 
 lean_exe immutableSSTableCheck where
   root := `Alvoki.Experiments.SSTable.UnifiedFixtures
+
+lean_exe recursiveSSTableCheck where
+  root := `Alvoki.Experiments.SSTable.Recursive.Fixtures

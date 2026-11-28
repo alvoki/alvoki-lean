@@ -67,7 +67,7 @@ structure RefCovers (rows : List Entry) (first count : Nat) (refs : Array Ref) :
     ∃ j, ∃ hj : j < refs.size, refs[j].firstRow ≤ index ∧ index < refs[j].firstRow + refs[j].count
 
 /-- Use the actual binary search on the reference array to route a row cursor. -/
-private theorem RefCovers.selectRow {rows : List Entry} {refs : Array Ref}
+theorem RefCovers.selectRow {rows : List Entry} {refs : Array Ref}
     (partition : RefCovers rows first count refs) (start : first ≤ index)
     (stop : index < first + count) :
     ∃ j, ∃ hj : j < refs.size,
@@ -87,7 +87,7 @@ private theorem RefCovers.selectRow {rows : List Entry} {refs : Array Ref}
 
 /-- Route the global lower-bound cursor by fence keys, using the same search as
 the executable lookup. -/
-private theorem RefCovers.selectKey {rows : List Entry} {refs : Array Ref} {key : ByteArray}
+theorem RefCovers.selectKey {rows : List Entry} {refs : Array Ref} {key : ByteArray}
     (partition : RefCovers rows first count refs)
     (lower : LowerBound (fun i => (rowAt rows i).key) rows.length key index)
     (start : first ≤ index) (stop : index < first + count) :
@@ -114,7 +114,7 @@ private theorem RefCovers.selectKey {rows : List Entry} {refs : Array Ref} {key 
     have ge := lower.2.2 _ existsHere inRows
     exact decide_eq_false (Std.not_lt.mpr (fence.symm ▸ ge))
 
-private theorem RefCovers.noKey {rows : List Entry} {refs : Array Ref} {key : ByteArray}
+theorem RefCovers.noKey {rows : List Entry} {refs : Array Ref} {key : ByteArray}
     (partition : RefCovers rows first count refs)
     (lower : LowerBound (fun i => (rowAt rows i).key) rows.length key rows.length) :
     findRef refs (fun ref => decide (ref.lastKey < key)) = none := by
@@ -142,7 +142,7 @@ private theorem array_getElem_mem {xs : Array α} {i : Nat} (inside : i < xs.siz
 
 /-- A fixed global lower bound lies at the corresponding local lower bound
 when the selected block contains it. -/
-private theorem seek_local [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+theorem seek_local [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {rows : List Entry} {ref : Ref} {data : Data} {index : Nat} {key : ByteArray}
     (reads : ∀ i, i < ref.count → data.readRow i = .ok (rowAt rows (ref.firstRow + i)))
     (lower : LowerBound (fun i => (rowAt rows i).key) rows.length key index)
@@ -186,7 +186,7 @@ private theorem Handle.locate_at [Monad m] [LawfulMonad m] [MonadExceptOf String
   refine ⟨refs[i], data, ?_, start, rowRead⟩
   simp [Handle.locate, pickLeaf, readLeaf, pickData, readData, localSeek, rowInside]
 
-private theorem exists_lowerBound {rows : List Entry} (ordered : Ordered rows) (key : ByteArray) :
+theorem exists_lowerBound {rows : List Entry} (ordered : Ordered rows) (key : ByteArray) :
     ∃ index, LowerBound (fun i => (rowAt rows i).key) rows.length key index := by
   have sorted : ∀ i j, i ≤ j → j < rows.length →
       (rowAt rows i).key ≤ (rowAt rows j).key := by
@@ -255,7 +255,7 @@ private theorem hit_atLowerBound {rows : List Entry} {key : ByteArray}
       rw [rowAt_eq inside, matchKey] at smaller
       exact False.elim (Std.lt_irrefl smaller)
 
-private theorem lookup_of_lowerBound {rows : List Entry} {key : ByteArray}
+theorem lookup_of_lowerBound {rows : List Entry} {key : ByteArray}
     (ordered : Ordered rows)
     (lower : LowerBound (fun i => (rowAt rows i).key) rows.length key index) :
     Contents.lookup rows key =
