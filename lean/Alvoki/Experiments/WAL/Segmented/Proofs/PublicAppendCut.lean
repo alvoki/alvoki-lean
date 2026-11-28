@@ -1,5 +1,5 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.ChildCutCoverage
-import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutCoverage
+import Alvoki.Experiments.WAL.Segmented.Proofs.PrepareCutCoverage
 import Alvoki.Experiments.WAL.Segmented.Proofs.CloseCutCoverage
 
 namespace WalRecoverySlice.Segmented.Native.AppendCut
@@ -27,6 +27,7 @@ inductive PublicStop (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (stor
 proof below transforms them into the prefix evidence used by the disk model. -/
 def sourceSites (s : Store) (session : Session) (stop : Stop) : Sites s :=
   { sites s session stop with
+    prepare := fun _ _ => (PrepareCutIO.program s session.control stop).cuts
     publish := fun _ => (ControlCutIO.program s session.control stop).cuts
     write := ChildCutIO.source stop
     close := closeSource stop
@@ -71,7 +72,8 @@ private theorem bodyCovered (s : Store) (session : Session) (batch : Bytes) (sto
     · exact ⟨rfl, fun hit => oldCloseCovered hit⟩
     intro _
     unfold withActiveChild cleanupOnError
-    apply Covers.bind (Covers.refl _)
+    apply Covers.bind
+    · exact ⟨rfl, fun hit => PrepareCutIO.covered hit⟩
     intro h
     apply Covers.catch
     · apply Covers.bind (Covers.refl _)

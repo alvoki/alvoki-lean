@@ -103,7 +103,7 @@ theorem Inspect.run (p : Inspect dir w s b R) :
     At (inspectChild dir) b w s (fun xs ys t u => ys = xs.map (·.fileName) ∧ R t u) R := by
   apply ofReports
   have stat := p.stat
-  unfold inspectChild
+  unfold inspectChild inspectChildWith
   apply IOReturns.bind (middle := fun md t => dir.symlinkMetadata w = .ok md t ∧
     ((md.type == .dir) = false → Stopped b s R t))
   · unfold IOReturns

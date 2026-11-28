@@ -172,7 +172,7 @@ theorem inspect (dir : FilePath)
     (list : entries dir statWorld = .ok items listed)
     (members : Members dir items.toList listed after) :
     inspectChild dir w = .ok items after := by
-  unfold inspectChild
+  unfold inspectChild inspectChildWith
   apply io_bind_ok stat
   simp only [directory, ite_true]
   apply io_bind_ok list

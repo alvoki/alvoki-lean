@@ -111,7 +111,7 @@ theorem inspectChild_io {P : W → Prop} (dir : FilePath) (valid : Array IO.FS.D
     (stat : ∀ path : FilePath, Keeps P path.symlinkMetadata)
     (list : ∀ u, P u → IOReturns (entries dir) u (fun items t => P t ∧ valid items) P)
     (hw : P w) : IOReturns (inspectChild dir) w (fun items t => P t ∧ valid items) P := by
-  unfold inspectChild
+  unfold inspectChild inspectChildWith
   apply IOReturns.bind (stat dir w hw)
   intro md t held
   split

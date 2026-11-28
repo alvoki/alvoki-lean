@@ -142,7 +142,7 @@ private theorem Step.remove (edge : Step dir p w q t) (outside : p ≠ .mkdir) :
         let items ← entries dir
         let _ ← members dir items.toList
         pure items : IO _) t := by
-      unfold inspectChild
+      unfold inspectChild inspectChildWith
       simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, observed, valid, ↓reduceIte]
       cases listed : entries dir t <;> simp_all only
       rename_i items v

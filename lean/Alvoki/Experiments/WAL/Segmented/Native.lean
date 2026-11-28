@@ -44,14 +44,19 @@ def policyStamp (p : Policy) := if p == .boundary then "v3 boundary" else "v3 lo
 def childName (name : String) : Bool :=
   ["lock", "policy", "segment", "commit.0", "commit.1"].contains name
 
-def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) := do
-  unless (← dir.symlinkMetadata).type == .dir do throw <| IO.userError s!"expected segment directory at {dir}"
-  let names ← entries dir
+@[inline] abbrev inspectChildWith [Monad m] [MonadExceptOf IO.Error m]
+    (stat : FilePath → m IO.FS.Metadata) (list : FilePath → m (Array IO.FS.DirEntry))
+    (check : FilePath → IO.FS.Metadata → m Unit) (dir : FilePath) : m (Array IO.FS.DirEntry) := do
+  unless (← stat dir).type == .dir do throw <| IO.userError s!"expected segment directory at {dir}"
+  let names ← list dir
   for item in names do
     let path := dir / item.fileName
     unless childName item.fileName do throw <| IO.userError s!"unexpected child {path}"
-    regular path (← path.symlinkMetadata)
+    check path (← stat path)
   return names
+
+def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) :=
+  inspectChildWith FilePath.symlinkMetadata entries regular dir
 
 /-- Reclaim only recognized names after the shared protocol has established
 the ID is retired or was never published. A partial deletion is retryable. -/
