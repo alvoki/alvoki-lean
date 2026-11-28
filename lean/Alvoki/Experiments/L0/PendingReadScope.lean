@@ -25,19 +25,7 @@ the pending WAL request; failed opens leave the same alternatives available. -/
 theorem afterWrite (run : Execution.Run events (some session) image) (change : Change) :
     Admitted ((events ++ [.writeUncertain change]) ++ [.stop]) image (some (.append (encode change))) := by
   intro view allowed
-  have trace := run.uncertainRetries 0 allowed
-  simp only [List.replicate_zero, List.append_nil] at trace
-  exact trace.stop
-
-/-- When the native append returned success before acknowledgement was
-lost, the established disk has a single survivor although the client
-observes the same uncertain-write event. -/
-theorem afterLostAck (run : Execution.Run events (some session) image) (change : Change) :
-    Admitted ((events ++ [.writeUncertain change]) ++ [.stop]) (image.append (encode change)) none := by
-  intro view allowed
-  have same : view = (image.append (encode change)).view := allowed.elim id (by simp)
-  subst view
-  exact (run.uncertainAtView (Or.inr rfl)).stop
+  exact (run.uncertainPermitted allowed).stop
 
 private theorem installed_eq (valid : Installed session image history) : session = image.replaySession := by
   obtain ⟨d, version, mem⟩ := valid
