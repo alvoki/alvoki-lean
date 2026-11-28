@@ -201,7 +201,11 @@ therefore apply to the run carrying the child.
 
 `publicOpenModel_refines` follows the shared outer install and release
 schedules and reports the ready store and held root, or a released root and
-a recoverable reached disk. `publicOpenModel_append` consumes the exact
+a recoverable reached disk. Its reported-error case also carries
+`ScopedFailureReleased`. If the active child was acquired, this identifies the
+failed continuation on that child and the close on the same reached segment
+image. The single-file phase is closed and its lock is no longer held even
+when unlock reports an error. `publicOpenModel_append` consumes the exact
 stored child and the active image on that reached disk. Its input
 precondition comes from the shared prefix proof, and collection frames the
 child image before append. `publicOpenModel_healthy` lifts progress to the
@@ -216,9 +220,10 @@ inspection errors before opening the child. The listing primitive must
 reflect the protected namespace, including the native no-follow type and
 single-link checks. Healthy listings may use any enumeration order.
 
-The active scan uses the actual opened single-file phase. The sealed path
-uses that same scan guarantee and runs the shared close schedule on the
-opened child. A reported sealed close failure leaves the exact reached disk
+The sealed and active paths consume the handle from the same child producer.
+The value-only disk interpretation projects its batches and cursor. Both
+scans use the returned single-file phase, and the sealed path runs the shared
+close schedule on that child. A reported sealed close failure leaves the exact reached disk
 and carries no child authority. An active scope that acquired a child but
 fails later closes that child on the reached image. Single-file close
 supplies the ownership drop even when unlock reports an error. Before

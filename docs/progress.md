@@ -8,15 +8,15 @@ roles, preserves the sole submitted batch as the retry choice after an
 uncertain result, and composes with the existing segmented child contract.
 [Native proofs and premises](../lean/Alvoki/Experiments/WAL/Proofs/README.md)
 
-**Segmented WAL recovery.** The branch composes the single-file producer
-with segmented reopen on the reached child image, and checks view stability
-across a failed publication, a failed reopen, and two successful reopens
-using the root publication model and interpreted native reopen operations. The native CONTROL sync keeps the original PR #5
-writer. The public append schedule rejects position exhaustion before any
-write. The interpreted native root barrier and reclamation preserve the
-selected bindings and feed the existing reopen proof. The next obligation is
-to connect the public root and child resource lifecycle to that proof. CONTROL publication and rotation still need a
-primitive-level proof of their joint namespace effects.
+**Segmented WAL recovery.** The public open proof connects the installed active
+child to the single-file append producer on the reached disk. The reported
+failure case proves scoped child release and root unlock while preserving the
+primary error and recoverable disk. The interpreted publication and reopen
+continuation checks view stability across a failed publication, a failed
+reopen and two successful reopens. Native CONTROL publication and rotation
+still need a primitive-level proof of their joint namespace effects. CONTROL
+publication must preserve fsync on the staged writer and supply
+representability from reachable states.
 [Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 · [WAL fault assumptions](design/wal-recovery.md)
 
