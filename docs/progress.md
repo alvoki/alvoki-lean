@@ -8,11 +8,16 @@ roles, preserves the sole submitted batch as the retry choice after an
 uncertain result, and composes with the existing segmented child contract.
 [Native proofs and premises](../lean/Alvoki/Experiments/WAL/Proofs/README.md)
 
-**Next open obligation.** Connect segmented root recovery, CONTROL
-publication, and rotation to the actual Linux operations. Preserve the
-reached state after a sync that may have taken effect, and show that
-repeated successful opens select the same view. The filesystem supplies
-the effect of a failed sync. [Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
+**Segmented WAL recovery.** The public open proof connects the installed active
+child to the single-file append producer on the reached disk. The reported
+failure case proves scoped child release and root unlock while preserving the
+primary error and recoverable disk. The interpreted publication and reopen
+continuation checks view stability across a failed publication, a failed
+reopen and two successful reopens. Native CONTROL publication and rotation
+still need a primitive-level proof of their joint namespace effects. CONTROL
+publication must preserve fsync on the staged writer and supply
+representability from reachable states.
+[Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 · [WAL fault assumptions](design/wal-recovery.md)
 
 **Verification baseline.** The integrated recovery candidate for #8 passed

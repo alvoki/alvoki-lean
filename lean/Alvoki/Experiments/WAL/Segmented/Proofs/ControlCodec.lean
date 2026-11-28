@@ -75,8 +75,8 @@ theorem encoded_size (c : Control) (capacity : c.capacity ≤ 255)
     (active : c.active ≤ wordMax) (discarded : c.discarded ≤ wordMax) :
     (encode c).size ≤ 80 := by
   have ncap := decimal_length 3 c.capacity (by decide) (by omega)
-  have nlast := decimal_length 20 c.active (by decide) (by unfold wordMax at active; omega)
-  have nbase := decimal_length 20 c.discarded (by decide) (by unfold wordMax at discarded; omega)
+  have nlast := decimal_length 20 c.active (by decide) (by unfold wordMax Contract.maxPosition at active; omega)
+  have nbase := decimal_length 20 c.discarded (by decide) (by unfold wordMax Contract.maxPosition at discarded; omega)
   have vlen : version.length = 5 := by decide
   have mlen : (modeBytes c.policy).length ≤ 8 := by cases c.policy <;> decide
   change (([32].intercalate (fields c) ++ checksumBytes _).toArray).size ≤ 80

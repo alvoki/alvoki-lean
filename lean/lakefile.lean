@@ -33,6 +33,9 @@ lean_lib Components where
 
 lean_lib Alvoki.Checks.Audit.AxiomPolicy
 
+lean_exe manifestNativeCheck where
+  root := `Alvoki.Experiments.Manifest.NativeTests
+
 target crc32cArchive pkg : FilePath := do
   let buildScript ← inputTextFile (pkg.dir / "native" / "build-crc32c.sh")
   let bridge ← inputTextFile (pkg.dir / "native" / "crc32c.c")
@@ -49,3 +52,8 @@ lean_lib CRC32C where
 
 lean_exe crc32cCheck where
   root := `Alvoki.Checks.Tests.CRC32C
+
+lean_lib Alvoki.Checks.Tests.SSTableProducer
+
+lean_exe immutableSSTableCheck where
+  root := `Alvoki.Experiments.SSTable.UnifiedFixtures

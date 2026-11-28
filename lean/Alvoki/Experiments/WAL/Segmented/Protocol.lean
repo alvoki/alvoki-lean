@@ -77,6 +77,7 @@ def rotateIfFull (ops : Ops m) (session : Session) : m (Control × Nat) := do
 
 def append (ops : Ops m) (session : Session) (payload : Bytes) : m Session := do
   if payload.length > 32 then throw "batch out of bounds"
+  if session.view.tail ≥ Contract.maxPosition then throw "segmented WAL position exhausted"
   let (next, used) ← rotateIfFull ops session
   ops.appendSegment next.policy next.active payload
   return ⟨next, used + 1, session.view.append payload⟩
@@ -99,20 +100,35 @@ def readSealed (ops : Ops m) (policy : Policy) (capacity first count : Nat)
     if batches.length != capacity then throw "incomplete sealed segment"
     readSealed ops policy capacity (first + 1) n (acc ++ batches.toArray)
 
-def reopen (ops : Ops m) : m Session := do
+@[inline] def reopenPrefix (ops : Ops m) : m (Control × Array Bytes) := do
   let c ← ops.readControl
   if c.capacity = 0 || c.capacity > 255 then throw "invalid segment capacity"
   if c.discarded > (c.active + 1) * c.capacity then throw "invalid release position"
   -- A process exit can leave a renamed control record visible before root sync.
   ops.syncRoot
-  let first := c.firstNeeded
-  let sealed ← readSealed ops c.policy c.capacity first (c.active - first) #[]
-  let active ← ops.openSegment c.policy c.active
+  let sealed ← readSealed ops c.policy c.capacity c.firstNeeded (c.active - c.firstNeeded) #[]
+  return (c, sealed)
+
+@[inline] def finishReopen (ops : Ops m) (c : Control) (sealed : Array Bytes)
+    (active : List Bytes) : m Session := do
   if active.length > c.capacity then throw "oversized active segment"
   if c.discarded > c.active * c.capacity + active.length then throw "release beyond recovered data"
-  let retained := (sealed.toList ++ active).drop (c.discarded - first * c.capacity)
+  let retained := (sealed.toList ++ active).drop (c.discarded - c.firstNeeded * c.capacity)
   collect ops c
   return ⟨c, active.length, ⟨c.discarded, retained⟩⟩
+
+/-- The active child is in scope through validation and collection. The
+caller supplies its lifetime and receives it explicitly on success. -/
+def reopenWith (ops : Ops m)
+    (withActive : Policy → Nat → (child → List Bytes → m result) → m result)
+    (finish : Session → child → m result) : m result := do
+  let (c, sealed) ← reopenPrefix ops
+  withActive c.policy c.active fun child active => do
+    finish (← finishReopen ops c sealed active) child
+
+def reopen (ops : Ops m) : m Session :=
+  reopenWith ops (fun policy id resume => do resume () (← ops.openSegment policy id))
+    (fun session () => pure session)
 
 end
 end WalRecoverySlice.Segmented

@@ -136,29 +136,24 @@ private theorem readOutcome_bind {σ α β : Type} {inv post failure : σ → Pr
       obtain ⟨keep, rfl⟩ := src
       exact tail s keep
 
-/-- Recover the precise absolute base and retained history from the control and
-its selected child files. Primitive errors use a separate postcondition; a
-healthy caller can instantiate it with False. -/
-theorem reopen_spec {σ : Type} (ops : Ops (ExceptT String (EStateM Unit σ)))
-    (c : Control) (history : List Bytes) (start : σ) (seen layout opened installed failure : σ → Prop)
+/-- The common prefix selects CONTROL and scans only its sealed range. -/
+theorem reopenPrefix_spec {σ : Type} (ops : Ops (ExceptT String (EStateM Unit σ)))
+    (c : Control) (history : List Bytes) (start : σ) (seen layout failure : σ → Prop)
     (capacity : 0 < c.capacity ∧ c.capacity ≤ 255)
     (lower : c.active * c.capacity ≤ history.length)
     (upper : history.length ≤ (c.active + 1) * c.capacity) (release : c.discarded ≤ history.length)
     (readControl : readOutcome seen failure c (ops.readControl.run start))
     (stabilize : ∀ s, seen s → readOutcome layout failure () (ops.syncRoot.run s))
     (sealedRead : ∀ id, c.firstNeeded ≤ id → id < c.active → ∀ s, layout s →
-      readOutcome layout failure (segmentHistory c.capacity id history) ((ops.openSegment c.policy id).run s))
-    (activeRead : ∀ s, layout s →
-      readOutcome opened failure (segmentHistory c.capacity c.active history) ((ops.openSegment c.policy c.active).run s))
-    (cleanup : ∀ s, opened s → readOutcome installed failure () ((collect ops c).run s)) :
-    readOutcome installed failure
-      ⟨c, history.length - c.active * c.capacity, ⟨c.discarded, history.drop c.discarded⟩⟩
-      ((reopen ops).run start) := by
-  unfold reopen
+      readOutcome layout failure (segmentHistory c.capacity id history) ((ops.openSegment c.policy id).run s)) :
+    readOutcome layout failure
+      (c, (segmentWindow c.capacity c.firstNeeded (c.active - c.firstNeeded) history).toArray)
+      ((reopenPrefix ops).run start) := by
+  unfold reopenPrefix
   apply readOutcome_bind readControl
   intro s valid
   have nonzero : c.capacity ≠ 0 := by omega
-  simp only [nonzero, decide_false, Bool.false_or,
+  simp only [nonzero, decide_false, Bool.false_or, Bool.false_eq_true,
     Nat.not_lt_of_ge capacity.2, ↓reduceIte, Nat.not_lt_of_ge (Nat.le_trans release upper)]
   apply readOutcome_bind (stabilize s valid)
   intro next stable
@@ -168,14 +163,35 @@ theorem reopen_spec {σ : Type} (ops : Ops (ExceptT String (EStateM Unit σ)))
     history #[] next layout failure stable (by rwa [span])
     (by intro id low hi; exact sealedRead id low (by omega)))
   intro afterSealed validSealed
+  exact ⟨validSealed, by simp⟩
+
+/-- Recover the precise absolute base and retained history from the control and
+its selected child files. Primitive errors use a separate postcondition; a
+healthy caller can instantiate it with False. -/
+theorem reopen_spec {σ : Type} (ops : Ops (ExceptT String (EStateM Unit σ)))
+    (c : Control) (history : List Bytes) (start : σ) (layout opened installed failure : σ → Prop)
+    (lower : c.active * c.capacity ≤ history.length)
+    (upper : history.length ≤ (c.active + 1) * c.capacity) (release : c.discarded ≤ history.length)
+    (prefixResult : readOutcome layout failure
+      (c, (segmentWindow c.capacity c.firstNeeded (c.active - c.firstNeeded) history).toArray)
+      ((reopenPrefix ops).run start))
+    (activeRead : ∀ s, layout s →
+      readOutcome opened failure (segmentHistory c.capacity c.active history) ((ops.openSegment c.policy c.active).run s))
+    (cleanup : ∀ s, opened s → readOutcome installed failure () ((collect ops c).run s)) :
+    readOutcome installed failure
+      ⟨c, history.length - c.active * c.capacity, ⟨c.discarded, history.drop c.discarded⟩⟩
+      ((reopen ops).run start) := by
+  simp only [reopen, reopenWith, finishReopen, bind_pure]
+  apply readOutcome_bind prefixResult
+  intro afterSealed validSealed
   apply readOutcome_bind (activeRead afterSealed validSealed)
   intro afterActive validActive
   have n := segmentHistory_active_length (active := c.active) upper
   have size : history.length - c.active * c.capacity ≤ c.capacity := by
     rw [Nat.add_mul, Nat.one_mul] at upper; omega
   have endBound : ¬ c.discarded > c.active * c.capacity + (history.length - c.active * c.capacity) := by omega
-  simp only [n, Nat.not_lt_of_ge size, endBound, ↓reduceIte, Array.toList_append,
-    List.nil_append, selectedHistory_eq c history upper]
+  simp only [n, Nat.not_lt_of_ge size, endBound, ↓reduceIte,
+    selectedHistory_eq c history upper]
   apply readOutcome_bind (cleanup afterActive validActive)
   intro finish ok
   exact ⟨ok, rfl⟩

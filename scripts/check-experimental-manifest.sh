@@ -6,38 +6,18 @@ if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
   export ELAN_HOME="$(cd "${ALVOKI_TOOLCHAINS:-../../work/toolchains}/elan" && pwd)"
   export PATH="$ELAN_HOME/bin:$PATH"
 fi
-prefix=$(lean --print-prefix)
-out=$(mktemp -d)
-trap 'rm -rf "$out"' EXIT
-export LEAN_PATH="$out"
-sources=()
-compile() {
-  local module=$1
-  mkdir -p "$out/$(dirname "$module")"
-  if [[ ${2:-} == native ]]; then
-    lean -o "$out/$module.olean" -c "$out/$module.c" "$module.lean"
-    sources+=("$out/$module.c")
-  else
-    lean -o "$out/$module.olean" "$module.lean"
-  fi
-  leanchecker "${module//\//.}"
-}
-blob=Alvoki/Experiments/DurableBlob
-manifest=Alvoki/Experiments/Manifest
-compile Alvoki/Codec/Block native
-compile Alvoki/Codec/WordChecksum native
-compile Alvoki/Kernel/BlockContracts
-compile Alvoki/Codec/ByteWords
-for module in Contract Protocol Native; do
-  compile "$blob/$module" native
+modules=(
+  Alvoki.Codec.{Block,WordChecksum,ByteWords}
+  Alvoki.Kernel.BlockContracts
+  Alvoki.Experiments.DurableBlob.{Contract,Protocol,Native,Proofs,Trace}
+  Alvoki.Experiments.Manifest.{Basic,Proofs,NativeTests}
+  Alvoki.Checks.Audit.AxiomPolicy
+)
+lake build "${modules[@]}"
+for module in "${modules[@]}"; do
+  lake env leanchecker "$module"
 done
-compile "$blob/Proofs"
-compile "$blob/Trace"
-compile "$manifest/Basic" native
-compile "$manifest/Proofs"
-compile "$manifest/NativeTests" native
-compile Alvoki/Checks/Audit/AxiomPolicy
-lean --stdin <<'LEAN'
+lake env lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.DurableBlob.Proofs
 import Alvoki.Experiments.Manifest.Proofs
@@ -57,6 +37,4 @@ import Alvoki.Experiments.Manifest.Proofs
 #check_axioms L0Manifest.trace_refines
 #check_axioms L0Manifest.decode_rejects_checksum
 LEAN
-cc -O2 -fPIC -I"$prefix/include" "${sources[@]}" native/fsync.c \
-  -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-manifest"
-"$out/test-manifest"
+lake exe manifestNativeCheck

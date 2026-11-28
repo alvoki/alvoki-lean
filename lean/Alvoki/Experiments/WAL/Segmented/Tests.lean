@@ -211,6 +211,20 @@ private def runScenario (policy : Policy) : IO Unit := do
         let (opened, afterRetry, observed) ← openChecked (powerLoss repaired) observed
         let (_, afterNext, observed) ← submitBatch afterRetry opened observed [8]
         let _ ← openChecked (powerLoss afterNext) observed
+  -- Lose the response after the publication barrier, then fail after
+  -- the first reclamation unlink during recovery.
+  let (publishError, published) := run (discardThrough simOps active 6)
+    {storage with fault := some ⟨.root, 0, .after⟩}
+  require (!publishError.isOk && published.durableControl == some {active.control with discarded := 6})
+    "discard fault did not follow durable publication"
+  let (recoveryError, partialRecovery) := run (reopen simOps)
+    {(processExit published) with fault := some ⟨.remove, 0, .after⟩}
+  require (!recoveryError.isOk && partialRecovery.names.length < published.names.length)
+    "recovery fault did not follow a reclamation effect"
+  let (chosen, settled, observed) ← openChecked (powerLoss partialRecovery) (client.requestDiscard 6)
+  let (repeated, _, _) ← openChecked (powerLoss settled) observed
+  require (chosen.view.base == 6 && chosen.view.batches == [[7]] && repeated.view == chosen.view)
+    "repeated recovery did not retain the published release"
   -- Publish the release, then fail before collection. Repeated recovery cuts
   -- must tolerate both persisted and unpersisted individual removals.
   let (releaseCut, uncollected) := run (discardThrough simOps active 6)

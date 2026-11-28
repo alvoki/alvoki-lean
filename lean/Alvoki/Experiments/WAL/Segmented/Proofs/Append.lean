@@ -11,7 +11,8 @@ open Model (Disk State DiskPost)
 theorem appendActive_refines (effects : Model.Effects) (c : Control) (history : List Bytes)
     (p : Bytes) (s : State) (ready : ReadyLayout c history s.disk)
     (live : s.disk.liveControl = some c) (durable : s.disk.durableControl = some c)
-    (room : history.length < (c.active + 1) * c.capacity) (size : p.length ≤ 32) :
+    (room : history.length < (c.active + 1) * c.capacity) (size : p.length ≤ 32)
+    (positionRoom : (historyView c history).tail < Contract.maxPosition) :
     DiskPost (fun _ after => ReadyLayout c (history ++ [p]) after ∧
       after.liveControl = some c ∧ after.durableControl = some c)
       (Recoverable (historyView c history) (some (.append p)))
@@ -46,7 +47,7 @@ theorem appendActive_refines (effects : Model.Effects) (c : Control) (history : 
     intro selected permitted
     rcases permitted with rfl | rfl
     · exact .inl rfl
-    · exact .inr (by simp [Contract.Request.apply, historyView_append layout.discardedFits])
+    · exact .inr (by simp [Contract.Request.apply, positionRoom, historyView_append layout.discardedFits])
   have stop : Recoverable (historyView c history) (some (.append p)) after :=
     ⟨⟨c, authority.1, choice⟩, ⟨c, authority.2, choice⟩⟩
   have ack (ok : Model.returned run = some ()) : ReadyLayout c (history ++ [p]) after := by
@@ -73,16 +74,20 @@ theorem append_refines (effects : Model.Effects) (session : Session) (p : Bytes)
   obtain ⟨history, canonical, ready, live, durable⟩ := installed
   generalize hc : session.control = c at canonical ready live durable
   subst session
+  have unchanged : Recoverable (historyView c history) (some (.append p)) state.disk := by
+    have choice := ready.choice (known := historyView c history) (request := some (.append p)) (.inl rfl)
+    exact ⟨⟨c, live, choice⟩, ⟨c, durable, choice⟩⟩
   by_cases tooBig : p.length > 32
-  · have choice := ready.choice (known := historyView c history) (request := some (.append p)) (.inl rfl)
-    simp only [Segmented.append, tooBig, ↓reduceIte]
-    exact (show Recoverable (historyView c history) (some (.append p)) state.disk from
-      ⟨⟨c, live, choice⟩, ⟨c, durable, choice⟩⟩)
   · simp only [Segmented.append, tooBig, ↓reduceIte]
+    exact unchanged
+  by_cases full : Contract.maxPosition ≤ (historyView c history).tail
+  · simp only [Segmented.append, sessionOf, tooBig, full, ↓reduceIte]
+    exact unchanged
+  · simp only [Segmented.append, sessionOf, tooBig, full, ↓reduceIte]
     apply Model.bindPost (rotateIfFull_refines effects c history p state ready live durable)
     intro pair t mid
     obtain ⟨entry, boundLive, boundDurable, count, view, room⟩ := mid
-    have active := appendActive_refines effects pair.1 history p t entry boundLive boundDurable room (by omega)
+    have active := appendActive_refines effects pair.1 history p t entry boundLive boundDurable room (by omega) (by rw [view]; exact Nat.lt_of_not_ge full)
     rw [view] at active
     apply Model.bindPost active
     intro _ last post
@@ -92,8 +97,20 @@ theorem append_refines (effects : Model.Effects) (session : Session) (p : Bytes)
     have exactSession :
         (⟨pair.1, pair.2 + 1, (historyView c history).append p⟩ : Session) = sessionOf pair.1 (history ++ [p]) := by
       simp [sessionOf, extend, extendedView, view, count]
-    refine And.intro ?_ rfl
-    exact ⟨history ++ [p], exactSession, newEntry, newLive, newDurable⟩
+    refine And.intro ?_ ?_
+    · exact ⟨history ++ [p], exactSession, newEntry, newLive, newDurable⟩
+    · simp [Contract.Request.apply, Nat.lt_of_not_ge full]
+
+/-- Exhaustion rejects before any namespace or child effect can run. -/
+theorem append_exhausted (effects : Model.Effects) (session : Session) (p : Bytes)
+    (state : State) (exhausted : Contract.maxPosition ≤ session.view.tail) :
+    (Segmented.append (Model.ops effects) session p).run state =
+      .ok (.error (if p.length > 32 then "batch out of bounds" else "segmented WAL position exhausted")) state := by
+  by_cases oversized : p.length > 32
+  · simp only [Segmented.append, oversized, ↓reduceIte]
+    rfl
+  · simp only [Segmented.append, oversized, exhausted, ↓reduceIte]
+    rfl
 
 /-- The position projected from an acknowledged source append is the next
 absolute batch position, including after rotation or prefix release. -/
@@ -113,9 +130,26 @@ theorem append_returned_position (effects : Model.Effects) (session : Session) (
     rw [count, historyView_tail ready.layout.discardedFits]
     omega
   rw [position]
-  simp [Contract.Request.apply] at same
-  rw [← same]
-  simp [Contract.View.tail, Contract.View.append]
-  omega
+  simp only [Contract.Request.apply] at same
+  split at same
+  · replace same := Option.some.inj same
+    rw [← same]
+    simp [Contract.View.tail, Contract.View.append]
+    omega
+  · contradiction
+
+/-- An acknowledged absolute position fits the wire field used for release. -/
+theorem append_returned_representable (effects : Model.Effects) (session : Session) (p : Bytes)
+    (state after : State) (next : Session) (installed : Installed session state.disk)
+    (returned : (Segmented.append (Model.ops effects) session p).run state = .ok (.ok next) after) :
+    next.tailPosition ≤ Contract.maxPosition := by
+  rw [append_returned_position effects session p state after next installed returned]
+  have result := append_refines effects session p state installed
+  rw [returned] at result
+  have applied := result.2
+  simp only [Contract.Request.apply] at applied
+  split at applied
+  · omega
+  · contradiction
 
 end WalRecoverySlice.Segmented
