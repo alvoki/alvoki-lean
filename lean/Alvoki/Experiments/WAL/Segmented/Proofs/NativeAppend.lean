@@ -1479,7 +1479,7 @@ theorem nativeAppendModel_rotation_refines (root : System.FilePath) (held : Nat)
         rw [ready] at frame
         exact ⟨prep.offline (.inl rfl), frame, rfl⟩
       | ok phase =>
-        have ⟨image, cursor, authority, _⟩ := prepareNativeChild_authority root removal
+        obtain ⟨image, cursor, authority, acquired⟩ := prepareNativeChild_authority root removal
           (fun step => effects.prepare step (successor session).active)
           create session.control.policy (successor session).active linux ready
         have continued := resumeSuccessor_refines root held effects session reports (atPrepare, phase)
@@ -1498,8 +1498,10 @@ theorem nativeAppendModel_rotation_refines (root : System.FilePath) (held : Nat)
             exact ⟨continued, readyAfter⟩
           | error err =>
             have owned := resumeSuccessor_error_owned root held effects session reports authority ran
+            obtain ⟨_, acquiredImage, _, _, acquiredHeld⟩ := acquired
             have childClose := SingleFile.closeModel_owned session.control.policy close
-              {image := atWrite.1.disk.segment (successor session).active, held := true} owned
+              {image := atWrite.1.disk.segment (successor session).active, held := acquiredImage.held} owned
+            rw [acquiredHeld] at childClose
             have released : release (.acquired (successor session).active) atWrite =
                 .ok (if close.unlockError then .error "primitive error" else .ok ())
                   ({atWrite.1 with activeEntry := none}, .closed) := by
@@ -2329,7 +2331,10 @@ private theorem bootstrapFailure_custody (root : System.FilePath) (held : Nat)
       ({}, .closed) = .ok (.error err) after) :
     match after.1.activeEntry with
     | none => after.2 = .closed
-    | some _ => ∃ files cursor history, after.2 = .active .lock files cursor history := by
+    | some _ => ∃ ready acquired,
+        SingleFile.createModel (Native.segmentPath root 0) policy create = .ok (.ok ready) acquired ∧
+        SingleFile.storedPhase ready = after.2 ∧ acquired.held = true ∧
+        ∃ files cursor history, after.2 = .active .lock files cursor history := by
   by_cases zero : capacity = 0
   · simp only [nativeBootstrapModel, Segmented.create, zero, decide_true, Bool.true_or, ↓reduceIte] at ran
     cases ran
@@ -2360,8 +2365,9 @@ private theorem bootstrapFailure_custody (root : System.FilePath) (held : Nat)
       change prepared.activeEntry = none at frame
       rw [frame]
     | ok phase =>
-      have live := (prepareNativeChild_authority root removal (fun step => effects.prepare step 0)
-        create policy 0 linux exactMade).2.2.1
+      obtain ⟨_, _, live, ready, acquired, created, binding, heldChild⟩ :=
+        prepareNativeChild_authority root removal (fun step => effects.prepare step 0)
+          create policy 0 linux exactMade
       let registered := {prepared with activeEntry := some 0}
       simp only [ExceptT.bindCont, EStateM.bind, registerSuccessor, storeActiveEntry, ↓reduceIte,
         live, liftRootAction, ExceptT.run] at ran
@@ -2382,7 +2388,7 @@ private theorem bootstrapFailure_custody (root : System.FilePath) (held : Nat)
         | error =>
           cases ran
           rw [slot]
-          exact ⟨_, _, _, rfl⟩
+          exact ⟨ready, acquired, created, binding.trans live, heldChild, _, _, _, rfl⟩
         | ok done =>
           cases done
           simp only [Segmented.publish, ExceptT.bindCont, EStateM.bind, liftRootAction, ExceptT.run] at ran
@@ -2403,7 +2409,7 @@ private theorem bootstrapFailure_custody (root : System.FilePath) (held : Nat)
               cases ran
               change reached.activeEntry = settled.activeEntry at frame
               rw [frame, slot]
-              exact ⟨_, _, _, rfl⟩
+              exact ⟨ready, acquired, created, binding.trans live, heldChild, _, _, _, rfl⟩
       · rw [stopped] at ran
         cases ran
 
@@ -2620,7 +2626,10 @@ theorem publicBootstrap_failed_releases (owned : RootBinding directory lock)
     dsimp [reached]
     cases entry : after.1.activeEntry with
     | none => rw [entry] at phase; exact ⟨phase, rfl⟩
-    | some id => rw [entry] at phase; exact ⟨rfl, .inr phase⟩
+    | some id =>
+      rw [entry] at phase
+      obtain ⟨_, acquired, _, _, heldChild, live⟩ := phase
+      exact ⟨(show (some id).isSome = acquired.held from heldChild.symm).trans heldChild, .inr live⟩
   have released := appendRelease_releases policy close unlockError reached custody
   simp only [reached] at released
   rw [released]
