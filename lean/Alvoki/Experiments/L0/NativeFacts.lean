@@ -1,6 +1,6 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.Execution
 
-namespace ExperimentalL0.NativeBridge
+namespace ExperimentalL0.NativeFacts
 open WalRecoverySlice.Segmented
 
 private theorem wal_step_unique (left : Contract.Step start event a)
@@ -45,4 +45,4 @@ theorem wal_append
     · exact (Option.some.inj applied).symm
     · contradiction
 
-end ExperimentalL0.NativeBridge
+end ExperimentalL0.NativeFacts

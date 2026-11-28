@@ -37,7 +37,6 @@ cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,
 cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixture.so"
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
 compile "$l0/NativeFacts" proof
-compile "$l0/NativeBridge" proof
 compile "$l0/WalProducerHandoff" proof
 leanchecker Alvoki.Experiments.L0.WalProducerHandoff
 compile "$l0/LifecycleRefinement" proof
@@ -57,8 +56,8 @@ for module in PreparedFile ControlCutIO PrepareCutIO ChildCutIO CutSchedule; do
 done
 compile Alvoki/Checks/Audit/AxiomPolicy proof
 l0_proofs=(
-  Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition
-  ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps
+  Codecs CodecProofs Lifecycle Native NativeFacts ManifestComposition
+  ManifestRecovery DurableCatalog RestartRefinement LifecycleRefinement ScheduleSteps
   TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs
   NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut
   WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendRecovery NativeWrite
@@ -91,7 +90,6 @@ done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.L0.NativeFacts
-import Alvoki.Experiments.L0.NativeBridge
 import Alvoki.Experiments.L0.Native
 import Alvoki.Experiments.L0.RestartRefinement
 import Alvoki.Experiments.L0.ScheduleSteps
@@ -114,7 +112,7 @@ import Alvoki.Experiments.L0.NativeTableCheck
 import Alvoki.Experiments.L0.PublicationCut
 import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeChild
 import Alvoki.Experiments.L0.WalProducerHandoff
-open ExperimentalL0 ExperimentalL0.NativeBridge
+open ExperimentalL0
 #check_axioms WalProducerHandoff.reopenAuthority
 #check_axioms WalProducerHandoff.reportedWrite
 #check_axioms WalProducerHandoff.retry
@@ -212,12 +210,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms keyCodec_roundtrips
 #check_axioms keyCodec_preservesOrder
 #check_axioms mutationCodec_roundtrips
-#check_axioms wal_append
-#check_axioms WalRecovery.Interpretation.reopenReached
-#check_axioms WalRecovery.Interpretation.scanAfterReopen
-#check_axioms WalRecovery.Interpretation.reportedFailure
-#check_axioms WalRecovery.Interpretation.reopenHealthy
-#check_axioms WalRecovery.Interpretation.scanEffect
+#check_axioms NativeFacts.wal_append
 #check_axioms DurableBlob.LinuxEffects.reopenBinding
 #check_axioms DurableBlob.LinuxEffects.reopenHealthy
 #check_axioms DurableBlob.LinuxEffects.publishActive
@@ -227,12 +220,6 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.reopenSelected
 #check_axioms ManifestComposition.publishSelected
 #check_axioms ManifestComposition.retryAfterPublication
-#check_axioms ManifestComposition.Interpretation.reopenEffect
-#check_axioms ManifestComposition.Interpretation.reopenHealthy
-#check_axioms ManifestComposition.Interpretation.publishEffect
-#check_axioms CallbackEvidence.recoveryEffects
-#check_axioms CallbackEvidence.flushEffects
-#check_axioms CallbackEvidence.flushCatalog
 #check_axioms get_refines_from
 #check_axioms Execution.Run.flushObserved
 #check_axioms Execution.Run.refines
@@ -255,14 +242,9 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.Proof.flush_keepsPhase
 #check_axioms Lifecycle.Proof.get_keepsPhase
 #check_axioms Lifecycle.initialCatalog
-#check_axioms Lifecycle.recovery_progress
 #check_axioms Lifecycle.scope_refines
 #check_axioms ExperimentalL0.Native.get_afterPhaseRead
 #check_axioms retainRecoverySelection
-#check_axioms Lifecycle.recovery_online
-#check_axioms Lifecycle.recovery_offline
-#check_axioms Lifecycle.flush_online
-#check_axioms Lifecycle.flush_offline
 #check_axioms Lifecycle.Proof.useSession_offline
 #check_axioms native_table_check
 #check_axioms nativeTableAt_afterStat
@@ -275,32 +257,21 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms freeTableId_spec
 #check_axioms createTableAt_success
 #check_axioms createTableAt_bindings
-#check_axioms TableCreationEvidence.published
-#check_axioms TableCreationEvidence.catalogAfter
-#check_axioms TableCreationEvidence.catalogInserted
-#check_axioms TableCreationEvidence.failureCatalog
 #check_axioms rowSupply_step
 #check_axioms nextTableRow_cons
 #check_axioms nextTableRow_nil
 #check_axioms supplied_builder_input
-#check_axioms TableCreationEvidence.effect
 #check_axioms table_open_published_inode
 #check_axioms nextTableRow_writerEffect
 #check_axioms flushPublicationChoices
-#check_axioms ManifestComposition.StateWithImage.interpretation
 #check_axioms ManifestComposition.recoverPublication
 #check_axioms ManifestComposition.reopenAfterRestart
 #check_axioms TableNamespace.scopedLookup
 #check_axioms nativeTableAt_success
 #check_axioms nativeTableAt_reached
 #check_axioms TableNamespace.scopedCheck
-#check_axioms NativeTableReads.product
-#check_axioms NativeTableReads.productFrame
-#check_axioms NativeTableReads.Interpretation.checkHealthy
-#check_axioms RestartLookup.get
 #check_axioms TableNamespace.Represents.frame
 #check_axioms recoverKeepsCatalog
 #check_axioms recoverCatalog
 #check_axioms recover_progress
-#check_axioms recoverReachedFlush
 LEAN

@@ -5,43 +5,6 @@ namespace ExperimentalL0.ManifestComposition
 open DurableBlob L0Manifest
 open WalRecoverySlice.Segmented
 
-/-- The manifest part of the recovery state keeps the complete reached
-image together with the L0 projections of the other two namespaces. -/
-structure StateWithImage where
-  selected : Selected
-  image : Image
-  valid : selected.version.Valid
-  encoded : image.active = L0Manifest.encode selected.version
-
-noncomputable def StateWithImage.install (s : StateWithImage) (image : Image) : StateWithImage := by
-  classical
-  exact
-    if h : ∃ v, Version.Valid v ∧ image.active = L0Manifest.encode v then
-      ⟨s.selected.publish (Classical.choose h), image, (Classical.choose_spec h).1,
-        (Classical.choose_spec h).2⟩
-    else s
-
-noncomputable def StateWithImage.interpretation (dir : System.FilePath)
-    (openReports : StateWithImage → LinuxEffects.Reports)
-    (publishReports : StateWithImage → Version → LinuxEffects.Reports) :
-    Interpretation
-      (callbacks dir StateWithImage.image StateWithImage.install openReports publishReports)
-      StateWithImage.selected where
-  directory := dir
-  image := StateWithImage.image
-  install := StateWithImage.install
-  openReports := openReports
-  publishReports := publishReports
-  schedule := rfl
-  projection s := ⟨s.valid, s.encoded⟩
-  imageInstalled s image admitted := by simp [StateWithImage.install, admitted]
-  walFrame s image := by
-    unfold StateWithImage.install
-    split <;> rfl
-  tableFrame s image := by
-    unfold StateWithImage.install
-    split <;> rfl
-
 /-- Process exit keeps the reached image. At power loss the filesystem
 selects one of its survivors. The caller retains the already durable table
 catalog and settled WAL view across this boundary. -/
