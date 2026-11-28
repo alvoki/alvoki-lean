@@ -35,6 +35,7 @@ open ExperimentalL0.CompactionExperiment
 #check_axioms mergeReference_ordered
 #check_axioms mergeReference_lookup
 #check_axioms overlay_replace
+#check_axioms spliceVersion
 #check_axioms publicationChoices
 #check_axioms install_compacted
 #check_axioms merge_recovery
