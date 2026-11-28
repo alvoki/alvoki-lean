@@ -310,4 +310,79 @@ def scan (h : Handle) : IO (List Bytes) := withMutex h do
 def close (h : Handle) : IO Unit := withMutex h do
   checked (closeWith (← h.state.get) h.state.set (fun lock => lock.unlock))
 
+/-- Proof-only identification of the private phase and mutex. -/
+def Handle.Binds (h : Handle) (cell : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle)))
+    (mutex : Std.BaseMutex) : Prop := h.state = cell ∧ h.mutex = mutex
+
+theorem Handle.bindings (h : Handle) : ∃ cell mutex, h.Binds cell mutex := ⟨_, _, rfl, rfl⟩
+
+/-- Public close operates on the phase under the very same mutex. A live
+child is marked closed before unlocking its description. A previously
+closed child only reports the primary error. Both paths leave the mutex. -/
+theorem close_run {h : Handle} (binding : h.Binds cell mutex) (start : Void IO.RealWorld) :
+    close h start =
+      let locked := (mutex.lock start).state
+      let read := (cell.get : BaseIO _) locked
+      let release := fun (lock : IO.FS.Handle) =>
+        lock.unlock ((cell.set .closed : BaseIO Unit) read.state).state
+      let result := match read.val with
+        | .closed => EST.Out.error (IO.userError "WAL closed") read.state
+        | .active fd _ _ _ | .poisoned fd => release fd
+      match result with
+      | .ok x t => .ok x (mutex.unlock t).state
+      | .error e t => .error e (mutex.unlock t).state := by
+  obtain ⟨rfl, rfl⟩ := binding
+  let locked := (h.mutex.lock start).state
+  let read := (h.state.get : BaseIO _) locked
+  let call := fun (p : Phase IO.FS.Handle (AppendFiles IO.FS.Handle)) =>
+    checked (closeWith p h.state.set (fun lock => lock.unlock))
+  have withMutex_run (a : IO Unit) : withMutex h a start =
+      match a locked with
+      | .ok x t => .ok x (h.mutex.unlock t).state
+      | .error e t => .error e (h.mutex.unlock t).state := by
+    have base (a : BaseIO Unit) (w : Void IO.RealWorld) :
+        (liftM a : IO Unit) w = .ok (a w).val (a w).state := by
+      change BaseIO.toEIO a w = _
+      cases ran : a w
+      simp [BaseIO.toEIO, ran]
+    unfold withMutex
+    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base, tryFinally,
+      tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+      Functor.map, instMonadEIO._aux_1]
+    cases a (h.mutex.lock start).state <;> rfl
+  unfold close
+  rw [withMutex_run]
+  have readRun : (h.state.get : IO _) locked = .ok read.val read.state := rfl
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, readRun]
+  change (match call read.val read.state with
+    | .ok x t => EST.Out.ok x (h.mutex.unlock t).state
+    | .error e t => EST.Out.error e (h.mutex.unlock t).state) = _
+  dsimp only [locked, read]
+  cases phase : (h.state.get : BaseIO _) (h.mutex.lock start).state with
+  | mk p t =>
+    cases p with
+    | closed => rfl
+    | active fd files cursor entries | poisoned fd =>
+      let after := ((h.state.set .closed : BaseIO Unit) t).state
+      have setRun : (h.state.set .closed : FileM Unit).run t = .ok (.ok ()) after := rfl
+      have finish : checked ((h.state.set .closed : FileM Unit) >>= fun _ => (liftM fd.unlock : FileM Unit)) t =
+          fd.unlock after := by
+        unfold checked
+        rw [ExceptT.run_bind]
+        simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, setRun]
+        cases u : fd.unlock after with
+        | error e v =>
+          have lifted : (liftM fd.unlock : FileM Unit).run after = .error e v := by
+            change (Except.ok <$> fd.unlock : IO (Except String Unit)) after = _
+            simp [Functor.map, instMonadEIO._aux_1, EST.bind, u]
+          rw [lifted]
+        | ok x v =>
+          have lifted : (liftM fd.unlock : FileM Unit).run after = .ok (.ok x) v := by
+            change (Except.ok <$> fd.unlock : IO (Except String Unit)) after = _
+            simp [Functor.map, instMonadEIO._aux_1, EST.bind, EST.pure, u]
+          rw [lifted]
+          rfl
+      simp only [call, closeWith]
+      rw [finish]
+
 end WalRecoverySlice.SingleFile
