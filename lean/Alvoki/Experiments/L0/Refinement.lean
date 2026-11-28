@@ -143,7 +143,7 @@ theorem recover_progress (laws : ComponentEffects ops selected)
   rw [ran] at result
   exact ⟨_, ran, result.2⟩
 
-private def Durable.append (d : Durable image history) (change : Change) :
+def Durable.append (d : Durable image history) (change : Change) :
     Durable (image.append (encode change)) (history ++ [change]) := by
   refine ⟨d.flushed, d.pending ++ [change], ?_, d.base, d.boundary, ?_, d.unique,
     d.runs, d.bindings, d.covered, d.ordered⟩
