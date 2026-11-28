@@ -1,5 +1,6 @@
 import Alvoki.Experiments.L0.ManifestRecovery
 import Alvoki.Experiments.L0.NativeBridge
+import Alvoki.Experiments.L0.NativeRead
 import Alvoki.Experiments.L0.ScheduleSteps
 
 namespace ExperimentalL0
@@ -213,12 +214,62 @@ theorem recoverTwiceTrace
   exact ⟨again.recoverOk evidence.effects reopened,
     catalog.frame (keptFailure.trans (keptFirst.trans (survives.trans keptSecond)))⟩
 
+/-- Reindex the restart model's namespace by the IO world reached inside a read. -/
+def TableNamespace.readWorld (ns : TableNamespace σ) (atWorld : NativeRead.W → σ) :
+    TableNamespace NativeRead.W :=
+  ⟨ns.directory, ns.inode, ns.names ∘ atWorld, ns.contents ∘ atWorld⟩
+
+/-- The model-only flush theorem still dispatches a lookup on its abstract
+carrier. Its adapter uses the same scoped table proof as a public handle. -/
+structure RestartLookup (ops : Tables (StorageM σ)) (selected : σ → Selected) (ns : TableNamespace σ)
+    (life : NativeRead.Lifetime) where
+  world : σ → NativeRead.W
+  advance : σ → NativeRead.W → σ
+  valid : σ → NativeRead.W → Prop
+  entered : ∀ s, valid s (world s)
+  primitive : ∀ s, NativeRead.Primitives (ns.readWorld (advance s)) life (valid s)
+  lookup : ∀ id key, ops.lookup id key = NativeTableReads.call world advance
+    (nativeTableAt ns.directory id (·.lookup key))
+  frame : ∀ s t, valid s t → selected (advance s t) = selected s ∧
+    ns.Keeps s (advance s t) (selected s).tables
+
+theorem RestartLookup.get {ops : Components (StorageM σ)} {ns : TableNamespace σ} {selected : σ → Selected}
+    (r : RestartLookup ops.tables selected ns life)
+    (catalog : ns.Represents s (selected s).tables)
+    (installed : Installed session (selected s) history) (key : UInt64) :
+    match get ops session key s with
+    | .ok v t => v = denote history key ∧ selected t = selected s ∧ ns.Represents t (selected t).tables
+    | .error _ t => selected t = selected s ∧ ns.Represents t (selected t).tables := by
+  apply get_refines_from (fun s => ns.Represents s (selected s).tables) _ s catalog session installed key
+  intro before id key rows ready bound
+  rw [r.lookup]
+  have frame t (valid : r.valid before t) := r.frame before t valid
+  have boundAt t (valid : r.valid before t) : (ns.readWorld (r.advance before)).Bound t id rows :=
+    ready.frame (frame t valid).2 id rows bound
+  have post := (NativeRead.table (r.primitive before) boundAt key (r.world before) (r.entered before)).2
+  have after t (valid : r.valid before t) :
+      selected (r.advance before t) = selected before ∧
+        ns.Represents (r.advance before t) (selected (r.advance before t)).tables :=
+    ⟨(frame t valid).1, (frame t valid).1.symm ▸ ready.frame (frame t valid).2⟩
+  change (match (nativeTableAt ns.directory id (·.lookup key)).run (r.world before) with
+    | .ok (.ok x) t => _ ∧ x = _ | .ok (.error _) t | .error _ t => _) at post
+  cases ran : (nativeTableAt ns.directory id (·.lookup key)).run (r.world before) with
+  | error e t =>
+    rw [ran] at post
+    simpa only [NativeTableReads.call, ran] using after t post
+  | ok reply t =>
+    rw [ran] at post
+    cases reply with
+    | error e => simpa only [NativeTableReads.call, ran] using after t post
+    | ok x => simpa only [NativeTableReads.call, ran] using And.intro post.2 (after t post.1)
+
 /-- Connect the reached flush creation to the component restart choice.
 The manifest is interpreted from the reached publication, while WAL and
 catalog correspond to the state whose parent-directory sync succeeded. -/
 theorem recoverReachedFlush {tableId : UInt64}
     {ops : Components (StorageM σ)} {selected : σ → Selected} {ns : TableNamespace σ}
     (evidence : NativeBridge.CallbackEvidence ops selected ns)
+    (lookup : RestartLookup ops.tables selected ns life)
     (prior : Execution.Run events (some session) (selected start))
     (observation : FlushObservation (flush ops session start))
     (uncertain : observation.event = .flushUncertain)
@@ -407,9 +458,8 @@ theorem recoverReachedFlush {tableId : UInt64}
     (congrArg Selected.tables secondOpened.1).trans secondBootCatalog
   have reachedCatalog : ns.Represents finalState (selected finalState).tables :=
     finalCatalog.symm ▸ catalog
-  obtain ⟨reads⟩ := evidence.reads
   refine ⟨?_, version, observed, openedAgain.1, exactFirst, exactSecond, pinned, ⟨durable⟩,
-    reachedCatalog, (fun _ installed key => reads.get reachedCatalog installed key), trace⟩
+    reachedCatalog, (fun _ installed key => lookup.get reachedCatalog installed key), trace⟩
   simp only [flush, nonempty, Bool.false_eq_true, ite_false, Bind.bind, EStateM.bind,
     scanned, fits, ite_true, created]
   split <;> (rename_i issued; rw [issued] <;> rfl)

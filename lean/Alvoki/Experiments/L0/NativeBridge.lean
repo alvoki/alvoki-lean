@@ -198,8 +198,8 @@ theorem TableCreationEvidence.effect {create : Rows → StorageM σ UInt64} (e :
 
 /-- Local evidence for reached callbacks. Manifest effects are derived from the shared schedule and primitive
 reports. WAL effects are obtained from component traces. Table creation carries the
-namespace durability and isolation conditions; a read carries the exact
-built image served by its descriptor. State indices identify the reached
+namespace durability and isolation conditions. Table checks preserve the
+selected image for recovery. State indices identify the reached
 phase. Relating the reported callbacks to native IO remains a premise. -/
 structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → Selected)
     (namespaceState : TableNamespace σ) : Prop where
@@ -213,7 +213,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (.ready (selected s).version) (.online (selected after).view) (.ready (selected after).version) ∧
           (selected after).tables = (selected s).tables)
   create : Nonempty (TableCreationEvidence ops.tables.create selected namespaceState)
-  reads : Nonempty (NativeTableReads.Interpretation ops.tables selected namespaceState)
+  checks : Nonempty (NativeTableReads.Interpretation ops.tables selected namespaceState)
 
 private theorem selected_eq {a b : Selected}
     (view : a.view = b.view) (version : a.version = b.version) (tables : a.tables = b.tables) :
@@ -251,7 +251,7 @@ theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected names
     obtain ⟨manifest⟩ := evidence.manifest
     exact manifest.publishEffect s proposal valid
   check s id := by
-    obtain ⟨reads⟩ := evidence.reads
+    obtain ⟨reads⟩ := evidence.checks
     exact reads.checkEffect s id
 
 /-- WAL mutation uses the supplied namespace frames on the reached scan

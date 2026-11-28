@@ -396,7 +396,7 @@ theorem flush_offline
 
 theorem get_online
     (prior : Execution.Run events (some session) (selected before))
-    (reads : NativeTableReads.Interpretation (ops).tables (selected ∘ Prod.snd) tns)
+    (reads : RestartLookup (ops).tables (selected ∘ Prod.snd) tns life)
     (catalog : namespaceState.Represents before (selected before).tables)
     (ran : get ops session key (.online handle session, before) =
       .ok value after) (invalid : String) :
@@ -422,7 +422,7 @@ theorem get_online
 
 theorem get_online_error
     (prior : Execution.Run events (some session) (selected before))
-    (reads : NativeTableReads.Interpretation (ops).tables (selected ∘ Prod.snd) tns)
+    (reads : RestartLookup (ops).tables (selected ∘ Prod.snd) tns life)
     (catalog : namespaceState.Represents before (selected before).tables)
     (ran : get ops session key (.online handle session, before) =
       .error error after) (invalid : String) :
@@ -456,7 +456,7 @@ private def readSequence [Monad m] [MonadExceptOf String m]
 remain in the returned list and do not add a successful client event. -/
 theorem getList_online
     (keys : List UInt64) (handle : W)
-    (tableReads : NativeTableReads.Interpretation (ops).tables (selected ∘ Prod.snd) tns)
+    (tableReads : RestartLookup (ops).tables (selected ∘ Prod.snd) tns life)
     (invalid : String)
     (prior : Execution.Run events (some session) (selected before))
     (catalog : namespaceState.Represents before (selected before).tables) :
@@ -494,6 +494,7 @@ share one client trace. The scope result may report a cleanup error. -/
 theorem getScope_refines
     (keys : List UInt64)
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
+    (tableReads : RestartLookup (ops).tables (selected ∘ Prod.snd) tns life)
     (invalid : String) (closeWal : W → StorageM (Phase W × S) Unit)
     (unlock : StorageM (Phase W × S) Unit)
     (prior : Execution.Run events none (selected before))
@@ -513,7 +514,6 @@ theorem getScope_refines
         Execution.Represents none (selected after) state := by
   dsimp only
   have reopened := Execution.Run.recoverOk (s := (.opening, before)) prior evidence.effects ran
-  obtain ⟨tableReads⟩ := evidence.reads
   obtain ⟨results, after, reads, trace, kept⟩ := getList_online keys handle tableReads invalid reopened catalog
   let use := readSequence (Cell.get stateCell invalid ops) keys
   have closed := successful_recovery_cleanup (recover ops) use invalid closeWal unlock handle session

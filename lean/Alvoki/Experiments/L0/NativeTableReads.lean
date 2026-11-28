@@ -28,31 +28,15 @@ def AcquiredSource (guarantee : IO.FS.Handle → ByteArray → Prop)
       guarantee handle bytes
 
 abbrev HealthySource {σ : Type} := AcquiredSource (σ := σ) nativeReadPrimitives.ReadsExactly
-/-- Local descriptor contract. A successful acquisition binds the protected
-name and supplies byte correctness on successful reads of that inode. -/
-def LookupPrimitives (ns : TableNamespace σ) (world : σ → Void IO.RealWorld) : Prop :=
-  ∀ s id metadata checked handle entered,
-    (nativeTableStat (tablePath ns.directory id)).run (world s) = .ok (.ok metadata) checked →
-    isTableFile metadata = true →
-    IO.FS.Handle.mk (tablePath ns.directory id) .read checked = .ok handle entered →
-    ∃ inodeAt : IO.FS.Handle → Option ns.inode,
-      inodeAt handle = ns.names s (tablePath ns.directory id) ∧
-      ∀ identity bytes, inodeAt handle = some identity → ns.contents s identity = some bytes →
-        Unified.ReadSafety (handleSource handle) bytes
-
-/-- Both table callbacks evaluate the native scope once. The carrier
-update accounts only for the reached IO world. -/
+/-- The healthy-recovery interpreter evaluates the native table check. -/
 structure Interpretation (ops : Tables (StorageM σ)) (selected : σ → Selected)
     (ns : TableNamespace σ) where
   world : σ → Void IO.RealWorld
   advance : σ → Void IO.RealWorld → σ
   checkSchedule : ∀ id, ops.check id =
     call world advance (nativeTableAt ns.directory id (fun _ => pure ()))
-  lookupSchedule : ∀ id key, ops.lookup id key =
-    call world advance (nativeTableAt ns.directory id (·.lookup key))
   readFrame : ∀ s reached, selected (advance s reached) = selected s ∧
     ns.Keeps s (advance s reached) (selected s).tables
-  lookupPrimitives : LookupPrimitives ns world
 
 /-- On the product carrier, read steps preserve the durable table namespace
 and selected image by construction. -/
@@ -62,25 +46,17 @@ theorem productFrame (ns : TableNamespace σ) (selected : σ → Selected)
       ns.storage.Keeps s (reached, s.2) (selected s.2).tables :=
   ⟨rfl, fun _ _ _ _ _ name content => ⟨name, content⟩⟩
 
-def productTables (ns : TableNamespace σ)
-    (create : Rows → StorageM (Void IO.RealWorld × σ) UInt64) :
-    Tables (StorageM (Void IO.RealWorld × σ)) where
-  create
-  check id := call Prod.fst (fun s reached => (reached, s.2))
-    (nativeTableAt ns.directory id (fun _ => pure ()))
-  lookup id key := call Prod.fst (fun s reached => (reached, s.2))
-    (nativeTableAt ns.directory id (·.lookup key))
-
+/-- Interpret the recovery check on the old storage carrier. Read callbacks
+on public handles are verified through NativeRead. -/
 def product (ns : TableNamespace σ) (selected : σ → Selected)
-    (create : Rows → StorageM (Void IO.RealWorld × σ) UInt64)
-    (primitives : LookupPrimitives ns.storage Prod.fst) :
-    Interpretation (productTables ns create) (selected ∘ Prod.snd) ns.storage where
+    (ops : Tables (StorageM (Void IO.RealWorld × σ)))
+    (schedule : ∀ id, ops.check id = call Prod.fst (fun s reached => (reached, s.2))
+      (nativeTableAt ns.directory id (fun _ => pure ()))) :
+    Interpretation ops (selected ∘ Prod.snd) ns.storage where
   world := Prod.fst
   advance s reached := (reached, s.2)
-  checkSchedule _ := rfl
-  lookupSchedule _ _ := rfl
+  checkSchedule := schedule
   readFrame := productFrame ns selected
-  lookupPrimitives := primitives
 
 variable {σ : Type} {ops : Tables (StorageM σ)} {selected : σ → Selected} {ns : TableNamespace σ}
 
@@ -100,46 +76,5 @@ theorem Interpretation.checkHealthy {id : UInt64} (i : Interpretation ops select
   obtain ⟨handle, inodeAt, _, entered, _, stat, regular, acquired, picked, reads⟩ := healthy
   have ran := ns.scopedCheck bound handle stat regular acquired inodeAt picked reads
   exact ⟨i.advance s entered, by simp [i.checkSchedule, call, ran], (i.readFrame s entered).2⟩
-
-theorem Interpretation.lookupEffect (i : Interpretation ops selected ns)
-    (catalog : ns.Represents s (selected s).tables) (id key : UInt64)
-    (bound : (selected s).tables id = some rows) :
-    match ops.lookup id key s with
-    | .ok result after => result = lookupRows rows key ∧ selected after = selected s ∧
-        ns.Represents after (selected after).tables
-    | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables := by
-  rw [i.lookupSchedule]
-  cases ran : (nativeTableAt ns.directory id (·.lookup key)).run (i.world s) with
-  | error error reached =>
-    obtain ⟨frame, keeps⟩ := i.readFrame s reached
-    have kept : ns.Represents (i.advance s reached) (selected (i.advance s reached)).tables :=
-      frame.symm ▸ catalog.frame keeps
-    simpa [call, ran] using And.intro frame kept
-  | ok response reached =>
-    obtain ⟨frame, keeps⟩ := i.readFrame s reached
-    have kept : ns.Represents (i.advance s reached) (selected (i.advance s reached)).tables :=
-      frame.symm ▸ catalog.frame keeps
-    cases response with
-    | error error => simpa [call, ran] using And.intro frame kept
-    | ok value =>
-      obtain ⟨metadata, checked, handle, entered, stat, regular, acquired⟩ := nativeTableAt_success ran
-      obtain ⟨inodeAt, picked, reads⟩ :=
-        i.lookupPrimitives s id metadata checked handle entered stat regular acquired
-      have same := ns.scopedLookup (catalog id rows bound) handle key stat regular acquired
-        inodeAt picked reads ran
-      simpa [call, ran] using And.intro same (And.intro frame kept)
-
-/-- Get needs only the reached lookup effects and the durable catalog. -/
-theorem Interpretation.get {components : Components (StorageM σ)}
-    (reads : Interpretation components.tables selected ns)
-    (catalog : ns.Represents s (selected s).tables)
-    (prior : Installed session (selected s) history) (key : UInt64) :
-    match ExperimentalL0.get components session key s with
-    | .ok value after => value = denote history key ∧ selected after = selected s ∧
-        ns.Represents after (selected after).tables
-    | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables :=
-  get_refines_from (fun s => ns.Represents s (selected s).tables)
-    (fun _ id key _ ready binding => reads.lookupEffect ready id key binding)
-    s catalog session prior key
 
 end ExperimentalL0.NativeTableReads
