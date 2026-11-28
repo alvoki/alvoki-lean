@@ -221,4 +221,39 @@ theorem checkedTypedLookup_success (safety : ReadSafety source image)
   rw [ran] at post
   exact post.2
 
+/-- The table returned by the actual checked open has a fallible indexed
+cursor. A successful call returns the exact row or logical EOF. All returned
+outcomes preserve the caller's chosen frame, including a failed packet
+read or decode. The caller may strengthen the frame during later use. -/
+theorem Image.checkedOpenTable_next_scoped
+    (built : Image crc layout rows image) (opening : ScopedRead P source image) :
+    ReadPost P (fun table : Table Native =>
+      ∀ Q, ScopedRead Q source image →
+        ∀ index, ReadPost Q (· = Contents.next rows index) (table.next index))
+      (openTableChecked source crc layout.tableId) := by
+  have served : (ReadSafety.reference image).Serves image := ⟨rfl, fun _ _ _ _ => rfl⟩
+  obtain ⟨reference, opened, observed⟩ := built.open_observed served
+  intro start frame
+  have handoff := open_sim (crc := crc) (tableId := layout.tableId) opening start frame
+  cases ran : openChecked source crc layout.tableId start with
+  | error error reached =>
+    simpa [openTableChecked, Bind.bind, instMonadEIO._aux_13, EST.bind, ran] using handoff
+  | ok handle reached =>
+    rw [ran] at handoff
+    obtain ⟨kept, other, openedOther, same⟩ := handoff
+    rw [opened] at openedOther
+    cases openedOther
+    simp only [openTableChecked, Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+    refine ⟨kept, ?_⟩
+    intro Q reads index before valid
+    have cursor := ReaderRelation.next_sim (rules Q) same reads.steps index before valid
+    simp only [Handle.table]
+    rw [reference.next_observed observed] at cursor
+    cases pulled : handle.next index before with
+    | error error after => simpa only [pulled] using cursor
+    | ok result after =>
+      rw [pulled] at cursor
+      obtain ⟨held, value, exactResult, rfl⟩ := cursor
+      exact ⟨held, (EStateM.Result.ok.inj exactResult).1.symm⟩
+
 end ImmutableSSTable.Unified

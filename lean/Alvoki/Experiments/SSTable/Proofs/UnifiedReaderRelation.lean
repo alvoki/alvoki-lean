@@ -107,57 +107,92 @@ private theorem seek_sim (data : Data) (key : ByteArray) (lo hi : Nat) :
 termination_by hi - lo
 decreasing_by all_goals omega
 
+private theorem leaf_sim {a : Handle Native} {b : Handle Reference}
+    (same : SameHandle a b source model)
+    (h : SourceSteps R source model) (parent : Ref) :
+    R.Rel (a.readLeaf parent) (b.readLeaf parent) Eq := by
+  obtain ⟨_, layout, _, crc, left, right⟩ := same
+  unfold Handle.readLeaf
+  rw [left, right, crc, layout]
+  apply R.bind (packet_sim R h)
+  intro raw expected equal
+  subst expected
+  apply R.bind (decode R _)
+  intro refs expected equal
+  subst expected
+  apply R.bind (decode R _)
+  intro _ _ _
+  split
+  · exact R.pure rfl
+  · exact R.bind (rel := fun _ _ => False) R.throw (fun _ _ impossible => False.elim impossible)
+
+private theorem data_sim {a : Handle Native} {b : Handle Reference}
+    (same : SameHandle a b source model)
+    (h : SourceSteps R source model) (ref : Ref) :
+    R.Rel (a.readData ref) (b.readData ref) Eq := by
+  obtain ⟨_, layout, _, crc, left, right⟩ := same
+  unfold Handle.readData
+  rw [left, right, crc, layout]
+  apply R.bind (packet_sim R h)
+  intro raw expected equal
+  subst expected
+  apply R.bind (decode R _)
+  intro data expected equal
+  subst expected
+  apply R.bind (decode R _)
+  intro row expected equal
+  subst expected
+  split
+  · exact R.pure rfl
+  · exact R.bind (rel := fun _ _ => False) R.throw (fun _ _ impossible => False.elim impossible)
+
+theorem next_sim {a : Handle Native} {b : Handle Reference}
+    (same : SameHandle a b source model)
+    (h : SourceSteps R source model) (index : Nat) :
+    R.Rel (a.next index) (b.next index) Eq := by
+  unfold Handle.next
+  rw [same.1, same.2.2.1]
+  split
+  · exact R.pure rfl
+  · dsimp only
+    split
+    · apply R.bind (leaf_sim R same h _)
+      intro refs expected equal
+      subst expected
+      split
+      · apply R.bind (data_sim R same h _)
+        intro data expected equal
+        subst expected
+        apply R.bind (decode R _)
+        intro row expected equal
+        subst expected
+        exact R.pure rfl
+      · exact R.throw
+    · exact R.throw
+
 private theorem locate_sim {a : Handle (Native)} {b : Handle (Reference)}
     (same : SameHandle a b source model) (h : SourceSteps R source model) (key : ByteArray) :
     R.Rel (a.locate key) (b.locate key) Eq := by
-  obtain ⟨_, layout, root, crc, left, right⟩ := same
   unfold Handle.locate
-  rw [root]
+  rw [same.2.2.1]
   dsimp only
   split
   · rename_i parent _
-    unfold Handle.readLeaf
-    rw [left, right, crc, layout]
-    apply R.bind
-    · apply R.bind (packet_sim R h)
-      intro raw expected equal
+    apply R.bind (leaf_sim R same h parent)
+    intro refs expected equal
+    subst expected
+    split
+    · rename_i ref _
+      apply R.bind (data_sim R same h ref)
+      intro data expected equal
       subst expected
-      apply R.bind (decode R _)
-      intro refs expected equal
+      apply R.bind (seek_sim R data key 0 ref.count)
+      intro index expected equal
       subst expected
-      apply R.bind (decode R _)
-      intro _ _ _
       split
       · exact R.pure rfl
       · exact R.bind (rel := fun _ _ => False) R.throw (fun _ _ impossible => False.elim impossible)
-    · intro refs expected equal
-      subst expected
-      split
-      · rename_i ref _
-        unfold Handle.readData
-        rw [left, right, crc, layout]
-        apply R.bind
-        · apply R.bind (packet_sim R h)
-          intro raw expected equal
-          subst expected
-          apply R.bind (decode R _)
-          intro data expected equal
-          subst expected
-          apply R.bind (decode R _)
-          intro row expected equal
-          subst expected
-          split
-          · exact R.pure rfl
-          · exact R.bind (rel := fun _ _ => False) R.throw (fun _ _ impossible => False.elim impossible)
-        · intro data expected equal
-          subst expected
-          apply R.bind (seek_sim R data key 0 ref.count)
-          intro index expected equal
-          subst expected
-          split
-          · exact R.pure rfl
-          · exact R.bind (rel := fun _ _ => False) R.throw (fun _ _ impossible => False.elim impossible)
-      · exact R.throw
+    · exact R.throw
   · exact R.pure rfl
 
 theorem lookup_sim {a : Handle (Native)} {b : Handle (Reference)}
