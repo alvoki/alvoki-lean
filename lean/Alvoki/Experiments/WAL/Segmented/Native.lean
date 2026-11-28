@@ -474,6 +474,27 @@ structure Registration where
   store : Store
   child : SingleFile.Handle
 
+/-- A fresh descriptor of this directory's lock file granted the lock on
+the world returned by its open. -/
+def RootLockFrom (dir : FilePath) (fd : IO.FS.Handle) (start : Void IO.RealWorld) : Prop :=
+  ∃ opened granted, IO.FS.Handle.mk (dir / "lock") .append start = .ok fd opened ∧
+    fd.tryLock true opened = .ok true granted
+
+def RootLockAt (dir : FilePath) (fd : IO.FS.Handle) : Prop := ∃ start, RootLockFrom dir fd start
+
+/-- Both observations start at the same public child open. The first lock
+pathname, acquired descriptor and returned handle therefore share one call. -/
+def ChildLockAt (dir : FilePath) (child : SingleFile.Handle) (fd : IO.FS.Handle) : Prop :=
+  ∃ start finish, SingleFile.openExisting dir start = .ok child finish ∧ RootLockFrom dir fd start
+
+theorem ChildLockAt.root (held : ChildLockAt dir child fd) : RootLockAt dir fd := by
+  obtain ⟨w, _, _, issued⟩ := held
+  exact ⟨w, issued⟩
+
+def LocksFrom (reg : Registration) : Prop :=
+  RootLockAt reg.store.root reg.store.lock ∧
+    ∃ fd, ChildLockAt (segmentPath reg.store.root reg.session.control.active) reg.child fd
+
 def PhaseMemory.Registered (heap : PhaseMemory) (handle : Handle) (reg : Registration)
     (w : Void IO.RealWorld) : Prop :=
   heap.separate handle.state reg.store.active ∧ heap.holds handle.state (.ready reg.store reg.session) w ∧
