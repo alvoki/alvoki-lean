@@ -32,6 +32,14 @@ theorem At.bind {a : IO α} {b : M σ β} {f : α → IO γ} {g : β → M σ δ
     | ok => contradiction
   all_goals contradiction
 
+theorem At.trace {a : IO α} {b : M σ β} (h : At a b w s ok fail) :
+    At a b w s (fun x y t u => ok x y t u ∧ a w = .ok x t ∧ b.run s = .ok (.ok y) u) fail := by
+  unfold At at *
+  cases ha : a w <;> cases hb : b.run s <;> simp only [ha, hb] at h ⊢
+  case ok.ok x t y u => cases y <;> first | contradiction | exact ⟨h, rfl, rfl⟩
+  case error.ok x t y u => cases y <;> first | contradiction | exact h
+  all_goals contradiction
+
 theorem At.map {a : IO α} {b : M σ β} {ok ok' : α → β → W → σ → Prop}
     {failed failed' : W → σ → Prop} (step : At a b w s ok failed)
     (success : ∀ x y t u, ok x y t u → ok' x y t u)

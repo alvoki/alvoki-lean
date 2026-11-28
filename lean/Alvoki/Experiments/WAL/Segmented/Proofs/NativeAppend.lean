@@ -22,7 +22,7 @@ def writeActive (policy : Policy) (id : Nat)
   | .ok (.error err) child => .ok (.error err) (update child (s.1.disk.cursor id))
   | .error token child => .error token (update child (s.1.disk.cursor id))
 
-private theorem writeActive_success_active (policy : Policy) (id : Nat)
+theorem writeActive_success_active (policy : Policy) (id : Nat)
     (reports : ∀ cursor, SingleFile.AppendReports policy cursor batch)
     {before after : State × SingleFile.AppendPhase}
     (ran : (writeActive policy id reports).run before = .ok (.ok ()) after) :
