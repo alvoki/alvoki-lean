@@ -108,6 +108,7 @@ def Effects.appendRun (effects : Effects) (clock id : Nat) (policy : Policy) (cu
 structure State where
   disk : Disk := {}
   step : Nat := 0
+  activeEntry : Option Nat := none
 
 abbrev M := ExceptT String (EStateM Unit State)
 abbrev Result (α : Type) := EStateM.Result Unit State (Except String α)

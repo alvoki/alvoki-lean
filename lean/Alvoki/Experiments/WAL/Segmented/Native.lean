@@ -128,10 +128,14 @@ interrupted rotation. Creation and the returned child use the same path. -/
 private def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle :=
   prepareChildWith (removeSegment s.root) IO.FS.createDir SingleFile.create s.root p id
 
+@[inline] def registerPreparedWith [Monad m] (prepare : m child)
+    (register : (Nat × child) → m Unit) (id : Nat) : m Unit := do
+  let child ← prepare
+  register (id, child)
+
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   s.closeChild
-  let child ← s.prepareChild p id
-  s.active.set (some (id, child))
+  registerPreparedWith (s.prepareChild p id) (fun entry => s.active.set (some entry)) id
 
 def requiredChildNames (p : Policy) : List String :=
   if p == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]

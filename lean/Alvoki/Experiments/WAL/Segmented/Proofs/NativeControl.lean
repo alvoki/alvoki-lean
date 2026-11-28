@@ -69,10 +69,73 @@ theorem nativeControl_cuts (root : FilePath) (held : Nat) (r : Effects) (c : Con
   rw [nativeControl_run root held r c active discarded]
   exact publish_cases r c before
 
+private def FramesEntry (action : M α) : Prop :=
+  ∀ s, (reached (action.run s)).activeEntry = s.activeEntry
+
+private theorem framesEntry_bind {a : M α} {b : α → M β}
+    (first : FramesEntry a) (next : ∀ value, FramesEntry (b value)) : FramesEntry (a >>= b) := by
+  intro s
+  have same := first s
+  simp only [ExceptT.run, ExceptT.bind, Bind.bind, ExceptT.mk, EStateM.bind] at same ⊢
+  cases ran : a s with
+  | error => rw [ran] at same; exact same
+  | ok reply after =>
+    rw [ran] at same
+    cases reply with
+    | error => exact same
+    | ok value => exact (next value after).trans same
+
+private theorem namespace_framesEntry (effect : NamespaceEffect) (changeDisk : Disk → Bool → Disk)
+    (s : State) : (reached (namespaceChange effect changeDisk s)).activeEntry = s.activeEntry := by
+  cases effect with
+  | before fault => cases fault <;> rfl
+  | after _ stop =>
+    cases stop with
+    | none => rfl
+    | some fault => cases fault <;> rfl
+
+private theorem barrier_framesEntry (effect : Primitive) (changeDisk : Disk → Disk) (s : State) :
+    (reached (barrier effect changeDisk s)).activeEntry = s.activeEntry := by
+  cases effect with
+  | before fault => cases fault <;> rfl
+  | after stop =>
+    cases stop with
+    | none => rfl
+    | some fault => cases fault <;> rfl
+
+/-- A successful publication changes the filesystem but not the root's
+active-entry reference. -/
+theorem nativeControl_slot (root : FilePath) (held : Nat) (r : Effects)
+    (c : Control) (active : c.active ≤ ControlCodec.wordMax)
+    (discarded : c.discarded ≤ ControlCodec.wordMax) (s : State)
+    (ran : (Segmented.publish (nativeControlOps root held r) c).run s = .ok (.ok ()) after) :
+    after.activeEntry = s.activeEntry := by
+  rw [nativeControl_run root held r c active discarded] at ran
+  have frames : FramesEntry (Segmented.publish (ops r) c) := by
+    change FramesEntry (DurableBlob.publishWith _ _ _ _ : M Unit)
+    unfold DurableBlob.publishWith
+    apply framesEntry_bind
+    · intro state; exact namespace_framesEntry (r.stage state.step) (fun d p => d.stage c p) state
+    intro _
+    apply framesEntry_bind
+    · intro state; exact barrier_framesEntry (r.syncControl state.step) Disk.syncStage state
+    intro _
+    apply framesEntry_bind
+    · intro s
+      dsimp only [ExceptT.run]
+      cases s.disk.staged with
+      | none => rfl
+      | some control => exact namespace_framesEntry (r.rename s.step) (fun d p => d.rename control p) s
+    · intro _ s
+      exact barrier_framesEntry (r.root s.step) Disk.syncRoot s
+  have frame := frames s
+  rw [ran] at frame
+  exact frame
+
 theorem nativeControl_healthy (root : FilePath) (held : Nat) (c : Control) (s : State)
     (active : c.active ≤ ControlCodec.wordMax) (discarded : c.discarded ≤ ControlCodec.wordMax) :
     (Segmented.publish (nativeControlOps root held healthy) c).run s =
-      .ok (.ok ()) {disk := s.disk.published c, step := s.step + 4} := by
+      .ok (.ok ()) {s with disk := s.disk.published c, step := s.step + 4} := by
   rw [nativeControl_run root held healthy c active discarded]
   rfl
 
