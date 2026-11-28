@@ -199,6 +199,41 @@ structure PublishFrames {disk : W → WalRecoverySlice.Segmented.Model.Disk} (me
         reg.session.control.active reg.session.control.policy reg.child) phase,
       a.Live t phase → a.Live u phase
 
+abbrev KeepsLive {disk : W → WalRecoverySlice.Segmented.Model.Disk} (mem : ChildMemory disk)
+    (reg : Registration) (w t : W) : Prop :=
+  ∀ (a : ChildAuthority mem (segmentPath reg.store.root reg.session.control.active)
+      reg.session.control.active reg.session.control.policy reg.child) phase, a.Live w phase → a.Live t phase
+
+theorem advanceActive {disk : W → WalRecoverySlice.Segmented.Model.Disk} {mem : ChildMemory disk}
+    (active : Active mem heap wal reg w) (registered : heap.Registered wal reg t)
+    (storage : WalRecoverySlice.Segmented.Writebacks (disk w) (disk t))
+    (kept : KeepsLive mem reg w t) : Active mem heap wal reg t := by
+  obtain ⟨rootBound, _, a, childPhase, live, history, eq, layout, lc, dc, bound⟩ := active
+  have afterLayout := storage.readyLayout layout
+  refine ⟨rootBound, registered, a, childPhase, kept a _ live, history, eq, afterLayout,
+    storage.live.trans lc, storage.durable.trans dc, ?_⟩
+  change childPhase = .active _ _ ((disk t).cursor reg.session.control.active) _
+  rw [afterLayout.active.position, ← layout.active.position]
+  exact bound
+
+/-- Success publishes the new session and preserves the exact new
+registration and reusable append authority, including a rotation successor. -/
+theorem publishActive {mem : ChildMemory (fun t => (physical t).disk)}
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (cached : NativeRecoverAt.Cached heap physical root lock ref)
+    (held : NativeRecoverAt.Held physical root lock ref image (.updating wal) w)
+    (active : Active mem heap wal reg w) (next : Session)
+    (frames : PublishFrames mem ref wal reg w next) :
+    ∃ u, NativeWrite.afterWrite ref (.ok next w) = .ok () u ∧
+      NativeRecoverAt.Held physical root lock ref image (.online wal next) u ∧ Active mem heap wal reg u ∧
+      WalRecoverySlice.Segmented.Writebacks (physical w).disk (physical u).disk := by
+  obtain ⟨t,u,readAt,swapAt,read,swapped,published,returned⟩ := NativeWrite.afterWrite_publish held phase next
+  have pinned := (cached _ held.owned wal reg).mpr active.2.1
+  have final := (cached u published.owned wal reg).mp (swapped.child.trans (read.child.trans pinned))
+  have storage := read.disk.trans swapped.disk
+  exact ⟨u, returned, published, advanceActive active final storage
+    (fun a stage live => frames.swap _ _ readAt swapAt a stage (frames.read _ readAt a stage live)), storage⟩
+
 /-- Success publishes the new session and preserves the exact new
 registration and reusable append authority, including a rotation successor. -/
 theorem afterSuccess {mem : ChildMemory (fun t => (physical t).disk)}
@@ -210,18 +245,8 @@ theorem afterSuccess {mem : ChildMemory (fun t => (physical t).disk)}
     (frames : PublishFrames mem ref wal reg w next) :
     ∃ u, NativeWrite.afterWrite ref (.ok next w) = .ok () u ∧
       Held pending physical root lock ref image (.online wal next) u ∧ Active mem heap wal reg u := by
-  obtain ⟨t,u,readAt,swapAt,read,swapped,published,returned⟩ := NativeWrite.afterWrite_publish held phase next
-  obtain ⟨rootBound, ready, a, childPhase, live, history, eq, layout, lc, dc, bound⟩ := active
-  have pinned := (cached _ held.owned wal reg).mpr ready
-  have final := (cached u published.owned wal reg).mp (swapped.child.trans (read.child.trans pinned))
-  have storage := read.disk.trans swapped.disk
-  have afterLayout := storage.readyLayout layout
-  refine ⟨u, returned, Held.ofRecover published (storage.recoverable disk), rootBound, final, a, childPhase,
-    frames.swap t u readAt swapAt a _ (frames.read t readAt a _ live), history, eq, afterLayout,
-    storage.live.trans lc, storage.durable.trans dc, ?_⟩
-  change childPhase = .active _ _ ((physical u).disk.cursor reg.session.control.active) _
-  rw [afterLayout.active.position, ← layout.active.position]
-  exact bound
+  obtain ⟨u, ran, published, kept, storage⟩ := publishActive phase cached held active next frames
+  exact ⟨u, ran, Held.ofRecover published (storage.recoverable disk), kept⟩
 
 /-- With an attached WAL the outer release takes the registered slot
 before unlocking the L0 root. The first reported cleanup error wins. -/

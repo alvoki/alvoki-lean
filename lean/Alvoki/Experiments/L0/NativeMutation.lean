@@ -32,7 +32,7 @@ def AppendPrimitives {physical : W → Footprint inode} {heap : PhaseMemory}
 
 theorem atIssue {physical : W → Footprint inode}
     (ops : WithOpenReads.Runtime physical root lock ref image life heap)
-    (entered : SessionAt physical root lock ref wal session image history issued (.updating wal)) :
+    (entered : SessionAt physical root lock ref wal session image history issued stage) :
     ∃ reg : Registration, ∃ path : reg.store.root = ops.wal.acquire.canonical,
       (physical issued).readyWal wal = some reg ∧ reg.session.view = image.view ∧
       Active (ops.wal.worker reg.store path).children.memory heap wal reg issued := by
