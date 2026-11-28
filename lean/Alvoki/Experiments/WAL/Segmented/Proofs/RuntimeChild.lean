@@ -175,7 +175,7 @@ structure ChildAttempt (s : Store) (disk : W → Disk) (Q : W → Prop) (mem : C
   reports : OpenReports
   state : W → OpenImage → Prop
   steps : OpenSteps (segmentPath s.root id) p reports state (mem.bound id) w
-  recovery : WorkerSteps state (mem.bound id) reports
+  recovery : WorkerSteps (segmentPath s.root id) state (mem.bound id) reports w
   runtime : Runtime state
   cell : ∀ t ref phase, runtime.cell t ref phase → mem.cell t ref phase
   mutex : ∀ t m, runtime.mutex t m → mem.mutex t m

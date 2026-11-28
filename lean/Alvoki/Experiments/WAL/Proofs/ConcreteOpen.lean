@@ -192,83 +192,28 @@ private theorem files (steps : OpenSteps dir p r R B origin)
     rintro _ _ _ _ _ _ frame rfl
     exact ⟨frame, st, rfl, hr, hw, ⟨hz, ho⟩, rfl⟩
 
-/-- The fixed report schedule describes only the calls issued to the
-held reader and marker descriptions. Intervening per-file writebacks can be
-selected independently at each primitive in the existing persistence model. -/
-structure WorkerSteps (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop)
-    (r : OpenReports) : Prop where
-  data : ∀ h (base : OpenImage), B h .reader → Sim (fun w i => R w {base with image := i})
-    (nativeRecovery.readFromStart h) ((scheduledOps (ops r.worker) r.writebacks).readData) Eq
-  truncate : ∀ h n (base : OpenImage), B h .reader → Sim (fun w i => R w {base with image := i})
-    (nativeRecovery.truncateAt h n) ((scheduledOps (ops r.worker) r.writebacks).truncate n) Eq
-  syncData : ∀ h (base : OpenImage), B h .reader → Sim (fun w i => R w {base with image := i})
-    (nativeRecovery.sync h) ((scheduledOps (ops r.worker) r.writebacks).syncData) Eq
-  marker : ∀ h slot (base : OpenImage), slot < 2 → B h (if slot = 0 then .marker0 else .marker1) →
-    Sim (fun w i => R w {base with image := i})
-      (nativeRecovery.readFromStart h) ((scheduledOps (ops r.worker) r.writebacks).readMarker slot) Eq
-  syncMarker : ∀ h slot (base : OpenImage), slot < 2 → B h (if slot = 0 then .marker0 else .marker1) →
-    Sim (fun w i => R w {base with image := i})
-      (nativeRecovery.sync h) ((scheduledOps (ops r.worker) r.writebacks).syncMarker slot) Eq
+/-- Each contract observes one instruction in this particular worker's
+issued prefix, starting from its actual acquired descriptions. -/
+structure WorkerSteps (dir : FilePath) (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop)
+    (r : OpenReports) (origin : W) : Prop where
+  issued : ∀ {a b p lock start began base}, Files B p a b → LockedAt dir origin lock start →
+    (openFilesWith nativeOpen dir).run start = .ok (.ok a) began → R began base →
+    RecoveryOps (fun w i => R w {base with image := i}) (recoveryOps nativeRecovery a.reader a.markers)
+      (scheduledOps (ops r.worker) r.writebacks) p began base.image
 
-/-- Only issued primitive obligations appear in the log-only branch. -/
-private theorem logWorker (steps : WorkerSteps R B r) (reader writer : IO.FS.Handle)
-    (held : B reader .reader) (base : OpenImage) :
-    Sim (fun w i => R w {base with image := i}) (recoverNative .logOnly reader writer none)
-      (recoverScheduled r.worker r.writebacks .logOnly) Eq := by
-  rw [recoverScheduled_eq]
-  unfold recoverNative recoverWith WalRecoverySlice.reopen
-  have leftPure {α β : Type} (x : α) (f : α → F β) : (pure x >>= f) = f x := rfl
-  have rightPure {α β : Type} (x : α) (f : α → M β) : (pure x >>= f) = f x := rfl
-  simp only [leftPure, rightPure]
-  dsimp
-  repeat' first
-    | exact Sim.pure rfl
-    | exact Sim.throw
-    | exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ h => h.elim)
-    | apply (steps.data reader base held).bind; intro a b eq; subst b
-    | apply (steps.truncate reader _ base held).bind; intro a b eq; cases a; cases b
-    | apply (steps.syncData reader base held).bind; intro a b eq; cases a; cases b
-    | simp only [leftPure, rightPure]
-    | split
-    | dsimp only
-
-theorem worker (steps : WorkerSteps R B r) (files : Files B p a b) :
-    Sim R (recoverNative a.policy a.reader a.writer a.markers)
-      (workerEffect r b.policy b.reader b.writer b.markers) Eq := by
-  rcases files with ⟨_, pol, reader, _, markers, rfl⟩
+theorem worker (steps : WorkerSteps dir R B r origin) (files : Files B p a b)
+    (locked : LockedAt dir origin lock start) (opened : (openFilesWith nativeOpen dir).run start = .ok (.ok a) w)
+    (pre : R w base) : SimResult R (recoverNative a.policy a.reader a.writer a.markers)
+      (workerEffect r b.policy b.reader b.writer b.markers) Eq w base := by
+  have schedule := steps.issued files locked opened pre
+  obtain ⟨_, pol, _, _, _, rfl⟩ := files
   rw [pol]
-  intro w base pre
-  have run : Sim (fun w i => R w {base with image := i}) (recoverNative p a.reader a.writer a.markers)
-      (recoverScheduled r.worker r.writebacks p) Eq := by
-    cases p with
-    | logOnly =>
-      cases m : a.markers with
-      | none => exact logWorker steps _ _ reader _
-      | some pair => simp [Markers, m] at markers
-    | boundary =>
-      cases m : a.markers with
-      | none => simp [Markers, m] at markers
-      | some pair =>
-        obtain ⟨zero, one⟩ := pair
-        have h : B zero .marker0 ∧ B one .marker1 := by simpa [Markers, m] using markers
-        rw [recoverScheduled_eq]
-        unfold recoverNative recoverWith
-        apply reopen
-        constructor
-        · exact steps.data _ _ reader
-        · intro slot fit
-          by_cases z : slot = 0
-          · subst slot; exact steps.marker zero 0 base fit h.1
-          · have eq : slot = 1 := by omega
-            subst slot; exact steps.marker one 1 base fit h.2
-        · intro n; exact steps.truncate _ n _ reader
-        · exact steps.syncData _ _ reader
-        · intro slot fit
-          by_cases z : slot = 0
-          · subst slot; exact steps.syncMarker zero 0 base fit h.1
-          · have eq : slot = 1 := by omega
-            subst slot; exact steps.syncMarker one 1 base fit h.2
-  have obs := run w base.image pre
+  have obs := reopen schedule pre
+  rw [← recoverScheduled_eq] at obs
+  change At (recoverNative p a.reader a.writer a.markers) (recoverScheduled r.worker r.writebacks p)
+    w base.image _ _ at obs
+  unfold SimResult
+  unfold At at obs
   have lift : (workerEffect r p .reader .writer (markersFor p)).run base =
       match (recoverScheduled r.worker r.writebacks p).run base.image with
       | .ok response image => EStateM.Result.ok response {base with image}
@@ -293,7 +238,7 @@ structure OpenedTogether (B : IO.FS.Handle → OpenTarget → Prop) (p : Policy)
   phase : a.phase = .active a.lock (appendFiles a.writer a.reader a.markers)
     a.recovered.cursor a.recovered.batches
 
-private theorem install (steps : OpenSteps dir p r R B origin) (recovery : WorkerSteps R B r)
+private theorem install (steps : OpenSteps dir p r R B origin) (recovery : WorkerSteps dir R B r origin)
     (lock : B h .lock) (locked : LockedAt dir origin h start) (initial : R start model) :
     SimResult R (installWith nativeOpen recoverNative appendFiles dir h)
       (installWith (openEffects p r) (workerEffect r) appendFiles dir .lock) (OpenedTogether B p) start model := by
@@ -301,7 +246,7 @@ private theorem install (steps : OpenSteps dir p r R B origin) (recovery : Worke
   apply (files steps locked initial).bind
   intro a b began base opened _ frame pair
   have decoded : SimResult R (recoverNative a.policy a.reader a.writer a.markers)
-      (workerEffect r b.policy b.reader b.writer b.markers) Eq began base := worker recovery pair began base frame
+      (workerEffect r b.policy b.reader b.writer b.markers) Eq began base := worker recovery pair locked opened frame
   apply decoded.bind
   rintro decoded _ t u ran _ frame rfl
   have done : WorkerDone dir origin a.stamp t := ⟨h, start, locked, a, began, opened, rfl, decoded, ran⟩
@@ -317,27 +262,6 @@ private theorem install (steps : OpenSteps dir p r R B origin) (recovery : Worke
   apply set.bind
   rintro _ _ _ _ _ _ frame rfl
   exact ⟨frame, lock, reader, writer, markers, policy, rfl, rfl⟩
-
-/-- A pointwise primitive observation with separate continuations for
-returned values and errors. Each refers to both reached states. -/
-def At (a : F α) (b : OpenM β) (w : W) (s : OpenImage)
-    (ok : α → β → W → OpenImage → Prop) (fail : W → OpenImage → Prop) : Prop :=
-  match a.run w, b.run s with
-  | .ok (.ok x) t, .ok (.ok y) u => ok x y t u
-  | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => fail t u
-  | _, _ => False
-
-private theorem At.bind {a : F α} {b : OpenM β} {f : α → F γ} {g : β → OpenM δ}
-    (first : At a b w s mid fail)
-    (next : ∀ x y t u, mid x y t u → At (f x) (g y) t u ok fail) :
-    At (a >>= f) (b >>= g) w s ok fail := by
-  unfold At at *
-  rw [ExceptT.run_bind, ExceptT.run_bind]
-  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, EStateM.bind]
-  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at first ⊢
-  case ok.ok x t y u => cases x <;> cases y <;> first | contradiction | exact first | exact next _ _ _ _ first
-  case error.ok x t y u => cases y <;> first | contradiction | exact first
-  all_goals exact first
 
 private theorem SimResult.atPost {a : F α} {b : OpenM β} (h : SimResult R a b rel w s) : At a b w s (fun x y t u => R t u ∧ rel x y) R := by
   have post := h
@@ -453,7 +377,7 @@ private theorem At.trace {a : F α} {b : OpenM β} (h : At a b w s ok fail) :
   case error.ok x t y u => cases y <;> exact h
   all_goals exact h
 
-private theorem openBody (steps : OpenSteps dir p r R B w) (recovery : WorkerSteps R B r)
+private theorem openBody (steps : OpenSteps dir p r R B w) (recovery : WorkerSteps dir R B r w)
     (rt : Runtime R) (edge : Boundaries dir p r R B rt w initial phys) :
     At (openExistingWith nativeOpen (fun action => (checked action).toBaseIO)
       (fun err => liftM (throw err : IO Handle)) recoverNative appendFiles
@@ -497,7 +421,7 @@ private theorem openBody (steps : OpenSteps dir p r R B w) (recovery : WorkerSte
   all_goals exact False.elim pair
 
 theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps dir p r R B w)
-    (recovery : WorkerSteps R B r) (rt : Runtime R) (initial : OpenImage)
+    (recovery : WorkerSteps dir R B r w) (rt : Runtime R) (initial : OpenImage)
     (edge : Boundaries dir p r R B rt w initial physical) :
     match SingleFile.openExisting dir w, openExistingModel dir p r initial with
     | .ok h t, .ok (.ok ready) u => physical t u ∧ Owns rt B p t h ready
