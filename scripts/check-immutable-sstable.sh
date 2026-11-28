@@ -53,6 +53,7 @@ import Alvoki.Experiments.SSTable.Proofs.Typed
 open ImmutableSSTable
 #check_axioms Alvoki.lowerBound_partition
 #check_axioms Alvoki.pushWordFast_roundtrip
+#check_axioms Alvoki.splitByte_joinBytes
 #check_axioms Unified.buildFileWith_refines
 #check_axioms Unified.buildFileWith_syncError
 #check_axioms Unified.buildFileWith_open_represents
