@@ -101,6 +101,10 @@ state, bytes and locks.
 
 ## Acceptance gate and producer migration
 
+The next checkpoint records separate benchmark review, the Linux-read
+prerequisite and the producer reuse audit against Astra’s pinned
+milestone 2 candidate. [Milestone 2 checkpoint](wal-compact-milestone-2.md)
+
 General segmented compact recovery refinement is still open. The
 segmented producer still needs to instantiate the root and child
 reports and compose their reached outcomes with outer installation.

@@ -385,6 +385,11 @@ private def Store.recoverFold (s : Store) (seed : α) (step : Option (α → Nat
     (fun c id acc => s.openChildFold c id acc step) SingleFile.close
     (fun c => checked (collect s.callbacks c)) (fun id child => s.active.set (some (id, child))) seed
 
+@[inline] def loadCompactReadyWith [Monad m]
+    (owned : store) (recover : m (CompactSession × α)) : m (Phase store CompactSession × Bounds × α) := do
+  let (session, folded) ← recover
+  return (.ready owned session, session.bounds, folded)
+
 private def install (dir : FilePath) (fresh : Option (Policy × Nat))
     (seed : α) (step : Option (α → Nat → Bytes → α)) : IO (Handle × Bounds × α) := do
   let load (store : Store) : IO (Phase Store CompactSession × Bounds × α) := do
@@ -394,9 +399,7 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat))
         let control ← checked (createControl store.callbacks policy cap)
         return (⟨control, 0⟩ : CompactSession)
       return (phase, ⟨0, 0⟩, seed)
-    | none =>
-      let (session, result) ← store.recoverFold seed step
-      return (.ready store session, session.bounds, result)
+    | none => loadCompactReadyWith store (store.recoverFold seed step)
   let ((state, bounds, result), mutex) ← openWithStore (error := IO.Error) (acquireStore dir) load
     (fun (phase, bounds, result) => do return (← IO.mkRef phase, bounds, result))
     (liftM Std.BaseMutex.new) Store.release

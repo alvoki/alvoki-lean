@@ -1001,4 +1001,15 @@ theorem openCompactModel_refines (dir : System.FilePath) (policy : Policy) (r : 
         settled, cursor, ?_, rfl⟩
       simp only [modelCompactPhase, compactPhase, lock, reader, writer, slots]
 
+/-- Compact close clears the installed phase before unlocking the exact
+description, including when unlock itself reports an error. -/
+theorem closeCompactModel_active (policy : Policy) (r : OpenReports)
+    (files : CompactFiles OpenTarget) (cursor : Cursor) (s : OpenImage) :
+    closeCompactModel policy r (.active .lock files cursor ()) s =
+      .ok (if r.unlockError then .error "primitive error" else .ok ())
+        {s with closed := true, held := false} := by
+  unfold closeCompactModel closeWith
+  simp only [runBind, unlock_run]
+  cases r.unlockError <;> rfl
+
 end WalRecoverySlice.SingleFile

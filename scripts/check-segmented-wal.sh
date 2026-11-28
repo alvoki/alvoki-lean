@@ -206,6 +206,15 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.recoverCompactWith_delivers
 #check_axioms Native.recoverCompactWith_reached
 #check_axioms Native.finishCompactRecoveryWith_disk
+#check_axioms Native.recoverSealedWith_post
+#check_axioms Native.foldSealedWith_post
+#check_axioms Native.recoverCompactWith_local
+#check_axioms Native.selectControl_compactPost
+#check_axioms Native.compactActive_selected
+#check_axioms Native.compactActive_retry
+#check_axioms Native.compactSealed_open
+#check_axioms Native.loadCompactReadyWith_post
+#check_axioms Native.openWithStore_post
 #check_axioms Native.scanReadyWith_selected
 #check_axioms Native.ReadOutcome.healthy
 LEAN
