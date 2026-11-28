@@ -487,7 +487,8 @@ theorem Frame.trans (a : Frame physical root wal tables s t) (b : Frame physical
 /-- This particular store and child were registered by the public WAL open.
 The same value remains in the framed heap projection during reads. -/
 def Original (root : System.FilePath) (wal : Wal) (reg : WalRecoverySlice.Segmented.Native.Registration) : Prop :=
-  ∃ start finish, WalRecoverySlice.Segmented.Native.Origin (root / "wal") wal reg start finish
+  (∃ start finish, WalRecoverySlice.Segmented.Native.Origin (root / "wal") wal reg start finish) ∧
+    WalRecoverySlice.Segmented.Native.LocksFrom reg
 
 def RegisteredChild (physical : W → Footprint inode) (root : System.FilePath)
     (image : Selected) (wal : Wal) (w : W) : Prop :=

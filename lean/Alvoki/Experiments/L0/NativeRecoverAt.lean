@@ -240,6 +240,7 @@ def OpenDiskPost (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
     (ref : Ref) (image : Selected) (w : W) : Prop :=
   IOReturns (WalRecoverySlice.Segmented.Native.openExisting (root / "wal")) w
     (fun h t => ∃ c, WalRecoverySlice.Segmented.Native.Origin (root / "wal") h c w t ∧ heap.Registered h c t ∧
+      WalRecoverySlice.Segmented.Native.LocksFrom c ∧
       WalRecoverySlice.Segmented.Installed c.session (physical t).disk ∧ c.session.view = image.view ∧ Held physical root lock ref image .opening t)
     (fun t => WalRecoverySlice.Segmented.Recoverable image.view none (physical t).disk ∧
       Held physical root lock ref image .opening t)
@@ -316,8 +317,8 @@ theorem recoverAt_checks_of_open (d : Durable image history)
       (attached := Attached physical root lock ref image)
     · intro t can
       apply (Returns.liftIO (openDisk t can)).mapPost
-      · rintro wal u ⟨c, origin, readyWal, disk, view, held⟩
-        exact ⟨held, c, (cache u held.owned wal c).mpr readyWal, ⟨t, u, origin⟩, disk, view⟩
+      · rintro wal u ⟨c, origin, readyWal, locks, disk, view, held⟩
+        exact ⟨held, c, (cache u held.owned wal c).mpr readyWal, ⟨⟨t, u, origin⟩, locks⟩, disk, view⟩
       · rintro u ⟨disk, held⟩
         exact .inl ⟨⟨held.owned, held.phaseEq, held.catalog, disk⟩, held.manifest.1⟩
     · intro wal t acquired

@@ -692,24 +692,19 @@ private theorem locked_run (handle : Handle) (action : IO α) (w : Void IO.RealW
     Functor.map, instMonadEIO._aux_1]
   cases action (handle.mutex.lock w).state <;> rfl
 
-/-- The exact child and input of its close operation, after taking the
-registered slot under the WAL mutex. -/
-def CloseChildAt (heap : PhaseMemory) (wal : Handle) (session : Session)
-    (w : Void IO.RealWorld) (child : SingleFile.Handle) (u : Void IO.RealWorld) : Prop :=
-  ∃ store, heap.holds wal.state (.ready store session) w ∧
-    heap.holds store.active (some (session.control.active, child)) w ∧
-    let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
-    u = ((store.active.swap none : BaseIO _) closed.state).state
+/-- The child close starts on the output of the registered slot removal. -/
+def detachedWorld (wal : Handle) (reg : Registration) (w : Void IO.RealWorld) : Void IO.RealWorld :=
+  let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
+  ((reg.store.active.swap none : BaseIO _) closed.state).state
 
 /-- A segmented close removes its own store and its registered active slot.
 Only the stored directory lock and the child's actual phase lock can issue
 a file unlock, each at its particular syscall input. -/
 def CloseSites (childSite : SingleFile.Handle → Void IO.RealWorld → IO.FS.Handle → Void IO.RealWorld → Prop)
     (wal : Handle) (reg : Registration) (w : Void IO.RealWorld) (fd : IO.FS.Handle) (t : Void IO.RealWorld) : Prop :=
-  let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
-  let taken := (reg.store.active.swap none : BaseIO _) closed.state
-  childSite reg.child taken.state fd t ∨
-    (fd = reg.store.lock ∧ t = ((SingleFile.close reg.child).toBaseIO taken.state).state)
+  let u := detachedWorld wal reg w
+  childSite reg.child u fd t ∨
+    (fd = reg.store.lock ∧ t = ((SingleFile.close reg.child).toBaseIO u).state)
 
 /-- The consuming close takes exactly the registered store and active child
 from its two typed heap cells. -/

@@ -4,7 +4,7 @@ import Alvoki.Experiments.L0.NativeCleanup
 namespace ExperimentalL0.NativeReadRelease
 open System Lifecycle NativeScope NativeRead NativeReadScope
 open NativeRecoverAt (Cached Child Failed Opening)
-open WalRecoverySlice.Segmented.Native (PhaseMemory)
+open WalRecoverySlice.Segmented.Native (PhaseMemory RootLockAt ChildLockAt segmentPath detachedWorld)
 
 variable {inode : Type} {physical : NativeScope.W → Footprint inode} {root : FilePath}
   {lock : IO.FS.Handle} {ref : NativeScope.Ref} {image : Selected} {heap : PhaseMemory}
@@ -43,10 +43,23 @@ structure Laws (heap : PhaseMemory) (physical : NativeScope.W → Footprint inod
   emptySwap : ∀ w, Opening physical root lock ref image w → Files physical root image w →
     let t := (ref.swap .offline : BaseIO _) w
     t.val = .opening ∧ Custody physical root lock ref image t.state
-  /-- The locks owned by the ready WAL store and its registered child are
-  separate acquisitions from the granted outer descriptor. -/
-  separate : ∀ wal c w, Grant root lock ref → Custody physical root lock ref image w →
-    Original root wal c → heap.Registered wal c w → ∀ fd u, Nested wal c w fd u → fd ≠ lock
+  /-- Live separately opened file descriptions have distinct identities.
+  The inner operand is tied to the original registered store or its child
+  open, and comes from the indicated concrete lock-file constructor. -/
+  freshOpen : ∀ wal reg w, Grant root lock ref → Custody physical root lock ref image w →
+    heap.Registered wal reg w → Original root wal reg → ∀ dir fd start entered,
+    ((fd = reg.store.lock ∧ dir = reg.store.root) ∨
+      (dir = segmentPath reg.store.root reg.session.control.active ∧ ChildLockAt dir reg.child fd)) →
+    IO.FS.Handle.mk (dir / "lock") .append start = .ok fd entered → fd ≠ lock
+  /-- Read the particular phase of the originally registered child under
+  its mutex. Active and poisoned phases retain that child's opened lock.
+  A closed phase contains no descriptor. -/
+  childRead : ∀ wal reg w fd, Custody physical root lock ref image w → heap.Registered wal reg w →
+    Original root wal reg → ChildLockAt (segmentPath reg.store.root reg.session.control.active) reg.child fd →
+    ∀ cell mutex, reg.child.Binds cell mutex →
+      match ((cell.get : BaseIO _) (mutex.lock (detachedWorld wal reg w)).state).val with
+      | .active held _ _ _ | .poisoned held => held = fd
+      | .closed => True
   /-- Only a separately owned descriptor at an actual child or WAL unlock
   site is eligible. Mutex and typed cell operations preserve the root. -/
   nested : ∀ wal c w, NativeCleanup.Frame (fun fd u => Nested wal c w fd u ∧ fd ≠ lock)
@@ -55,6 +68,30 @@ structure Laws (heap : PhaseMemory) (physical : NativeScope.W → Footprint inod
     Offline physical root ref image (lock.unlock.toBaseIO u).state
   unlocked : ∀ u t, Grant root lock ref → Custody physical root lock ref image u →
     lock.unlock u = .ok () t → (physical t).rootLock = none
+
+/-- Descriptor separation follows from the originally bound successful opens
+and the local phase read. No unlock operand is postulated for a completed
+child close. -/
+theorem Laws.separate (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
+    (held : Custody physical root lock ref image w) (origin : Original root wal reg)
+    (ready : heap.Registered wal reg w) (site : Nested wal reg w fd u) : fd ≠ lock := by
+  obtain ⟨outer, child, opened⟩ := origin.2
+  have fresh (dir : FilePath) f (bound : (f = reg.store.lock ∧ dir = reg.store.root) ∨
+      (dir = segmentPath reg.store.root reg.session.control.active ∧ ChildLockAt dir reg.child f))
+      (openedAt : RootLockAt dir f) : f ≠ lock := by
+    obtain ⟨a, b, _, made, _⟩ := openedAt
+    exact laws.freshOpen wal reg w grant held ready origin dir f a b bound made
+  rcases site with inner | ⟨rfl, _⟩
+  · obtain ⟨cell, mutex, binds, _, fromPhase⟩ := inner
+    have got := laws.childRead wal reg w child held ready origin opened cell mutex binds
+    let read := (cell.get : BaseIO _) (mutex.lock (detachedWorld wal reg w)).state
+    change (match read.val with | .closed => False | .active f _ _ _ | .poisoned f => fd = f) at fromPhase
+    change (match read.val with | .active f _ _ _ | .poisoned f => f = child | .closed => True) at got
+    have same : fd = child := by
+      cases phase : read.val <;> simp only [phase] at fromPhase got <;>
+        first | contradiction | exact fromPhase.trans got
+    exact same ▸ fresh _ child (.inr ⟨rfl, opened⟩) opened.root
+  · exact fresh _ reg.store.lock (.inl ⟨rfl, rfl⟩) outer
 
 private theorem observed (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (held : Custody physical root lock ref image u) :
@@ -85,7 +122,7 @@ private theorem releaseTo (laws : Laws heap physical root lock ref image) (grant
     obtain ⟨c, origin, ready⟩ := registered wal attached
     have frame : NativeCleanup.Frame (Nested wal c taken.state) (Custody physical root lock ref image) :=
       fun step => laws.nested wal c taken.state
-        (step.map (fun fd u site => ⟨site, laws.separate wal c taken.state grant held origin ready fd u site⟩))
+        (step.map (fun fd u site => ⟨site, laws.separate grant held origin ready site⟩))
     exact (NativeCleanup.wal_close heap frame ready held).weaken (fun _ => finish)
       (fun e _ h => (observed laws grant h).weaken (fun _ => fail e) (fun _ => fail e))
 
