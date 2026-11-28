@@ -305,6 +305,14 @@ private def acquireStore (dir : FilePath) : IO Store :=
   let owned ← storeActive (some (session.control.active, child))
   return .ready owned session
 
+private def Store.recoverChild (store : Store) : IO (Session × SingleFile.Handle) :=
+  checked <| Segmented.reopenWith store.callbacks
+    (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
+      (store.acquireChild policy id) SingleFile.close (fun child => do
+        let batches ← SingleFile.scan child
+        checked (resume child batches)))
+    (fun session child => pure (session, child))
+
 private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
   let load (store : Store) := match fresh with
     | some (policy, cap) => do
@@ -312,13 +320,7 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handl
         throw <| IO.userError "segmented WAL directory is not empty"
       pure (.ready store (← checked (Segmented.create store.callbacks policy cap)))
     | none =>
-      let recovery := checked <| Segmented.reopenWith store.callbacks
-        (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
-          (store.acquireChild policy id) SingleFile.close (fun child => do
-            let batches ← SingleFile.scan child
-            checked (resume child batches)))
-        (fun session child => pure (session, child))
-      installReopenedWith recovery fun entry => do
+      installReopenedWith store.recoverChild fun entry => do
         store.active.set entry
         return store
 
@@ -371,5 +373,153 @@ def scan (h : Handle) : IO Contract.View := h.locked do
 
 def close (h : Handle) : IO Unit := h.locked do
   closeWith h.state.swap Store.release
+
+/-- The runtime semantics of a held reference: allocation binds the value,
+a read consumes only a valid binding, and the mutex primitives frame it.
+This contract contains no WAL operation or abstract disk predicate. -/
+structure PhaseMemory where
+  holds : {α : Type} → IO.Ref α → α → Void IO.RealWorld → Prop
+  allocate : ∀ {α : Type} (value : α) w,
+    let r := (IO.mkRef value : BaseIO (IO.Ref α)) w
+    holds r.val value r.state
+  allocateFrame : ∀ {α β : Type} {ref : IO.Ref α} {value w} (fresh : β),
+    holds ref value w → holds ref value ((IO.mkRef fresh : BaseIO (IO.Ref β)) w).state
+  set : ∀ {α : Type} (ref : IO.Ref α) (value : α) w,
+    holds ref value ((ref.set value : BaseIO Unit) w).state
+  newMutex : ∀ {α : Type} {ref : IO.Ref α} {value w},
+    holds ref value w → holds ref value (Std.BaseMutex.new w).state
+  lock : ∀ {α : Type} {ref : IO.Ref α} {value w} (mutex : Std.BaseMutex),
+    holds ref value w → holds ref value (mutex.lock w).state
+  read : ∀ {α : Type} {ref : IO.Ref α} {value w},
+    holds ref value w →
+    let got := (ref.get : BaseIO α) w
+    got.val = value ∧ holds ref value got.state
+  readFrame : ∀ {α β : Type} {ref : IO.Ref α} {value w} (other : IO.Ref β),
+    holds ref value w → holds ref value ((other.get : BaseIO β) w).state
+  unlock : ∀ {α : Type} {ref : IO.Ref α} {value w} (mutex : Std.BaseMutex),
+    holds ref value w → holds ref value (mutex.unlock w).state
+
+def PhaseMemory.Ready (heap : PhaseMemory) (handle : Handle) (session : Session)
+    (w : Void IO.RealWorld) : Prop :=
+  ∃ store child, heap.holds handle.state (.ready store session) w ∧
+    heap.holds store.active (some (session.control.active, child)) w
+
+/-- The concrete recovery run that produced this session also returned the
+child stored under its active ID. The outer phase ref is allocated after
+that transfer, and the public handle uses that ref and the reached mutex. -/
+def ReturnedChild (dir : FilePath) (session : Session) (handle : Handle)
+    (start finish : Void IO.RealWorld) : Prop :=
+  ∃ store acquired child recovered,
+    acquireStore dir start = .ok store acquired ∧
+    store.recoverChild acquired = .ok (session, child) recovered ∧
+    let attached := (store.active.set (some (session.control.active, child)) : BaseIO Unit) recovered
+    let cell := (IO.mkRef (.ready store session : Phase Store) : BaseIO _) attached.state
+    let mutex := Std.BaseMutex.new cell.state
+    handle.state = cell.val ∧ handle.mutex = mutex.val ∧ finish = mutex.state
+
+private theorem base_out (a : BaseIO α) (w : Void IO.RealWorld) :
+    (liftM a : IO α) w = .ok (a w).val (a w).state := by
+  change BaseIO.toEIO a w = _
+  cases ran : a w
+  simp [BaseIO.toEIO, ran]
+
+private theorem attempt_ok (body : IO α) (cleanup : IO Unit)
+    (ran : cleanupOnError (error := IO.Error) body cleanup w = .ok x t) :
+    body w = .ok x t := by
+  cases action : body w with
+  | ok a u =>
+    simpa [cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, action] using ran
+  | error e u =>
+    cases released : cleanup u <;>
+      simp [cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, action, released,
+        Bind.bind, instMonadEIO._aux_13, EST.bind, Pure.pure, instMonadEIO._aux_5, EST.pure,
+        throw, throwThe, MonadExceptOf.throw, instMonadExceptOfEIO._aux_1, EST.throw] at ran
+
+theorem openExisting_ready (heap : PhaseMemory) (dir : FilePath)
+    (opened : openExisting dir start = .ok handle finish) :
+    ∃ session, ReturnedChild dir session handle start finish ∧ heap.Ready handle session finish := by
+  let load (s : Store) := installReopenedWith s.recoverChild (fun entry => do
+    s.active.set entry
+    return s)
+  let construct (s : Store) : IO (IO.Ref (Phase Store) × Std.BaseMutex) := do
+    let p ← load s
+    let cell ← IO.mkRef p
+    return (cell, ← Std.BaseMutex.new)
+  change (do
+    let (ref, mutex) ← (do
+      let s ← acquireStore dir
+      cleanupOnError (error := IO.Error) (construct s) s.release)
+    pure (Handle.mk ref mutex) : IO Handle) start = .ok handle finish at opened
+  cases acquired : acquireStore dir start with
+  | error e u => simp [Bind.bind, instMonadEIO._aux_13, EST.bind, acquired] at opened
+  | ok s u =>
+    cases constructed : cleanupOnError (error := IO.Error) (construct s) s.release u with
+    | error e t => simp [Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, constructed] at opened
+    | ok pair t =>
+      obtain ⟨ref, mutex⟩ := pair
+      have success := attempt_ok (construct s) s.release constructed
+      cases recovery : s.recoverChild u with
+      | error e v =>
+        simp [construct, load, installReopenedWith, Bind.bind, instMonadEIO._aux_13,
+          EST.bind, recovery] at success
+      | ok result v =>
+        obtain ⟨session, child⟩ := result
+        let attached := (s.active.set (some (session.control.active, child)) : BaseIO Unit) v
+        let cell := (IO.mkRef (.ready s session : Phase Store) : BaseIO _) attached.state
+        let made := Std.BaseMutex.new cell.state
+        have wrote : (s.active.set (some (session.control.active, child)) : IO Unit) v =
+            .ok attached.val attached.state := base_out _ _
+        have mkCell : (liftM (IO.mkRef (.ready s session)) : IO (IO.Ref (Phase Store))) attached.state =
+            .ok cell.val cell.state := base_out _ _
+        have mkMutex : (liftM Std.BaseMutex.new : IO _) cell.state = .ok made.val made.state := base_out _ _
+        have h : EST.Out.ok (cell.val, made.val) made.state = (EST.Out.ok (ref, mutex) t :
+            EST.Out IO.Error IO.RealWorld _) := by
+          simpa [construct, load, installReopenedWith, Bind.bind, instMonadEIO._aux_13,
+            EST.bind, recovery, wrote, mkCell, mkMutex, Pure.pure, instMonadEIO._aux_5, EST.pure] using success
+        obtain ⟨⟨rfl, rfl⟩, rfl⟩ := EST.Out.ok.inj h
+        have outer : (Handle.mk cell.val made.val, made.state) = (handle, finish) := by
+          simpa [Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, constructed,
+            Pure.pure, instMonadEIO._aux_5, EST.pure] using opened
+        obtain ⟨rfl, rfl⟩ := Prod.mk.inj outer
+        exact ⟨session, ⟨s, u, child, v, acquired, recovery, rfl, rfl, rfl⟩,
+          s, child, heap.newMutex (heap.allocate _ _),
+          heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
+
+theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    ∃ t, scan handle w = .ok session.view t ∧ heap.Ready handle session t := by
+  obtain ⟨store, child, owns, ownsChild⟩ := ready
+  let locked := handle.mutex.lock w
+  let got := (handle.state.get : BaseIO (Phase Store)) locked.state
+  let released := handle.mutex.unlock got.state
+  obtain ⟨value, stillHeld⟩ := heap.read (heap.lock handle.mutex owns)
+  refine ⟨released.state, ?_, store, child, heap.unlock _ stillHeld,
+    heap.unlock _ (heap.readFrame _ (heap.lock _ ownsChild))⟩
+  change got.val = .ready store session at value
+  have raw : (handle.state.get : IO (Phase Store)) locked.state =
+      .ok (.ready store session) got.state := by
+    change EST.Out.ok got.val got.state = _
+    rw [value]
+  have lockRun : (liftM handle.mutex.lock : IO Unit) w = .ok locked.val locked.state := base_out _ _
+  have unlockRun : (liftM handle.mutex.unlock : IO Unit) got.state =
+      .ok released.val released.state := base_out _ _
+  unfold scan Handle.locked
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, lockRun, tryFinally, tryFinally',
+    MonadFinally.tryFinally', instMonadFinallyEIO._aux_1, Functor.map, instMonadEIO._aux_1]
+  rw [raw]
+  have cached : checked (scanWith (.ready store session)) got.state = .ok session.view got.state := rfl
+  simp only [cached, unlockRun]
+  rfl
+
+/-- Open and public scan agree on the recovered session using the original
+handle's mutex, phase cell and registered child, starting at the reached
+installation state. The byte/disk meaning of the inner recovery lives below
+ReturnedChild and is needed to identify this view with a client's history. -/
+theorem openExisting_scan (heap : PhaseMemory) (dir : FilePath)
+    (opened : openExisting dir start = .ok h installed) :
+    ∃ session t, ReturnedChild dir session h start installed ∧
+      scan h installed = .ok session.view t ∧ heap.Ready h session t := by
+  obtain ⟨session, returned, ready⟩ := openExisting_ready heap dir opened
+  obtain ⟨t, scanned, stillReady⟩ := scan_readyAt heap ready
+  exact ⟨session, t, returned, scanned, stillReady⟩
 
 end WalRecoverySlice.Segmented.Native
