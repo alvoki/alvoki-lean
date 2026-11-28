@@ -15,14 +15,16 @@ def FilePost (P : W → Prop) (q : α → Prop) (a : F α) : Prop :=
 /-- All fields concern a single primitive or an immutable descriptor's
 size and positional reads. The caller chooses the protected footprint P. -/
 structure Primitives (ns : TableNamespace W) (P : W → Prop) where
-  held : IO.FS.Handle → ns.inode → ByteArray → W → Prop
+  inodeOf : IO.FS.Handle → W → Option ns.inode
   stat : ∀ path, FilePost P (fun _ => True) (nativeTableStat path)
   openRead : ∀ path inode bytes w, P w → ns.names w path = some inode →
     ns.contents w inode = some bytes →
     match IO.FS.Handle.mk path .read w with
     | .error _ t => P t
-    | .ok h t => P t ∧ held h inode bytes t
-  reads : ∀ h inode bytes, ScopedRead (fun w => P w ∧ held h inode bytes w) (handleSource h) bytes
+    | .ok h t => P t ∧ inodeOf h t = some inode ∧ ns.contents t inode = some bytes
+  reads : ∀ h inode bytes, ScopedRead
+    (fun w => P w ∧ inodeOf h w = some inode ∧ ns.contents w inode = some bytes)
+    (handleSource h) bytes
 
 /-- The correct binding is read *after* stat. This allows unrelated state
 to move while stat holds the protected catalog invariant. -/
@@ -31,22 +33,19 @@ theorem table {id : UInt64} (prim : Primitives ns P)
     FilePost P (· = lookupRows rows key) (nativeTableAt ns.directory id (·.lookup key)) := by
   intro w valid
   have keep := prim.stat (tablePath ns.directory id) w valid
+  rw [nativeTableAt_reached]
   cases st : (nativeTableStat (tablePath ns.directory id)).run w with
   | error e t =>
     rw [st] at keep
-    unfold nativeTableAt withTableAt withTableDescriptor
-    rw [ExceptT.run_bind]
-    simpa [Bind.bind, instMonadEIO._aux_13, EST.bind, st] using keep
+    exact keep
   | ok r t =>
     rw [st] at keep
     cases r with
     | error e =>
-      unfold nativeTableAt withTableAt withTableDescriptor
-      rw [ExceptT.run_bind]
-      simpa [Bind.bind, instMonadEIO._aux_13, EST.bind, st, Pure.pure, instMonadEIO._aux_5, EST.pure] using keep
+      exact keep
     | ok md =>
       by_cases regular : isTableFile md = true
-      · rw [nativeTableAt_afterStat st regular]
+      · simp only [regular, ite_true]
         obtain ⟨inode, bytes, named, stored, built⟩ := bound t keep.1
         have acquired := prim.openRead _ _ _ _ keep.1 named stored
         cases op : IO.FS.Handle.mk (tablePath ns.directory id) .read t with
@@ -65,10 +64,7 @@ theorem table {id : UInt64} (prim : Primitives ns P)
             rw [action] at result
             simpa [nativeTableAction, ExceptT.run, EIO.toBaseIO, BaseIO.toEIO, action] using
               And.intro result.1.1 result.2
-      · unfold nativeTableAt withTableAt withTableDescriptor
-        rw [ExceptT.run_bind]
-        simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, st, regular, Bool.false_eq_true, ite_false]
-        exact keep.1
+      · simpa [regular] using keep.1
 
 /-- Erase the distinction between reported errors only inside the existing L0
 model proof. Both error channels carry their actual reached world. -/
@@ -114,6 +110,12 @@ private theorem lower_get (ops : Components F) (session : Session) (key : UInt64
 
 abbrev Wal := WalRecoverySlice.Segmented.Native.Handle
 
+private def readOps (dir : System.FilePath) : Components F := {
+    append := fun _ => throw "unused", scan := throw "unused", reopenWal := throw "unused",
+    manifest := ⟨fun _ => throw "unused", throw "unused"⟩,
+    tables := ⟨fun _ => throw "unused", fun _ => throw "unused",
+      fun id k => nativeTableAt dir id (·.lookup k)⟩ }
+
 /-- The ref and directory are the ones assembled at withOpen. The footprint
 can include the root lock, WAL, phase ownership and namespace resources. -/
 theorem publicGet (ref : IO.Ref (Phase Wal)) (root : System.FilePath)
@@ -127,17 +129,13 @@ theorem publicGet (ref : IO.Ref (Phase Wal)) (root : System.FilePath)
     match Native.get handle key start with
     | .ok x t => x = denote history key ∧ P t
     | .error _ t => P t := by
-  let ops : Components F := {
-    append := fun _ => throw "unused", scan := throw "unused", reopenWal := throw "unused",
-    manifest := ⟨fun _ => throw "unused", throw "unused"⟩,
-    tables := ⟨fun _ => throw "unused", fun _ => throw "unused",
-      fun id k => nativeTableAt ns.directory id (·.lookup k)⟩ }
+  let ops := readOps ns.directory
   obtain ⟨entered, read, frame⟩ := phase start valid
-  rw [Native.get_atRoot binding read ops (by simp [ops, directory])]
+  rw [Native.get_atRoot binding read ops (by simp [ops, readOps, directory])]
   have law := get_refines_from (ops := project ops) (selected := fun _ => image) P
     (fun w id k rows owned present => by
       have post := table prim (fun u hu => catalog u hu id rows present) k w owned
-      simp only [project, ops]
+      simp only [project, ops, readOps]
       unfold lower NativeTableReads.call
       simp only [id_eq]
       cases ran : (nativeTableAt ns.directory id (·.lookup k)).run w with
@@ -156,6 +154,30 @@ theorem publicGet (ref : IO.Ref (Phase Wal)) (root : System.FilePath)
     simpa [ran] using law
   | ok r t =>
     cases r <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran, Pure.pure, instMonadEIO._aux_5, EST.pure] <;> simp [ran] at law <;> assumption
+
+/-- A size error from the first required descriptor reaches the caller with
+its exact message and world, for every possible older run list. -/
+theorem firstSizeError {id : UInt64} (root : System.FilePath) (ref : IO.Ref (Phase Wal))
+    (binding : Native.Handle.AtRoot handle root ref)
+    (phase : (ref.get : IO (Phase Wal)) start = .ok (.online wal session) w)
+    (miss : session.mem[key]? = none) (first : session.version.tables = id :: older)
+    (stat : (nativeTableStat (tablePath (root / "tables") id)).run w = .ok (.ok md) checked)
+    (regular : isTableFile md = true)
+    (opened : IO.FS.Handle.mk (tablePath (root / "tables") id) .read checked = .ok h entered)
+    (failed : (handleSource h).size entered = .error e after) :
+    Native.get handle key start = .error (IO.userError e) after := by
+  have action : withTableSource (handleSource h) id (·.lookup key) entered = .error e after := by
+    simp [withTableSource, openTableChecked, openChecked, readFooter, Bind.bind,
+      instMonadEIO._aux_13, EST.bind, failed]
+  have lookupError : (nativeTableAt (root / "tables") id (·.lookup key)).run w =
+      .ok (.error e) after := by
+    rw [nativeTableAt_acquired stat regular opened]
+    change (BaseIO.toEIO (withTableSource (handleSource h) id (·.lookup key)).toBaseIO) entered = _
+    simp [EIO.toBaseIO, BaseIO.toEIO, action]
+  rw [Native.get_atRoot binding phase (readOps (root / "tables")) rfl]
+  simp only [get, miss, first, lookupTables, readOps, ExceptT.run_bind]
+  simp [Bind.bind, instMonadEIO._aux_13, EST.bind, lookupError]
+  rfl
 
 /-- A concrete instantiation of the protected observations. Leaf contracts
 frame projected values. Catalog representation and logical correctness are
