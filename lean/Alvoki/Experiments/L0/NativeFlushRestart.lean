@@ -1,4 +1,4 @@
-import Alvoki.Experiments.L0.NativeAppendCut
+import Alvoki.Experiments.L0.WithOpenReads
 
 namespace ExperimentalL0.NativeFlushRestart
 open System NativeRead NativeReadScope
@@ -89,50 +89,6 @@ theorem withOpen (survivor : Survivor physical root before session w image)
       (WithOpenReads.Finished physical root image life events ⟨path, keys, w⟩ rootLife)
       (WithOpenReads.Failure physical root image life events ⟨path, keys, w⟩ rootLife) :=
   WithOpenReads.withOpen entry (survivor.files catalog wal) heap runtime prior keys rootLife
-
-/-- The manifest and table barriers precede a boot. Process exit retains the live
-manifest, while power loss selects any allowed durable manifest. In both cases the
-WAL reboot relation admits independent writeback. -/
-theorem ofRestart {id : UInt64}
-    (restart : NativeAppendCut.Restarted physical root (stored before session id).tables origin d mode after)
-    (oldTables : (tableNamespace physical root).Represents origin before.tables)
-    (fresh : before.tables id = none) (fits : before.view.tail < UInt64.size)
-    (bound : (tableNamespace physical root).Bound origin id session.mem.toList)
-    (admits : (physical origin).manifest.Admits (L0Manifest.encode before.version)
-      (some (L0Manifest.encode (proposal before session id))))
-    (wal : Recoverable before.view none d) :
-    ∃ image, Survivor physical root before session after image ∧ Files physical root image after := by
-  let ns := tableNamespace physical root
-  have catalog : ns.Represents after (stored before session id).tables :=
-    (oldTables.insert (fun _ _ _ _ _ name content => ⟨name, content⟩) bound).frame restart.catalog
-  have old : ns.Represents after before.tables := by
-    intro k rows found
-    have ne : k ≠ id := by rintro rfl; simp [fresh] at found
-    exact catalog k rows (by simpa [stored, ne] using found)
-  have protect := restart.files.recoverable wal
-  have obs := restart.manifest
-  have choice : DurableBlob.Permitted (L0Manifest.encode before.version)
-      (some (L0Manifest.encode (proposal before session id))) (physical after).manifest.active := by
-    cases mode with
-    | processExit => rw [obs]; exact admits.1
-    | powerLoss => exact admits.2 _ obs
-  rcases choice with active | active
-  · have s := Survivor.old (physical := physical) (root := root) (session := session) active
-    exact ⟨_, s, s.files old protect⟩
-  · have binding := catalog id session.mem.toList (by simp [stored])
-    have s := Survivor.newTable (before := before) (session := session) id fresh fits binding
-      (Option.some.inj active).symm
-    exact ⟨_, s, s.files old protect⟩
-
-/-- Before the candidate has crossed the directory barrier, a partial file or
-name can disappear entirely on power loss. Only preexisting table bindings frame. -/
-theorem beforePublication (restart : NativeAppendCut.Restarted physical root before.tables origin d mode after)
-    (oldTables : (tableNamespace physical root).Represents origin before.tables)
-    (stable : (physical origin).manifest.Stable (L0Manifest.encode before.version))
-    (wal : Recoverable before.view none d) :
-    Survivor physical root before session after before ∧ Files physical root before after := by
-  have files := restart.filesAt stable oldTables wal
-  exact ⟨.old files.manifest, files⟩
 
 /-- A lost reply can leave either manifest selected. The subsequent process stop is
 recorded distinctly from the uncertain flush and from the later public open. -/

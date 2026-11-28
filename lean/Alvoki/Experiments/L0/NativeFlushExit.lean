@@ -3,13 +3,12 @@ import Alvoki.Experiments.L0.NativeFlush
 import Alvoki.Experiments.L0.NativeFlushBoot
 
 namespace ExperimentalL0.NativeFlushExit
-open NativeScope (W Ref Post)
-open NativeRead (Footprint tableNamespace SessionAt)
+open NativeScope (W)
+open NativeRead (Footprint tableNamespace)
 open NativeReadScope (Files)
-open NativeFlushRestart (stored published proposal Survivor)
-open MutationExitCut (afterStore Cut Frames Frame)
+open NativeFlushRestart (stored proposal Survivor)
+open MutationExitCut (Frame)
 open WalRecoverySlice.Segmented (Recoverable)
-open WalRecoverySlice.Segmented.Native (returnedWorld)
 open System
 
 abbrev Result := EST.Out IO.Error IO.RealWorld Session
@@ -90,55 +89,5 @@ def resultAt (root : FilePath) (image : Selected) (s : Session) (w : W) : Result
   if s.mem.isEmpty then .ok s w
   else if image.view.tail < UInt64.size then NativeFlush.store root image s w
   else .error (IO.userError "absolute WAL position exhausted") w
-
-/-- Project the native public flush from the callback invoked by this open. The
-tail is indexed by its actual store return (including a thrown IO error). -/
-theorem dispatch (p : InterruptedMutation.Prefix path root start)
-    (entry : NativeReadScope.Entry physical path root image) (files : Files physical root image start)
-    (heap : WithOpenReads.Heap) (ops : WithOpenReads.Runtime physical root p.lock p.ref image life heap)
-    (run : Execution.Run events none image)
-    (scan : ∀ history w, SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) →
-      NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w) :
-    Execution.Run (events ++ [.reopened]) (some p.session) image ∧ ∃ history w,
-      SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) ∧
-      let out := resultAt root image p.session w
-      ∃ h, Native.Handle.AtRoot h root p.ref ∧
-      Native.withOpen path Native.flush start = Lifecycle.finish (ε := IO.Error) (Native.flush h)
-        (Lifecycle.finish (ε := IO.Error) ((Native.phaseCell p.ref).close WalRecoverySlice.Segmented.Native.close)
-          p.lock.unlock) p.callback ∧
-      Native.flush h p.callback = NativeWrite.afterWrite p.ref out ∧
-      ((afterStore p.ref p.lock p.session out).run (returnedWorld out)).state =
-        returnedWorld (Native.withOpen path Native.flush start) := by
-  obtain ⟨opened, history, online⟩ := p.online entry files heap ops run
-  obtain ⟨h, binds, invoked⟩ := p.withOpen Native.flush
-  obtain ⟨w, reached, executed⟩ := NativeFlush.dispatch online binds heap ops.cleanup.cached ops.phase (scan history)
-  exact ⟨opened, history, w, reached, h, binds, invoked, executed, invoked ▸ MutationExitCut.afterWrite_state _ executed p.lock p.session⟩
-
-/-- Under a stop after store return and before reply, even a successful publication
-has an uncertain client acknowledgement. The physical catalog and manifest still
-decide exactly which image the subsequent concrete open/check/get/cleanup consumes. -/
-theorem readAfterReturn {physical : W → Footprint inode} {media : NativeTableCreate.Media (tableNamespace physical root)}
-    (out : Result)
-    (source : Media physical root image s (returnedWorld out) tables)
-    (stable : media.stable.Represents (returnedWorld out) tables)
-    (wal : Recoverable image.view none (physical (returnedWorld out)).disk)
-    (position : Cut stop (afterStore ref lock s out) (returnedWorld out) cut)
-    (frames : Frames (Edge physical root media tables) stop (afterStore ref lock s out) (returnedWorld out))
-    (boot : NativeFlushRestart.Boot physical root media tables cut mode after)
-    (run : Execution.Run events (some s) image)
-    (entry : ∀ img, NativeReadScope.Entry physical path root img) (heap : WithOpenReads.Heap)
-    (runtime : ∀ img lock ref, WithOpenReads.Runtime physical root lock ref img life heap)
-    (keys : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
-    let stopped := (events ++ [.flushUncertain]) ++ [.stop]
-    ∃ img, Survivor physical root image s after img ∧ Files physical root img after ∧
-      Execution.Run stopped none img ∧
-      Post (Native.withOpen path (fun h => (NativeRead.readMany h keys : IO (List NativeRead.Reply)))) after
-        (WithOpenReads.Finished physical root img life stopped ⟨path, keys, after⟩ rootLife)
-        (WithOpenReads.Failure physical root img life stopped ⟨path, keys, after⟩ rootLife) := by
-  have edge := position.accumulate frames (Edge.same physical root media tables) Edge.trans
-  obtain ⟨img, selected, files⟩ := (source.advance edge.toFrame).reboot (stable.frame edge.stable)
-    (edge.disk.recoverable wal) boot
-  exact ⟨img, selected, files, (selected.uncertain run).stop,
-    NativeFlushRestart.uncertainReopen selected files run (entry img) heap (runtime img) keys rootLife⟩
 
 end ExperimentalL0.NativeFlushExit

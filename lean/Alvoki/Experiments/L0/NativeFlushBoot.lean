@@ -1,3 +1,4 @@
+import Alvoki.Experiments.WAL.Segmented.Proofs.AppendCut
 import Alvoki.Experiments.L0.NativeFlushRestart
 import Alvoki.Experiments.L0.NativeTableAllocation
 
