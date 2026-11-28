@@ -35,7 +35,7 @@ def Leaf.action : (op : Leaf) → IO op.Result
   | .fsync h => SingleFile.Internal.syncHandle h
   | .rewind h => h.rewind
   | .readEOF h => SingleFile.Internal.readChunks h .empty
-  | .readChunk h => h.read 1024
+  | .readChunk h => SingleFile.Internal.checkedChunk h 1024
   | .truncate h size => (SingleFile.nativeRecovery.truncateAt h size).run
   | .ref ready => IO.mkRef ready.phase
   | .mutex => Std.BaseMutex.new
@@ -120,7 +120,7 @@ private def call (l : Leaf) : Trace l.Result where
 exception terminates the loop and cannot authorize a subsequent read. -/
 inductive ChunkPrefix (h : IO.FS.Handle) (origin : W) : ByteArray → W → Prop where
   | first : ChunkPrefix h origin .empty origin
-  | next : ChunkPrefix h origin acc w → h.read 1024 w = .ok bytes t →
+  | next : ChunkPrefix h origin acc w → SingleFile.Internal.checkedChunk h 1024 w = .ok bytes t →
       bytes.isEmpty = false → ChunkPrefix h origin (acc ++ bytes) t
 
 theorem ChunkPrefix.remaining (path : ChunkPrefix h origin acc w) :
