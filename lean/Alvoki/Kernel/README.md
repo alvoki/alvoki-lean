@@ -1,5 +1,5 @@
 # Shared proof contracts
 
-[`BlockContracts`](BlockContracts.lean) states the block range and lookup facts used by the immutable SSTable proofs. The component proof files import these contracts explicitly.
+[`BlockContracts`](BlockContracts.lean) proves the lower-bound partition used by SSTable and the word encoding facts used by the shared codecs.
 
 Run the kernel and axiom checks with [`scripts/reproduce.sh`](../../../scripts/reproduce.sh).
