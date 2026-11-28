@@ -17,11 +17,19 @@ structure Offline (physical : NativeScope.W → Footprint inode) (root : FilePat
   phaseRef : (physical w).phaseRef = some ref
   offline : (physical w).phase = .offline
 
+/-- Root ownership remains live through the registered WAL and child closes.
+Only the outer unlock may consume this grant. -/
+structure Custody (physical : NativeScope.W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
+    (ref : NativeScope.Ref) (image : Selected) (w : NativeScope.W) : Prop extends Offline physical root ref image w where
+  owner : (physical w).rootLock = some (root, lock)
+
+abbrev Nested := WalRecoverySlice.Segmented.Native.CloseSites NativeCleanup.ChildIssued
+
 /-- An unlock error can be masked by a primary failure. The report retains
 the actual descriptor outcome independently of what withOpen returns. -/
 def Report (physical : NativeScope.W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
     (ref : NativeScope.Ref) (image : Selected) (t : NativeScope.W) : Prop :=
-  ∃ u, Offline physical root ref image u ∧
+  Grant root lock ref ∧ ∃ u, Custody physical root lock ref image u ∧
     ((lock.unlock u = .ok () t ∧ (physical t).rootLock = none) ∨ ∃ e, lock.unlock u = .error e t)
 
 structure Closed (physical : NativeScope.W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
@@ -34,33 +42,54 @@ structure Laws (heap : PhaseMemory) (physical : NativeScope.W → Footprint inod
   swap : ∀ wal, RefSwap physical root lock ref wal image.tables
   emptySwap : ∀ w, Opening physical root lock ref image w → Files physical root image w →
     let t := (ref.swap .offline : BaseIO _) w
-    t.val = .opening ∧ Offline physical root ref image t.state
-  frame : NativeCleanup.Frame (Offline physical root ref image)
-  unlocked : ∀ u t, Offline physical root ref image u → lock.unlock u = .ok () t →
-    (physical t).rootLock = none
+    t.val = .opening ∧ Custody physical root lock ref image t.state
+  /-- The locks owned by the ready WAL store and its registered child are
+  separate acquisitions from the granted outer descriptor. -/
+  separate : ∀ wal c w, Grant root lock ref → Custody physical root lock ref image w →
+    heap.Ready wal c w → ∀ fd u, Nested heap wal c w fd u → fd ≠ lock
+  /-- Only a separately owned descriptor at an actual child or WAL unlock
+  site is eligible. Mutex and typed cell operations preserve the root. -/
+  nested : ∀ wal c w, NativeCleanup.Frame (fun fd u => Nested heap wal c w fd u ∧ fd ≠ lock)
+    (Custody physical root lock ref image)
+  rootFrame : ∀ u, Grant root lock ref → Custody physical root lock ref image u →
+    Offline physical root ref image (lock.unlock.toBaseIO u).state
+  unlocked : ∀ u t, Grant root lock ref → Custody physical root lock ref image u →
+    lock.unlock u = .ok () t → (physical t).rootLock = none
 
-private theorem observed (laws : Laws heap physical root lock ref image)
-    (off : Offline physical root ref image u) :
+private theorem observed (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
+    (held : Custody physical root lock ref image u) :
     Post lock.unlock u (fun _ t => Closed physical root lock ref image t)
       (fun _ t => Closed physical root lock ref image t) := by
-  have kept := laws.frame (.fileUnlock lock u) off
+  have kept := laws.rootFrame u grant held
   unfold Post
   cases ran : lock.unlock u with
-  | error e t => exact ⟨by simpa only [EIO.toBaseIO, ran] using kept, u, off, .inr ⟨e, ran⟩⟩
-  | ok val t => cases val; exact ⟨by simpa only [EIO.toBaseIO, ran] using kept, u, off, .inl ⟨ran, laws.unlocked _ _ off ran⟩⟩
+  | error e t => exact ⟨by simpa only [EIO.toBaseIO, ran] using kept, grant, u, held, .inr ⟨e, ran⟩⟩
+  | ok val t => cases val; exact ⟨by simpa only [EIO.toBaseIO, ran] using kept, grant, u, held,
+      .inl ⟨ran, laws.unlocked _ _ grant held ran⟩⟩
 
-private theorem releaseTo (laws : Laws heap physical root lock ref image)
+private theorem releaseTo (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (oldValue : ((ref.swap .offline : BaseIO _) w).val = old)
-    (off : Offline physical root ref image ((ref.swap .offline : BaseIO _) w).state)
-    (ready : ∀ h, old.wal = some h → ∃ c, heap.Ready h c ((ref.swap .offline : BaseIO _) w).state)
+    (held : Custody physical root lock ref image ((ref.swap .offline : BaseIO _) w).state)
+    (registered : ∀ h, old.wal = some h → ∃ c, heap.Ready h c ((ref.swap .offline : BaseIO _) w).state)
     (succeed : ∀ t, Closed physical root lock ref image t → ok t)
     (fail : ∀ e t, Closed physical root lock ref image t → err e t) :
-    Release ref lock w ok err :=
-  NativeCleanup.release_of_swap heap laws.frame ref lock oldValue off ready
-    (fun _ offline => (observed laws offline).weaken (fun _ => succeed) fail)
-    (fun e _ offline => (observed laws offline).weaken (fun _ => fail e) (fun _ => fail e))
+    Release ref lock w ok err := by
+  let taken := (ref.swap .offline : BaseIO _) w
+  have finish u (h : Custody physical root lock ref image u) := (observed laws grant h).weaken (fun _ => succeed) fail
+  unfold Release
+  dsimp only
+  rw [oldValue]
+  cases attached : old.wal with
+  | none => exact finish taken.state held
+  | some wal =>
+    obtain ⟨c, ready⟩ := registered wal attached
+    have frame : NativeCleanup.Frame (Nested heap wal c taken.state) (Custody physical root lock ref image) :=
+      fun step => laws.nested wal c taken.state
+        (step.map (fun fd u site => ⟨site, laws.separate wal c taken.state grant held ready fd u site⟩))
+    exact (NativeCleanup.wal_close heap frame ready held).weaken (fun _ => finish)
+      (fun e _ h => (observed laws grant h).weaken (fun _ => fail e) (fun _ => fail e))
 
-private theorem childTo (laws : Laws heap physical root lock ref image)
+private theorem childTo (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (owned : Owned (physical w) root lock ref) (attached : (physical w).phase.wal = some wal)
     (child : Child physical image wal w)
     (catalog : (tableNamespace physical root).Represents w image.tables)
@@ -74,38 +103,38 @@ private theorem childTo (laws : Laws heap physical root lock ref image)
   have finalChild : Child physical image wal _ :=
     ⟨c, step.child.trans cache, WalRecoverySlice.Segmented.Writebacks.installed step.disk installed, view⟩
   have files := filesOfChild finalChild (catalog.frame step.tablesKept) (step.manifest.trans manifest)
-  refine releaseTo laws value ⟨files, finalOwned.2, step.phase⟩ ?_ succeed fail
+  refine releaseTo laws grant value ⟨⟨files, finalOwned.2, step.phase⟩, finalOwned.1⟩ ?_ succeed fail
   intro h eq
   have same := Option.some.inj (eq.symm.trans attached)
   subst h
   exact ⟨c, (laws.cached _ finalOwned wal c).mp (step.child.trans cache)⟩
 
-theorem onlineTo (laws : Laws heap physical root lock ref image)
+theorem onlineTo (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (ready : Online physical root lock ref wal session image history w)
     (succeed : ∀ t, Closed physical root lock ref image t → ok t)
     (fail : ∀ e t, Closed physical root lock ref image t → err e t) :
     Release ref lock w ok err :=
-  childTo laws ready.owned (by rw [ready.phase]; rfl) ready.child ready.catalog ready.manifest.1 succeed fail
+  childTo laws grant ready.owned (by rw [ready.phase]; rfl) ready.child ready.catalog ready.manifest.1 succeed fail
 
-theorem failedTo (laws : Laws heap physical root lock ref image)
+theorem failedTo (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (failed : Failed physical root lock ref image w)
     (succeed : ∀ t, Closed physical root lock ref image t → ok t)
     (fail : ∀ e t, Closed physical root lock ref image t → err e t) :
     Release ref lock w ok err := by
   rcases failed with ⟨opening, bytes⟩ | ⟨wal, held, child⟩
   · obtain ⟨value, off⟩ := laws.emptySwap w opening ⟨opening.catalog, bytes, opening.disk⟩
-    exact releaseTo laws value off (fun _ impossible => by cases impossible) succeed fail
-  · exact childTo laws held.owned (by rw [held.phaseEq]; rfl) child held.catalog held.manifest.1 succeed fail
+    exact releaseTo laws grant value off (fun _ impossible => by cases impossible) succeed fail
+  · exact childTo laws grant held.owned (by rw [held.phaseEq]; rfl) child held.catalog held.manifest.1 succeed fail
 
-theorem online (laws : Laws heap physical root lock ref image)
+theorem online (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (ready : Online physical root lock ref wal session image history w) :
     Release ref lock w (Closed physical root lock ref image) (fun _ => Closed physical root lock ref image) :=
-  onlineTo laws ready (fun _ h => h) (fun _ _ h => h)
+  onlineTo laws grant ready (fun _ h => h) (fun _ _ h => h)
 
-theorem failed (laws : Laws heap physical root lock ref image)
+theorem failed (laws : Laws heap physical root lock ref image) (grant : Grant root lock ref)
     (failure : Failed physical root lock ref image w) :
     Release ref lock w (Closed physical root lock ref image) (fun _ => Closed physical root lock ref image) :=
-  failedTo laws failure (fun _ h => h) (fun _ _ h => h)
+  failedTo laws grant failure (fun _ h => h) (fun _ _ h => h)
 
 /-- The public read callback returns a list of closed data/error values. The
 root descriptor appears only in tryLock and in the cleanup continuation.

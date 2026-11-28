@@ -82,7 +82,7 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
       exact ⟨_, d⟩
   obtain ⟨d⟩ := durable
   apply entry.withOpen files _ (fun _ _ before => .before before failedTrace)
-  intro lock ref w opening bytes handle binding
+  intro lock ref w grant opening bytes handle binding
   let ops := runtime lock ref
   have safe (actual) (D : Durable image actual) :=
     NativeRecoverAt.recoverAt D opening bytes (ops.manifest _ opening) heap ops.cleanup.cached
@@ -92,7 +92,7 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
   | error e t =>
     have exit := safe history d
     rw [Post, recovery] at exit
-    exact NativeReadRelease.failedTo ops.cleanup exit
+    exact NativeReadRelease.failedTo ops.cleanup grant exit
       (fun _ closed => .recovery closed failedTrace) (fun _ _ closed => .recovery closed failedTrace)
   | ok session t =>
     have installed actual (D : Durable image actual) := by
@@ -110,7 +110,7 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
     have finish (u) (closed : NativeReadRelease.Closed physical root lock ref image u) :
         Finished physical root image life events keys result.val u :=
       ⟨stopped, stopped.refines, lock, ref, wal, session, history, handle, entered, binding, online, rfl, reached, released, closed⟩
-    have release := NativeReadRelease.onlineTo ops.cleanup reached finish (fun _ u h => Failure.cleanup (finish u h))
+    have release := NativeReadRelease.onlineTo ops.cleanup grant reached finish (fun _ u h => Failure.cleanup (finish u h))
     unfold NativeScope.Callback Post
     change (match readMany handle keys entered with | ⟨xs, v⟩ => _)
     dsimp only [result] at release

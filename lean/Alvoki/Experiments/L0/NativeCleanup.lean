@@ -8,22 +8,44 @@ open WalRecoverySlice
 for data observations can cover these operations even when unlock reports
 an error. This relation makes no physical claim about releasing a lock
 after a failed unlock. -/
-inductive Leaf : W → W → Prop where
-  | mutexLock (m : Std.BaseMutex) (w) : Leaf w (m.lock w).state
-  | mutexUnlock (m : Std.BaseMutex) (w) : Leaf w (m.unlock w).state
+inductive Leaf (issued : IO.FS.Handle → W → Prop) : W → W → Prop where
+  | mutexLock (m : Std.BaseMutex) (w) : Leaf issued w (m.lock w).state
+  | mutexUnlock (m : Std.BaseMutex) (w) : Leaf issued w (m.unlock w).state
   | walClosed (cell : IO.Ref (Segmented.Native.Phase Segmented.Native.Store)) (w) :
-      Leaf w ((cell.swap .closed : BaseIO _) w).state
+      Leaf issued w ((cell.swap .closed : BaseIO _) w).state
   | takeChild (slot : IO.Ref (Option (Nat × SingleFile.Handle))) (w) :
-      Leaf w ((slot.swap none : BaseIO _) w).state
+      Leaf issued w ((slot.swap none : BaseIO _) w).state
   | childPhase (cell : IO.Ref (SingleFile.Phase IO.FS.Handle (SingleFile.AppendFiles IO.FS.Handle))) (w) :
-      Leaf w ((cell.get : BaseIO _) w).state
+      Leaf issued w ((cell.get : BaseIO _) w).state
   | childClosed (cell : IO.Ref (SingleFile.Phase IO.FS.Handle (SingleFile.AppendFiles IO.FS.Handle))) (w) :
-      Leaf w ((cell.set .closed : BaseIO _) w).state
-  | fileUnlock (fd : IO.FS.Handle) (w) : Leaf w (fd.unlock.toBaseIO w).state
+      Leaf issued w ((cell.set .closed : BaseIO _) w).state
+  | fileUnlock (fd : IO.FS.Handle) (w) (site : issued fd w) : Leaf issued w (fd.unlock.toBaseIO w).state
 
-def Frame (P : W → Prop) : Prop := ∀ {w t}, Leaf w t → P w → P t
+def Frame (issued : IO.FS.Handle → W → Prop) (P : W → Prop) : Prop := ∀ {w t}, Leaf issued w t → P w → P t
 
-theorem child_close (frame : Frame P) (h : SingleFile.Handle) (start : P w) :
+theorem Leaf.map (h : ∀ fd w, issued fd w → allowed fd w) (step : Leaf issued s t) :
+    Leaf allowed s t := by
+  cases step with
+  | mutexLock m w => exact .mutexLock m _
+  | mutexUnlock m w => exact .mutexUnlock m _
+  | walClosed cell w => exact .walClosed cell _
+  | takeChild slot w => exact .takeChild slot _
+  | childPhase cell w => exact .childPhase cell _
+  | childClosed cell w => exact .childClosed cell _
+  | fileUnlock fd w site => exact .fileUnlock fd _ (h fd _ site)
+
+/-- A child unlock is issued only for the lock actually read from its
+registered phase, immediately after changing that cell to closed. -/
+def ChildIssued (h : SingleFile.Handle) (w : W) (fd : IO.FS.Handle) (t : W) : Prop :=
+  ∃ cell mutex, h.Binds cell mutex ∧
+    let got := (cell.get : BaseIO _) (mutex.lock w).state
+    t = ((cell.set .closed : BaseIO Unit) got.state).state ∧
+      match got.val with
+      | .closed => False
+      | .active held _ _ _ | .poisoned held => fd = held
+
+theorem child_close (frame : Frame issued P) (h : SingleFile.Handle)
+    (childSite : ∀ fd t, ChildIssued h w fd t → issued fd t) (start : P w) :
     P ((SingleFile.close h).toBaseIO w).state := by
   obtain ⟨cell, mutex, binds⟩ := h.bindings
   rw [EIO.toBaseIO, SingleFile.close_run binds]
@@ -37,7 +59,10 @@ theorem child_close (frame : Frame P) (h : SingleFile.Handle) (start : P w) :
   | closed => exact frame (.mutexUnlock mutex got.state) framed
   | active fd _ _ _ | poisoned fd =>
     let after := ((cell.set .closed : BaseIO Unit) got.state).state
-    have freed := frame (.fileUnlock fd after) (frame (.childClosed cell got.state) framed)
+    have site : ChildIssued h w fd after := by
+      refine ⟨cell, mutex, binds, rfl, ?_⟩
+      rw [hp]
+    have freed := frame (.fileUnlock fd after (childSite fd after site)) (frame (.childClosed cell got.state) framed)
     cases unlock : fd.unlock after with
     | error e t | ok x t =>
       have preserved : P t := by simpa only [EIO.toBaseIO, unlock] using freed
@@ -45,15 +70,17 @@ theorem child_close (frame : Frame P) (h : SingleFile.Handle) (start : P w) :
       simp only [unlock]
       exact frame (.mutexUnlock mutex t) preserved
 
-private theorem closeResult_frame (frame : Frame P) (child : SingleFile.Handle)
-    (fd : IO.FS.Handle) (mutex : Std.BaseMutex) (start : P w) :
+private theorem closeResult_frame (frame : Frame issued P) (child : SingleFile.Handle)
+    (fd : IO.FS.Handle) (mutex : Std.BaseMutex)
+    (childSite : ∀ f t, ChildIssued child w f t → issued f t)
+    (storeSite : issued fd ((SingleFile.close child).toBaseIO w).state) (start : P w) :
     P (Segmented.Native.returnedWorld (Segmented.Native.closeResult child fd mutex w)) := by
-  have afterChild := child_close frame child start
+  have afterChild := child_close frame child childSite start
   unfold Segmented.Native.closeResult
   cases ran : SingleFile.close child w with
   | error e t | ok x t =>
     have atUnlock : P t := by simpa only [EIO.toBaseIO, ran] using afterChild
-    have freed := frame (.fileUnlock fd t) atUnlock
+    have freed := frame (.fileUnlock fd t (by simpa only [EIO.toBaseIO, ran] using storeSite)) atUnlock
     cases unlock : fd.unlock t with
     | error err v | ok val v =>
       have preserved : P v := by simpa only [EIO.toBaseIO, unlock] using freed
@@ -61,78 +88,19 @@ private theorem closeResult_frame (frame : Frame P) (child : SingleFile.Handle)
 
 /-- Frame the actual close using the registered child's identity from the
 reached ready store. No callback-wide close frame is a premise. -/
-theorem wal_close (heap : Segmented.Native.PhaseMemory) (frame : Frame P)
+theorem wal_close (heap : Segmented.Native.PhaseMemory) (frame : Frame (Segmented.Native.CloseSites ChildIssued heap wal session w) P)
     (ready : heap.Ready wal session w) (start : P w) :
     Post (Segmented.Native.close wal) w (fun _ t => P t) (fun _ t => P t) := by
-  obtain ⟨store, child, _, _, _, _, ran⟩ := Segmented.Native.close_ready_releases heap ready
+  obtain ⟨store, child, phase, slot, _, _, ran⟩ := Segmented.Native.close_ready_releases heap ready
   have body : P (Segmented.Native.returnedWorld (Segmented.Native.close wal w)) := by
     rw [ran]
     apply closeResult_frame frame
+    · exact fun f t site => ⟨store, child, phase, slot, .inl site⟩
+    · exact ⟨store, child, phase, slot, .inr ⟨rfl, rfl⟩⟩
     apply frame (.takeChild store.active _)
     apply frame (.walClosed _ _)
     exact frame (.mutexLock _ w) start
   unfold Post
   cases outcome : Segmented.Native.close wal w <;> simpa only [outcome, Segmented.Native.returnedWorld] using body
-
-/-- The outer descriptor has reached its actual unlock primitive. Success
-and failure remain distinguishable after a child close error takes priority.
-Further physical conclusions use the primitive report or a justified scoped
-last-reference contract on this descriptor. -/
-structure RootUnlock (P : W → Prop) (lock : IO.FS.Handle) (t : W) : Prop where
-  observed : ∃ u, P u ∧ (lock.unlock.toBaseIO u).state = t
-  kept : P t
-
-/-- The recovery/callback producer supplies either the exact attached WAL
-authority after the phase swap, or an empty phase. P describes the data and
-trace observations to keep after custody is consumed. -/
-theorem release_of_swap (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (ref : Ref) (lock : IO.FS.Handle)
-    (value : ((ref.swap .offline : BaseIO _) w).val = old)
-    (swapped : P ((ref.swap .offline : BaseIO _) w).state)
-    (registered : ∀ wal, old.wal = some wal →
-      ∃ session, heap.Ready wal session ((ref.swap .offline : BaseIO _) w).state)
-    (unlock : ∀ u, P u → Post lock.unlock u (fun _ t => ok t) err)
-    (primary : ∀ e u, P u → Post lock.unlock u (fun _ t => err e t) (fun _ t => err e t)) :
-    NativeScope.Release ref lock w ok err := by
-  let taken := (ref.swap .offline : BaseIO _) w
-  unfold NativeScope.Release
-  dsimp only
-  rw [value]
-  cases attached : old.wal with
-  | none => exact unlock taken.state swapped
-  | some wal =>
-    obtain ⟨session, ready⟩ := registered wal attached
-    exact (wal_close heap frame ready swapped).weaken
-      (fun _ t kept => unlock t kept) (fun e t kept => primary e t kept)
-
-/-- The recovery/callback producer supplies either the exact attached WAL
-authority after the phase swap, or an empty phase. P describes the data and
-trace observations to keep after custody is consumed. -/
-theorem release_rule (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (ref : Ref) (lock : IO.FS.Handle)
-    (owner : heap.holds ref old w)
-    (swapped : P ((ref.swap .offline : BaseIO _) w).state)
-    (registered : ∀ wal, old.wal = some wal →
-      ∃ session, heap.Ready wal session ((ref.swap .offline : BaseIO _) w).state)
-    (unlock : ∀ u, P u → Post lock.unlock u (fun _ t => ok t) err)
-    (primary : ∀ e u, P u → Post lock.unlock u (fun _ t => err e t) (fun _ t => err e t)) :
-    NativeScope.Release ref lock w ok err := by
-  exact release_of_swap heap frame ref lock (heap.swap .offline owner) swapped registered unlock primary
-
-/-- The recovery/callback producer supplies either the exact attached WAL
-authority after the phase swap, or an empty phase. P describes the data and
-trace observations to keep after custody is consumed. -/
-theorem release (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (ref : Ref) (lock : IO.FS.Handle)
-    (owner : heap.holds ref old w)
-    (swapped : P ((ref.swap .offline : BaseIO _) w).state)
-    (registered : ∀ wal, old.wal = some wal →
-      ∃ session, heap.Ready wal session ((ref.swap .offline : BaseIO _) w).state) :
-    NativeScope.Release ref lock w (RootUnlock P lock) (fun _ => RootUnlock P lock) := by
-  have unlock (u) (keeps : P u) :
-      Post lock.unlock u (fun _ t => RootUnlock P lock t) (fun _ t => RootUnlock P lock t) := by
-    have kept := frame (.fileUnlock lock u) keeps
-    unfold Post
-    cases ran : lock.unlock u with
-    | ok x t | error e t =>
-      exact ⟨⟨u, keeps, by simp only [EIO.toBaseIO, ran]⟩, by simpa only [EIO.toBaseIO, ran] using kept⟩
-  exact release_rule heap frame ref lock owner swapped registered unlock (fun _ => unlock)
 
 end ExperimentalL0.NativeCleanup

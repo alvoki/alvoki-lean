@@ -639,6 +639,19 @@ private theorem locked_run (handle : Handle) (action : IO α) (w : Void IO.RealW
     Functor.map, instMonadEIO._aux_1]
   cases action (handle.mutex.lock w).state <;> rfl
 
+/-- A segmented close removes its own store and its registered active slot.
+Only the stored directory lock and the child's actual phase lock can issue
+a file unlock, each at its particular syscall input. -/
+def CloseSites (childSite : SingleFile.Handle → Void IO.RealWorld → IO.FS.Handle → Void IO.RealWorld → Prop)
+    (heap : PhaseMemory) (wal : Handle)
+    (session : Session) (w : Void IO.RealWorld) (fd : IO.FS.Handle) (t : Void IO.RealWorld) : Prop :=
+  ∃ store child, heap.holds wal.state (.ready store session) w ∧
+    heap.holds store.active (some (session.control.active, child)) w ∧
+    let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
+    let taken := (store.active.swap none : BaseIO _) closed.state
+    childSite child taken.state fd t ∨
+      (fd = store.lock ∧ t = ((SingleFile.close child).toBaseIO taken.state).state)
+
 /-- Exact release data for the active child registered in the held store.
 Physical unlock-on-last-drop remains the local descriptor contract. -/
 theorem close_ready_releases (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :

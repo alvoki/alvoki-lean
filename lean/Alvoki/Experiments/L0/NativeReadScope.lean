@@ -49,12 +49,24 @@ structure Entry (physical : W → Footprint inode) (path root : FilePath) (image
     let f := IO.mkRef (.opening : Phase Wal) w
     Owned (physical f.state) root h f.val ∧ (physical f.state).phase = .opening ∧ Files physical root image f.state
 
+/-- Exact root acquisition and the reference allocated by this grant. -/
+def Grant (root : FilePath) (lock : IO.FS.Handle) (ref : Ref) : Prop :=
+  ∃ checked opened granted, IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock opened ∧
+    lock.tryLock true opened = .ok true granted ∧ (IO.mkRef (.opening : Phase Wal) granted).val = ref
+
+private theorem withReturn (h : Post action w success fail) :
+    Post action w (fun x t => action w = .ok x t ∧ success x t) fail := by
+  unfold Post at *
+  cases ran : action w with
+  | error e t => simpa [ran] using h
+  | ok x t => exact ⟨rfl, by simpa [ran] using h⟩
+
 /-- Root validation, reported failure to obtain the lock, and construction
 of the phase cell come from the concrete public scope. -/
 theorem Entry.withOpen (entry : Entry physical path root image) (initial : Files physical root image start)
     (use : Native.Handle → IO α)
     (reject : ∀ e t, Files physical root image t → err e t)
-    (recover : ∀ lock ref w, Opening physical root lock ref image w →
+    (recover : ∀ lock ref w, Grant root lock ref → Opening physical root lock ref image w →
       (physical w).manifest.active = L0Manifest.encode image.version →
       ∀ handle, handle.AtRoot root ref →
       Post (Native.recoverAt root ref) w
@@ -62,7 +74,9 @@ theorem Entry.withOpen (entry : Entry physical path root image) (initial : Files
         (fun e t => Release ref lock t (err e) (fun _ u => err e u))) :
     Post (Native.withOpen path use) start ok err := by
   let held := fun canonical h w => canonical = root ∧
-    Files physical root image w ∧ (physical w).rootLock = some (root, h)
+    Files physical root image w ∧ (physical w).rootLock = some (root, h) ∧
+      ∃ checked opened, IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok h opened ∧
+        h.tryLock true opened = .ok true w
   apply withOpen_rule path use held
   · have resolved := validatedRoot_rule path (entry.resolve start initial)
       (fun r w hr p => (entry.stat p w hr.2).weaken
@@ -70,18 +84,18 @@ theorem Entry.withOpen (entry : Entry physical path root image) (initial : Files
       (fun _ _ hr _ => hr.2)
     apply resolved.weaken
     · rintro _ t ⟨rfl, files⟩
-      apply (entry.openFile t files).weaken
-      · rintro h u ⟨bound, files⟩
-        apply (entry.lock h u bound files).weaken
-        · intro yes v succeeded
+      apply (withReturn (entry.openFile t files)).weaken
+      · rintro h u ⟨opened, bound, files⟩
+        apply (withReturn (entry.lock h u bound files)).weaken
+        · rintro yes v ⟨granted, succeeded⟩
           cases yes with
-          | true => exact ⟨rfl, succeeded.1, succeeded.2 rfl⟩
+          | true => exact ⟨rfl, succeeded.1, succeeded.2 rfl, t, u, opened, granted⟩
           | false => exact reject _ _ succeeded.1
         · exact reject
       · exact reject
     · exact reject
-  · rintro _ lock v ⟨rfl, files, owns⟩ fresh handle binding
+  · rintro _ lock v ⟨rfl, files, owns, checked, opened, mk, yes⟩ fresh handle binding
     obtain ⟨owned, phase, ready⟩ := entry.fresh lock v owns files
-    exact recover lock _ _ ⟨owned, phase, ready.catalog, ready.disk⟩ ready.manifest handle binding
+    exact recover lock _ _ ⟨checked, opened, v, mk, yes, rfl⟩ ⟨owned, phase, ready.catalog, ready.disk⟩ ready.manifest handle binding
 
 end ExperimentalL0.NativeReadScope
