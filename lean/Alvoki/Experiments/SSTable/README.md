@@ -147,6 +147,10 @@ created and still owns the name. A general acquisition failure can also
 mean an existing name was rejected and must be preserved. The open
 resource-cleanup guarantee does not block this datasafety milestone.
 
+Native open expects a path to an ordinary file in the caller's managed
+namespace. The descriptor check runs after the blocking open, so a FIFO
+with no writer can block before the type check.
+
 The [read bridge](../../../native/sstable.c) checks the descriptor with
 `fstat` and uses bounded `pread` on that descriptor. Successful operations
 on the immutable regular inode must return its extent and requested

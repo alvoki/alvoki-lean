@@ -6,14 +6,32 @@ The component models and Linux adapters separate code facts from filesystem and 
 |---|---|
 | One writer owns a stable directory namespace for the operation. | Name checks, rename, unlink, and descriptor acquisition refer to the intended files without an unmodeled concurrent replacement. |
 | A metadata check is tied to the descriptor later used, or the owner keeps the namespace stable between check and open. | A separate `stat` and `open` can otherwise refer to different inodes or follow a replaced symlink. |
-| Initialization creates the required files and durably publishes their names before normal use. | Reopen can distinguish a new component from a partially initialized one. |
-| Reads return the requested live bytes or an error. A read error is not an empty file. | Recovery cannot turn an I/O failure into lost history. |
+| An existing store has an admitted initialized image, and the caller supplies a durably named parent directory. | A bootstrap implementation must derive durability of its new contents and names from the barriers it actually issues. |
+| A successful component read supplies its required live bytes. | Native reads can return short chunks. The SSTable adapter checks required extents, and whole-file adapters read through EOF or propagate a reported error. |
 | Buffered writes report an explicit flush result before sync. | A close or finalizer can perform more I/O after the write call, and its failure is not evidence that the earlier write was fully flushed. |
 | Append and tail repair preserve the already synchronized prefix. | Later writes or truncation cannot silently alter acknowledged data below the repair point. |
 | File sync and parent-directory sync are separate effects. | Syncing file contents does not make a rename, unlink, or newly created name durable; sync the containing directory after namespace changes, and sync its parent when the directory's own binding must survive. |
 | A sync may take effect even when its call reports an error. | Retry must consume both possible reached states; the error itself does not identify the durable image. |
 | Directory enumeration distinguishes clean end-of-directory from an error after partial results. | A partial listing cannot safely be treated as a complete view when recovery or collection selects names from it. |
 | Process exit and power loss have different persistence outcomes. | Process exit may retain cache-visible bytes; power loss selects an admitted joint image of file contents and directory entries. |
+
+## Persistence after reported errors
+
+A successful synchronization is interpreted as settling the reached bytes
+or namespace covered by its primitive contract. Linux tracks writeback
+errors with a cursor per open file description. A previously observed error
+can be absent from a later `fsync`, including on a newly opened descriptor.
+Recovery therefore needs the premise that its selected bytes remain
+available for successful persistence. A later successful call alone gives
+no evidence that bytes lost in a failed writeback were repaired.
+[Linux VFS writeback errors](https://github.com/torvalds/linux/blob/v6.18/Documentation/filesystems/vfs.rst#handling-errors-during-writeback)
+
+Live atomic rename and crash persistence are distinct effects. DurableBlob
+and segmented WAL assume that power loss before the directory barrier
+leaves one of their admitted intact bindings. A process stop can leave the
+new binding and kernel-cached bytes visible while discarding userspace
+buffers. Lock release at process exit assumes no surviving alias to the
+open file description.
 
 ## Lean runtime resource pitfall
 

@@ -163,13 +163,15 @@ def ops (effects : Effects) : Segmented.Ops M where
   prepareSegment _ id := fun state =>
     namespaceChange (effects.prepare state.step id) (fun disk persist => disk.prepare id persist) state
   syncRoot := fun state => barrier (effects.root state.step) Disk.syncRoot state
-  stageControl value := fun state =>
-    namespaceChange (effects.stage state.step) (fun disk persist => disk.stage value persist) state
-  syncControl := fun state => barrier (effects.syncControl state.step) Disk.syncStage state
-  renameControl := fun state => match state.disk.staged with
-    | none => .ok (.error "missing staged control") state.tick
-    | some value =>
-      namespaceChange (effects.rename state.step) (fun disk persist => disk.rename value persist) state
+  publishControl value :=
+    DurableBlob.publishWith
+      (fun state => namespaceChange (effects.stage state.step) (fun disk persist => disk.stage value persist) state)
+      (fun _ state => barrier (effects.syncControl state.step) Disk.syncStage state)
+      (fun state => match state.disk.staged with
+        | none => .ok (.error "missing staged control") state.tick
+        | some control =>
+          namespaceChange (effects.rename state.step) (fun disk persist => disk.rename control persist) state)
+      (fun state => barrier (effects.root state.step) Disk.syncRoot state)
   readControl := fun state =>
     read (effects.controlRead state.step)
       (match state.disk.liveControl with | some control => .ok control | none => .error "missing control") state

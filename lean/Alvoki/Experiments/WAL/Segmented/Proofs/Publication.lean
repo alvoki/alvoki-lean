@@ -57,7 +57,8 @@ inductive PublishCut (d : Disk) (c : Control) : Disk → Prop where
 theorem publish_cases (effects : Effects) (c : Control) (s : State) :
     DiskPost (fun _ d => d = s.disk.published c) (PublishCut s.disk c)
       ((Segmented.publish (ops effects) c).run s) := by
-  unfold Segmented.publish
+  change DiskPost _ _ ((DurableBlob.publishWith _ _ _ _ : M Unit).run s)
+  unfold DurableBlob.publishWith
   apply bindPost (P := fun _ d => ∃ p, d = s.disk.stage c p)
   · apply namespacePost (effects.stage s.step) (fun d flag => d.stage c flag) s
     · exact .before
