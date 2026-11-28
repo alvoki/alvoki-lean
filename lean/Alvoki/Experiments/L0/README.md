@@ -148,10 +148,9 @@ Native check and lookup call the shared `nativeTableAt` adapter.
 the reached open error, or passes the exact handle from `Handle.mk`
 to `nativeTableAction` and forwards its result. No separate action or
 scope result is needed. The SSTable producer supplies the typed result
-from the immutable image on that inode. The reached result is now computed
-by [NativeTableReads](NativeTableReads.lean) from one evaluation of the
-native scope. On its product carrier only the IO world is advanced, so
-the table namespace and logical projection are structurally unchanged.
+from the immutable image on that inode. [NativeRead](NativeRead.lean) derives the result from the actual stat,
+open and scoped read operations. Its frame preserves the represented
+manifest and catalog and permits background WAL writeback.
 `nativeTableAt_reached` distinguishes stat failure, rejected metadata,
 acquisition failure and the outcome of the action on an acquired handle.
 For the concrete check and lookup, the descriptor is held in the local
@@ -241,7 +240,8 @@ Delivered success emits `flushed`. Each uncertain observation emits
 frame the durable catalog through each recovery attempt. Connecting the
 reached Linux state to the primitive reports and namespace frames
 remains open. The adapter still owes the initial reached catalog witness,
-the scoped read-result correspondence and the local creation frames.
+the local creation frames and the correspondence between the restarted
+model carrier and the reached filesystem.
 The probe frames visibility, the build leaves visibility untouched and
 the directory barrier changes only the allocated binding. These local
 effects yield exact insertion in the shared schedule. The native adapter
@@ -252,59 +252,52 @@ observations.
 
 ## Public read dispatch
 
-`Native.get` runs the phase check and table lookup in the same `ExceptT`
-dispatch, `Cell.get`. `Native.get_afterPhaseRead` identifies the continuation
-and its exact entry world from the primitive phase read. The interpreted schedule uses that dispatch as
-well. `Lifecycle.getScope_refines` composes a successful interpreted
-recovery, any finite list of gets that catches each reported error, and
-the shared outer cleanup. The induction adds a client event only for a
-successful get and threads the catalog through each result. Cleanup
-preserves the resulting trace even when the enclosing call reports an
-error. The remaining bridge must relate the actual phase reference and
-primitive calls to the reached carrier for this dispatch. The theorem
-currently consumes the interpreted lookup effects and cleanup frames.
-The online read theorems take only the table-read interpretation.
-They need no append, creation, manifest or WAL law.
+[WithOpenReads](WithOpenReads.lean) proves a client trace for the concrete
+`Native.withOpen` with any finite list of public gets. The caller supplies
+a represented initialized root and its prior trace. Root acquisition
+establishes ownership of the newly allocated phase reference. Concrete
+recovery supplies the installed session, its attached WAL, the settled
+manifest and the checked catalog. Publication swaps the owned reference
+to online before calling the reader. The first `onlineGet` consumes that
+world directly. A failed recovery takes cleanup without invoking the
+callback.
 
-The remaining native correspondence has two distinct boundaries.
+Each get emits a client event on success and returns its reached world
+on either outcome. The finite-list callback catches every reported
+error. `readMany_length` verifies one reply per key and
+`readEvents_eq_zip` identifies successful replies in order.
+`caughtSizeError_thenHit` specializes this to an actual size error after
+descriptor acquisition, its scope exit, and a subsequent successful
+public lookup. The final phase swap, WAL close and root unlock consume
+the state left by the callback. A cleanup error retains the observed
+read trace. `Execution.Run.refines` gives the final `Client.Allows`
+and representation witness.
 
-- The phase reference and file handles are opaque runtime objects.
-  A caller-side invariant must relate the owned reference to its online
-  phase, and the acquired descriptor to the inode named in the durable
-  catalog. The world token sequences operations and has no Lean projection
-  for that ownership or for the live filesystem. The product read carrier
-  preserves its mathematical projections by construction. Preservation of
-  the corresponding physical state must follow from primitive effects.
-- `Unified.ReadSafety` only constrains successful size and read calls.
-  `scopedLookup` applies the producer theorem to the action run on the
-  descriptor returned by acquisition. The healthy image interpreter is
-  used only as the reference for the resulting value. `HealthySource`
-  remains the stronger progress condition used by `scopedCheck`.
+The scoped SSTable proof frames each stat, open, size and bounded pread
+and checks the byte image selected by the acquired inode. Both closed
+table operations return data without a descriptor. The local runtime
+contract observes last-reference disposal at the actual labelled scope
+exit, including on a reported read error. The root lock has a separate
+scope and unwraps its actual unlock result. Failed `fdopen` before Lean
+constructs a handle remains outside the last-reference contract.
 
-The segmented WAL proves effects at the boundaries of the shared
-executable schedule. Its proof interpreter threads the reached disk and
-ownership through each bind. The current L0 read interpreter instead
-evaluates a whole native table action and then asks for a witness
-relating that action's result to its named inode. The producer theorem
-removes universal read success from that witness. Moving the remaining
-binding and frame evidence to the stat, acquire, read and release
-boundaries would follow the WAL approach and remove the need to recover
-that evidence from a completed callback. The world can remain opaque.
-The outer public get still needs the corresponding proof of native
-phase ownership, callback assembly and the physical frames on both
-return branches.
+The earlier product-carrier get and finite-list scope proofs have been
+removed. The abstract flush/restart theorem still interprets a lookup on
+its model carrier through `RestartLookup.get`, which invokes the same
+scoped native table proof. Healthy model recovery retains its table
+check interpreter.
 
 ## Remaining premises
 
 | Premise | Owner and producer | Consumer |
 | --- | --- | --- |
-| Stat, acquisition of the inode selected by the protected name, and bounded reads during its immutable lifetime | The primitive boundary must justify reads actually executed and propagate their failures. The scoped producer uses success-only byte correctness. The current interpreter still needs to derive the acquisition, binding and frame witnesses from the local native effects. Healthy progress can require all bounded reads to succeed | `TableNamespace.scopedLookup` and `scopedCheck` |
-| Descriptor drop and outer lock release | Runtime last-reference behavior and unlock effects. L0 must prove release on the reached ownership state. The shared schedule preserves an already-observed client trace through cleanup, assuming the close and unlock storage frames | `Lifecycle.recovery_offline` and `Lifecycle.scope_refines` |
-| Concrete dispatch uses the native read interpreter on its reached carrier | L0 native callback setup. The interpreter itself computes the lookup result and keeps the reported world, so an independent result equality is gone | `NativeTableReads.Interpretation.get` |
+| Table stat, open, size and bounded pread | Local filesystem contracts bind the successful acquisition to the selected name and inode and preserve the protected resources on both outcomes. Successful reads yield bytes from that inode. Healthy progress additionally requires successful primitives | `NativeRead.tableAction`, `onlineGet` and `checkTables_healthy` |
+| Last-reference disposal and unlock | Runtime releases a successfully constructed private handle at its labelled scope return. The filesystem supplies the actual unlock result. Cleanup preserves the observed trace through child close and unlock failures | `NativeRead.Call.Balanced.released`, `NativeReadRelease.root_released`, `WithOpenReads.withOpen` |
+| Phase-reference dispatch | Owned reference reads and swaps return the represented phase and preserve the protected footprint. Recovery produces the handle consumed during publication and cleanup | `NativeRead.publishOnline`, `onlineGet` |
 | Durable catalog insertion and preservation of unrelated physical bindings | Filesystem create, file sync and directory sync effects. L0 must represent the reached writer and prove local table, manifest and WAL namespace frames | `TableCreationEvidence.catalogInserted`, `catalogAfter` and the lifecycle postconditions |
-| Healthy recovery state and primitive reports | The filesystem supplies healthy manifest and table primitives. The manifest interpreter derives the typed open, and `scopedCheck` yields the table callback result. The returned state carries the installed L0 session, physical catalog, stable manifest image and exact ready WAL child, including the original successful WAL open result on the reached disk. L0 still supplies the catalog and manifest frames across WAL open and the manifest/WAL frames across table checks. The product read interpreter supplies mathematical projection frames; instantiating it in the callbacks also requires connecting actual Linux primitive effects and namespace ownership to those projections | `Lifecycle.recovery_progress` |
+| Healthy recovery state and primitive reports | The filesystem supplies healthy manifest and table primitives. The manifest interpreter derives the typed open, and `scopedCheck` yields the table callback result. The returned state carries the installed L0 session, physical catalog, stable manifest image and exact ready WAL child, including the original successful WAL open result on the reached disk. L0 still supplies the catalog and manifest frames across WAL open and the manifest/WAL frames across table checks. The model recovery check interpreter retains its product-carrier frames. The native read scope consumes the actual manifest, WAL, table and phase producers | `Lifecycle.recovery_progress` |
 | Restart selection, reply delivery and loss | Filesystem survivor choice and runtime/client observations. L0 must connect the resulting image and observations to the interpreter for arbitrary permitted prefixes, including allocation, table creation and the interval before manifest publication. Before a table enters the selected catalog, `retainRecoverySelection` derives the recovery precondition from the unchanged selection and the old inode bindings. After durable creation, `flushPublicationChoices` supplies both selections. Concrete cut coverage remains open | `recoverReachedFlush` and `Execution.Run.flushObserved` |
-| Repeated public operation steps on actual native states | A durably initialized empty root may be a caller premise. L0 still must derive the callback trace from one integrated reached-state interpretation and compose it with the outer scope | `Execution.Run.refines` |
+| Repeated public reads on actual native states | The root-binding, storage and runtime primitive laws establish the state consumed by the next operation. Native append and flush need their own producers on the reached state | `WithOpenReads.withOpen` and `Execution.Run.refines` |
 | Ready view, recoverability after restart and segmented append | WAL producers for append, rotation, CONTROL and uncertainty selection | `WalRecovery.Interpretation` and the append law |
 
 ## Process interruption checks

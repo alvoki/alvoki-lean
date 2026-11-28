@@ -44,12 +44,12 @@ compile "$l0/RestartRefinement" proof
 compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
-for module in NativeManifest NativeRead NativeRecovery NativeTableCheck PublicationCut; do
+for module in NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads; do
   compile "$l0/$module" proof
 done
 compile Alvoki/Experiments/WAL/Segmented/Proofs/NativeRootIO proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeRecovery NativeTableCheck PublicationCut; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Segmented.Proofs.NativeRootIO; do
@@ -67,6 +67,7 @@ import Alvoki.Experiments.L0.TableProofs
 import Alvoki.Experiments.L0.TableAllocationProofs
 import Alvoki.Experiments.L0.NativeManifest
 import Alvoki.Experiments.L0.NativeRecovery
+import Alvoki.Experiments.L0.WithOpenReads
 import Alvoki.Experiments.L0.NativeTableCheck
 import Alvoki.Experiments.L0.PublicationCut
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeRootIO
@@ -97,6 +98,16 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeRead.Online.frame
 #check_axioms NativeRead.onlineGet
 #check_axioms NativeRead.onlineGetTwice
+#check_axioms NativeRead.erasesGet
+#check_axioms NativeRead.publicGet
+#check_axioms NativeRead.readTwice_run
+#check_axioms NativeRead.readMany_run
+#check_axioms NativeRead.readMany_length
+#check_axioms NativeRead.readEvents_eq_zip
+#check_axioms NativeRead.caughtSizeError_thenHit
+#check_axioms NativeReadRelease.root_released
+#check_axioms NativeRecoverAt.withOpen_manifestStatError
+#check_axioms WithOpenReads.withOpen
 #check_axioms keyCodec_roundtrips
 #check_axioms keyCodec_preservesOrder
 #check_axioms mutationCodec_roundtrips
@@ -145,8 +156,6 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.initialCatalog
 #check_axioms Lifecycle.recovery_progress
 #check_axioms Lifecycle.scope_refines
-#check_axioms Lifecycle.getList_online
-#check_axioms Lifecycle.getScope_refines
 #check_axioms ExperimentalL0.Native.get_afterPhaseRead
 #check_axioms retainRecoverySelection
 #check_axioms Lifecycle.recovery_online
@@ -156,8 +165,6 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.write_offline
 #check_axioms Lifecycle.flush_offline
 #check_axioms Lifecycle.Proof.useSession_offline
-#check_axioms Lifecycle.get_online
-#check_axioms Lifecycle.get_online_error
 #check_axioms native_table_check
 #check_axioms nativeTableAt_afterStat
 #check_axioms nativeTableAt_acquired

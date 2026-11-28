@@ -1,6 +1,6 @@
 import Alvoki.Experiments.L0.NativeRecoverAt
 import Alvoki.Experiments.L0.NativePublish
-import Alvoki.Experiments.L0.NativeReadCallback
+import Alvoki.Experiments.L0.NativeReadClient
 
 namespace ExperimentalL0.NativeReadScope
 open System Lifecycle NativeScope NativeRead
