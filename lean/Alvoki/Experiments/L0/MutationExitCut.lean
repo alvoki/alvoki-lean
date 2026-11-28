@@ -212,20 +212,56 @@ structure Frame (physical : W → Footprint inode) (root : FilePath) (tables : C
   survivors : (physical t).manifest.survivors = (physical s).manifest.survivors
   catalog : (tableNamespace physical root).Keeps s t tables
 
-/-- Prefix of the one concrete suffix, including the instant before each
-call and its actual return. Only leaves preceding the cut need a frame. -/
-inductive Reached (edge : W → W → Prop) : Tail → W → W → Prop where
-  | here : Reached edge path w w
-  | step : edge w (op w).state → Reached edge (next (op w).val) (op w).state t →
-      Reached edge (.call op next) w t
+/-- Executing a prefix of the actual finalizer leaves this continuation.
+Membership refers only to the primitive operand and its returned value. -/
+inductive Tail.Prefix : Tail → W → Tail → W → Prop where
+  | here : Prefix path w path w
+  | step : Prefix (next (op w).val) (op w).state rest t → Prefix (.call op next) w rest t
 
-theorem Reached.frame (cut : Reached (Frame physical root tables) path s t) :
-    Frame physical root tables s t := by
+/-- Every primitive return boundary, including a reported error, is
+represented even if that return is the final call in the scope. -/
+theorem Tail.Prefix.finish (path : Tail) (w : W) : Prefix path w .done (path.run w).state := by
+  induction path generalizing w with
+  | done => exact .here
+  | call op next ih => exact .step (ih (op w).val _)
+
+abbrev LeafStop := {α : Type} → BaseIO α → W → W → Prop
+
+/-- Ordinary boundaries include pure guard rejections and the completed
+scope. An in-flight observation retains the exact operand but needs no
+return from the interrupted call. -/
+inductive Cut (stop : LeafStop) (path : Tail) (start : W) (cut : W) : Prop where
+  | boundary : Tail.Prefix path start rest cut → Cut stop path start cut
+  | during : Tail.Prefix path start (.call op next) w → stop op w cut → Cut stop path start cut
+
+private theorem Frame.refl (physical : W → Footprint inode) (root : FilePath) (tables : Catalog) (w : W) :
+    Frame physical root tables w w := ⟨.nil, rfl, rfl, fun _ _ _ _ _ left right => ⟨left, right⟩⟩
+
+private theorem Frame.trans (first : Frame physical root tables s t)
+    (next : Frame physical root tables t u) : Frame physical root tables s u :=
+  ⟨first.disk.trans next.disk, next.manifest.trans first.manifest,
+    next.survivors.trans first.survivors, first.catalog.trans next.catalog⟩
+
+/-- Local frame laws apply only to an operand actually issued by this
+invocation of the suffix, including the unlock after a failed child close. -/
+structure Frames (edge : W → W → Prop) (stop : LeafStop) (path : Tail) (start : W) : Prop where
+  returned : ∀ {α} {op : BaseIO α} {next w}, Tail.Prefix path start (.call op next) w → edge w (op w).state
+  stopped : ∀ {α} {op : BaseIO α} {next w cut}, Tail.Prefix path start (.call op next) w →
+    stop op w cut → edge w cut
+
+private theorem Tail.Prefix.frame (cut : Tail.Prefix path s rest t)
+    (frames : Frames (Frame physical root tables) stop path s) : Frame physical root tables s t := by
   induction cut with
-  | here => exact ⟨.nil, rfl, rfl, fun _ _ _ _ _ left right => ⟨left, right⟩⟩
-  | step step _ remaining =>
-    exact ⟨step.disk.trans remaining.disk, remaining.manifest.trans step.manifest,
-      remaining.survivors.trans step.survivors, step.catalog.trans remaining.catalog⟩
+  | here => exact Frame.refl ..
+  | step _ ih =>
+    exact (frames.returned .here).trans (ih ⟨fun path => frames.returned (.step path),
+      fun path => frames.stopped (.step path)⟩)
+
+theorem Cut.frame (position : Cut stop path s t)
+    (frames : Frames (Frame physical root tables) stop path s) : Frame physical root tables s t := by
+  cases position with
+  | boundary route => exact route.frame frames
+  | during route interrupted => exact (route.frame frames).trans (frames.stopped route interrupted)
 
 theorem Frame.files (keep : Frame physical root image.tables w cut)
     (manifest : (physical w).manifest.Stable (L0Manifest.encode image.version))
@@ -277,7 +313,8 @@ theorem afterReturn {physical : W → Footprint inode} (p : Prefix path root sta
       NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
     (fits : image.view.tail + 1 < UInt64.size) (io : NativeMutationScope.AppendPrimitives runtime change)
     (linux : System.Platform.isWindows = false)
-    (atCut : Reached (Frame physical root image.tables) (remaining p change) (returnedWorld (output p change)) cut)
+    (atCut : Cut stop (remaining p change) (returnedWorld (output p change)) cut)
+    (frames : Frames (Frame physical root image.tables) stop (remaining p change) (returnedWorld (output p change)))
     (restart : NativeAppendCut.Restarted physical root image.tables cut (physical cut).disk mode after) :
     ((remaining p change).run (returnedWorld (output p change))).state =
       returnedWorld (Native.withOpen path (fun h => Native.mutation h change) start) ∧
@@ -289,7 +326,7 @@ theorem afterReturn {physical : W → Footprint inode} (p : Prefix path root sta
   · exact suffix_state p scope invoked
   apply recovery
   have post := NativeMutationScope.appendAt runtime io entered fits linux
-  have keep := atCut.frame
+  have keep := atCut.frame frames
   change Frame physical root image.tables (returnedWorld (WalRecoverySlice.Segmented.Native.append p.wal (encode change) p.issue)) cut at keep
   unfold output
   unfold Alvoki.NativePost.IOReturns at post
@@ -313,8 +350,9 @@ theorem rejected {physical : W → Footprint inode} (p : Prefix path root start)
     (scans : ∀ history w, NativeRead.SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) →
       NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
     (full : ¬ image.view.tail + 1 < UInt64.size)
-    (atCut : Reached (Frame physical root image.tables) (suffix p.ref p.lock p.session false)
-      (NativeWrite.guardWorld p.ref p.wal p.callback) cut)
+    (atCut : Cut stop (suffix p.ref p.lock p.session false) (NativeWrite.guardWorld p.ref p.wal p.callback) cut)
+    (frames : Frames (Frame physical root image.tables) stop (suffix p.ref p.lock p.session false)
+      (NativeWrite.guardWorld p.ref p.wal p.callback))
     (restart : NativeAppendCut.Restarted physical root image.tables cut (physical cut).disk mode after) :
     ((suffix p.ref p.lock p.session false).run (NativeWrite.guardWorld p.ref p.wal p.callback)).state =
       returnedWorld (Native.withOpen path (fun h => Native.mutation h change) start) ∧
@@ -325,7 +363,7 @@ theorem rejected {physical : W → Footprint inode} (p : Prefix path root start)
   simp only [full, ↓reduceIte] at rejected
   obtain ⟨held, invoked⟩ := rejected
   obtain ⟨_, _, _, installed, view⟩ := held.child
-  have saved := atCut.frame.files held.manifest held.catalog (installed.installed.offline (request := none) (.inl view)) restart
+  have saved := (atCut.frame frames).files held.manifest held.catalog (installed.installed.offline (request := none) (.inl view)) restart
   refine ⟨?_, recovery (Retry.rejected run saved)⟩
   rw [scope]
   let body := Native.mutation h change
