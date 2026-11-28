@@ -16,26 +16,6 @@ def Sim (state : W → σ → Prop) (actual : F α) (model : ExceptT String (ESt
     | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => state t u
     | _, _ => False
 
-theorem Sim.bind {state : W → σ → Prop} {a : F α} {f : α → F γ}
-    {b : ExceptT String (EStateM Unit σ) β} {g : β → ExceptT String (EStateM Unit σ) δ}
-    (first : Sim state a b rel) (next : ∀ x y, rel x y → Sim state (f x) (g y) out) :
-    Sim state (a >>= f) (b >>= g) out := by
-  intro w s prior
-  have h := first w s prior
-  rw [ExceptT.run_bind, ExceptT.run_bind]
-  simp only [ Bind.bind, instMonadEIO._aux_13, EST.bind, EStateM.bind]
-  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at h ⊢
-  case ok.ok x t y u => cases x <;> cases y <;> first | contradiction | exact h | exact next _ _ h.2 _ _ h.1
-  case error.ok x t y u => cases y <;> first | contradiction | exact h
-  all_goals first | contradiction | exact h | exact next _ _ h.2 _ _ h.1
-
-theorem Sim.pure {state : W → σ → Prop} (h : rel x y) :
-    Sim state (pure x) (pure y) rel :=
-  fun _ _ frame => ⟨frame, h⟩
-
-theorem Sim.throw {state : W → σ → Prop} : Sim state (throw e) (throw d) rel :=
-  fun _ _ frame => frame
-
 /-- A pointwise primitive observation with separate continuations for
 returned values and errors. Each refers to both reached states. -/
 def At (a : F α) (b : ExceptT String (EStateM Unit σ) β) (w : W) (s : σ)
@@ -56,15 +36,6 @@ theorem At.bind {a : F α} {b : ExceptT String (EStateM Unit σ) β} {f : α →
   case ok.ok x t y u => cases x <;> cases y <;> first | contradiction | exact first | exact next _ _ _ _ first
   case error.ok x t y u => cases y <;> first | contradiction | exact first
   all_goals exact first
-
-theorem Sim.atPost {a : F α} {b : ExceptT String (EStateM Unit σ) β} (h : Sim R a b rel)
-    (entry : R w s) : At a b w s (fun x y t u => R t u ∧ rel x y) R := by
-  have post := h w s entry
-  unfold At
-  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at post ⊢
-  case ok.ok x t y u => cases x <;> cases y <;> exact post
-  case error.ok x t y u => cases y <;> exact post
-  all_goals exact post
 
 inductive Op where
   | readData
@@ -129,8 +100,9 @@ def Program.eval [Monad m] [MonadExceptOf String m] (ops : Ops m) : Program α �
 
 /-- The evaluator follows the very same generic decoder that the executable
 and persistence instance use. -/
-theorem eval_reopen [Monad m] [LawfulMonad m] [MonadExceptOf String m] 
+theorem eval_reopen [Monad m] [MonadExceptOf String m]
     (ops : Ops m) (p : Policy)
+    (pureBind : ∀ {α β : Type} (x : α) (f : α → m β), (pure x >>= f) = f x)
     (throwBind : ∀ {α β : Type} (e : String) (f : α → m β), (throw e >>= f) = throw e) : (WalRecoverySlice.reopen programOps p).eval ops = WalRecoverySlice.reopen ops p := by
   have pureLaw {α : Type} (x : α) : (pure x : Program α).eval ops = pure x := rfl
   have throwLaw {α : Type} (e : String) : (throw e : Program α).eval ops = throw e := rfl
@@ -153,7 +125,7 @@ theorem eval_reopen [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     | apply step (.syncMarker _); intro v
     | apply step (.truncate _); intro v
     | apply step .syncData; intro v
-    | simp only [lp, pure_bind, throwBind]
+    | simp only [lp, pureBind, throwBind]
     | split
     | rfl
 
@@ -248,21 +220,12 @@ private theorem interpret (steps : RecoveryOps R actual model p start initial)
         | none => exact trivial
         | some bytes => exact ⟨seen.1, (disk.marker slot _ _ _ b).trans seen.2.1, seen.2.2⟩
 
-local instance : LawfulMonad IO := .mk' IO
-  (id_map := fun x => funext fun w => by
-    simp only [Functor.map, instMonadEIO._aux_1, EST.bind]
-    cases x w <;> rfl)
-  (pure_bind := fun _ _ => rfl)
-  (bind_assoc := fun x _ _ => funext fun w => by
-    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind]
-    cases x w <;> rfl)
-
 theorem reopen (steps : RecoveryOps R actual model p w i) (disk : ReadModel model) (frame : R w i) :
     At (WalRecoverySlice.reopen actual p) (WalRecoverySlice.reopen model p) w i
       (fun x y t u => R t u ∧ x = y) R := by
   have nativeThrow {α β : Type} (e : String) (f : α → F β) : (throw e >>= f) = throw e := rfl
   have modelThrow {α β : Type} (e : String) (f : α → M β) : (throw e >>= f) = throw e := rfl
-  rw [← eval_reopen actual p nativeThrow, ← eval_reopen model p modelThrow]
+  rw [← eval_reopen actual p (fun _ _ => rfl) nativeThrow, ← eval_reopen model p (fun _ _ => rfl) modelThrow]
   exact interpret steps disk none _ .initial (reopen_shrinks p) trivial frame
 
 end WalRecoverySlice.SingleFile.ConcreteRecovery
