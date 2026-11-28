@@ -50,7 +50,7 @@ private theorem earlierFrame {disk : W → Disk} {start : W} (path : Issued actu
     (frames : path.Earlier (fun _ _ a b => AppendCut.ActiveFiles c (disk a) (disk b))) :
     AppendCut.ActiveFiles c (disk start) (disk w) := by
   induction path with
-  | start => exact .refl .. 
+  | start => exact .refl ..
   | next _ _ ih => exact (ih frames.1).trans frames.2
 
 theorem recoverable (r : Receipt stop h batch start cut) (prim : Primitives disk c r)
