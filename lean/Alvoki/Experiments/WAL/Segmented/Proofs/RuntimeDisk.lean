@@ -1,6 +1,6 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeOpen
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeRootIO
-import Alvoki.Experiments.WAL.Segmented.Proofs.Invariant
+import Alvoki.Experiments.WAL.Segmented.Proofs.Writeback
 
 namespace WalRecoverySlice.Segmented.Native
 open Alvoki.NativePost System
@@ -199,7 +199,10 @@ theorem openExisting_diskPost_of_worker (heap : PhaseMemory) (dir : FilePath)
 
 /-- Only the opened segment's image and cursor can be changed by a child reopen. -/
 def ChildChange (id : Nat) (before after : Disk) : Prop :=
-  after = before.setSegment id (after.segment id) (after.cursor id)
+  ∃ saved, Writebacks before saved ∧ after = saved.setSegment id (after.segment id) (after.cursor id)
+
+def AfterClose (before after : Disk) : Prop :=
+  ∃ saved, Writebacks before saved ∧ after = {saved with cursor := after.cursor}
 
 /-- A selected segment is qualified by its actual directory, policy and
 registered handle. Scanning consumes that binding; closing need only retain
@@ -216,11 +219,11 @@ structure ChildAccess (s : Store) (disk : W → Disk) (Q : W → Prop) where
         Child.Recoverable p bs none ((disk t).segment id) ∧
         (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
   scan : ∀ h bs u, owns h bs u → Q u → IOReturns (SingleFile.scan h) u
-    (fun bytes t => bytes = bs ∧ owns h bs t ∧ Q t ∧ disk t = disk u)
-    (fun t => owns h bs t ∧ Q t ∧ disk t = disk u)
+    (fun bytes t => bytes = bs ∧ owns h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
+    (fun t => owns h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
   close : ∀ h bs u, owns h bs u → Q u → IOReturns (SingleFile.close h) u
-    (fun _ t => Q t ∧ disk t = {disk u with cursor := (disk t).cursor})
-    (fun t => Q t ∧ disk t = {disk u with cursor := (disk t).cursor})
+    (fun _ t => Q t ∧ AfterClose (disk u) (disk t))
+    (fun t => Q t ∧ AfterClose (disk u) (disk t))
 
 private structure OpenLayout (c : Control) (history : List Bytes) (d : Disk) : Prop where
   readable : Readable c history none d
@@ -233,25 +236,35 @@ private theorem OpenLayout.retry (o : OpenLayout c history d) :
     ⟨history, none, o.readable, by intro result ok; simp [WalRecoverySlice.Contract.Permitted] at ok; subst result; exact .inl rfl⟩
   exact ⟨⟨c, o.live, choice⟩, ⟨c, o.durable, choice⟩⟩
 
+private theorem OpenLayout.writebacks (o : OpenLayout c history before) (steps : Writebacks before after) :
+    OpenLayout c history after := ⟨steps.readable o.readable, steps.live.trans o.live, steps.durable.trans o.durable⟩
+
 private theorem OpenLayout.child {id : Nat} (o : OpenLayout c history before) (delta : ChildChange id before after)
+    (clean : Child.Settled p (before.segment id) bs)
     (unchanged : after.segment id = before.segment id) : OpenLayout c history after := by
+  obtain ⟨saved, writes, delta⟩ := delta
+  have middle := o.writebacks writes
   have names : ∀ i, c.selects i → i ∈ after.liveNames ∧ i ∈ after.durableNames := by
-    rw [delta]; exact o.readable.layout.names
-  have same (i : Nat) : after.segment i = before.segment i := by
+    rw [delta]; exact middle.readable.layout.names
+  have same (i : Nat) : after.segment i = saved.segment i := by
     by_cases eq : i = id
-    · subst i; exact unchanged
-    · calc after.segment i = (before.setSegment id (after.segment id) (after.cursor id)).segment i :=
+    · subst i; exact unchanged.trans (writes.settled clean).symm
+    · calc after.segment i = (saved.setSegment id (after.segment id) (after.cursor id)).segment i :=
              congrArg (fun d : Disk => d.segment i) delta
            _ = _ := Disk.setSegment_other _ _ _ eq
-  exact ⟨o.readable.frame names (fun i _ => same i), (congrArg Disk.liveControl delta).trans o.live,
-    (congrArg Disk.durableControl delta).trans o.durable⟩
+  exact ⟨middle.readable.frame names (fun i _ => same i), (congrArg Disk.liveControl delta).trans middle.live,
+    (congrArg Disk.durableControl delta).trans middle.durable⟩
 
 private theorem OpenLayout.activeLayout (o : OpenLayout c history before)
-    (delta : ChildChange c.active before after) : Layout c history after := by
-  apply o.readable.layout.frame
-  · rw [delta]; exact o.readable.layout.names
+    (delta : ChildChange c.active before after) :
+    Layout c history after ∧ after.liveControl = some c ∧ after.durableControl = some c := by
+  obtain ⟨saved, writes, delta⟩ := delta
+  have prior := o.writebacks writes
+  refine ⟨?_, (congrArg Disk.liveControl delta).trans prior.live, (congrArg Disk.durableControl delta).trans prior.durable⟩
+  apply prior.readable.layout.frame
+  · rw [delta]; exact prior.readable.layout.names
   · intro i _ sealed
-    calc after.segment i = (before.setSegment c.active (after.segment c.active) (after.cursor c.active)).segment i :=
+    calc after.segment i = (saved.setSegment c.active (after.segment c.active) (after.cursor c.active)).segment i :=
              congrArg (fun d : Disk => d.segment i) delta
          _ = _ := Disk.setSegment_other _ _ _ (Nat.ne_of_lt sealed)
 
@@ -259,27 +272,29 @@ private theorem OpenLayout.activeFail (o : OpenLayout c history before)
     (delta : ChildChange c.active before after)
     (retained : Child.Recoverable c.policy (segmentHistory c.capacity c.active history) none (after.segment c.active)) :
     OpenLayout c history after :=
-  ⟨⟨o.activeLayout delta, o.readable.room, retained⟩, (congrArg Disk.liveControl delta).trans o.live,
-    (congrArg Disk.durableControl delta).trans o.durable⟩
+  ⟨⟨(o.activeLayout delta).1, o.readable.room, retained⟩, (o.activeLayout delta).2.1, (o.activeLayout delta).2.2⟩
 
 private theorem OpenLayout.activeReady (o : OpenLayout c history before)
     (delta : ChildChange c.active before after)
     (installed : Child.Installed c.policy (after.segment c.active) (after.cursor c.active)
       (segmentHistory c.capacity c.active history)) : Installed (sessionOf c history) after :=
-  ⟨history, rfl, ⟨o.activeLayout delta, installed⟩, (congrArg Disk.liveControl delta).trans o.live,
-    (congrArg Disk.durableControl delta).trans o.durable⟩
+  ⟨history, rfl, ⟨(o.activeLayout delta).1, installed⟩, (o.activeLayout delta).2⟩
 
 private theorem OpenLayout.cursors (o : OpenLayout c history before)
-    (eq : after = {before with cursor := after.cursor}) : OpenLayout c history after :=
-  ⟨o.readable.frame (by rw [eq]; exact o.readable.layout.names)
+    (eq : AfterClose before after) : OpenLayout c history after := by
+  obtain ⟨_, steps, eq⟩ := eq
+  have o := o.writebacks steps
+  exact ⟨o.readable.frame (by rw [eq]; exact o.readable.layout.names)
     (fun i _ => by rw [eq]), (congrArg Disk.liveControl eq).trans o.live,
     (congrArg Disk.durableControl eq).trans o.durable⟩
 
 private theorem Recoverable.cursors {request : Option Contract.Request} (o : Recoverable known request before)
-    (eq : after = {before with cursor := after.cursor}) : Recoverable known request after := by
+    (eq : AfterClose before after) : Recoverable known request after := by
+  obtain ⟨saved, steps, eq⟩ := eq
+  have o := steps.recoverable o
   obtain ⟨c, live, choice⟩ := o.live
   obtain ⟨d, durable, old⟩ := o.durable
-  have keeps {c} (r : RecoveryChoice known request c before) : RecoveryChoice known request c after := by
+  have keeps {c} (r : RecoveryChoice known request c saved) : RecoveryChoice known request c after := by
     obtain ⟨history, p, readable, permits⟩ := r
     exact ⟨history, p, readable.frame (by rw [eq]; exact readable.layout.names)
       (fun i _ => by rw [eq]), permits⟩
@@ -312,17 +327,17 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
   apply Store.readSealedChild_post s (ok := Frame) (failed := Failure) (held := held)
   · apply mapIO raw
     · rintro h t ⟨q, change, owned, _, physical⟩
-      exact ⟨owned, q, o.child change (physical settled)⟩
+      exact ⟨owned, q, o.child change settled (physical settled)⟩
     · rintro t ⟨q, change, _, physical⟩
-      exact ⟨q, (o.child change (physical settled)).retry⟩
+      exact ⟨q, (o.child change settled (physical settled)).retry⟩
   · rintro h v ⟨owned, q, prior⟩
     apply mapIO (ops.scan h bs v owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
-      exact ⟨rfl, owns, qt, same.symm ▸ prior⟩
+      exact ⟨rfl, owns, qt, prior.writebacks same⟩
     · rintro t ⟨owns, qt, same⟩
-      exact ⟨owns, qt, same.symm ▸ prior⟩
+      exact ⟨owns, qt, prior.writebacks same⟩
   · rintro h v ⟨owned, q, prior⟩
-    have after {t} (post : Q t ∧ disk t = {disk v with cursor := (disk t).cursor}) : Frame t ∧ Failure t :=
+    have after {t} (post : Q t ∧ AfterClose (disk v) (disk t)) : Frame t ∧ Failure t :=
       ⟨⟨post.1, prior.cursors post.2⟩, ⟨post.1, (prior.cursors post.2).retry⟩⟩
     exact mapIO (ops.close h bs v owned q) (fun _ _ post => after post) (fun _ post => (after post).2)
 
@@ -336,12 +351,12 @@ structure StoreIO (s : Store) (disk : W → Disk) (Q : W → Prop) where
   controlBytes : W → ByteArray
   controlBound : ∀ w, Q w → ControlCodec.decode (controlBytes w) = (disk w).liveControl
   metadata : ∀ w, Q w → IOReturns (s.root / "CONTROL").symlinkMetadata w
-    (fun _ t => Q t ∧ disk t = disk w) (fun t => Q t ∧ disk t = disk w)
-  file : ∀ before, FileRead.Primitives (s.root / "CONTROL") (fun t => Q t ∧ disk t = before)
+    (fun _ t => Q t ∧ Writebacks (disk w) (disk t)) (fun t => Q t ∧ Writebacks (disk w) (disk t))
+  file : ∀ before, FileRead.Primitives (s.root / "CONTROL") (fun t => Q t ∧ Writebacks before (disk t))
     controlBytes id
   sync : ∀ w, Q w → IOReturns (syncHandle s.directory) w
-    (fun _ t => Q t ∧ disk t = (disk w).syncRoot)
-    (fun t => Q t ∧ (disk t = disk w ∨ disk t = (disk w).syncRoot))
+    (fun _ t => Q t ∧ Writebacks (disk w).syncRoot (disk t))
+    (fun t => Q t ∧ (Writebacks (disk w) (disk t) ∨ Writebacks (disk w).syncRoot (disk t)))
   children : ChildAccess s disk Q
   cleanup : ∀ c history h, CollectionIO s.root c.firstNeeded (ActiveFrame children c history h)
   cleanupSync : ∀ c history h, Keeps (ActiveFrame children c history h) (syncHandle s.directory)
@@ -360,37 +375,40 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
       (fun t => Q t ∧ Recoverable known none (disk t)) := by
   obtain ⟨c, found, choice⟩ := prior.live
   obtain ⟨history, readable, rfl⟩ := choice.known
-  let P0 := fun t => Q t ∧ disk t = disk w
+  let P0 := fun t => Q t ∧ Writebacks (disk w) (disk t)
   let P := fun t => Q t ∧ OpenLayout c history (disk t)
   let bad := fun t => Q t ∧ Recoverable (historyView c history) none (disk t)
   let held := ActiveFrame ops.children c history
   let bs := segmentHistory c.capacity c.active history
   have control : ∀ t, P0 t → ControlCodec.decode (ops.controlBytes t) = some c := by
     rintro t ⟨q, same⟩
-    rw [ops.controlBound t q, same, found]
-  have bounds := decode_bounds (control w ⟨start, rfl⟩)
+    rw [ops.controlBound t q, same.live, found]
+  have bounds := decode_bounds (control w ⟨start, .nil⟩)
   have src := s.readControl_fromFile (ops.metadata w start) (ops.file (disk w))
     (fun t pt => ControlCodec.canonical_of_decode (control t pt)) bounds.1 bounds.2
-  have barrier : OpenLayout c history (disk w).syncRoot :=
-    ⟨readable.frame (fun id selected => ⟨(readable.layout.names id selected).1,
-      (readable.layout.names id selected).1⟩) (fun _ _ => rfl), found, found⟩
+  have barrier {t} (steps : Writebacks (disk w) (disk t)) : OpenLayout c history (disk t).syncRoot :=
+    let reached := steps.readable readable
+    let bound := steps.live.trans found
+    ⟨reached.frame (fun id selected => ⟨(reached.layout.names id selected).1,
+      (reached.layout.names id selected).1⟩) (fun _ _ => rfl), bound, bound⟩
   apply mapIO (s.recoverChild_post c history P0 P held bad ?source ?retry0 ?retry ?sync ?sealed ?acquire ?scan ?close ?collect readable.layout.upper)
   case success =>
     rintro ⟨session, child⟩ t ⟨rfl, _, q, installed⟩
     exact ⟨q, installed, rfl⟩
   case failure => exact fun _ h => h
   case source =>
-    exact src.mapPost (fun _ _ result => ⟨result.2, result.1⟩) (fun _ result => ⟨result.1, result.2.symm ▸ prior⟩)
-  case retry0 => exact fun _ result => ⟨result.1, result.2.symm ▸ prior⟩
+    exact src.mapPost (fun _ _ result => ⟨result.2, result.1⟩) (fun _ result => ⟨result.1, result.2.recoverable prior⟩)
+  case retry0 => exact fun _ result => ⟨result.1, result.2.recoverable prior⟩
   case retry => exact fun _ result => ⟨result.1, result.2.retry⟩
   case sync =>
     rintro t ⟨q, same⟩
-    apply Returns.mapPost (s.syncRoot_io (ops.sync t q))
-    · rintro _ u ⟨q', eq⟩
-      exact ⟨q', by rw [eq, same]; exact barrier⟩
-    · rintro u ⟨q', eq | eq⟩
-      · exact ⟨q', by rw [eq, same]; exact prior⟩
-      · exact ⟨q', by rw [eq, same]; exact barrier.retry⟩
+    have raw := Returns.liftIO (ops.sync t q)
+    apply Returns.mapPost raw
+    · rintro _ u ⟨q', steps⟩
+      exact ⟨q', (barrier same).writebacks steps⟩
+    · rintro u ⟨q', steps | steps⟩
+      · exact ⟨q', (same.trans steps).recoverable prior⟩
+      · exact ⟨q', ((barrier same).writebacks steps).retry⟩
   case sealed => exact fun id lo lt u post => ops.children.readSealed post.2 post.1 lo lt
   case acquire =>
     rintro u ⟨q, entry⟩
@@ -404,12 +422,12 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
     rintro h u ⟨owned, q, installed⟩
     apply mapIO (ops.children.scan h bs u owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
-      exact ⟨rfl, owns, qt, same.symm ▸ installed⟩
+      exact ⟨rfl, owns, qt, same.installed installed⟩
     · rintro t ⟨owns, qt, same⟩
-      exact ⟨owns, qt, same.symm ▸ installed⟩
+      exact ⟨owns, qt, same.installed installed⟩
   case close =>
     rintro h u ⟨owned, q, installed⟩
-    have after {t} (r : Q t ∧ disk t = {disk u with cursor := (disk t).cursor}) : bad t :=
+    have after {t} (r : Q t ∧ AfterClose (disk u) (disk t)) : bad t :=
       ⟨r.1, Recoverable.cursors (installed.offline (.inl rfl)) r.2⟩
     exact mapIO (ops.children.close h bs u owned q) (fun _ _ post => after post) (fun _ post => after post)
   case collect =>
