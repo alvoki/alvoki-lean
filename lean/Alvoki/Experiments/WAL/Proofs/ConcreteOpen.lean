@@ -7,20 +7,87 @@ abbrev Ref := IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle))
 abbrev ModelOpened := Opened OpenTarget (AppendFiles OpenTarget)
 abbrev ActualOpened := Opened IO.FS.Handle (AppendFiles IO.FS.Handle)
 
+/-- A primitive may require an entry condition which is consumed by its
+single call. The invariant R is retained on either reported outcome. -/
+def SimResult (R : W → σ → Prop) (a : F α) (b : ExceptT String (EStateM Unit σ) β) (rel : α → β → Prop)
+    (w : W) (s : σ) : Prop :=
+  match a.run w, b.run s with
+  | .ok (.ok x) t, .ok (.ok y) u => R t u ∧ rel x y
+  | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => R t u
+  | _, _ => False
+
+/-- The two actual pathname opens returned their respective descriptors
+at these very entry worlds. No capability is carried past a subsequent
+read of the stamp or acquisition of the exclusive lock. -/
+def Fresh (dir : FilePath) (p : Policy) (r : OpenReports) (R : W → OpenImage → Prop)
+    (target : OpenTarget) (h : IO.FS.Handle) (t : W) (u : OpenImage) : Prop :=
+  ∃ w s, R w s ∧ (nativeOpen.openTarget dir target).run w = .ok (.ok h) t ∧
+    ((openEffects p r).openTarget dir target).run s = .ok (.ok target) u
+
+theorem SimResult.bind {a : F α} {b : OpenM β} {f : α → F γ} {g : β → OpenM δ}
+    (first : SimResult R a b rel w s)
+    (next : ∀ x y t u, a.run w = .ok (.ok x) t → b.run s = .ok (.ok y) u →
+      R t u → rel x y → SimResult R (f x) (g y) out t u) :
+    SimResult R (a >>= f) (b >>= g) out w s := by
+  unfold SimResult at *
+  rw [ExceptT.run_bind, ExceptT.run_bind]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, EStateM.bind]
+  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at first ⊢
+  case ok.ok x t y u => cases x <;> cases y <;> first | contradiction | exact first | exact next _ _ _ _ ha hb first.1 first.2
+  case error.ok _ _ y _ => cases y <;> first | contradiction | exact first
+  all_goals first | contradiction | exact first
+
 /-- The local namespace/descriptor assumptions required during single-file
 acquisition. A relation B ties each acquired description to an OpenTarget. -/
 structure OpenSteps (dir : FilePath) (policy : Policy) (r : OpenReports)
     (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop) : Prop where
   openFile : ∀ target, Sim R (nativeOpen.openTarget dir target)
     ((openEffects policy r).openTarget dir target) (fun h model => model = target ∧ B h target)
-  unbuffered : ∀ h target, B h target → Sim R (nativeOpen.unbuffered h)
-    ((openEffects policy r).unbuffered target) Eq
-  policyRead : ∀ h, B h .policy → Sim R (nativeOpen.readPolicy (dir / "policy") h)
-    ((openEffects policy r).readPolicy (dir / "policy") .policy)
-    (fun x y => x = y ∧ y = stampText policy)
-  lock : ∀ h, B h .lock → Sim R (nativeOpen.tryLock h) ((openEffects policy r).tryLock .lock) Eq
+  unbuffered : ∀ h target w s, Fresh dir policy r R target h w s → B h target → R w s →
+    SimResult R (nativeOpen.unbuffered h) ((openEffects policy r).unbuffered target) Eq w s
+  policyRead : ∀ h w s, Fresh dir policy r R .policy h w s → B h .policy → R w s →
+    SimResult R (nativeOpen.readPolicy (dir / "policy") h)
+      ((openEffects policy r).readPolicy (dir / "policy") .policy)
+      (fun x y => x = y ∧ y = stampText policy) w s
+  lock : ∀ h w s, Fresh dir policy r R .lock h w s → B h .lock → R w s →
+    SimResult R (nativeOpen.tryLock h) ((openEffects policy r).tryLock .lock) Eq w s
   unlock : ∀ h, B h .lock → Sim R (nativeOpen.unlock h) ((openEffects policy r).unlock .lock) Eq
-  sync : ∀ h target, B h target → Sim R (nativeOpen.sync h) ((openEffects policy r).sync target) Eq
+  sync : ∀ h target, target = .policy ∨ target = .directory → B h target → Sim R (nativeOpen.sync h) ((openEffects policy r).sync target) Eq
+
+theorem OpenSteps.bindFreshOpen (steps : OpenSteps dir p r R B) (target : OpenTarget)
+    {f : IO.FS.Handle → F α} {g : OpenTarget → OpenM β}
+    (next : ∀ h t u, Fresh dir p r R target h t u → B h target → R t u →
+      SimResult R (f h) (g target) out t u) :
+    Sim R (nativeOpen.openTarget dir target >>= f) ((openEffects p r).openTarget dir target >>= g) out := by
+  intro w s frame
+  change SimResult R _ _ out w s
+  apply SimResult.bind (a := nativeOpen.openTarget dir target) (b := (openEffects p r).openTarget dir target)
+    (rel := fun h model => model = target ∧ B h target) (steps.openFile target w s frame)
+  rintro h _ t u actual model post ⟨rfl, bound⟩
+  exact next _ _ _ ⟨w, s, frame, actual, model⟩ bound post
+
+theorem SimResult.thenSim {a : F α} {b : OpenM β} {f : α → F γ} {g : β → OpenM δ}
+    (first : SimResult R a b rel w s)
+    (next : ∀ x y, rel x y → Sim R (f x) (g y) out) :
+    SimResult R (a >>= f) (b >>= g) out w s :=
+  first.bind fun _ _ _ _ _ _ frame pair => next _ _ pair _ _ frame
+
+/-- Two native reads of the same stamp description reject a reusable
+healthy stamp law: after the first call the second can observe EOF. -/
+theorem stampRead_notReusable (p : Policy) (path : FilePath) (h : IO.FS.Handle)
+    (entry : R w s)
+    (first : (nativeOpen.readPolicy path h).run w = .ok (.ok (stampText p)) t)
+    (eof : (nativeOpen.readPolicy path h).run t = .ok (.ok "") u) :
+    ¬ Sim R (nativeOpen.readPolicy path h) ((openEffects p {}).readPolicy path .policy) Eq := by
+  intro reused
+  have model (v : OpenImage) : ((openEffects p {}).readPolicy path .policy).run v =
+      .ok (.ok (stampText p)) v := rfl
+  have step := reused w s entry
+  rw [first, model] at step
+  have second := reused t s step.1
+  rw [eof, model] at second
+  have impossible := second.2
+  cases p <;> contradiction
 
 def Markers (B : IO.FS.Handle → OpenTarget → Prop) (p : Policy)
     (markers : Option (IO.FS.Handle × IO.FS.Handle)) : Prop :=
@@ -42,10 +109,9 @@ private theorem acquire (steps : OpenSteps dir p r R B) :
     Sim R (acquireWith nativeOpen dir) (acquireWith (openEffects p r) dir)
       (fun h target => target = .lock ∧ B h .lock) := by
   unfold acquireWith
-  apply (steps.openFile .lock).bind
-  intro h target hx
-  obtain ⟨rfl, held⟩ := hx
-  apply (steps.lock h held).bind
+  apply steps.bindFreshOpen .lock
+  intro h w s fresh held frame
+  apply (steps.lock h w s fresh held frame).thenSim
   intro a b same
   subst b
   split
@@ -55,36 +121,31 @@ private theorem acquire (steps : OpenSteps dir p r R B) :
 private theorem files (steps : OpenSteps dir p r R B) :
     Sim R (openFilesWith nativeOpen dir) (openFilesWith (openEffects p r) dir) (Files B p) := by
   unfold openFilesWith
-  apply (steps.openFile .policy).bind
-  intro stamp target ht
-  obtain ⟨rfl, st⟩ := ht
-  apply (steps.policyRead stamp st).bind
+  apply steps.bindFreshOpen .policy
+  intro stamp w s fresh st frame
+  apply (steps.policyRead stamp w s fresh st frame).thenSim
   intro text expected eq
   obtain ⟨rfl, eq⟩ := eq
   subst text
   cases p <;> dsimp only [stampText]
   all_goals
-    apply (steps.openFile .reader).bind
-    intro reader modelReader hr
-    obtain ⟨rfl, hr⟩ := hr
-    apply (steps.unbuffered reader _ hr).bind
+    apply steps.bindFreshOpen .reader
+    intro reader w s fresh hr frame
+    apply (steps.unbuffered reader _ w s fresh hr frame).thenSim
     intro _ _ _
-    apply (steps.openFile .writer).bind
-    intro writer modelWriter hw
-    obtain ⟨rfl, hw⟩ := hw
-    apply (steps.unbuffered writer _ hw).bind
+    apply steps.bindFreshOpen .writer
+    intro writer w s fresh hw frame
+    apply (steps.unbuffered writer _ w s fresh hw frame).thenSim
     intro _ _ _
   case logOnly => exact Sim.pure ⟨st, rfl, hr, hw, trivial, rfl⟩
   case boundary =>
-    apply (steps.openFile .marker0).bind
-    intro zero modelZero hz
-    obtain ⟨rfl, hz⟩ := hz
-    apply (steps.unbuffered zero _ hz).bind
+    apply steps.bindFreshOpen .marker0
+    intro zero w s fresh hz frame
+    apply (steps.unbuffered zero _ w s fresh hz frame).thenSim
     intro _ _ _
-    apply (steps.openFile .marker1).bind
-    intro one modelOne ho
-    obtain ⟨rfl, ho⟩ := ho
-    apply (steps.unbuffered one _ ho).bind
+    apply steps.bindFreshOpen .marker1
+    intro one w s fresh ho frame
+    apply (steps.unbuffered one _ w s fresh ho frame).thenSim
     intro _ _ _
     exact Sim.pure ⟨st, rfl, hr, hw, ⟨hz, ho⟩, rfl⟩
 
@@ -204,12 +265,12 @@ private theorem install (steps : OpenSteps dir p r R B) (recovery : WorkerSteps 
   have set : Sim R (settleWith nativeOpen dir a.stamp)
       (settleWith (openEffects p r) dir .policy) Eq := by
     unfold settleWith
-    apply (steps.sync _ _ stamp).bind
+    apply (steps.sync _ _ (.inl rfl) stamp).bind
     intro _ _ _
     apply (steps.openFile .directory).bind
     intro directory role hr
     obtain ⟨rfl, held⟩ := hr
-    exact steps.sync _ _ held
+    exact steps.sync _ _ (.inr rfl) held
   apply set.bind
   intro _ _ _
   exact Sim.pure ⟨lock, reader, writer, markers, policy, rfl, rfl⟩
