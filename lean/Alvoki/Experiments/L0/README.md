@@ -101,7 +101,8 @@ operation directly to an `Execution.Run` step. The model uses these same
 lemmas. [NativeBridge](NativeBridge.lean) derives the operation laws from
 component observations. [WalRecovery](WalRecovery.lean) consumes
 `publicOpenModel_refines` and the ready-phase scan on the exact installed
-session. The separate model receipt remains only for append.
+session. The public mutation consumes the registration and WAL result in
+[NativeMutation](NativeMutation.lean).
 [ManifestComposition](ManifestComposition.lean) derives the typed result and
 selected manifest directly from the DurableBlob primitive interpreter.
 `RecoveryChoices` discharges uncertain effects from the public steps.
@@ -209,11 +210,10 @@ The WAL recovery interpretation retains the exact public open result,
 including the ready store, active child identity and reached disk. A scan
 after open uses that phase directly. A reported open failure retains the
 recoverable disk, closed phase and the producer's root and child release
-facts. The open interpretation takes the WAL view as already selected at
-the restart boundary. Connecting uncertain native append and later restart
-to that selected input remains open. Arbitrary ready states still need a
-cached-view invariant, in particular after native append. Close after an uncertain
-operation preserves the pending request via the existing offline stop step.
+facts. A reported append failure keeps exactly the pending encoded change. Recovery
+chooses the surviving view on its actual WAL acquisition. A later failure
+after that acquisition retains the choice for the next public open.
+A lost reply after a successful append retains the extended view on both opens.
 If a component opened successfully and a later L0 callback failed, record
 the successful component open followed by stop. A scan failure after a
 successful WAL open follows this rule too. The integrated callback interpretation executes the typed manifest
@@ -310,8 +310,22 @@ check interpreter.
 | Durable catalog insertion and preservation of unrelated physical bindings | Filesystem create, file sync and directory sync effects. L0 must represent the reached writer and prove local table, manifest and WAL namespace frames | `TableCreationEvidence.catalogInserted`, `catalogAfter` and the lifecycle postconditions |
 | Healthy recovery state and primitive reports | The filesystem supplies healthy manifest and table primitives. The manifest interpreter derives the typed open, and `scopedCheck` yields the table callback result. The returned state carries the installed L0 session, physical catalog, stable manifest image and exact ready WAL child, including the original successful WAL open result on the reached disk. L0 still supplies the catalog and manifest frames across WAL open and the manifest/WAL frames across table checks. The model recovery check interpreter retains its product-carrier frames. The native read scope consumes the actual manifest, WAL, table and phase producers | `Lifecycle.recovery_progress` |
 | Restart selection, reply delivery and loss | Filesystem survivor choice and runtime/client observations. L0 must connect the resulting image and observations to the interpreter for arbitrary permitted prefixes, including allocation, table creation and the interval before manifest publication. Before a table enters the selected catalog, `retainRecoverySelection` derives the recovery precondition from the unchanged selection and the old inode bindings. After durable creation, `flushPublicationChoices` supplies both selections. Concrete cut coverage remains open | `recoverReachedFlush` and `Execution.Run.flushObserved` |
-| Repeated public reads on actual native states | The root-binding, storage and runtime primitive laws establish the state consumed by the next operation. Native append and flush need their own producers on the reached state | `WithOpenReads.withOpen` and `Execution.Run.refines` |
-| Ready view, recoverability after restart and segmented append | WAL producers for append, rotation, CONTROL and uncertainty selection | `WalRecovery.Interpretation` and the append law |
+| Repeated public reads on actual native states | The root-binding, storage and runtime primitive laws establish the state consumed by the next operation. Public mutation uses the recovered child and returns a physical input to both opens. Native flush still needs a producer on the reached state | `WithOpenReads.withOpen` and `Execution.Run.refines` |
+| Ready view, recoverability after restart and segmented append | WAL producers for append, rotation, CONTROL and uncertainty selection | `AppendIO.LocalIO.append`, `NativeMutationScope.mutationThenReadTwice` |
+
+## Reuse across append, close and recovery
+
+| Scope | Producer and guarantee | Reuse |
+| --- | --- | --- |
+| Single-file WAL | `ConcreteRecovery` binds descriptors to file roles and the active cursor. `ConcreteAppend` interprets data and marker writes. `ConcreteCreate` installs a fresh rotating child. | The active and successor branches share the bounded child write proof. A successful successor carries its physical fresh bytes and live directory name before CONTROL can select it. |
+| Segmented WAL | `RuntimeStoreOpen` and `RuntimeChild` produce the selected registration. `AppendIO.LocalIO` in `AppendRuntime` composes admission, child IO, CONTROL and slot transfer with PR #26’s append model. | A successful write returns the updated ready authority. Error cleanup receives the actual slot, including the empty slot after detachment. Known and pending opens use the same acquisition worker. |
+| L0 | `NativeMutationScope.mutationThenReadTwice` supplies the position guard, change encoding, table/manifest frames, phase publication, delivery and close. `PendingReadScope.twice` passes each reached world into the next public open. | Both reopens consume the existing scoped read and cleanup proof. A reported error keeps the exact issued request. A successful write followed by a lost reply and an acknowledged write share one physical outcome. |
+
+External assumptions describe Linux file and directory effects, handle
+and reference ownership, descriptor disposal, and preservation of the
+caller’s manifest and table resources by WAL primitives. Root unlock and
+last-reference release are separate observations. A failed `fdopen` on
+Lean 4.36 can leak a raw descriptor before a Lean handle exists.
 
 ## Process interruption checks
 

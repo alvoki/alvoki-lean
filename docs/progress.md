@@ -30,9 +30,13 @@ successfully on the same handle, counts descriptors across close and
 reads again after reopen. The [L0 guide](../lean/Alvoki/Experiments/L0/README.md)
 describes the remaining consumers of the earlier model bridge.
 
-Milestone 2 connects the public append, lost reply and close to the WAL
-producers above and reopens twice on the disk returned by the previous
-operation. Milestone 3 follows table creation, directory sync and manifest
+[NativeMutationScope.mutationThenReadTwice](../lean/Alvoki/Experiments/L0/NativeMutation.lean)
+connects public put and delete, acknowledgement loss, error cleanup and two
+reopens on the reached worlds. It derives the write authority from the
+child installed by the public opener. The first recovery with a pending
+request pins its choice at WAL acquisition. The next open consumes that
+choice even if the earlier read or cleanup returned an error. The L0 guide
+records the division between reusable WAL producers and public L0 proofs. Milestone 3 follows table creation, directory sync and manifest
 publication through the admissible interruption prefixes into survivor
 selection and a recovered read. Both deliver their observations to
 `Client.Step`, `Client.Allows` and `Execution.Run.refines`. PR #30 at
