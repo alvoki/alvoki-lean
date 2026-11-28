@@ -42,9 +42,16 @@ compile "$l0/RestartRefinement" proof
 compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
+for module in NativeManifest NativeRead NativeRecovery NativeTableCheck PublicationCut; do
+  compile "$l0/$module" proof
+done
+compile Alvoki/Experiments/WAL/Segmented/Proofs/NativeRootIO proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeRecovery NativeTableCheck PublicationCut; do
   leanchecker "Alvoki.Experiments.L0.$module"
+done
+for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Segmented.Proofs.NativeRootIO; do
+  leanchecker "Alvoki.Experiments.$module"
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
@@ -56,7 +63,38 @@ import Alvoki.Experiments.L0.Lifecycle
 import Alvoki.Experiments.L0.LifecycleRefinement
 import Alvoki.Experiments.L0.TableProofs
 import Alvoki.Experiments.L0.TableAllocationProofs
+import Alvoki.Experiments.L0.NativeManifest
+import Alvoki.Experiments.L0.NativeRecovery
+import Alvoki.Experiments.L0.NativeTableCheck
+import Alvoki.Experiments.L0.PublicationCut
+import Alvoki.Experiments.WAL.Segmented.Proofs.NativeRootIO
 open ExperimentalL0 ExperimentalL0.NativeBridge
+#check_axioms FileRead.readBinFile
+#check_axioms FileRead.readBinFile_atEOF
+#check_axioms WalRecoverySlice.Segmented.Native.Store.readControl_fromFile
+#check_axioms WalRecoverySlice.Segmented.Native.Store.syncRoot_io
+#check_axioms WalRecoverySlice.Segmented.Native.CollectionIO.collect
+#check_axioms ImmutableSSTable.Unified.checkedOpen_frame
+#check_axioms ImmutableSSTable.Unified.Image.checkedOpen_healthy
+#check_axioms ImmutableSSTable.Unified.checkedTypedLookup_scoped
+#check_axioms ExperimentalL0.Native.get_atRoot
+#check_axioms table_lookup_scoped
+#check_axioms NativeManifest.reopen
+#check_axioms NativeManifest.reopen_atSync
+#check_axioms NativeRecovery.reopenWal
+#check_axioms NativeRecovery.recover
+#check_axioms PublicationCut.renameCut
+#check_axioms PublicationCut.cutRecovery
+#check_axioms NativeRead.Call.Balanced.released
+#check_axioms NativeRead.tableAction
+#check_axioms NativeRead.checkTables_frame
+#check_axioms NativeRead.checkTables_balanced
+#check_axioms NativeRead.checkTables_healthy
+#check_axioms NativeRead.firstSizeError
+#check_axioms NativeRead.Writebacks.installed
+#check_axioms NativeRead.Online.frame
+#check_axioms NativeRead.onlineGet
+#check_axioms NativeRead.onlineGetTwice
 #check_axioms keyCodec_roundtrips
 #check_axioms keyCodec_preservesOrder
 #check_axioms mutationCodec_roundtrips
