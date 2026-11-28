@@ -1,7 +1,7 @@
 import Alvoki.Experiments.L0.Native
 import Alvoki.Experiments.L0.DurableCatalog
 import Alvoki.Experiments.L0.Refinement
-import Alvoki.Experiments.WAL.Segmented.Proofs.Invariant
+import Alvoki.Experiments.WAL.Segmented.Proofs.Writeback
 import Alvoki.Experiments.DurableBlob.Proofs
 
 namespace ExperimentalL0.NativeRead
@@ -458,36 +458,11 @@ def Owned (atWorld : Footprint inode) (root : System.FilePath) (lock : IO.FS.Han
 
 open WalRecoverySlice.Segmented (Model.Disk)
 
-inductive Writebacks (initial : WalRecoverySlice.Segmented.Model.Disk) :
-    WalRecoverySlice.Segmented.Model.Disk → Prop where
-  | nil : Writebacks initial initial
-  | next : Writebacks initial middle → ∀ id file, Writebacks initial (middle.writeback id file)
+abbrev Writebacks := WalRecoverySlice.Segmented.Writebacks
 
-theorem Writebacks.trans {finish : WalRecoverySlice.Segmented.Model.Disk} (a : Writebacks start middle) (b : Writebacks middle finish) :
-    Writebacks start finish := by
-  induction b with
-  | nil => exact a
-  | next _ id file ih => exact .next ih id file
-
-/-- Selected files of an installed WAL child are clean after open. Whole-file
-writeback on any other segment may change its durable bytes. -/
-theorem Writebacks.installed (steps : Writebacks before after)
-    (held : WalRecoverySlice.Segmented.Installed child before) :
-    WalRecoverySlice.Segmented.Installed child after := by
-  induction steps with
-  | nil => exact held
-  | @next middle _ id file ih =>
-    obtain ⟨history, canonical, ready, live, durable⟩ := ih
-    refine ⟨history, canonical, ready.frame ready.layout.names ?_ rfl, live, durable⟩
-    intro i selects
-    by_cases hit : i = id
-    · have le := selects.2
-      rcases Nat.eq_or_lt_of_le le with eq | lt
-      · simp only [WalRecoverySlice.Segmented.Model.Disk.writeback, hit, ite_true]
-        simpa only [← hit, eq] using ready.active.toSettled.writeback file
-      · simpa [WalRecoverySlice.Segmented.Model.Disk.writeback, hit] using
-          (ready.layout.sealed i selects lt).writeback file
-    · simp [WalRecoverySlice.Segmented.Model.Disk.writeback, hit]
+namespace Writebacks
+export WalRecoverySlice.Segmented.Writebacks (nil next trans installed)
+end Writebacks
 
 structure FrameTo (physical : W → Footprint inode) (root : System.FilePath)
     (wal : Wal) (tables : Catalog) (before after : W) (next : Phase Wal) : Prop where

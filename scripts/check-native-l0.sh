@@ -190,9 +190,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms TableNamespace.scopedCheck
 #check_axioms NativeTableReads.product
 #check_axioms NativeTableReads.productFrame
-#check_axioms NativeTableReads.Interpretation.lookupEffect
 #check_axioms NativeTableReads.Interpretation.checkHealthy
-#check_axioms ExperimentalL0.NativeTableReads.Interpretation.get
+#check_axioms RestartLookup.get
 #check_axioms TableNamespace.Represents.frame
 #check_axioms recoverKeepsCatalog
 #check_axioms recoverCatalog
