@@ -71,11 +71,25 @@ inductive WriterStage (store : Store) (c : Control) (start : W) :
 
 abbrev Regular (md : IO.FS.Metadata) := (md.type == .file && md.numLinks == 1) = true
 
+/-- Physical observations of the inode held by an open file description.
+A pathname binding can move at rename. The stable bytes belong to the inode:
+fsync on the file descriptor does not imply durability of its staging name. -/
+structure Media where
+  bound : IO.FS.Handle → FilePath → W → Prop
+  inode : IO.FS.Handle → W → Persistence.FileImage
+
+def Media.Written (m : Media) (h : IO.FS.Handle) (path : FilePath) (c : Control) (w : W) : Prop :=
+  m.bound h path w ∧ (m.inode h w).live = (ControlCodec.encode c).data.toList
+
+def Media.Synced (m : Media) (h : IO.FS.Handle) (path : FilePath) (c : Control) (w : W) : Prop :=
+  m.Written h path c w ∧ (m.inode h w).durable = (ControlCodec.encode c).data.toList
+
 /-- Local syscall reports for one invocation. Private partial bytes are
 represented in the caller's physical relation. No proposal is renamed until
 the actual write, flush and fsync on its own writer all returned success. -/
 structure Primitives (store : Store) (c : Control) (reports : Effects)
-    (start : W) (initial : State) (R : W → State → Prop) : Prop where
+    (start : W) (initial : State) (R : W → State → Prop) (disk : W → Disk) where
+  media : Media
   stat : match (store.root / "CONTROL.next").symlinkMetadata start with
     | .ok md t => ¬ Regular md → StageError reports c initial R t
     | .error (.noFileOrDirectory ..) _ => True
@@ -83,22 +97,30 @@ structure Primitives (store : Store) (c : Control) (reports : Effects)
   unlink : ∀ md t, (store.root / "CONTROL.next").symlinkMetadata start = .ok md t → Regular md →
     IOReturns (IO.FS.removeFile (store.root / "CONTROL.next")) t (fun _ _ => True) (StageError reports c initial R)
   openWriter : ∀ t, removeRegular (store.root / "CONTROL.next") start = .ok () t →
-    IOReturns (IO.FS.Handle.mk (store.root / "CONTROL.next") .writeNew) t (fun _ _ => True) (StageError reports c initial R)
-  unbuffered : ∀ h t, WriterStage store c start .opened h t →
-    IOReturns (disableBuffering h) t (fun _ _ => True) (StageError reports c initial R)
-  write : ∀ h t, WriterStage store c start .unbuffered h t →
-    IOReturns (h.write (ControlCodec.encode c)) t (fun _ _ => True) (StageError reports c initial R)
-  flush : ∀ h t, WriterStage store c start .written h t →
-    At h.flush (stage reports c) t initial (fun _ _ v u => R v u) R
+    IOReturns (IO.FS.Handle.mk (store.root / "CONTROL.next") .writeNew) t
+      (fun h v => media.bound h (store.root / "CONTROL.next") v) (StageError reports c initial R)
+  unbuffered : ∀ h t, WriterStage store c start .opened h t → media.bound h (store.root / "CONTROL.next") t →
+    IOReturns (disableBuffering h) t (fun _ v => media.bound h (store.root / "CONTROL.next") v) (StageError reports c initial R)
+  write : ∀ h t, WriterStage store c start .unbuffered h t → media.bound h (store.root / "CONTROL.next") t →
+    IOReturns (h.write (ControlCodec.encode c)) t (fun _ v => media.Written h (store.root / "CONTROL.next") c v)
+      (StageError reports c initial R)
+  flush : ∀ h t, WriterStage store c start .written h t → media.Written h (store.root / "CONTROL.next") c t →
+    At h.flush (stage reports c) t initial
+      (fun _ _ v u => R v u ∧ media.Written h (store.root / "CONTROL.next") c v ∧ (disk v).staged = some c) R
   syncWriter : ∀ h t u, WriterStage store c start .flushed h t →
     (stage reports c).run initial = .ok (.ok ()) u → R t u →
-    At (syncHandle h) (syncStage reports) t u (fun _ _ v n => R v n) R
+    media.Written h (store.root / "CONTROL.next") c t → (disk t).staged = some c →
+    At (syncHandle h) (syncStage reports) t u
+      (fun _ _ v n => R v n ∧ media.Synced h (store.root / "CONTROL.next") c v ∧ (disk v).staged = some c) R
   renameFile : ∀ h t u v, WriterStage store c start .synced h t →
     (stage reports c).run initial = .ok (.ok ()) v → (syncStage reports).run v = .ok (.ok ()) u → R t u →
-    At (IO.FS.rename (store.root / "CONTROL.next") (store.root / "CONTROL")) (rename reports) t u (fun _ _ v n => R v n) R
+    media.Synced h (store.root / "CONTROL.next") c t → (disk t).staged = some c →
+    At (IO.FS.rename (store.root / "CONTROL.next") (store.root / "CONTROL")) (rename reports) t u
+      (fun _ _ w n => R w n ∧ media.Synced h (store.root / "CONTROL") c w ∧ (disk w).liveControl = some c) R
   directory : ∀ h t u v n, WriterStage store c start .renamed h t →
     (stage reports c).run initial = .ok (.ok ()) v → (syncStage reports).run v = .ok (.ok ()) n →
     (rename reports).run n = .ok (.ok ()) u → R t u →
+    media.Synced h (store.root / "CONTROL") c t → (disk t).liveControl = some c →
     At (syncHandle store.directory) (rootSync reports) t u (fun _ _ v n => R v n) R
 
 /-- A ghost state with an absent staged proposal cannot be supplied at the
@@ -121,7 +143,7 @@ theorem proposalAtRename (stageRun : (stage reports c).run initial = .ok (.ok ()
         | some abort => cases abort <;> simp_all [barrier, outcome]
         | none => simp [barrier, outcome, sy] at syncRun; cases syncRun; rfl
 
-private theorem cleared (p : Primitives store c reports w s R) :
+private theorem cleared (p : Primitives store c reports w s R disk) :
     IOReturns (removeRegular (store.root / "CONTROL.next")) w (fun _ _ => True) (StageError reports c s R) := by
   let path := store.root / "CONTROL.next"
   have observed := p.stat
@@ -148,23 +170,24 @@ private theorem cleared (p : Primitives store c reports w s R) :
         stat, Pure.pure, instMonadEIO._aux_5, EST.pure, regular, valid, Regular, throw, throwThe,
         MonadExceptOf.throw, instMonadExceptOfEIO._aux_1, EST.throw] using observed valid
 
-private theorem staged (p : Primitives store c reports start initial R) :
+private theorem staged (p : Primitives store c reports start initial R disk) :
     At (store.stageControl c) (stage reports c) start initial
       (fun h _ t u => WriterStage store c start .flushed h t ∧ R t u ∧
-        (stage reports c).run initial = .ok (.ok ()) u) R := by
+        (stage reports c).run initial = .ok (.ok ()) u ∧
+        p.media.Written h (store.root / "CONTROL.next") c t ∧ (disk t).staged = some c) R := by
   unfold Store.stageControl
   apply defer (ioTrace (cleared p))
   rintro _ t ⟨clear, _⟩
   apply defer (ioTrace (p.openWriter t clear))
-  rintro h u ⟨opened, _⟩
+  rintro h u ⟨opened, located⟩
   have acquired := WriterStage.opened (c := c) clear opened
-  apply defer (ioTrace (p.unbuffered h u acquired))
-  rintro _ v ⟨unbuffered, _⟩
+  apply defer (ioTrace (p.unbuffered h u acquired located))
+  rintro _ v ⟨unbuffered, prepared⟩
   have ready := acquired.unbuffered unbuffered
-  apply defer (ioTrace (p.write h v ready))
-  rintro _ x ⟨written, _⟩
+  apply defer (ioTrace (p.write h v ready prepared))
+  rintro _ x ⟨written, raw⟩
   have writing := ready.written written
-  have flush := p.flush h x writing
+  have flush := p.flush h x writing raw
   unfold At at *
   cases actual : h.flush x with
   | error err t =>
@@ -183,12 +206,12 @@ private theorem staged (p : Primitives store c reports start initial R) :
       rw [model] at flush
       cases response with
       | error => contradiction
-      | ok result => cases result; exact ⟨writing.flushed actual, flush, rfl⟩
+      | ok result => cases result; exact ⟨writing.flushed actual, flush.1, rfl, flush.2⟩
 
 /-- The native callback itself produces the reviewed publication result.
 The same writer is used through its barrier; only the store's acquired
 directory is used for the final root barrier. -/
-theorem publish (p : Primitives store c reports start initial R)
+theorem publish (p : Primitives store c reports start initial R disk)
     (held : Nat) (active : c.active ≤ ControlCodec.wordMax) (discarded : c.discarded ≤ ControlCodec.wordMax) :
     At (checked (store.callbacks.publishControl c)) (Segmented.publish (nativeControlOps store.root held reports) c)
       start initial (fun _ _ t u => R t u) R := by
@@ -198,13 +221,13 @@ theorem publish (p : Primitives store c reports start initial R)
     start initial _ _
   unfold DurableBlob.publishWith
   apply (staged p).bind
-  rintro h _ t u ⟨flushed, frame, stageRun⟩
-  apply (trace (p.syncWriter h t u flushed stageRun frame)).bind
-  rintro _ _ x y ⟨frame, sync, syncRun⟩
+  rintro h _ t u ⟨flushed, frame, stageRun, raw, visible⟩
+  apply (trace (p.syncWriter h t u flushed stageRun frame raw visible)).bind
+  rintro _ _ x y ⟨⟨frame, stable, visible⟩, sync, syncRun⟩
   have synced := flushed.synced sync
-  apply (trace (p.renameFile h x y u synced stageRun syncRun frame)).bind
-  rintro _ _ z n ⟨frame, changed, renameRun⟩
-  exact p.directory h z n u y (synced.renamed changed) stageRun syncRun renameRun frame
+  apply (trace (p.renameFile h x y u synced stageRun syncRun frame stable visible)).bind
+  rintro _ _ z n ⟨⟨frame, named, installed⟩, changed, renameRun⟩
+  exact p.directory h z n u y (synced.renamed changed) stageRun syncRun renameRun frame named installed
 
 theorem syncRoot (store : Store) (held : Nat)
     (issued : At (syncHandle store.directory) (rootSync reports) w s ok fail) :

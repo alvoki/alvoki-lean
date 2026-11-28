@@ -88,7 +88,7 @@ structure LocalRotation (c : Context disk) (r : Reports batch) (h : SingleFile.H
     At (syncHandle c.store.directory) (ControlIO.rootSync r.effects) t u.1
       (fun _ _ => c.rootFrame child u.2) (fun v n => c.Candidate child v (n,u.2))
   control : ∀ child t u, Prefix c r w s .synced (some child) t u → c.ReadyFile none c.nextId child t u → PrepareIO.PreparedFile disk c.nextId t →
-    c.nextId ∈ (disk t).durableNames → ControlIO.Primitives c.store (successor c.session) r.effects t u.1 (c.rootFrame child u.2)
+    c.nextId ∈ (disk t).durableNames → ControlIO.Primitives c.store (successor c.session) r.effects t u.1 (c.rootFrame child u.2) disk
   write : ∀ child t u, Prefix c r w s .published (some child) t u → c.ReadyFile none c.nextId child t u → PrepareIO.PreparedFile disk c.nextId t →
     c.nextId ∈ (disk t).durableNames → WriteSteps c none c.nextId child r t u
   install : ∀ child t u, Prefix c r w s .written (some child) t u → c.Candidate child t u → (∃ files cursor history, u.2 = .active .lock files cursor history) →
