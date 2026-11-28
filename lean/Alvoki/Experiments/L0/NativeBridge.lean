@@ -1,4 +1,5 @@
 import Alvoki.Experiments.L0.NativeFacts
+import Alvoki.Experiments.L0.Refinement
 import Alvoki.Experiments.L0.ManifestComposition
 import Alvoki.Experiments.L0.TableAllocationProofs
 import Alvoki.Experiments.L0.DurableCatalog
@@ -137,7 +138,6 @@ built image served by its descriptor. State indices identify the reached
 phase. Relating the reported callbacks to native IO remains a premise. -/
 structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → Selected)
     (namespaceState : TableNamespace σ) : Prop where
-  catalog : ∀ s, namespaceState.Represents s (selected s).tables
   scan : ∀ s, match ops.scan s with
     | .ok view after => WalScanReceipt (selected s).view view ∧ selected after = selected s
     | .error _ after => selected after = selected s
@@ -158,6 +158,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
   lookup : ∀ s id key rows, (selected s).tables id = some rows →
     match ops.tables.lookup id key s with
     | .ok result after => selected after = selected s ∧
+        namespaceState.Keeps s after (selected s).tables ∧
         ∃ (handle : IO.FS.Handle) (inodeAt : IO.FS.Handle → Option namespaceState.inode),
           inodeAt handle = namespaceState.names s (tablePath namespaceState.directory id) ∧
           (∀ identity bytes, inodeAt handle = some identity →
@@ -175,22 +176,23 @@ theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
     (catalog : ns.Represents s (selected s).tables)
     (tableId key : UInt64) (bound : (selected s).tables tableId = some rows) :
     match ops.tables.lookup tableId key s with
-    | .ok result after => result = lookupRows rows key ∧ selected after = selected s
+    | .ok result after => result = lookupRows rows key ∧ selected after = selected s ∧
+        ns.Represents after (selected after).tables
     | .error _ after => selected after = selected s := by
     have read := evidence.lookup s tableId key rows bound
     cases ran : ops.tables.lookup tableId key s with
     | ok value after =>
       rw [ran] at read
-      obtain ⟨frame, handle, inodeAt, picked, primitives, returned⟩ := read
+      obtain ⟨frame, keeps, handle, inodeAt, picked, primitives, returned⟩ := read
       have expected := TableNamespace.lookup (catalog tableId rows bound) handle
         inodeAt picked primitives key
       obtain ⟨world⟩ := (inferInstance : Nonempty (Void IO.RealWorld))
       have equal := returned.symm.trans expected
-      exact ⟨EST.Out.ok.inj (congrFun equal world) |>.1, frame⟩
+      exact ⟨EST.Out.ok.inj (congrFun equal world) |>.1, frame, frame.symm ▸ catalog.frame keeps⟩
     | error error after => simpa [ran] using read
 
-theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected namespaceState) :
-    ComponentLaws ops selected where
+theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected namespaceState) :
+    ComponentEffects ops selected where
   scan s := by
     have read := evidence.scan s
     cases ran : ops.scan s with
@@ -229,6 +231,16 @@ theorem CallbackEvidence.laws (evidence : CallbackEvidence ops selected namespac
     obtain ⟨manifest⟩ := evidence.manifest
     exact manifest.publishEffect s proposal valid
   check := evidence.check
-  lookup s id key _ bound := evidence.lookupFromCatalog (evidence.catalog s) id key bound
+
+theorem CallbackEvidence.get {ops : Components (StorageM σ)}
+    (evidence : CallbackEvidence ops selected ns)
+    (catalog : ns.Represents s (selected s).tables)
+    (prior : Installed session (selected s) history) (key : UInt64) :
+    match get ops session key s with
+    | .ok value after => value = denote history key ∧ selected after = selected s
+    | .error _ after => selected after = selected s :=
+  get_refines_from (fun s => ns.Represents s (selected s).tables)
+    (fun _ id key _ ready binding => evidence.lookupFromCatalog ready id key binding)
+    s catalog session prior key
 
 end ExperimentalL0.NativeBridge

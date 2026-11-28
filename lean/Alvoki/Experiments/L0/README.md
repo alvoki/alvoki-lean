@@ -131,8 +131,11 @@ explains the exact encoded suffix and EOF.
 [DurableCatalog](DurableCatalog.lean) relates logical rows to their table
 ID, durable name, inode, bytes and proven image. The creation proof
 produces the new binding, and the catalog insertion lemma retains the
-older bindings. Lookup consumes that invariant and the scoped descriptor's
-inode selection and read effects. `table_open_published_inode` checks the typed producer-to-reader
+older bindings. Lookup consumes that invariant and the scoped descriptor's inode
+selection and read effects. It carries the catalog forward across each
+successful miss using the read's namespace frame. The caller supplies
+the invariant at the reached entry state. Recovery and mutation use
+`ComponentEffects` and have no dependency on a lookup law. `table_open_published_inode` checks the typed producer-to-reader
 handoff with `buildFileWith_open_represents`. Checked open validates metadata.
 Row validation occurs on demand.
 
@@ -174,7 +177,7 @@ operation preserves the pending request via the existing offline stop step.
 If a component opened successfully and a later L0 callback failed, record
 the successful component open followed by stop. A scan failure after a
 successful WAL open follows this rule too. The integrated callback interpretation executes the typed manifest
-schedule over DurableBlob's Linux primitive reports. `CallbackEvidence.laws`
+schedule over DurableBlob's Linux primitive reports. `CallbackEvidence.effects`
 derives its manifest fields from that execution. Reopen preserves the live
 binding on either outcome, including a sync error after the barrier.
 Publication success installs the proposal. A returned error can retain
@@ -190,10 +193,19 @@ open, including across another restart.
 [RestartRefinement](RestartRefinement.lean) derives both logical choices
 from the reached scan and table creation, takes publication reports from
 the same manifest interpretation and uses the existing L0 recovery and
-client trace after restart. Manifest reopen, WAL reopen and table checks
+client trace after restart. Both boot states use its image installer, which
+supplies the WAL and catalog projections. The reopen reports are read
+from those reached states. The flush observation records a delivered
+success, a reported error, a lost reply or a process interruption.
+Delivered success emits `flushed`. Each uncertain observation emits
+`flushUncertain` and clears the visible session. Manifest reopen, WAL reopen and table checks
 frame the durable catalog through each recovery attempt. Connecting the
 reached Linux state to the primitive reports and namespace frames
-remains open.
+remains open. The adapter still owes the initial reached catalog witness,
+exact insertion after a create, and the scoped read-result correspondence.
+The filesystem supplies the survivor and the effects of failed barriers.
+The client or runtime supplies reply delivery and process interruption
+observations.
 
 The interpretation needs the active image projection, installation of the
 reached image and frames for the WAL and table namespaces. The reports

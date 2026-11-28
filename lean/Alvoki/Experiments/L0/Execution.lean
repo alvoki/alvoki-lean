@@ -23,9 +23,10 @@ inductive Run : List Event → Option Session → Image → Prop where
   | flushed : Run events (some session) image →
       flush (components faults) session image = .ok next after →
       Run (events ++ [.flushed]) (some next) after
-  | flushUncertain : Run events (some session) image →
+  | flushObserved : Run events (some session) image →
       flush (components faults) session image = result →
-      Run (events ++ [.flushUncertain]) none (reached result)
+      (observed : FlushObservation result) →
+      Run (events ++ [observed.event]) observed.session (reached result)
   | reopened : Run events none image →
       recover (components faults) image = .ok session after →
       Run (events ++ [.reopened]) (some session) after
@@ -44,19 +45,19 @@ theorem Run.projects (run : Run events session image) :
   induction run with
   | initial => exact .initial initial_durable
   | @written _ _ _ faults _ _ _ _ ran ih =>
-    exact ih.writeOk (componentLaws faults) ran
+    exact ih.writeOk (componentLaws faults).toComponentEffects ran
   | @writeUncertain _ _ _ faults _ result _ ran ih =>
-    cases result <;> exact ih.writeInterrupted (componentLaws faults) ran
+    cases result <;> exact ih.writeInterrupted (componentLaws faults).toComponentEffects ran
   | @got _ _ _ faults _ _ _ ran ih =>
-    exact ih.getOk (componentLaws faults) ran
+    exact ih.getOk (fun _ installed => get_refines (componentLaws faults) _ _ installed _) ran
   | @flushed _ _ _ faults _ _ _ ran ih =>
-    exact ih.flushOk (componentLaws faults) ran
-  | @flushUncertain _ _ _ faults result _ ran ih =>
-    cases result <;> exact ih.flushInterrupted (componentLaws faults) ran
+    exact ih.flushObserved (componentLaws faults).toComponentEffects ran .delivered
+  | @flushObserved _ _ _ faults result _ ran observed ih =>
+    cases result <;> exact ih.flushObserved (componentLaws faults).toComponentEffects ran observed
   | @reopened _ _ faults _ _ _ ran ih =>
-    exact ih.recoverOk (componentLaws faults) ran
+    exact ih.recoverOk (componentLaws faults).toComponentEffects ran
   | @openFailed _ _ faults _ _ _ ran ih =>
-    exact ih.recoverError (componentLaws faults) ran
+    exact ih.recoverError (componentLaws faults).toComponentEffects ran
   | stop _ ih => exact .stop ih
 
 theorem Run.refines (run : Run events session image) :

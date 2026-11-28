@@ -72,7 +72,10 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.retryAfterPublication
 #check_axioms ManifestComposition.Interpretation.reopenEffect
 #check_axioms ManifestComposition.Interpretation.publishEffect
-#check_axioms CallbackEvidence.laws
+#check_axioms CallbackEvidence.effects
+#check_axioms CallbackEvidence.get
+#check_axioms get_refines_from
+#check_axioms Execution.Run.flushObserved
 #check_axioms Execution.Run.refines
 #check_axioms Execution.Run.recoverOk
 #check_axioms Execution.Run.recoverError

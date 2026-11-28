@@ -18,10 +18,10 @@ def Selected.publish (s : Selected) (version : L0Manifest.Version) : Selected :=
 
 abbrev StorageM (σ : Type) := EStateM String σ
 
-/-- Local effects on a selected image, with success and error frames.
+/-- Local effects used by write, flush and recover, with success and error frames.
 The selected image is fixed during a recovery attempt and its retries.
 RecoveryChoices justifies this abstraction at the public trace boundary. -/
-structure ComponentLaws (ops : Components (StorageM σ)) (selected : σ → Selected) : Prop where
+structure ComponentEffects (ops : Components (StorageM σ)) (selected : σ → Selected) : Prop where
   scan : ∀ s, match ops.scan s with
     | .ok view after => view = (selected s).view ∧ selected after = selected s
     | .error _ after => selected after = selected s
@@ -47,6 +47,9 @@ structure ComponentLaws (ops : Components (StorageM σ)) (selected : σ → Sele
     | .error _ after => selected after = selected s ∨ selected after = (selected s).publish version
   check : ∀ s id, match ops.tables.check id s with
     | .ok _ after | .error _ after => selected after = selected s
+/-- Reads add the table lookup law. Recovery and mutation do not require it. -/
+structure ComponentLaws (ops : Components (StorageM σ)) (selected : σ → Selected)
+    : Prop extends ComponentEffects ops selected where
   lookup : ∀ s id key rows, (selected s).tables id = some rows →
     match ops.tables.lookup id key s with
     | .ok result after => result = lookupRows rows key ∧ selected after = selected s

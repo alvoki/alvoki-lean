@@ -31,7 +31,7 @@ theorem recovery_online
   change phase = .recovering handle at attached
   subst phase
   exact ⟨handle, rfl,
-    Execution.Run.recoverOk (s := (.opening, before)) prior evidence.laws ran,
+    Execution.Run.recoverOk (s := (.opening, before)) prior evidence.effects ran,
     successful_recovery_publishes (recover ops) use invalid closeWal unlock handle session
       before storage ran⟩
 
@@ -48,7 +48,7 @@ theorem recovery_offline
     Execution.Run (events ++ [.openFailed]) none (selected after.2) ∧
       Cell.withSession stateCell invalid (recover ops) use closeWal unlock (.opening, before) =
         .error error (.offline, after.2) :=
-  ⟨Execution.Run.recoverError (s := (.opening, before)) prior evidence.laws ran,
+  ⟨Execution.Run.recoverError (s := (.opening, before)) prior evidence.effects ran,
     failed_recovery_closes (recover ops) use invalid error closeWal unlock before after ran
       closeFrame unlockFrame⟩
 
@@ -68,7 +68,7 @@ theorem write_online
   rcases after with ⟨phase, storage⟩
   change phase = .updating handle at frame
   subst phase
-  exact ⟨Execution.Run.writeOk (s := (.updating handle, before)) prior evidence.laws ran,
+  exact ⟨Execution.Run.writeOk (s := (.updating handle, before)) prior evidence.effects ran,
     update_success _ invalid closeWal handle old next before storage ran⟩
 
 theorem write_offline
@@ -81,7 +81,7 @@ theorem write_offline
     Execution.Run (events ++ [.writeUncertain change]) none (selected after.2) ∧
       Cell.update stateCell invalid (fun session => write ops session change) closeWal
         (.online handle old, before) = .error error (.offline, after.2) :=
-  ⟨Execution.Run.writeInterrupted (s := (.updating handle, before)) prior evidence.laws ran,
+  ⟨Execution.Run.writeInterrupted (s := (.updating handle, before)) prior evidence.effects ran,
     update_error _ invalid error closeWal handle old before after ran closeFrame⟩
 
 theorem flush_online
@@ -97,7 +97,7 @@ theorem flush_online
   rcases after with ⟨phase, storage⟩
   change phase = .updating handle at frame
   subst phase
-  exact ⟨Execution.Run.flushOk (s := (.updating handle, before)) prior evidence.laws ran,
+  exact ⟨Execution.Run.flushObserved (s := (.updating handle, before)) prior evidence.effects ran .delivered,
     update_success _ invalid closeWal handle old next before storage ran⟩
 
 theorem flush_offline
@@ -109,13 +109,14 @@ theorem flush_offline
     Execution.Run (events ++ [.flushUncertain]) none (selected after.2) ∧
       Cell.update stateCell invalid (flush ops) closeWal
         (.online handle old, before) = .error error (.offline, after.2) :=
-  ⟨Execution.Run.flushInterrupted (s := (.updating handle, before)) prior evidence.laws ran,
+  ⟨Execution.Run.flushObserved (s := (.updating handle, before)) prior evidence.effects ran .reportedError,
     update_error _ invalid error closeWal handle old before after ran closeFrame⟩
 
 
 theorem get_online
     (prior : Execution.Run events (some session) (selected before))
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
+    (catalog : namespaceState.Represents (.online handle session, before) (selected before).tables)
     (ran : get ops session key (.online handle session, before) =
       .ok value after) (invalid : String) :
     Execution.Run (events ++ [.got key value]) (some session) (selected after.2) ∧
@@ -126,12 +127,13 @@ theorem get_online
   rcases after with ⟨phase, storage⟩
   change phase = .online handle session at frame
   subst phase
-  exact ⟨Execution.Run.getOk (s := (.online handle session, before)) prior evidence.laws ran,
+  exact ⟨Execution.Run.getOk (s := (Phase.online handle session, before)) prior (fun _ installed => evidence.get catalog installed key) ran,
     (useSession_online _ invalid handle session before).trans ran⟩
 
 theorem get_online_error
     (prior : Execution.Run events (some session) (selected before))
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) namespaceState)
+    (catalog : namespaceState.Represents (.online handle session, before) (selected before).tables)
     (ran : get ops session key (.online handle session, before) =
       .error error after) (invalid : String) :
     Execution.Run events (some session) (selected after.2) ∧
@@ -142,7 +144,7 @@ theorem get_online_error
   rcases after with ⟨phase, storage⟩
   change phase = .online handle session at frame
   subst phase
-  exact ⟨Execution.Run.getError (s := (.online handle session, before)) prior evidence.laws ran,
+  exact ⟨Execution.Run.getError (s := (Phase.online handle session, before)) prior (fun _ installed => evidence.get catalog installed key) ran,
     (useSession_online _ invalid handle session before).trans ran⟩
 
 end ExperimentalL0.Lifecycle

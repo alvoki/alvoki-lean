@@ -12,6 +12,23 @@ inductive Event where
   | openFailed
   | reopened
 
+/-- Public observation of a reached flush. A successful storage result
+can have an acknowledged reply or stop before acknowledgement. -/
+inductive FlushObservation : EStateM.Result String σ Session → Type where
+  | delivered : FlushObservation (.ok next after)
+  | reportedError : FlushObservation (.error error after)
+  | replyLost : FlushObservation (.ok next after)
+  /-- The process stops during the flush, before any reply is delivered. -/
+  | interrupted : FlushObservation result
+
+def FlushObservation.event : FlushObservation result → Event
+  | .delivered => .flushed
+  | .reportedError | .replyLost | .interrupted => .flushUncertain
+
+def FlushObservation.session : FlushObservation result → Option Session
+  | @delivered _ next _ => some next
+  | .reportedError | .replyLost | .interrupted => none
+
 namespace Client
 
 inductive State where
