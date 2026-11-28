@@ -379,6 +379,13 @@ a read consumes only a valid binding, and the mutex primitives frame it.
 This contract contains no WAL operation or abstract disk predicate. -/
 structure PhaseMemory where
   holds : {α : Type} → IO.Ref α → α → Void IO.RealWorld → Prop
+  separate : {α β : Type} → IO.Ref α → IO.Ref β → Prop
+  fresh : ∀ {α β : Type} {live : IO.Ref α} {old w} (value : β),
+    holds live old w → separate ((IO.mkRef value : BaseIO (IO.Ref β)) w).val live
+  swap : ∀ {α : Type} {ref : IO.Ref α} {old w} (value : α),
+    holds ref old w → ((ref.swap value : BaseIO α) w).val = old
+  swapFrame : ∀ {α β : Type} {ref : IO.Ref α} {other : IO.Ref β} {value w} (next : α),
+    separate ref other → holds other value w → holds other value ((ref.swap next : BaseIO α) w).state
   allocate : ∀ {α : Type} (value : α) w,
     let r := (IO.mkRef value : BaseIO (IO.Ref α)) w
     holds r.val value r.state
@@ -401,7 +408,7 @@ structure PhaseMemory where
 
 def PhaseMemory.Ready (heap : PhaseMemory) (handle : Handle) (session : Session)
     (w : Void IO.RealWorld) : Prop :=
-  ∃ store child, heap.holds handle.state (.ready store session) w ∧
+  ∃ store child, heap.separate handle.state store.active ∧ heap.holds handle.state (.ready store session) w ∧
     heap.holds store.active (some (session.control.active, child)) w
 
 /-- The concrete recovery run that produced this session also returned the
@@ -423,76 +430,70 @@ private theorem base_out (a : BaseIO α) (w : Void IO.RealWorld) :
   cases ran : a w
   simp [BaseIO.toEIO, ran]
 
-private theorem attempt_ok (body : IO α) (cleanup : IO Unit)
-    (ran : cleanupOnError (error := IO.Error) body cleanup w = .ok x t) :
-    body w = .ok x t := by
-  cases action : body w with
-  | ok a u =>
-    simpa [cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, action] using ran
-  | error e u =>
-    cases released : cleanup u <;>
-      simp [cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, action, released,
-        Bind.bind, instMonadEIO._aux_13, EST.bind, Pure.pure, instMonadEIO._aux_5, EST.pure,
-        throw, throwThe, MonadExceptOf.throw, instMonadExceptOfEIO._aux_1, EST.throw] at ran
+def returnedWorld {ε α : Type} : EST.Out ε IO.RealWorld α → Void IO.RealWorld
+  | .ok _ w | .error _ w => w
+
+/-- Cut the actual public open at store acquisition, the scoped child
+recovery, active registration, phase installation and mutex allocation.
+After an inner error the release starts on the world left by recovery. -/
+theorem openExisting_run (dir : FilePath) (start : Void IO.RealWorld) :
+    openExisting dir start = match acquireStore dir start with
+      | .error e w => .error e w
+      | .ok store w => match store.recoverChild w with
+        | .error e stopped => .error e (returnedWorld (store.release stopped))
+        | .ok (session, child) recovered =>
+          let attached := (store.active.set (some (session.control.active, child)) : BaseIO Unit) recovered
+          let cell := (IO.mkRef (.ready store session : Phase Store) : BaseIO _) attached.state
+          let mutex := Std.BaseMutex.new cell.state
+          .ok ⟨cell.val, mutex.val⟩ mutex.state := by
+  cases acquired : acquireStore dir start with
+  | error e w =>
+    simp [openExisting, install, openWithStore, Bind.bind, instMonadEIO._aux_13, EST.bind, acquired]
+  | ok s w =>
+    cases recovery : s.recoverChild w with
+    | ok pair u =>
+      obtain ⟨session, child⟩ := pair
+      let attached := (s.active.set (some (session.control.active, child)) : BaseIO Unit) u
+      have wrote : (s.active.set (some (session.control.active, child)) : IO Unit) u =
+          .ok attached.val attached.state := base_out _ _
+      simp only [openExisting, install, openWithStore, installPhaseWith, installReopenedWith,
+        cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+        EST.tryCatch, Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, recovery, wrote,
+        base_out, Pure.pure, instMonadEIO._aux_5, EST.pure]
+      rfl
+    | error e stopped =>
+      cases release : s.release stopped <;>
+        simp [openExisting, install, openWithStore, installPhaseWith, installReopenedWith,
+          cleanupOnError, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+          EST.tryCatch, Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, recovery, release,
+          returnedWorld, Pure.pure, instMonadEIO._aux_5, EST.pure, throw, throwThe,
+          MonadExceptOf.throw, instMonadExceptOfEIO._aux_1, EST.throw]
 
 theorem openExisting_ready (heap : PhaseMemory) (dir : FilePath)
     (opened : openExisting dir start = .ok handle finish) :
     ∃ session, ReturnedChild dir session handle start finish ∧ heap.Ready handle session finish := by
-  let load (s : Store) := installReopenedWith s.recoverChild (fun entry => do
-    s.active.set entry
-    return s)
-  let construct (s : Store) : IO (IO.Ref (Phase Store) × Std.BaseMutex) := do
-    let p ← load s
-    let cell ← IO.mkRef p
-    return (cell, ← Std.BaseMutex.new)
-  change (do
-    let (ref, mutex) ← (do
-      let s ← acquireStore dir
-      cleanupOnError (error := IO.Error) (construct s) s.release)
-    pure (Handle.mk ref mutex) : IO Handle) start = .ok handle finish at opened
+  rw [openExisting_run] at opened
   cases acquired : acquireStore dir start with
-  | error e u => simp [Bind.bind, instMonadEIO._aux_13, EST.bind, acquired] at opened
+  | error e u => simp [acquired] at opened
   | ok s u =>
-    cases constructed : cleanupOnError (error := IO.Error) (construct s) s.release u with
-    | error e t => simp [Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, constructed] at opened
-    | ok pair t =>
-      obtain ⟨ref, mutex⟩ := pair
-      have success := attempt_ok (construct s) s.release constructed
-      cases recovery : s.recoverChild u with
-      | error e v =>
-        simp [construct, load, installReopenedWith, Bind.bind, instMonadEIO._aux_13,
-          EST.bind, recovery] at success
-      | ok result v =>
-        obtain ⟨session, child⟩ := result
-        let attached := (s.active.set (some (session.control.active, child)) : BaseIO Unit) v
-        let cell := (IO.mkRef (.ready s session : Phase Store) : BaseIO _) attached.state
-        let made := Std.BaseMutex.new cell.state
-        have wrote : (s.active.set (some (session.control.active, child)) : IO Unit) v =
-            .ok attached.val attached.state := base_out _ _
-        have mkCell : (liftM (IO.mkRef (.ready s session)) : IO (IO.Ref (Phase Store))) attached.state =
-            .ok cell.val cell.state := base_out _ _
-        have mkMutex : (liftM Std.BaseMutex.new : IO _) cell.state = .ok made.val made.state := base_out _ _
-        have h : EST.Out.ok (cell.val, made.val) made.state = (EST.Out.ok (ref, mutex) t :
-            EST.Out IO.Error IO.RealWorld _) := by
-          simpa [construct, load, installReopenedWith, Bind.bind, instMonadEIO._aux_13,
-            EST.bind, recovery, wrote, mkCell, mkMutex, Pure.pure, instMonadEIO._aux_5, EST.pure] using success
-        obtain ⟨⟨rfl, rfl⟩, rfl⟩ := EST.Out.ok.inj h
-        have outer : (Handle.mk cell.val made.val, made.state) = (handle, finish) := by
-          simpa [Bind.bind, instMonadEIO._aux_13, EST.bind, acquired, constructed,
-            Pure.pure, instMonadEIO._aux_5, EST.pure] using opened
-        obtain ⟨rfl, rfl⟩ := Prod.mk.inj outer
-        exact ⟨session, ⟨s, u, child, v, acquired, recovery, rfl, rfl, rfl⟩,
-          s, child, heap.newMutex (heap.allocate _ _),
-          heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
+    cases recovered : s.recoverChild u with
+    | error e v => simp [acquired, recovered] at opened
+    | ok pair v =>
+      obtain ⟨session, child⟩ := pair
+      simp only [acquired, recovered] at opened
+      cases opened
+      exact ⟨session, ⟨s, u, child, v, acquired, recovered, rfl, rfl, rfl⟩,
+        s, child, heap.fresh _ (heap.set _ _ _), heap.newMutex (heap.allocate _ _),
+        heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
 
 theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
     ∃ t, scan handle w = .ok session.view t ∧ heap.Ready handle session t := by
-  obtain ⟨store, child, owns, ownsChild⟩ := ready
+  obtain ⟨store, child, disjoint, owns, ownsChild⟩ := ready
   let locked := handle.mutex.lock w
   let got := (handle.state.get : BaseIO (Phase Store)) locked.state
   let released := handle.mutex.unlock got.state
   obtain ⟨value, stillHeld⟩ := heap.read (heap.lock handle.mutex owns)
-  refine ⟨released.state, ?_, store, child, heap.unlock _ stillHeld,
+  refine ⟨released.state, ?_, store, child, disjoint, heap.unlock _ stillHeld,
     heap.unlock _ (heap.readFrame _ (heap.lock _ ownsChild))⟩
   change got.val = .ready store session at value
   have raw : (handle.state.get : IO (Phase Store)) locked.state =
@@ -509,6 +510,91 @@ theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready 
   have cached : checked (scanWith (.ready store session)) got.state = .ok session.view got.state := rfl
   simp only [cached, unlockRun]
   rfl
+
+/-- A reported failure comes from acquisition or the inner recovery on the
+acquired store. The outer release may change the world but keeps the error. -/
+theorem openExisting_failure (dir : FilePath)
+    (failed : openExisting dir start = .error error finish) :
+    acquireStore dir start = .error error finish ∨
+      ∃ store acquired stopped, acquireStore dir start = .ok store acquired ∧
+        store.recoverChild acquired = .error error stopped ∧
+        returnedWorld (store.release stopped) = finish := by
+  rw [openExisting_run] at failed
+  cases acquired : acquireStore dir start with
+  | error e w => exact Or.inl (by simpa [acquired] using failed)
+  | ok s u =>
+    cases recover : s.recoverChild u with
+    | error e v =>
+      simp [acquired, recover] at failed
+      obtain ⟨rfl, rfl⟩ := failed
+      exact Or.inr ⟨s, u, v, rfl, recover, rfl⟩
+    | ok pair v => cases pair; simp [acquired, recover] at failed
+
+theorem Store.release_empty (store : Store)
+    (taken : (store.active.swap none : IO _) w = .ok none t) :
+    store.release w = store.lock.unlock t := by
+  simp [Store.release, releaseWith, cleanupOnError, Store.closeChild, closeChildWith, tryCatchThe,
+    MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, Bind.bind,
+    instMonadEIO._aux_13, EST.bind, taken, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
+/-- The child close and root unlock happen on the same reached execution,
+including the unlock after a reported child error. The mutex unlock then
+runs as the finalizer of the concrete handle even if either close fails. -/
+def closeResult (child : SingleFile.Handle) (root : IO.FS.Handle) (mutex : Std.BaseMutex)
+    (taken : Void IO.RealWorld) : EST.Out IO.Error IO.RealWorld Unit :=
+  let closeResult := match SingleFile.close child taken with
+    | .ok _ u => root.unlock u
+    | .error e u => .error e (returnedWorld (root.unlock u))
+  match closeResult with
+  | .ok x v => .ok x (mutex.unlock v).state
+  | .error e v => .error e (mutex.unlock v).state
+
+private theorem locked_run (handle : Handle) (action : IO α) (w : Void IO.RealWorld) :
+    handle.locked action w =
+      match action (handle.mutex.lock w).state with
+      | .ok x t => EST.Out.ok x (handle.mutex.unlock t).state
+      | .error e t => .error e (handle.mutex.unlock t).state := by
+  unfold Handle.locked
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base_out, tryFinally,
+    tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+    Functor.map, instMonadEIO._aux_1]
+  cases action (handle.mutex.lock w).state <;> rfl
+
+/-- Exact release data for the active child registered in the held store.
+Physical unlock-on-last-drop remains the local descriptor contract. -/
+theorem close_ready_releases (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    ∃ store child, heap.holds handle.state (.ready store session) w ∧
+      heap.holds store.active (some (session.control.active, child)) w ∧
+      let locked := (handle.mutex.lock w).state
+      let closed := (handle.state.swap .closed : BaseIO _) locked
+      let taken := (store.active.swap none : BaseIO _) closed.state
+      closed.val = .ready store session ∧ taken.val = some (session.control.active, child) ∧
+        close handle w = closeResult child store.lock handle.mutex taken.state := by
+  obtain ⟨store, child, separate, phase, slot⟩ := ready
+  refine ⟨store, child, phase, slot, ?_⟩
+  intro locked closed taken
+  have phaseAt := heap.lock handle.mutex phase
+  have slotAt := heap.swapFrame (w := locked) .closed separate (heap.lock handle.mutex slot)
+  have phaseValue := heap.swap .closed phaseAt
+  have slotValue := heap.swap none slotAt
+  refine ⟨phaseValue, slotValue, ?_⟩
+  have removedPhase : (handle.state.swap .closed : IO _) locked = .ok (.ready store session) closed.state := by
+    change EST.Out.ok closed.val closed.state = _
+    rw [show closed.val = _ from phaseValue]
+  have removedChild : (store.active.swap none : IO _) closed.state =
+      .ok (some (session.control.active, child)) taken.state := by
+    change EST.Out.ok taken.val taken.state = _
+    rw [show taken.val = _ from slotValue]
+  unfold close
+  rw [locked_run]
+  rw [show (handle.mutex.lock w).state = locked from rfl]
+  simp only [closeWith, Bind.bind, instMonadEIO._aux_13, EST.bind, removedPhase]
+  simp only [Store.release, releaseWith, cleanupOnError, Store.closeChild, closeChildWith,
+    tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch,
+    Bind.bind, instMonadEIO._aux_13, EST.bind, removedChild, closeResult]
+  cases stopped : SingleFile.close child taken.state with
+  | ok x t => cases x; dsimp only; cases store.lock.unlock t <;> rfl
+  | error e t => dsimp only; cases store.lock.unlock t <;> rfl
 
 /-- Open and public scan agree on the recovered session using the original
 handle's mutex, phase cell and registered child, starting at the reached

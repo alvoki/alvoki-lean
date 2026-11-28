@@ -122,6 +122,10 @@ open WalRecoverySlice.Segmented
 #check_axioms Native.withActiveChild_reached
 #check_axioms Model.nativeAcquireBinding_ok
 #check_axioms Native.scan_ready
+#check_axioms Native.openExisting_run
+#check_axioms Native.openExisting_failure
+#check_axioms Native.Store.release_empty
+#check_axioms Native.close_ready_releases
 #check_axioms Native.openExisting_ready
 #check_axioms Native.scan_readyAt
 #check_axioms Native.openExisting_scan
