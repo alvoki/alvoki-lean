@@ -1,3 +1,4 @@
+import Alvoki.Checks.Benchmarks.SSTableWorkload
 import Alvoki.Experiments.SSTable.UnifiedNative
 import Alvoki.Experiments.SSTable.Recursive.Native
 
@@ -285,26 +286,6 @@ def run : IO Unit := IO.FS.withTempDir fun dir => do
   checkCorruption dir
   IO.println "unified immutable SSTable native fixtures passed"
 
-private def benchKey (n : Nat) : ByteArray :=
-  ⟨#[(n >>> 56).toUInt8, (n >>> 48).toUInt8, (n >>> 40).toUInt8, (n >>> 32).toUInt8,
-    (n >>> 24).toUInt8, (n >>> 16).toUInt8, (n >>> 8).toUInt8, n.toUInt8]⟩
-
-private def benchKeyFor (layout : Unified.Layout) (index : Nat) : ByteArray :=
-  let bytes := benchKey index
-  if layout.keyWidth.isSome then bytes
-  else bytes ++ ByteArray.mk (Array.replicate ((index / 2) % 8) 0x42)
-
-private def benchRows (layout : Unified.Layout) (rows : Nat) : IO (IO (Option Entry)) := do
-  let next ← IO.mkRef 0
-  return do
-    let index ← next.get
-    if index == rows then return none
-    next.set (index + 1)
-    let value := encodeOffset (index + 1)
-    let value := if layout.valueWidth.isSome then value
-      else value ++ ByteArray.mk (Array.replicate (index % 16) 0x56)
-    return some ⟨benchKeyFor layout (2 * index), value⟩
-
 private def mix (hash value : UInt64) : UInt64 := (hash ^^^ value) * 1099511628211
 
 private def benchQueries (layout : Unified.Layout) (rows queries : Nat) :
@@ -319,7 +300,7 @@ private def benchQueries (layout : Unified.Layout) (rows queries : Nat) :
     seed := (1664525 * seed + 1013904223) % 4294967296
     let index := (seed >>> 8) % rows
     let miss := i % 2
-    let key := benchKeyFor layout (2 * index + miss)
+    let key := SSTableWorkload.benchKeyFor layout (2 * index + miss)
     let value := if miss == 0 then (index + 1).toUInt64 else 0
     mixed := mixed.push key
     mixedSum := mix mixedSum value
@@ -431,19 +412,11 @@ private def recursiveInventory (crc : Unified.Checksum) (id : UInt64)
       blocks := blocks + count
     return (indexOffsets, blocks)
 
-private def benchmarkBuild (path : System.FilePath) (layout : Unified.Layout)
-    (rows dataTarget indexTarget : Nat) (recursive : Bool) : IO Nat := do
-  let provider ← benchRows layout rows
-  if recursive then
-    Recursive.buildFileWith (nativeOutputOps (fun _ => pure ())) Alvoki.CRC32C.extend
-      path layout provider IO.userError ⟨dataTarget, indexTarget⟩
-  else Unified.buildFile path layout provider ⟨dataTarget, indexTarget⟩
-
 def benchmarkBuildOnly (recursive : Bool) (rows : Nat) : IO Unit := IO.FS.withTempDir fun dir => do
   let path := dir / "writer"
   let layout : Unified.Layout := ⟨some 8, some 8, 84⟩
   let start ← IO.monoNanosNow
-  let count ← benchmarkBuild path layout rows 4096 1024 recursive
+  let count ← SSTableWorkload.benchmarkBuild path layout rows 4096 1024 recursive
   let elapsed := (← IO.monoNanosNow) - start
   check (count == rows) "RSS benchmark row count"
   IO.println s!"{if recursive then "ALVSST06" else "ALVSST05"},{count},{elapsed}"
@@ -461,7 +434,7 @@ def benchmark (paired : Bool := false) : IO Unit := IO.FS.withTempDir fun dir =>
       for recursive in (if paired then [false, true] else [false]) do
         let path := dir / s!"{name}-{dataTarget}-{indexTarget}"
         let start ← IO.monoNanosNow
-        let count ← benchmarkBuild path layout rows dataTarget indexTarget recursive
+        let count ← SSTableWorkload.benchmarkBuild path layout rows dataTarget indexTarget recursive
         let buildTime := (← IO.monoNanosNow) - start
         check (count == rows) "benchmark build count"
         let image ← IO.FS.readBinFile path
@@ -500,7 +473,7 @@ def benchmarkTargets (rows dataTarget indexTarget : Nat) (writerOnly : Bool) :
     let layout : Unified.Layout := ⟨keyWidth, valueWidth, 84⟩
     let path := dir / name
     let start ← IO.monoNanosNow
-    let count ← benchmarkBuild path layout rows dataTarget indexTarget true
+    let count ← SSTableWorkload.benchmarkBuild path layout rows dataTarget indexTarget true
     let buildTime := (← IO.monoNanosNow) - start
     check (count == rows) "benchmark build count"
     if writerOnly then

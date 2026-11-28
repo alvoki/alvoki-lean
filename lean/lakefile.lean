@@ -62,3 +62,8 @@ lean_exe recursiveSSTableCheck where
   root := `Alvoki.Experiments.SSTable.Recursive.Fixtures
 
 lean_lib Alvoki.Checks.Tests.RecursiveSSTableProducer
+
+lean_lib Alvoki.Checks.Benchmarks.SSTableWorkload
+
+lean_exe sstableIndexCacheBench where
+  root := `Alvoki.Checks.Benchmarks.SSTableIndexCache

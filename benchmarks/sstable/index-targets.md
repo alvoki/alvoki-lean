@@ -81,3 +81,5 @@ transition and its coverage and progress proofs. Simply promoting the
 oversized directory would reproduce the measured interior-page regression.
 The current results support workload-specific tuning and measuring
 fetched bytes alongside read counts before adding a spill transition.
+
+The [index residency experiment](index-cache.md) compares both formats with a shared metadata byte budget and separates read traffic from validation.
