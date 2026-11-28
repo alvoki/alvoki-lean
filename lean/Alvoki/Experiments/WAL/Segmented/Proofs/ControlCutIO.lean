@@ -43,7 +43,7 @@ def Effect (c : Control) (kind : OpKind) (completed : Bool) (before after : Disk
 
 inductive Point
   | stat | unlink | openWriter | unbuffer (h : IO.FS.Handle) | write (h : IO.FS.Handle)
-  | flush (h : IO.FS.Handle) | syncWriter (h : IO.FS.Handle) | rename | directory | done
+  | flush (h : IO.FS.Handle) | syncWriter (h : IO.FS.Handle) | rename (writer : IO.FS.Handle) | directory (writer : IO.FS.Handle) | done
 
 inductive Issued (s : Store) (c : Control) : Point → {α : Type} → IO α → OpKind → Prop where
   | stat : Issued s c .stat (s.root / "CONTROL.next").symlinkMetadata .privateFile
@@ -53,8 +53,8 @@ inductive Issued (s : Store) (c : Control) : Point → {α : Type} → IO α →
   | write h : Issued s c (.write h) (h.write (ControlCodec.encode (next c))) .privateFile
   | flush h : Issued s c (.flush h) h.flush .privateFile
   | syncWriter h : Issued s c (.syncWriter h) (syncHandle h) .privateFile
-  | rename : Issued s c .rename (IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")) .publishName
-  | directory : Issued s c .directory (syncHandle s.directory) .syncRoot
+  | rename h : Issued s c (.rename h) (IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL")) .publishName
+  | directory h : Issued s c (.directory h) (syncHandle s.directory) .syncRoot
 
 /-- Only the concrete control-flow edges that continue the operation. A
 missing staging path skips unlink. An invalid path cannot reach unlink. -/
@@ -67,9 +67,9 @@ inductive Step (s : Store) (c : Control) : Point → W → Point → W → Prop 
   | unbuffered : disableBuffering h w = .ok () t → Step s c (.unbuffer h) w (.write h) t
   | written : h.write (ControlCodec.encode (next c)) w = .ok () t → Step s c (.write h) w (.flush h) t
   | flushed : h.flush w = .ok () t → Step s c (.flush h) w (.syncWriter h) t
-  | synced : syncHandle h w = .ok () t → Step s c (.syncWriter h) w .rename t
-  | renamed : IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL") w = .ok () t → Step s c .rename w .directory t
-  | settled : syncHandle s.directory w = .ok () t → Step s c .directory w .done t
+  | synced : syncHandle h w = .ok () t → Step s c (.syncWriter h) w (.rename h) t
+  | renamed : IO.FS.rename (s.root / "CONTROL.next") (s.root / "CONTROL") w = .ok () t → Step s c (.rename h) w (.directory h) t
+  | settled : syncHandle s.directory w = .ok () t → Step s c (.directory h) w .done t
 
 inductive Prefix (s : Store) (c : Control) (origin : W) : Point → W → Prop where
   | start : Prefix s c origin .stat origin
@@ -91,8 +91,8 @@ def remaining (s : Store) (c : Control) : Point → IO Unit
   | .write h => write s c h
   | .flush h => flush s h
   | .syncWriter h => sync s h
-  | .rename => publish s
-  | .directory => barrier s
+  | .rename _ => publish s
+  | .directory _ => barrier s
   | .done => pure ()
 
 private theorem concrete (s : Store) (c : Control) (active : (next c).active ≤ ControlCodec.wordMax)
@@ -138,19 +138,110 @@ theorem Prefix.continuation (path : Prefix s c origin p w) (active : (next c).ac
   | more _ step ih => exact ih.trans step.consume
 
 def Point.kind : Point → OpKind
-  | .rename => .publishName
-  | .directory => .syncRoot
+  | .rename _ => .publishName
+  | .directory _ => .syncRoot
   | _ => .privateFile
 
-structure Primitives (s : Store) (c : Control) (origin : W) (disk : W → Disk) (stop : Stops) : Prop where
-  returned : ∀ p w q t, Prefix s c origin p w → Step s c p w q t →
+/-- Inode and selector evidence consumed by this one reached operation.
+The rename carries the exclusive writer from open, with its exact synced
+bytes. The directory barrier carries that same inode at its new name. -/
+def Operand (m : ControlIO.Media) (s : Store) (c : Control) (disk : W → Disk) (w : W) : Point → Prop
+  | .unbuffer h | .write h => m.bound h (s.root / "CONTROL.next") w
+  | .flush h => m.Written h (s.root / "CONTROL.next") (next c) w
+  | .syncWriter h => m.Written h (s.root / "CONTROL.next") (next c) w ∧ (disk w).staged = some (next c)
+  | .rename h => m.Synced h (s.root / "CONTROL.next") (next c) w ∧ (disk w).staged = some (next c)
+  | .directory h => m.Synced h (s.root / "CONTROL") (next c) w ∧ (disk w).liveControl = some (next c)
+  | _ => True
+
+private def ModelAt (_io : ControlIO.Primitives s (next c) r origin initial R disk) (w : W) : Point → Prop
+  | .stat => w = origin
+  | .unlink => ∃ md, (s.root / "CONTROL.next").symlinkMetadata origin = .ok md w ∧ ControlIO.Regular md
+  | .openWriter => removeRegular (s.root / "CONTROL.next") origin = .ok () w
+  | .unbuffer h => ControlIO.WriterStage s (next c) origin .opened h w
+  | .write h => ControlIO.WriterStage s (next c) origin .unbuffered h w
+  | .flush h => ControlIO.WriterStage s (next c) origin .written h w
+  | .syncWriter h => ControlIO.WriterStage s (next c) origin .flushed h w ∧
+      ∃ staged, (ControlIO.stage r (next c)).run initial = .ok (.ok ()) staged ∧ R w staged
+  | .rename h => ControlIO.WriterStage s (next c) origin .synced h w ∧
+      ∃ staged synced, (ControlIO.stage r (next c)).run initial = .ok (.ok ()) staged ∧
+        (ControlIO.syncStage r).run staged = .ok (.ok ()) synced ∧ R w synced
+  | _ => True
+
+private theorem returned {a : IO α} {b : M β} (p : AppendIO.At a b w s ok bad) (ran : a w = .ok x t) :
+    ∃ y v, b.run s = .ok (.ok y) v ∧ ok x y t v := by
+  unfold AppendIO.At at p
+  rw [ran] at p
+  cases model : b.run s <;> rw [model] at p
+  case ok reply v => cases reply <;> first | contradiction | exact ⟨_,_,rfl,p⟩
+  case error => contradiction
+
+private theorem clearMissing {path : FilePath} (stat : path.symlinkMetadata w = .error (.noFileOrDirectory x y z) t) :
+    removeRegular path w = .ok () t := by
+  simp [removeRegular, metadata?, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+    EST.tryCatch, Functor.map, instMonadEIO._aux_1, EST.bind, Bind.bind, instMonadEIO._aux_13,
+    stat, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
+private theorem clearUnlinked {path : FilePath} (stat : path.symlinkMetadata w = .ok md t) (valid : ControlIO.Regular md)
+    (unlinked : IO.FS.removeFile path t = .ok () v) : removeRegular path w = .ok () v := by
+  simp [removeRegular, metadata?, Native.regular, ControlIO.Regular, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+    EST.tryCatch, Functor.map, instMonadEIO._aux_1, EST.bind, Bind.bind, instMonadEIO._aux_13,
+    stat, valid, unlinked, Pure.pure, instMonadEIO._aux_5, EST.pure] at *
+
+/-- The returning producer supplies the operands of every completed step
+before the interrupted call. No return is needed from the last call. -/
+theorem Prefix.operand (path : Prefix s c origin site w)
+    (io : ControlIO.Primitives s (next c) r origin initial R disk) :
+    Operand io.media s c disk w site := by
+  suffices h : ModelAt io w site ∧ Operand io.media s c disk w site from h.2
+  induction path with
+  | start => exact ⟨rfl, trivial⟩
+  | more prior edge ih =>
+    obtain ⟨pc, inode⟩ := ih
+    cases edge with
+    | regular stat valid => exact ⟨⟨_, pc ▸ stat, valid⟩, trivial⟩
+    | missing stat =>
+      change _ = origin at pc
+      rw [pc] at stat
+      exact ⟨clearMissing stat, trivial⟩
+    | cleared unlinked =>
+      obtain ⟨md, stat, valid⟩ := pc
+      exact ⟨clearUnlinked stat valid unlinked, trivial⟩
+    | opened openRun =>
+      have receipt := io.openWriter _ pc
+      rw [IOReturns, openRun] at receipt
+      exact ⟨.opened pc openRun, receipt⟩
+    | unbuffered ran =>
+      have receipt := io.unbuffered _ _ pc inode
+      rw [IOReturns, ran] at receipt
+      exact ⟨pc.unbuffered ran, receipt⟩
+    | written ran =>
+      have receipt := io.write _ _ pc inode
+      rw [IOReturns, ran] at receipt
+      exact ⟨pc.written ran, receipt⟩
+    | flushed ran =>
+      obtain ⟨⟨⟩, u, model, frame, physical⟩ := returned (io.flush _ _ pc inode) ran
+      exact ⟨⟨pc.flushed ran, u, model, frame⟩, physical⟩
+    | synced ran =>
+      obtain ⟨opened, u, stageRun, frame⟩ := pc
+      obtain ⟨⟨⟩, v, syncRun, stayed, physical⟩ := returned
+        (io.syncWriter _ _ _ opened stageRun frame inode.1 inode.2) ran
+      exact ⟨⟨opened.synced ran, u, v, stageRun, syncRun, stayed⟩, physical⟩
+    | renamed ran =>
+      obtain ⟨synced, u, v, stageRun, syncRun, frame⟩ := pc
+      obtain ⟨⟨⟩, _, _, _, physical⟩ := returned
+        (io.renameFile _ _ _ _ synced stageRun syncRun frame inode.1 inode.2) ran
+      exact ⟨trivial, physical⟩
+    | settled => exact ⟨trivial, trivial⟩
+
+structure Primitives (s : Store) (c : Control) (origin : W) (disk : W → Disk) (stop : Stops) (media : ControlIO.Media) : Prop where
+  returned : ∀ p w q t, Prefix s c origin p w → Step s c p w q t → Operand media s c disk w p →
     Files c (disk w) (disk t) ∧ Effect c p.kind true (disk w) (disk t)
-  stopped : ∀ p w, Prefix s c origin p w → ∀ {α} (a : IO α) k, Issued s c p a k →
+  stopped : ∀ p w, Prefix s c origin p w → ∀ {α} (a : IO α) k, Issued s c p a k → Operand media s c disk w p →
     ∀ d, stop a w d → Files c (disk w) d ∧ Effect c k false (disk w) d
 
 def Authority (c : Control) (p : Point) (d : Disk) : Prop :=
   match p with
-  | .directory => d.liveControl = some (next c) ∧ (d.durableControl = some c ∨ d.durableControl = some (next c))
+  | .directory _ => d.liveControl = some (next c) ∧ (d.durableControl = some c ∨ d.durableControl = some (next c))
   | .done => d.liveControl = some (next c) ∧ d.durableControl = some (next c)
   | _ => d.liveControl = some c ∧ d.durableControl = some c
 
@@ -158,12 +249,13 @@ private theorem advance (step : Step s c p w q t) (old : Authority c p a)
     (effect : Effect c p.kind true a b) : Authority c q b := by
   cases step <;> simp_all [Authority, Effect, Point.kind]
 
-theorem Prefix.frame (prims : Primitives s c origin disk stop) (path : Prefix s c origin p w)
+theorem Prefix.frame (io : ControlIO.Primitives s (next c) r origin initialState R disk)
+    (prims : Primitives s c origin disk stop io.media) (path : Prefix s c origin p w)
     (initial : Authority c .stat (disk origin)) : Files c (disk origin) (disk w) ∧ Authority c p (disk w) := by
   induction path with
   | start => exact ⟨.refl .., initial⟩
   | more prior step ih =>
-    obtain ⟨files, effect⟩ := prims.returned _ _ _ _ prior step
+    obtain ⟨files, effect⟩ := prims.returned _ _ _ _ prior step (prior.operand io)
     exact ⟨ih.1.trans files, advance step ih.2 effect⟩
 
 /-- Both sides of the atomic rename may be observed at the cut. After the
@@ -176,15 +268,16 @@ private theorem atCut (site : Issued s c p action k) (old : Authority c p a)
     (effect : Effect c k false a b) : Choices c b := by
   cases site <;> simp_all [Authority, Effect, Choices] <;> grind
 
-theorem survivor (prims : Primitives s c origin disk stop) (path : Prefix s c origin p w)
+theorem survivor (io : ControlIO.Primitives s (next c) r origin initialState R disk)
+    (prims : Primitives s c origin disk stop io.media) (path : Prefix s c origin p w)
     (issued : Issued s c p action k) (cut : stop action w d)
     (initial : Authority c .stat (disk origin)) (ready : ReadyLayout c history (disk origin))
     (full : (segmentHistory c.capacity c.active history).length = c.capacity)
     (named : c.active + 1 ∈ (disk origin).liveNames ∧ c.active + 1 ∈ (disk origin).durableNames)
     (fresh : Child.Installed c.policy ((disk origin).segment (c.active + 1)) ((disk origin).cursor (c.active + 1)) []) :
     Choices c d ∧ Recoverable (historyView c history) none d ∧ Recoverable (historyView c history) none d.powerLoss := by
-  obtain ⟨previous, authority⟩ := path.frame prims initial
-  obtain ⟨last, effect⟩ := prims.stopped _ _ path _ _ issued _ cut
+  obtain ⟨previous, authority⟩ := path.frame io prims initial
+  obtain ⟨last, effect⟩ := prims.stopped _ _ path _ _ issued (path.operand io) _ cut
   have files := previous.trans last
   have names (i) (sel : c.selects i) :=
     And.intro ((files.names i (.inl sel)).1 (ready.layout.names i sel).1)

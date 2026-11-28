@@ -62,7 +62,8 @@ structure CutRuntime (disk : W → Disk) (store : Store) (session : Session) (st
     PrepareIO.PreparedFile disk (successor session).active w → ∀ d, stop (syncHandle store.directory) w d → PrepareCutIO.Frame session.control (disk w) d
   control : ∀ origin, Reached disk store session .synced origin → Installed session (disk origin) →
     PrepareIO.PreparedFile disk (successor session).active origin → (successor session).active ∈ (disk origin).durableNames →
-    ControlCutIO.Primitives store session.control origin disk stop
+    ∀ {reports initial R} (io : ControlIO.Primitives store (successor session) reports origin initial R disk),
+      ControlCutIO.Primitives store session.control origin disk stop io.media
   child : ∀ {h batch w d} (r : ChildCutIO.Receipt (fun a => stop a) h batch w d) c,
     (disk w).liveControl = some c → (disk w).durableControl = some c → OwnedOperand disk store c r.operand → ChildCutIO.Primitives disk c r
   finished : ∀ {h batch w d} (r : ChildCutIO.Complete stop h batch w d) c,
@@ -171,7 +172,8 @@ theorem recoverBody {disk : W → Disk} {mem : ChildMemory disk}
       obtain ⟨hist,shape,layout,l,dur⟩ := entry.1.2.1.installed model.1
       have count := (congrArg Session.activeCount shape).symm.trans full
       obtain ⟨names,empty⟩ := file.namedChild named reg.session.control.policy
-      have facts := ControlCutIO.survivor (prim.control t (visit path) ⟨hist,shape,layout,l,dur⟩ file named) visited site stopped ⟨l,dur⟩ layout count names empty
+      let publication := io.control child t st path entry file named
+      have facts := ControlCutIO.survivor publication (prim.control t (visit path) ⟨hist,shape,layout,l,dur⟩ file named publication) visited site stopped ⟨l,dur⟩ layout count names empty
       exact congrArg Session.view shape ▸ allowPending facts.2.1 _
     · rintro child t st ⟨path,entry,file,named⟩ after stopped
       obtain ⟨hist,view,layout,l,dur,empty,spare,shape⟩ := path.layout ready size room full linux
