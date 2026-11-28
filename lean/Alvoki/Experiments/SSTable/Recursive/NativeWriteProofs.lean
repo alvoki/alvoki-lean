@@ -1,5 +1,7 @@
-import Alvoki.Experiments.SSTable.Proofs.NativeWrite
-import Alvoki.Experiments.SSTable.Recursive.Native
+import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
+import Alvoki.Experiments.SSTable.Proofs.Typed
+import Alvoki.Experiments.SSTable.Recursive.NativeReadProofs
+import Alvoki.Experiments.SSTable.Recursive.WriterProofs
 
 namespace ImmutableSSTable.Recursive
 
@@ -443,5 +445,148 @@ theorem buildFileWith_syncError {ops : OutputOps (NativeWriteM handle inode) han
   unfold buildFileWith
   rw [freshOutput_result]
   simp only [openRan, writeRan, syncRan, failedOutput]
+
+/-- A successful sync establishes the recursive image of the original
+supplier at the inode of the descriptor returned by exclusive creation. -/
+theorem buildFileWith_refines {ops : OutputOps (NativeWriteM writer inode) writer}
+    {path : System.FilePath} {nextRow : NativeWriteM writer inode (Option Entry)}
+    {crc : Checksum} {layout : Layout} {options : BuildOptions}
+    {before after : NativeWriteState writer inode} {count : Nat}
+    (effects : NativeWriteEffects ops path nextRow)
+    (run : (buildFileWith ops crc path layout nextRow id options).run before = .ok count after) :
+    before.binding = none ∧ after.rows = [] ∧ count = before.rows.length ∧
+      Image layout crc after.appended before.rows ∧
+      ∃ output identity, after.BoundTo path output identity ∧ after.flushed = true ∧
+        after.durable = some (identity, after.appended) := by
+  obtain ⟨fresh, exhausted, flushed, exact, output, identity, _, _, bound, durable⟩ :=
+    buildFileWith_exact effects run
+  have model : modelBuild crc layout before.rows options = .ok (count, after.appended) := by
+    unfold modelBuild
+    rw [exact]
+    rfl
+  obtain ⟨countEq, image⟩ := modelBuild_ok model
+  exact ⟨fresh, exhausted, countEq, image, output, identity, bound, flushed, durable⟩
+
+/-- Local read contracts are supplied for the inode and bytes actually
+established by the writer. The frame survives successful and failed reads. -/
+theorem buildFileWith_lookup_framed {outputOps : OutputOps (NativeWriteM writer inode) writer}
+    {path readPath : System.FilePath} {nextRow : NativeWriteM writer inode (Option Entry)}
+    {crc : Checksum} {layout : Layout} {options : BuildOptions}
+    {before after : NativeWriteState writer inode} {count : Nat}
+    {readOps : ReadPrimitives (ReadM σ) reader} {frame : σ → Prop}
+    {inodeAt : reader → σ → Option inode}
+    (effects : NativeWriteEffects outputOps path nextRow)
+    (built : (buildFileWith outputOps crc path layout nextRow id options).run before = .ok count after)
+    (reads : ∀ identity bytes, after.durable = some (identity, bytes) →
+      ReadEffects readOps readPath frame (fun held state => inodeAt held state = some identity) bytes)
+    (key : ByteArray) :
+    ReadPost frame
+      (openCheckedWith readOps crc readPath layout.tableId >>= fun handle => handle.table.lookup key)
+      (· = Contents.lookup before.rows key) := by
+  obtain ⟨_, _, _, image, _, identity, _, _, durable⟩ := buildFileWith_refines effects built
+  exact checkedNativeLookup (reads identity after.appended durable) image key
+
+/-- The healthy reader interprets the durable contents of the inode selected
+by its acquired description. All three public operations use that image. -/
+theorem buildFileWith_open_represents [DecidableEq inode]
+    {outputOps : OutputOps (NativeWriteM writer inode) writer}
+    {path readPath : System.FilePath} {nextRow : NativeWriteM writer inode (Option Entry)}
+    {crc : Checksum} {layout : Layout} {options : BuildOptions}
+    {before after : NativeWriteState writer inode} {count : Nat}
+    {acquire : System.FilePath → IO.FS.Mode → ReadM σ reader}
+    {start acquired : σ} {held : reader} {inodeAt : reader → Option inode}
+    (effects : NativeWriteEffects outputOps path nextRow)
+    (built : (buildFileWith outputOps crc path layout nextRow id options).run before = .ok count after)
+    (opened : acquire readPath .read start = .ok held acquired)
+    (selected : ∀ output identity, after.BoundTo path output identity → inodeAt held = some identity) :
+    count = before.rows.length ∧
+    ∃ handle, openCheckedWith ((after.readSnapshot inodeAt).primitives acquire)
+      crc readPath layout.tableId start = .ok handle acquired ∧
+      handle.table.Represents before.rows := by
+  obtain ⟨_, _, countEq, image, output, identity, bound, _, durable⟩ :=
+    buildFileWith_refines effects built
+  let snapshot := after.readSnapshot inodeAt
+  have contents : snapshot.contents identity = some after.appended := by
+    simp [snapshot, NativeWriteState.readSnapshot, durable]
+  have observed := snapshot.readsExactly acquire (selected output identity bound) contents image.extent
+  obtain ⟨handle, checked, represents⟩ := image.open_represents (observed.source_serves image.extent)
+  refine ⟨countEq, handle, ?_, represents⟩
+  have accepted : (snapshot.primitives acquire).openFile readPath .read start = .ok held acquired := opened
+  change openCheckedWith (snapshot.primitives acquire) crc readPath layout.tableId start =
+    .ok handle acquired
+  simp [openCheckedWith, Bind.bind, EStateM.bind, accepted, checked, EStateM.pure, Pure.pure]
+
+theorem buildFileWith_open_typed_represents [DecidableEq κ] [DecidableEq inode]
+    {outputOps : OutputOps (NativeWriteM writer inode) writer}
+    {path readPath : System.FilePath} {nextRow : NativeWriteM writer inode (Option Entry)}
+    {crc : Checksum} {layout : Layout} {options : BuildOptions}
+    {before after : NativeWriteState writer inode} {count : Nat}
+    {acquire : System.FilePath → IO.FS.Mode → ReadM σ reader}
+    {start acquired : σ} {held : reader} {inodeAt : reader → Option inode}
+    (effects : NativeWriteEffects outputOps path nextRow)
+    (built : (buildFileWith outputOps crc path layout nextRow id options).run before = .ok count after)
+    (opened : acquire readPath .read start = .ok held acquired)
+    (selected : ∀ output identity, after.BoundTo path output identity → inodeAt held = some identity)
+    {rows : List (κ × ν)} {less : κ → κ → Prop} {keys : Codec κ} {values : Codec ν}
+    (supplier : before.rows = rows.map (Entry.encode keys values))
+    (keyLaw : keys.Roundtrips) (valueLaw : values.Roundtrips) (orderLaw : keys.PreservesOrder less) :
+    count = rows.length ∧
+    ∃ handle, openCheckedWith ((after.readSnapshot inodeAt).primitives acquire)
+      crc readPath layout.tableId start = .ok handle acquired ∧
+      (TypedTable.mk handle.table keys values).Represents less rows := by
+  obtain ⟨countEq, handle, checked, represents⟩ :=
+    buildFileWith_open_represents effects built opened selected
+  refine ⟨by simpa [supplier] using countEq, handle, checked, ?_⟩
+  exact TypedTable.represents_of_bytes (supplier ▸ represents) keyLaw valueLaw orderLaw
+
+/-- A fault reading the footer propagates its original error and state
+through checked open and the lookup continuation. -/
+private theorem checkedLookup_footerError
+    {readOps : ReadPrimitives (ReadM σ) reader} {path : System.FilePath}
+    {crc : Checksum} {id : UInt64} {key : ByteArray}
+    {start opened sized reached : σ} {held : reader} {size : Nat} {error : String}
+    (openRan : readOps.openFile path .read start = .ok held opened)
+    (sizeRan : readOps.size held opened = .ok size sized)
+    (fits : footerPacketSize ≤ size ∧ size ≤ maxFileSize)
+    (failed : readOps.pread held (size - footerPacketSize).toUInt64 footerPacketSize.toUSize sized =
+      .error error reached) :
+    (openCheckedWith readOps crc path id >>= fun handle => handle.table.lookup key) start =
+      .error error reached := by
+  have sourceSize : (readOps.source held).size opened = .ok size sized := sizeRan
+  have sourceFailure := ReadPrimitives.source_pread_error (by decide : footerPacketSize ≤ maxRowSize)
+    (show size - footerPacketSize + footerPacketSize ≤ maxFileSize by omega) failed
+  have exactFailure : readExact (readOps.source held) (size - footerPacketSize) footerPacketSize sized =
+      .error error reached := by
+    simp [readExact, Bind.bind, EStateM.bind, sourceFailure]
+  have footerFailure : readFooter (readOps.source held) crc opened = .error error reached := by
+    simp [readFooter, Bind.bind, EStateM.bind, sourceSize, fits, exactFailure]
+  have checkedFailure : openChecked (readOps.source held) crc id opened = .error error reached := by
+    simp [openChecked, Bind.bind, EStateM.bind, footerFailure]
+  simp [openCheckedWith, Bind.bind, EStateM.bind, openRan, checkedFailure]
+
+theorem buildFileWith_lookup_footerError {outputOps : OutputOps (NativeWriteM writer inode) writer}
+    {path readPath : System.FilePath} {nextRow : NativeWriteM writer inode (Option Entry)}
+    {crc : Checksum} {layout : Layout} {options : BuildOptions}
+    {before after : NativeWriteState writer inode} {count : Nat}
+    {readOps : ReadPrimitives (ReadM σ) reader} {frame : σ → Prop}
+    {inodeAt : reader → σ → Option inode} {key : ByteArray}
+    {start opened sized reached : σ} {held : reader} {size : Nat} {error : String}
+    (effects : NativeWriteEffects outputOps path nextRow)
+    (built : (buildFileWith outputOps crc path layout nextRow id options).run before = .ok count after)
+    (reads : ∀ identity bytes, after.durable = some (identity, bytes) →
+      ReadEffects readOps readPath frame (fun held state => inodeAt held state = some identity) bytes)
+    (initialFrame : frame start)
+    (openRan : readOps.openFile readPath .read start = .ok held opened)
+    (sizeRan : readOps.size held opened = .ok size sized)
+    (fits : footerPacketSize ≤ size ∧ size ≤ maxFileSize)
+    (failed : readOps.pread held (size - footerPacketSize).toUInt64 footerPacketSize.toUSize sized =
+      .error error reached) :
+    (openCheckedWith readOps crc readPath layout.tableId >>= fun handle => handle.table.lookup key) start =
+      .error error reached ∧ frame reached := by
+  have surfaced := checkedLookup_footerError (crc := crc) (id := layout.tableId) (key := key)
+    openRan sizeRan fits failed
+  have framed := buildFileWith_lookup_framed effects built reads key start initialFrame
+  rw [surfaced] at framed
+  exact ⟨surfaced, framed⟩
 
 end ImmutableSSTable.Recursive
