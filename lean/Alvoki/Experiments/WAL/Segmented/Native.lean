@@ -25,10 +25,15 @@ def regular (path : FilePath) (md : IO.FS.Metadata) : IO Unit := do
   unless md.type == .file && md.numLinks == 1 do
     throw <| IO.userError s!"expected singly linked regular file at {path}"
 
-def removeRegular (path : FilePath) : IO Unit := do
-  if let some md ← metadata? path then
-    regular path md
-    IO.FS.removeFile path
+@[inline] abbrev removeRegularWith [Monad m]
+    (stat : FilePath → m (Option IO.FS.Metadata)) (check : FilePath → IO.FS.Metadata → m Unit)
+    (unlink : FilePath → m Unit) (path : FilePath) : m Unit := do
+  if let some md ← stat path then
+    check path md
+    unlink path
+
+def removeRegular (path : FilePath) : IO Unit :=
+  removeRegularWith metadata? regular IO.FS.removeFile path
 
 def segmentName (id : Nat) : String := "segment-" ++ id.repr
 

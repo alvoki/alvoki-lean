@@ -1,4 +1,5 @@
 import Alvoki.Experiments.WAL.Segmented.Proofs.CutRuntime
+import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutCoverage
 
 namespace WalRecoverySlice.Segmented.Native.AppendCut
 open Model (Disk)
@@ -20,6 +21,61 @@ inductive PublicStop (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (stor
   | fail : store.appendSession session batch (issuedWorld cell mutex store w) = .error e t →
       stop (liftM mutex.unlock : IO Unit) t d → PublicStop cell mutex store session batch w stop d
 
+/-- Source-side observations of the nested operating-system calls. The
+proof below transforms them into the prefix evidence used by the disk model. -/
+def sourceSites (s : Store) (session : Session) (stop : Stop) : Sites s :=
+  { sites s session stop with publish := fun _ => (ControlCutIO.program s session.control stop).cuts }
+
+private structure Covers (source certified : Observed α) : Prop where
+  erase : source.run = certified.run
+  covered : ∀ {w d}, source.cuts w d → certified.cuts w d
+
+private theorem Covers.bind {a b : Observed α} {f g : α → Observed β} (first : Covers a b)
+    (rest : ∀ x, Covers (f x) (g x)) : Covers (a >>= f) (b >>= g) := by
+  refine ⟨?_, ?_⟩
+  · change (a.run >>= fun x => (f x).run) = (b.run >>= fun x => (g x).run)
+    rw [first.erase]
+    exact congrArg (Bind.bind b.run) (funext fun x => (rest x).erase)
+  · rintro w d (cut | ⟨x,t,ran,cut⟩)
+    · exact Or.inl (first.covered cut)
+    · exact Or.inr ⟨x,t,first.erase ▸ ran,(rest x).covered cut⟩
+
+private theorem Covers.catch {a b : Observed α} {f g : IO.Error → Observed α} (first : Covers a b)
+    (rest : ∀ x, Covers (f x) (g x)) :
+    Covers (tryCatchThe IO.Error a f) (tryCatchThe IO.Error b g) := by
+  refine ⟨?_, ?_⟩
+  · change tryCatchThe IO.Error a.run (fun e => (f e).run) = tryCatchThe IO.Error b.run (fun e => (g e).run)
+    rw [first.erase]
+    exact congrArg (tryCatchThe IO.Error b.run) (funext fun x => (rest x).erase)
+  · rintro w d (cut | ⟨x,t,ran,cut⟩)
+    · exact Or.inl (first.covered cut)
+    · exact Or.inr ⟨x,t,first.erase ▸ ran,(rest x).covered cut⟩
+
+private theorem Covers.refl (a : Observed α) : Covers a a := ⟨rfl, fun h => h⟩
+
+private theorem bodyCovered (s : Store) (session : Session) (batch : Bytes) (stop : Stop) :
+    Covers ((sourceSites s session stop).appendSession session batch)
+      ((sites s session stop).appendSession session batch) := by
+  unfold Sites.appendSession appendOwnedWith
+  apply Covers.bind (Covers.refl _)
+  intro _
+  dsimp only
+  split
+  · apply Covers.bind (Covers.refl _)
+    intro _
+    unfold withActiveChild cleanupOnError
+    apply Covers.bind (Covers.refl _)
+    intro h
+    apply Covers.catch
+    · apply Covers.bind (Covers.refl _)
+      intro _
+      apply Covers.bind
+      · exact ⟨rfl, fun hit => ControlCutIO.covered hit⟩
+      intro _
+      exact Covers.refl _
+    · exact fun _ => Covers.refl _
+  · exact Covers.refl _
+
 /-- Instrument a primitive without requiring that it returned at the point
 of interruption. The ordinary interpreter still calls the original action. -/
 private def leaf (stop : Stop) (a : IO α) : Observed α := ⟨a, stop a⟩
@@ -36,7 +92,7 @@ def publicProgram (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (batch :
   let _ ← leaf stop (liftM mutex.lock : IO Unit)
   finallyUnlock (updateWith IO.userError (leaf stop (cell.get : IO _))
     (fun ph => leaf stop (cell.set ph : IO Unit))
-    (fun store session => (sites store session stop).appendSession session batch)) mutex stop
+    (fun store session => (sourceSites store session stop).appendSession session batch)) mutex stop
 
 private theorem bindCuts (a : Observed α) (f : α → Observed β) (w : W) (d : Disk) :
     (a >>= f).cuts w d ↔ a.cuts w d ∨
@@ -69,13 +125,13 @@ private theorem updateOutput (cell : IO.Ref (Phase Store)) (mu : Std.BaseMutex) 
     (batch : Bytes) (w : W) (ready : ((cell.get : BaseIO _) (mu.lock w).state).val = .ready s session) :
     (updateWith IO.userError (leaf stop (cell.get : IO _))
       (fun ph => leaf stop (cell.set ph : IO Unit))
-      (fun store session => (sites store session stop).appendSession session batch)).run (mu.lock w).state =
+      (fun store session => (sourceSites store session stop).appendSession session batch)).run (mu.lock w).state =
       match s.appendSession session batch (issuedWorld cell mu s w) with
       | .error e t => .error e t
       | .ok next t => .ok next (installedWorld cell s next t) := by
   unfold updateWith
   rw [bindRun, readReady cell mu stop w ready]
-  change (((sites s session stop).appendSession session batch).run >>= _) (issuedWorld cell mu s w) = _
+  change (((sourceSites s session stop).appendSession session batch).run >>= _) (issuedWorld cell mu s w) = _
   rw [Sites.erase]
   cases a : s.appendSession session batch (issuedWorld cell mu s w) <;>
     simp [Bind.bind, instMonadEIO._aux_13, EST.bind, a] <;> rfl
@@ -120,7 +176,7 @@ theorem publicProgram_covered (cell : IO.Ref (Phase Store)) (mu : Std.BaseMutex)
     change (_ >>= _ : Observed _).cuts (issuedWorld cell mu s w) d at work
     rw [bindCuts, Sites.erase] at work
     rcases work with early | installed
-    · exact .worker early
+    · exact .worker ((bodyCovered s session batch stop).covered early)
     cases ran : s.appendSession session batch (issuedWorld cell mu s w) with
     | error e t => rw [ran] at installed; contradiction
     | ok next t =>
