@@ -30,6 +30,26 @@ structure Produced {ns : TableNamespace W} (media : Media ns) (old : Catalog) (P
     (fun id t => P t ∧ Created media old rows id t) (fun _ => P)
   visited : ∀ {α : Type} {a : IO α} {last}, Visits ns.directory rows origin a last → P last
 
+  afterVisit : ∀ {α : Type} {a : IO α} {last}, Visits ns.directory rows origin a last → P (a.toBaseIO last).state
+
+private theorem postState {a : IO α} {ok : α → W → Prop}
+    (post : Post a w ok (fun _ => P)) (success : ∀ x t, ok x t → P t) :
+    P (a.toBaseIO w).state := by
+  unfold Post at post
+  cases ran : a w with
+  | ok x t => rw [ran] at post; simpa [EIO.toBaseIO, ran] using success x t post
+  | error e t => rw [ran] at post; simpa [EIO.toBaseIO, ran] using post
+
+private theorem probeState (probe : Probe ns P) (id : UInt64) (pw : P w) :
+    P ((tablePath ns.directory id).symlinkMetadata.toBaseIO w).state := by
+  have raw := probe.stat id w pw
+  cases ran : (tablePath ns.directory id).symlinkMetadata w with
+  | ok x t => rw [ran] at raw; simpa [EIO.toBaseIO, ran] using raw
+  | error e t =>
+    rw [ran] at raw
+    simp only [EIO.toBaseIO, ran]
+    cases e <;> first | exact raw | exact raw.1
+
 private theorem withReport {ok : α → W → Prop} (result : Post act w ok err) :
     Post act w (fun x t => act w = .ok x t ∧ ok x t) err := by
   unfold Post at *
@@ -64,6 +84,33 @@ theorem create {ns : TableNamespace W} {media : Media ns}
     have atCall := allocated
     rw [Post, selected] at atCall
     exact NativeTableWriter.build (io.writer id w selected atCall.1 atCall.2) atCall.1
+  have edges : ∀ {α : Type} {a : IO α} {last}, Visits ns.directory rows origin a last →
+      P last ∧ P (a.toBaseIO last).state := by
+    intro α a last visit
+    cases visit with
+    | probe earlier _ =>
+      have held := earlier.frame io.probe start
+      exact ⟨held, probeState io.probe _ held⟩
+    | writer selected issued =>
+      have atCall := allocated
+      rw [Post,selected] at atCall
+      exact ⟨(reached _ _ selected).2 _ _ issued,
+        NativeTableWriter.buildAfter (io.writer _ _ selected atCall.1 atCall.2) atCall.1 _ _ issued⟩
+    | directory selected built =>
+      have safe := (reached _ _ selected).1
+      rw [Post,built] at safe
+      obtain ⟨kept, ino, bytes, named, content, synced, _⟩ := safe
+      have file : FileAt media _ ino bytes _ := ⟨named,content,synced⟩
+      exact ⟨kept, postState (io.directory.opened _ _ _ _ kept file) (fun _ _ h => h.1)⟩
+    | sync selected built opened =>
+      have safe := (reached _ _ selected).1
+      rw [Post,built] at safe
+      obtain ⟨kept, ino, bytes, named, content, synced, _⟩ := safe
+      have file : FileAt media _ ino bytes _ := ⟨named,content,synced⟩
+      have d := io.directory.opened _ _ _ _ kept file
+      rw [Post,opened] at d
+      exact ⟨d.1, postState (io.directory.sync _ _ _ _ _ d.1 d.2.1 ⟨_,opened⟩ d.2.2) (fun _ _ h => h.1)⟩
+
   constructor
   · rw [create_schedule]
     apply Post.bind
@@ -80,22 +127,8 @@ theorem create {ns : TableNamespace W} {media : Media ns}
         · exact fun _ _ h => h
       · exact fun _ _ h => h
     · exact fun _ _ h => h
-  · intro α a last visit
-    cases visit with
-    | probe earlier _ => exact earlier.frame io.probe start
-    | writer selected issued => exact (reached _ _ selected).2 _ _ issued
-    | directory selected built =>
-      have safe := (reached _ _ selected).1
-      rw [Post,built] at safe
-      exact safe.1
-    | sync selected built opened =>
-      have safe := (reached _ _ selected).1
-      rw [Post,built] at safe
-      obtain ⟨kept, ino, bytes, named, content, synced, _⟩ := safe
-      have file : FileAt media _ ino bytes _ := ⟨named,content,synced⟩
-      have d := io.directory.opened _ _ _ _ kept file
-      rw [Post,opened] at d
-      exact d.1
+  · exact fun v => (edges v).1
+  · exact fun v => (edges v).2
 
 /-- Positive reports for the parent directory only after this invocation's
 newly created SSTable has returned from its own flush and fsync. -/
