@@ -1784,6 +1784,18 @@ theorem reportedAppend_closeCustody (s : AppendCloseState)
     rw [slot] at phase
     exact .inl phase
 
+/-- Interpret the close input from the reached append slot and phase.
+A reported failure retains the root. A child is held exactly when the
+slot retains it. The scoped rotation proof has already released any
+successor that did not move to that slot. -/
+def appendCloseState (after : State × SingleFile.AppendPhase) (phase : Native.Phase Nat) :
+    AppendCloseState := ⟨after.1, phase, after.2, after.1.activeEntry.isSome, true⟩
+
+theorem reportedAppend_closeState (after : State × SingleFile.AppendPhase) (held : Nat)
+    (phase : after.2 = if after.1.activeEntry.isSome then .poisoned .lock else .closed) :
+    (appendCloseState after (.poisoned held)).ChildCustody :=
+  reportedAppend_closeCustody _ phase rfl
+
 private def closeStoredChild (policy : Policy) (reports : SingleFile.OpenReports)
     (id : Nat) : EStateM String AppendCloseState Unit := fun s =>
   match SingleFile.closeModel policy reports s.child
@@ -1843,8 +1855,8 @@ private theorem appendRelease_releases (policy : Policy) (reports : SingleFile.O
     cases reports.unlockError <;> cases unlockError <;> rfl
 
 theorem publicAppendClose_releases (policy : Policy) (reports : SingleFile.OpenReports)
-    (unlockError : Option String) (s : AppendCloseState) (held : Nat)
-    (poisoned : s.phase = .poisoned held)
+    (unlockError : Option String) (s : AppendCloseState)
+    (owned : s.phase ≠ .closed)
     (custody : s.ChildCustody) :
     let after := {s with
       state := {s.state with activeEntry := none}
@@ -1860,11 +1872,42 @@ theorem publicAppendClose_releases (policy : Policy) (reports : SingleFile.OpenR
   dsimp only
   have first : (publicAppendClose policy reports unlockError).run s =
       (appendRelease policy reports unlockError).run {s with phase := .closed} := by
-    cases s
-    subst_vars
-    rfl
+    obtain ⟨state, phase, child, childHeld, rootHeld⟩ := s
+    cases phase with
+    | closed => exact False.elim (owned rfl)
+    | ready => rfl
+    | poisoned => rfl
   rw [first]
   exact appendRelease_releases policy reports unlockError {s with phase := .closed} custody
+
+theorem publicAppendClose_afterReported (policy : Policy) (reports : SingleFile.OpenReports)
+    (unlockError : Option String) (after : State × SingleFile.AppendPhase) (held : Nat)
+    (phase : after.2 = if after.1.activeEntry.isSome then .poisoned .lock else .closed) :
+    let reached := appendCloseState after (.poisoned held)
+    let released : AppendCloseState :=
+      ⟨{after.1 with activeEntry := none}, .closed, .closed, false, false⟩
+    (publicAppendClose policy reports unlockError).run reached =
+      if after.1.activeEntry.isSome && reports.unlockError then .error "primitive error" released
+      else match unlockError with
+        | none => .ok () released
+        | some err => .error err released :=
+  publicAppendClose_releases policy reports unlockError _ (by intro impossible; cases impossible)
+    (reportedAppend_closeState after held phase)
+
+theorem publicAppendClose_afterRejection (policy : Policy) (reports : SingleFile.OpenReports)
+    (unlockError : Option String) (before : State × SingleFile.AppendPhase) (held : Nat)
+    (ready : AppendReady session before)
+    (registered : before.1.activeEntry = some session.control.active) :
+    let reached := appendCloseState before (.poisoned held)
+    let released : AppendCloseState :=
+      ⟨{before.1 with activeEntry := none}, .closed, .closed, false, false⟩
+    (publicAppendClose policy reports unlockError).run reached =
+      if before.1.activeEntry.isSome && reports.unlockError then .error "primitive error" released
+      else match unlockError with
+        | none => .ok () released
+        | some err => .error err released :=
+  publicAppendClose_releases policy reports unlockError _ (by intro impossible; cases impossible)
+    (AppendReady.closeCustody ready registered)
 
 theorem publicAppendClose_repeated (policy : Policy) (reports : SingleFile.OpenReports)
     (unlockError : Option String) (s : AppendCloseState) (closed : s.phase = .closed) :
@@ -2352,7 +2395,10 @@ def publicBootstrapModel (binding : Except String (RootBinding directory lock))
       | .ok response after =>
         .ok response {s with state := after.1, child := after.2, childHeld := after.1.activeEntry.isSome}
       | .error token after => .error token {s with state := after.1, child := after.2}))
-    pure (pure ())
+    (fun phase s => .ok (.ok phase) {s with phase := match phase with
+      | .ready _ session => .ready held session
+      | .poisoned _ => .poisoned held
+      | .closed => .closed}) (pure ())
     (fun _ s => match (appendRelease policy close unlockError).run s with
       | .ok () after => .ok (.ok ()) after
       | .error err after => .ok (.error err) after)
@@ -2368,7 +2414,7 @@ theorem publicBootstrap_installs (owned : RootBinding directory lock)
       ({}, .closed) = .ok (.ok session) after) :
     (publicBootstrapModel (.ok owned) enumerate held removal effects create close unlockError policy capacity).run
       ⟨{}, .closed, .closed, false, false⟩ =
-      .ok (.ok (.ready owned session, ())) ⟨after.1, .closed, after.2, true, true⟩ ∧
+      .ok (.ok (.ready owned session, ())) ⟨after.1, .ready held session, after.2, true, true⟩ ∧
     after.1.activeEntry = some session.control.active ∧ AppendReady session after := by
   obtain ⟨ready, slot, _⟩ := nativeBootstrap_ready owned.root held removal effects create policy capacity linux ran
   refine ⟨?_, slot, ready⟩
@@ -2391,13 +2437,38 @@ theorem publicBootstrap_healthy (owned : RootBinding directory lock)
       (publicBootstrapModel (.ok owned) enumerate held removal healthy {} {} none policy capacity).run
         ⟨{}, .closed, .closed, false, false⟩ =
           .ok (.ok (.ready owned session, ())) after ∧
-      after.rootHeld = true ∧ after.childHeld = true ∧
+      after.phase = .ready held session ∧ after.rootHeld = true ∧ after.childHeld = true ∧
       after.state.activeEntry = some session.control.active ∧
       AppendReady session (after.state, after.child) := by
   obtain ⟨session, after, ran⟩ := nativeBootstrap_healthy owned.root held removal removes policy capacity positive fits linux
   obtain ⟨installed, slot, ready⟩ := publicBootstrap_installs owned enumerate listed empty held removal
     healthy {} {} none policy capacity linux ran
-  exact ⟨session, _, installed, rfl, rfl, slot, ready⟩
+  exact ⟨session, _, installed, rfl, rfl, rfl, slot, ready⟩
+
+/-- Local acquisition reports feed the public create producer directly. -/
+theorem publicNativeCreate_healthy
+    (resolve : System.FilePath → Except String System.FilePath)
+    (openDirectory : System.FilePath → IO.FS.Mode → Except String directory)
+    (lockRoot : System.FilePath → Except String lock) (dir root : System.FilePath)
+    (resolved : resolve dir = .ok root)
+    (opened : openDirectory root .read = .ok directoryHandle)
+    (locked : lockRoot root = .ok lockHandle)
+    (enumerate : System.FilePath → Except String (Array IO.FS.DirEntry))
+    (listed : enumerate root = .ok names)
+    (empty : names.all (fun e => e.fileName == "lock") = true)
+    (held : Nat) (removal : RootReports) (removes : HealthyRoot removal)
+    (policy : Policy) (capacity : Nat) (positive : 0 < capacity) (fits : capacity ≤ 255)
+    (linux : System.Platform.isWindows = false) :
+    ∃ session after,
+      (publicBootstrapModel (nativeAcquireBinding resolve openDirectory lockRoot dir)
+        enumerate held removal healthy {} {} none policy capacity).run
+        ⟨{}, .closed, .closed, false, false⟩ =
+          .ok (.ok (.ready ⟨root, directoryHandle, lockHandle⟩ session, ())) after ∧
+      after.phase = .ready held session ∧ after.rootHeld = true ∧ after.childHeld = true ∧
+      after.state.activeEntry = some session.control.active ∧ AppendReady session (after.state, after.child) := by
+  rw [nativeAcquireBinding_ok resolve openDirectory lockRoot dir root resolved opened locked]
+  exact publicBootstrap_healthy ⟨root, directoryHandle, lockHandle⟩ enumerate listed empty held removal
+    removes policy capacity positive fits linux
 
 theorem publicBootstrap_acquisitionFailure (binding : Except String (RootBinding directory lock))
     (failed : binding = .error err) (enumerate : System.FilePath → Except String (Array IO.FS.DirEntry))
