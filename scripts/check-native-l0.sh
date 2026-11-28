@@ -67,6 +67,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms PublicReadInvestigation.table
 #check_axioms PublicReadInvestigation.publicGet
 #check_axioms PublicReadInvestigation.onlineGet
+#check_axioms PublicReadInvestigation.onlineGetTwice
 #check_axioms PublicReadInvestigation.firstSizeError
 #check_axioms PublicationInvestigation.renameCut
 #check_axioms PublicationInvestigation.cutRecovery

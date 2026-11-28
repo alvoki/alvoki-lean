@@ -229,10 +229,10 @@ theorem onlineGet {inode : Type} (physical : W → Footprint inode)
     ns.Represents start (physical start).selected.tables →
     Primitives ns (fun w => physical w = physical start) →
     match Native.get handle key start with
-    | .ok x t => x = denote history key ∧ (physical t).phase = .online wal session ∧
+    | .ok x t => x = denote history key ∧ physical t = physical start ∧ (physical t).phase = .online wal session ∧
         (physical t).rootHeld = true ∧ Installed session (physical t).selected history ∧
         ns.Represents t (physical t).selected.tables
-    | .error _ t => (physical t).phase = .online wal session ∧
+    | .error _ t => physical t = physical start ∧ (physical t).phase = .online wal session ∧
         (physical t).rootHeld = true ∧ Installed session (physical t).selected history ∧
         ns.Represents t (physical t).selected.tables := by
   intro ns catalog prim
@@ -251,11 +251,67 @@ theorem onlineGet {inode : Type} (physical : W → Footprint inode)
     rw [ran] at post
     dsimp only at post ⊢
     rw [post]
-    exact ⟨online, lock, installed, represents t post⟩
+    exact ⟨rfl, online, lock, installed, represents t post⟩
   | ok x t =>
     rw [ran] at post
     dsimp only at post ⊢
     rw [post.2]
-    exact ⟨post.1, online, lock, installed, represents t post.2⟩
+    exact ⟨post.1, rfl, online, lock, installed, represents t post.2⟩
+
+/-- The caller catches each reported read error and tries the next key on the
+same handle. The second get starts in the actual reached world of the first. -/
+def readTwice (handle : Native.Handle) (first second : UInt64) :
+    BaseIO (Except IO.Error (Option UInt64) × Except IO.Error (Option UInt64)) := do
+  let a ← (Native.get handle first).toBaseIO
+  let b ← (Native.get handle second).toBaseIO
+  return (a, b)
+
+def Observes (history : Rows) (key : UInt64) : Except IO.Error (Option UInt64) → Prop
+  | .ok value => value = denote history key
+  | .error _ => True
+
+theorem onlineGetTwice {inode : Type} (physical : W → Footprint inode)
+    (root : System.FilePath) (ref : IO.Ref (Phase Wal))
+    (binding : Native.Handle.AtRoot handle root ref)
+    (refRead : ∀ w, ∃ t, (ref.get : IO (Phase Wal)) w = .ok (physical w).phase t ∧
+      physical t = physical w)
+    (online : (physical start).phase = .online wal session)
+    (lock : (physical start).rootHeld = true)
+    (installed : Installed session (physical start).selected history) (first second : UInt64) :
+    let ns : TableNamespace W := ⟨root / "tables", inode, fun w => (physical w).names,
+      fun w => (physical w).contents⟩
+    ns.Represents start (physical start).selected.tables →
+    Primitives ns (fun w => physical w = physical start) →
+    let result := readTwice handle first second start
+    Observes history first result.val.1 ∧ Observes history second result.val.2 ∧
+      physical result.state = physical start ∧ ns.Represents result.state (physical start).selected.tables := by
+  intro ns catalog prim
+  have step (key w) (same : physical w = physical start)
+      (present : ns.Represents w (physical w).selected.tables) :
+      let r := (Native.get handle key).toBaseIO w
+      Observes history key r.val ∧ physical r.state = physical start ∧
+        ns.Represents r.state (physical r.state).selected.tables := by
+    have post := onlineGet physical root ref binding refRead (wal := wal)
+      (same.symm ▸ online : (physical w).phase = .online wal session)
+      (same.symm ▸ lock : (physical w).rootHeld = true)
+      (same.symm ▸ installed : Installed session (physical w).selected history) key present
+      (by simpa only [same] using prim)
+    cases ran : Native.get handle key w with
+    | ok x t =>
+      rw [ran] at post
+      obtain ⟨value, frame, _, _, _, remains⟩ := post
+      simpa only [EIO.toBaseIO, ran] using
+        (show Observes history key (.ok x) ∧ physical t = physical start ∧
+          ns.Represents t (physical t).selected.tables from ⟨value, frame.trans same, remains⟩)
+    | error e t =>
+      rw [ran] at post
+      obtain ⟨frame, _, _, _, remains⟩ := post
+      simpa only [EIO.toBaseIO, ran] using
+        (show Observes history key (.error e) ∧ physical t = physical start ∧
+          ns.Represents t (physical t).selected.tables from ⟨trivial, frame.trans same, remains⟩)
+  obtain ⟨observed, same, present⟩ := step first start rfl catalog
+  obtain ⟨next, finalFrame, finalCatalog⟩ := step second _ same present
+  rw [finalFrame] at finalCatalog
+  exact ⟨observed, next, finalFrame, finalCatalog⟩
 
 end ExperimentalL0.PublicReadInvestigation
