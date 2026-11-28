@@ -11,10 +11,30 @@ open Unified (Checksum Layout Ref NativeWriteEffects NativeWriteM NativeWriteSta
 private def project (state : NativeWriteState handle inode) : ModelFile :=
   ⟨state.rows, state.appended⟩
 
-private def Simulates (before after : NativeWriteState handle inode → Prop)
-    (actual : NativeWriteM handle inode α) (exactModel : ModelM α) : Prop :=
-  ∀ s t value, before s → actual.run s = .ok value t →
-    exactModel.run (project s) = .ok (value, (project t)) ∧ after t
+/-- Local availability of each primitive on the state where the writer uses
+it. The companion effect contract describes every successful return. -/
+structure HealthyNativeWrite {handle inode : Type}
+    (ops : OutputOps (NativeWriteM handle inode) handle) (path : System.FilePath)
+    (nextRow : NativeWriteM handle inode (Option Entry)) : Prop where
+  create : ∀ before, before.binding = none →
+    ∃ output after, (ops.openFile path .writeNew).run before = .ok output after
+  append : ∀ output identity bytes before, before.BoundTo path output identity →
+    ∃ after, (ops.append output bytes).run before = .ok () after
+  flush : ∀ output identity before, before.BoundTo path output identity →
+    ∃ after, (ops.flush output).run before = .ok () after
+  sync : ∀ output identity before, before.BoundTo path output identity → before.flushed = true →
+    ∃ after, (ops.sync output).run before = .ok () after
+  next : ∀ output identity before, before.BoundTo path output identity →
+    ∃ row after, nextRow.run before = .ok row after
+
+private structure Simulates (healthy : Prop) (before after : NativeWriteState handle inode → Prop)
+    (actual : NativeWriteM handle inode α) (exactModel : ModelM α) : Prop where
+  forward : ∀ s t value, before s → actual.run s = .ok value t →
+    exactModel.run (project s) = .ok (value, project t) ∧ after t
+  backward : healthy → ∀ s t value, before s → exactModel.run (project s) = .ok (value, t) →
+    ∃ reached, actual.run s = .ok value reached ∧ project reached = t ∧ after reached
+
+variable {healthy : Prop}
 
 private theorem actual_bind_ok {action : NativeWriteM handle inode α}
     {rest : α → NativeWriteM handle inode β} {before after : NativeWriteState handle inode}
@@ -33,39 +53,106 @@ private theorem actual_bind_ok {action : NativeWriteM handle inode α}
     change rest value middle = _
     simpa [EStateM.bind, observed] using run
 
+private theorem model_bind_ok {action : ModelM α} {rest : α → ModelM β}
+    {before after : ModelFile} {result : β}
+    (run : (action >>= rest).run before = .ok (result, after)) :
+    ∃ value middle, action.run before = .ok (value, middle) ∧
+      (rest value).run middle = .ok (result, after) := by
+  change (action.run before).bind _ = _ at run
+  cases observed : action.run before with
+  | error error => rw [observed] at run; cases run
+  | ok out =>
+    obtain ⟨value, middle⟩ := out
+    rw [observed] at run
+    exact ⟨value, middle, rfl, run⟩
+
+private theorem actual_bind_run {action : NativeWriteM handle inode α}
+    {rest : α → NativeWriteM handle inode β} {before middle after : NativeWriteState handle inode}
+    {value : α} {result : β} (first : action.run before = .ok value middle)
+    (second : (rest value).run middle = .ok result after) :
+    (action >>= rest).run before = .ok result after := by
+  change action before = _ at first
+  change EStateM.bind action rest before = _
+  simp only [EStateM.bind, first]
+  exact second
+
 private theorem Simulates.bind {p q r : NativeWriteState handle inode → Prop}
     {actual : NativeWriteM handle inode α} {exactModel : ModelM α}
     {next : α → NativeWriteM handle inode β} {modelNext : α → ModelM β}
-    (first : Simulates p q actual exactModel)
-    (rest : ∀ value, Simulates q r (next value) (modelNext value)) :
-    Simulates p r (actual >>= next) (exactModel >>= modelNext) := by
-  intro before after result initial run
-  obtain ⟨value, middle, firstRun, restRun⟩ := actual_bind_ok run
-  obtain ⟨firstModel, middleFacts⟩ := first before middle value initial firstRun
-  obtain ⟨restModel, finalFacts⟩ := rest value middle after result middleFacts restRun
-  refine ⟨?_, finalFacts⟩
-  change ((exactModel.run (project before)).bind _) = _
-  rw [firstModel]
-  exact restModel
+    (first : Simulates healthy p q actual exactModel)
+    (rest : ∀ value, Simulates healthy q r (next value) (modelNext value)) :
+    Simulates healthy p r (actual >>= next) (exactModel >>= modelNext) := by
+  constructor
+  · intro before after result initial run
+    obtain ⟨value, middle, firstRun, restRun⟩ := actual_bind_ok run
+    obtain ⟨firstModel, middleFacts⟩ := first.forward before middle value initial firstRun
+    obtain ⟨restModel, finalFacts⟩ := (rest value).forward middle after result middleFacts restRun
+    refine ⟨?_, finalFacts⟩
+    change ((exactModel.run (project before)).bind _) = _
+    rw [firstModel]
+    exact restModel
+  · intro enabled before after result initial run
+    obtain ⟨value, middle, firstRun, restRun⟩ := model_bind_ok run
+    obtain ⟨reached, firstActual, projection, middleFacts⟩ :=
+      first.backward enabled before middle value initial firstRun
+    rw [← projection] at restRun
+    obtain ⟨done, restActual, finalProjection, finalFacts⟩ :=
+      (rest value).backward enabled reached after result middleFacts restRun
+    exact ⟨done, actual_bind_run firstActual restActual, finalProjection, finalFacts⟩
+
+private theorem Simulates.pre
+    {p q r : NativeWriteState handle inode → Prop}
+    {actual : NativeWriteM handle inode α} {exactModel : ModelM α}
+    (sim : Simulates healthy q r actual exactModel) (implies : ∀ state, p state → q state) :
+    Simulates healthy p r actual exactModel :=
+  ⟨fun s t value initial => sim.forward s t value (implies s initial),
+    fun enabled s t value initial => sim.backward enabled s t value (implies s initial)⟩
 
 private theorem Simulates.post
     {p q r : NativeWriteState handle inode → Prop}
     {actual : NativeWriteM handle inode α} {exactModel : ModelM α}
-    (sim : Simulates p q actual exactModel) (implies : ∀ state, q state → r state) :
-    Simulates p r actual exactModel := fun s t value initial run =>
-  let ⟨exact, reached⟩ := sim s t value initial run
-  ⟨exact, implies t reached⟩
+    (sim : Simulates healthy p q actual exactModel) (implies : ∀ state, q state → r state) :
+    Simulates healthy p r actual exactModel := by
+  constructor
+  · intro s t value initial run
+    obtain ⟨exact, reached⟩ := sim.forward s t value initial run
+    exact ⟨exact, implies t reached⟩
+  · intro enabled s t value initial run
+    obtain ⟨reached, actualRun, projection, established⟩ := sim.backward enabled s t value initial run
+    exact ⟨reached, actualRun, projection, implies reached established⟩
 
 private theorem Simulates.pure {condition : NativeWriteState handle inode → Prop} (value : α) :
-    Simulates condition condition (pure value) (pure value) := by
-  intro before after result initial run
-  cases run
-  exact ⟨rfl, initial⟩
+    Simulates healthy condition condition (pure value) (pure value) := by
+  constructor
+  · intro before after result initial run
+    cases run
+    exact ⟨rfl, initial⟩
+  · intro enabled before after result initial run
+    cases run
+    exact ⟨before, rfl, rfl, initial⟩
 
 private theorem Simulates.throw {p q : NativeWriteState handle inode → Prop}
-    (error : String) (action : ModelM α) : Simulates p q (throw error) action := by
-  intro before after result initial run
-  cases run
+    (actualError modelError : String) :
+    Simulates (α := α) healthy p q (throw actualError) (throw modelError) := by
+  constructor
+  · intro before after result initial run
+    cases run
+  · intro enabled before after result initial run
+    cases run
+
+private theorem Simulates.ofPrimitive {p q : NativeWriteState handle inode → Prop}
+    {actual : NativeWriteM handle inode α} {exactModel : ModelM α}
+    (forward : ∀ s t value, p s → actual.run s = .ok value t →
+      exactModel.run (project s) = .ok (value, project t) ∧ q t)
+    (available : healthy → ∀ s, p s → ∃ value t, actual.run s = .ok value t) :
+    Simulates healthy p q actual exactModel := by
+  refine ⟨forward, ?_⟩
+  intro enabled before after result initial run
+  obtain ⟨value, reached, actualRun⟩ := available enabled before initial
+  obtain ⟨observed, established⟩ := forward before reached value initial actualRun
+  rw [run] at observed
+  cases observed
+  exact ⟨reached, actualRun, rfl, established⟩
 
 private def OwnsWithRows (path : System.FilePath) (output : handle) (identity : inode)
     (rowsInv : List Entry → Prop) (state : NativeWriteState handle inode) : Prop :=
@@ -73,42 +160,57 @@ private def OwnsWithRows (path : System.FilePath) (output : handle) (identity : 
 
 private theorem append_sim {ops : OutputOps (NativeWriteM handle inode) handle}
     {path : System.FilePath} {nextRow : NativeWriteM handle inode (Option Entry)}
-    (effects : NativeWriteEffects ops path nextRow) (output : handle) (identity : inode)
+    (effects : NativeWriteEffects ops path nextRow)
+    (available : healthy → HealthyNativeWrite ops path nextRow) (output : handle) (identity : inode)
     (rowsInv : List Entry → Prop) (bytes : ByteArray) :
-    Simulates (OwnsWithRows path output identity rowsInv) (OwnsWithRows path output identity rowsInv)
+    Simulates healthy (OwnsWithRows path output identity rowsInv) (OwnsWithRows path output identity rowsInv)
       (ops.append output bytes) (modelSink.write bytes) := by
-  intro before after value same run
-  cases value
-  rw [effects.append output identity bytes before after same.1 run]
-  exact ⟨rfl, same⟩
+  apply Simulates.ofPrimitive
+  · intro before after value same run
+    cases value
+    rw [effects.append output identity bytes before after same.1 run]
+    exact ⟨rfl, same⟩
+  · intro enabled before same
+    obtain ⟨after, run⟩ := (available enabled).append output identity bytes before same.1
+    exact ⟨(), after, run⟩
 
 private theorem flush_sim {ops : OutputOps (NativeWriteM handle inode) handle}
     {path : System.FilePath} {nextRow : NativeWriteM handle inode (Option Entry)}
-    (effects : NativeWriteEffects ops path nextRow) (output : handle) (identity : inode)
+    (effects : NativeWriteEffects ops path nextRow)
+    (available : healthy → HealthyNativeWrite ops path nextRow) (output : handle) (identity : inode)
     (rowsInv : List Entry → Prop) :
-    Simulates (OwnsWithRows path output identity rowsInv)
+    Simulates healthy (OwnsWithRows path output identity rowsInv)
       (fun state => OwnsWithRows path output identity rowsInv state ∧ state.flushed = true)
       (ops.flush output) modelSink.flush := by
-  intro before after value same run
-  cases value
-  rw [effects.flush output identity before after same.1 run]
-  exact ⟨rfl, same, rfl⟩
+  apply Simulates.ofPrimitive
+  · intro before after value same run
+    cases value
+    rw [effects.flush output identity before after same.1 run]
+    exact ⟨rfl, same, rfl⟩
+  · intro enabled before same
+    obtain ⟨after, run⟩ := (available enabled).flush output identity before same.1
+    exact ⟨(), after, run⟩
 
 private theorem next_sim {ops : OutputOps (NativeWriteM handle inode) handle}
     {path : System.FilePath} {nextRow : NativeWriteM handle inode (Option Entry)}
-    (effects : NativeWriteEffects ops path nextRow) (output : handle) (identity : inode) :
-    Simulates (OwnsWithRows path output identity (fun _ => True))
+    (effects : NativeWriteEffects ops path nextRow)
+    (available : healthy → HealthyNativeWrite ops path nextRow) (output : handle) (identity : inode) :
+    Simulates healthy (OwnsWithRows path output identity (fun _ => True))
       (OwnsWithRows path output identity (fun _ => True)) nextRow modelNext := by
-  intro before after row same run
-  obtain ⟨returned, state⟩ := effects.next output identity before after row same.1 run
-  rw [returned, state]
-  refine ⟨?_, same⟩
-  cases rows : before.rows <;> simp [modelNext, project, rows, StateT.run]
+  apply Simulates.ofPrimitive
+  · intro before after row same run
+    obtain ⟨returned, state⟩ := effects.next output identity before after row same.1 run
+    rw [returned, state]
+    refine ⟨?_, same⟩
+    cases rows : before.rows <;> simp [modelNext, project, rows, StateT.run]
+  · intro enabled before same
+    exact (available enabled).next output identity before same.1
 
-private structure SinkSimulation {handle inode : Type} (sink : Sink (NativeWriteM handle inode))
+private structure SinkSimulation {handle inode : Type} (healthy : Prop)
+    (sink : Sink (NativeWriteM handle inode))
     (bound ready : NativeWriteState handle inode → Prop) : Prop where
-  append : ∀ bytes, Simulates bound bound (sink.write bytes) (modelSink.write bytes)
-  flush : Simulates bound ready sink.flush modelSink.flush
+  append : ∀ bytes, Simulates healthy bound bound (sink.write bytes) (modelSink.write bytes)
+  flush : Simulates healthy bound ready sink.flush modelSink.flush
 
 private def modelWriter (crc : Checksum) (layout : Layout) (options : BuildOptions) :
     Writer ModelM String :=
@@ -120,25 +222,23 @@ private def nativeWriter (crc : Checksum) (layout : Layout) (options : BuildOpti
 
 private theorem writePacket_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)} {bound ready : NativeWriteState handle inode → Prop}
-    (agreement : SinkSimulation sink bound ready) (kind : UInt64) (limit offset : Nat)
+    (agreement : SinkSimulation healthy sink bound ready) (kind : UInt64) (limit offset : Nat)
     (body : ByteArray) :
-    Simulates bound bound ((nativeWriter crc layout options sink).writePacket kind limit offset body)
+    Simulates healthy bound bound ((nativeWriter crc layout options sink).writePacket kind limit offset body)
       ((modelWriter crc layout options).writePacket kind limit offset body) := by
   by_cases packet : body.size + checksumSize ≤ limit
   · by_cases file : offset + (body.size + checksumSize) + footerPacketSize ≤ maxFileSize
     · simp only [Writer.writePacket, packet, file, ↓reduceIte, nativeWriter, modelWriter]
       exact (agreement.append _).bind (fun _ => .pure _)
     · simp only [Writer.writePacket, packet, file, ↓reduceIte, nativeWriter, modelWriter]
-      intro before after value initial run
-      cases run
+      exact Simulates.throw _ _
   · simp only [Writer.writePacket, packet, ↓reduceIte, nativeWriter, modelWriter]
-    intro before after value initial run
-    cases run
+    exact Simulates.throw _ _
 
 private theorem writePage_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)} {bound ready : NativeWriteState handle inode → Prop}
-    (agreement : SinkSimulation sink bound ready) (height offset : Nat) (page : Page) :
-    Simulates bound bound ((nativeWriter crc layout options sink).writePage height offset page)
+    (agreement : SinkSimulation healthy sink bound ready) (height offset : Nat) (page : Page) :
+    Simulates healthy bound bound ((nativeWriter crc layout options sink).writePage height offset page)
       ((modelWriter crc layout options).writePage height offset page) := by
   unfold Writer.writePage
   split
@@ -149,9 +249,9 @@ private theorem writePage_sim (crc : Checksum) (layout : Layout) (options : Buil
 
 private theorem push_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)} {bound ready : NativeWriteState handle inode → Prop}
-    (agreement : SinkSimulation sink bound ready) (height offset : Nat) (ref : Ref)
+    (agreement : SinkSimulation healthy sink bound ready) (height offset : Nat) (ref : Ref)
     (pages : List Page) (fuel : Nat) :
-    Simulates bound bound ((nativeWriter crc layout options sink).push height offset ref pages fuel)
+    Simulates healthy bound bound ((nativeWriter crc layout options sink).push height offset ref pages fuel)
       ((modelWriter crc layout options).push height offset ref pages fuel) := by
   induction fuel generalizing height offset ref pages with
   | zero =>
@@ -173,8 +273,8 @@ private theorem push_sim (crc : Checksum) (layout : Layout) (options : BuildOpti
 
 private theorem flushData_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)} {bound ready : NativeWriteState handle inode → Prop}
-    (agreement : SinkSimulation sink bound ready) (state : BuilderState) :
-    Simulates bound bound ((nativeWriter crc layout options sink).flushData state)
+    (agreement : SinkSimulation healthy sink bound ready) (state : BuilderState) :
+    Simulates healthy bound bound ((nativeWriter crc layout options sink).flushData state)
       ((modelWriter crc layout options).flushData state) := by
   cases tail : state.data.back? with
   | none => simpa only [Writer.flushData, tail] using (Simulates.pure (condition := bound) state)
@@ -189,8 +289,8 @@ private theorem flushData_sim (crc : Checksum) (layout : Layout) (options : Buil
 
 private theorem accept_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)} {bound ready : NativeWriteState handle inode → Prop}
-    (agreement : SinkSimulation sink bound ready) (state : BuilderState) (row : Entry) :
-    Simulates bound bound ((nativeWriter crc layout options sink).accept state row)
+    (agreement : SinkSimulation healthy sink bound ready) (state : BuilderState) (row : Entry) :
+    Simulates healthy bound bound ((nativeWriter crc layout options sink).accept state row)
       ((modelWriter crc layout options).accept state row) := by
   have actualLayout : (nativeWriter crc layout options sink).layout = layout := rfl
   have modelLayout : (modelWriter crc layout options).layout = layout := rfl
@@ -215,64 +315,70 @@ private theorem bind_supplier {bound ready : NativeWriteState handle inode → P
     {supply : NativeWriteM handle inode (Option Entry)}
     {next : Option Entry → NativeWriteM handle inode α}
     {nextModel : Option Entry → ModelM α}
-    (observed : Simulates bound bound supply modelNext)
-    (continuation : ∀ opt, Simulates (fun state => bound state ∧ (opt = none → state.rows = []))
+    (observed : Simulates healthy bound bound supply modelNext)
+    (continuation : ∀ opt, Simulates healthy (fun state => bound state ∧ (opt = none → state.rows = []))
       ready (next opt) (nextModel opt)) :
-    Simulates bound ready (supply >>= next) (modelNext >>= nextModel) := by
-  intro before after result initial run
-  obtain ⟨opt, middle, supplied, continued⟩ := actual_bind_ok run
-  obtain ⟨modelSupplied, held⟩ := observed before middle opt initial supplied
-  have eof : opt = none → middle.rows = [] := by
+    Simulates healthy bound ready (supply >>= next) (modelNext >>= nextModel) := by
+  have atEOF (before after : ModelFile) (opt : Option Entry)
+      (run : modelNext.run before = .ok (opt, after)) : opt = none → after.rows = [] := by
     intro none
     subst opt
     cases rows : before.rows with
     | nil =>
-      have same : project before = project middle := by
-        simpa [modelNext, StateT.run, project, rows] using modelSupplied
+      have same : before = after := by simpa [modelNext, StateT.run, rows] using run
       exact (congrArg ModelFile.rows same.symm).trans rows
     | cons row rest =>
-      simp [modelNext, StateT.run, project, rows] at modelSupplied
-  obtain ⟨modelContinued, done⟩ := continuation opt middle after result ⟨held, eof⟩ continued
-  refine ⟨?_, done⟩
-  change ((modelNext.run (project before)).bind _) = _
-  rw [modelSupplied]
-  exact modelContinued
+      simp [modelNext, StateT.run, rows] at run
+  constructor
+  · intro before after result initial run
+    obtain ⟨opt, middle, supplied, continued⟩ := actual_bind_ok run
+    obtain ⟨modelSupplied, held⟩ := observed.forward before middle opt initial supplied
+    obtain ⟨modelContinued, done⟩ :=
+      (continuation opt).forward middle after result ⟨held, atEOF _ _ _ modelSupplied⟩ continued
+    refine ⟨?_, done⟩
+    change ((modelNext.run (project before)).bind _) = _
+    rw [modelSupplied]
+    exact modelContinued
+  · intro enabled before after result initial run
+    obtain ⟨opt, middle, supplied, continued⟩ := model_bind_ok run
+    obtain ⟨reached, actualSupply, projection, held⟩ :=
+      observed.backward enabled before middle opt initial supplied
+    have rows : reached.rows = middle.rows := congrArg ModelFile.rows projection
+    have eof := fun none => rows.trans (atEOF _ _ _ supplied none)
+    rw [← projection] at continued
+    obtain ⟨done, actualContinue, finalProjection, established⟩ :=
+      (continuation opt).backward enabled reached after result ⟨held, eof⟩ continued
+    exact ⟨done, actual_bind_run actualSupply actualContinue, finalProjection, established⟩
 
 private theorem streamRows_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)} {bound ready : NativeWriteState handle inode → Prop}
-    (agreement : SinkSimulation sink bound ready) (supply : NativeWriteM handle inode (Option Entry))
-    (supplied : Simulates bound bound supply modelNext) (state : BuilderState) (room : Nat) :
-    Simulates bound (fun state => bound state ∧ state.rows = [])
+    (agreement : SinkSimulation healthy sink bound ready) (supply : NativeWriteM handle inode (Option Entry))
+    (supplied : Simulates healthy bound bound supply modelNext) (state : BuilderState) (room : Nat) :
+    Simulates healthy bound (fun state => bound state ∧ state.rows = [])
       ((nativeWriter crc layout options sink).streamRows supply state room)
       ((modelWriter crc layout options).streamRows modelNext state room) := by
   induction room generalizing state with
   | zero =>
     simp only [Writer.streamRows]
     apply bind_supplier supplied
-    intro opt before after value initial run
-    cases opt
-    · cases run
-      exact ⟨rfl, initial.1, initial.2 rfl⟩
-    · cases run
+    intro opt
+    cases opt with
+    | none => exact (Simulates.pure state).post (fun _ facts => ⟨facts.1, facts.2 rfl⟩)
+    | some row => exact Simulates.throw _ _
   | succ room ih =>
     simp only [Writer.streamRows]
     apply bind_supplier supplied
     intro opt
     cases opt with
-    | none =>
-      intro before after value initial run
-      cases run
-      exact ⟨rfl, initial.1, initial.2 rfl⟩
+    | none => exact (Simulates.pure state).post (fun _ facts => ⟨facts.1, facts.2 rfl⟩)
     | some row =>
-      intro before after value initial run
-      exact ((accept_sim crc layout options agreement state row).bind (fun current => ih current))
-        before after value initial.1 run
+      exact ((accept_sim crc layout options agreement state row).bind ih).pre fun _ facts => facts.1
 
 private theorem finishPages_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)} {bound ready : NativeWriteState handle inode → Prop}
-    (agreement : SinkSimulation sink bound ready) (height offset : Nat) (pages : List Page)
+    (agreement : SinkSimulation healthy sink bound ready) (height offset : Nat) (pages : List Page)
     (fuel : Nat) :
-    Simulates bound bound ((nativeWriter crc layout options sink).finishPages height offset pages fuel)
+    Simulates healthy bound bound ((nativeWriter crc layout options sink).finishPages height offset pages fuel)
       ((modelWriter crc layout options).finishPages height offset pages fuel) := by
   induction fuel generalizing height offset pages with
   | zero =>
@@ -296,12 +402,12 @@ private theorem finishPages_sim (crc : Checksum) (layout : Layout) (options : Bu
 private theorem buildStream_sim (crc : Checksum) (layout : Layout) (options : BuildOptions)
     {sink : Sink (NativeWriteM handle inode)}
     {bound streamingReady drained ready : NativeWriteState handle inode → Prop}
-    (streaming : SinkSimulation sink bound streamingReady)
-    (finishing : SinkSimulation sink drained ready)
+    (streaming : SinkSimulation healthy sink bound streamingReady)
+    (finishing : SinkSimulation healthy sink drained ready)
     (afterEOF : ∀ state, bound state → state.rows = [] → drained state)
     (supply : NativeWriteM handle inode (Option Entry))
-    (supplied : Simulates bound bound supply modelNext) :
-    Simulates bound ready (buildStream crc layout sink supply id options)
+    (supplied : Simulates healthy bound bound supply modelNext) :
+    Simulates healthy bound ready (buildStream crc layout sink supply id options)
       (buildStream crc layout modelSink modelNext id options) := by
   by_cases valid : layout.Valid
   · by_cases targets : 0 < options.dataTarget ∧ options.dataTarget ≤ maxRowSize ∧
@@ -315,11 +421,29 @@ private theorem buildStream_sim (crc : Checksum) (layout : Layout) (options : Bu
       rintro ⟨height, offset, size⟩
       exact (finishing.append _).bind fun _ => finishing.flush.bind fun _ => .pure _
     · simp only [buildStream, valid, targets, ↓reduceIte]
-      intro before after value initial run
-      cases run
+      exact Simulates.throw _ _
   · simp only [buildStream, valid, ↓reduceIte]
-    intro before after value initial run
-    cases run
+    exact Simulates.throw _ _
+
+private theorem owned_buildStream_sim {ops : OutputOps (NativeWriteM handle inode) handle}
+    {path : System.FilePath} {nextRow : NativeWriteM handle inode (Option Entry)}
+    (effects : NativeWriteEffects ops path nextRow)
+    (available : healthy → HealthyNativeWrite ops path nextRow) (output : handle) (identity : inode)
+    (crc : Checksum) (layout : Layout) (options : BuildOptions) :
+    Simulates healthy (OwnsWithRows path output identity (fun _ => True))
+      (fun state => OwnsWithRows path output identity (· = []) state ∧ state.flushed = true)
+      (buildStream crc layout (ops.sink output) nextRow id options)
+      (buildStream crc layout modelSink modelNext id options) := by
+  let streaming : SinkSimulation healthy (ops.sink output)
+      (OwnsWithRows path output identity (fun _ => True))
+      (fun state => OwnsWithRows path output identity (fun _ => True) state ∧ state.flushed = true) :=
+    ⟨append_sim effects available output identity _, flush_sim effects available output identity _⟩
+  let finishing : SinkSimulation healthy (ops.sink output)
+      (OwnsWithRows path output identity (· = []))
+      (fun state => OwnsWithRows path output identity (· = []) state ∧ state.flushed = true) :=
+    ⟨append_sim effects available output identity _, flush_sim effects available output identity _⟩
+  exact buildStream_sim crc layout options streaming finishing (fun _ live empty => ⟨live.1, empty⟩)
+    nextRow (next_sim effects available output identity)
 
 /-- Cleanup cannot turn a failed write or sync into success. It starts from
 the reached state and keeps the primary error even if removal also fails. -/
@@ -413,23 +537,61 @@ theorem buildFileWith_exact {ops : OutputOps (NativeWriteM handle inode) handle}
   obtain ⟨fresh, identity, createdState⟩ := effects.create before created output openRan
   have owned : OwnsWithRows path output identity (fun _ => True) created := by
     simp [createdState, OwnsWithRows, NativeWriteState.BoundTo]
-  let streaming : SinkSimulation (ops.sink output)
-      (OwnsWithRows path output identity (fun _ => True))
-      (fun state => OwnsWithRows path output identity (fun _ => True) state ∧ state.flushed = true) :=
-    ⟨append_sim effects output identity _, flush_sim effects output identity _⟩
-  let finishing : SinkSimulation (ops.sink output)
-      (OwnsWithRows path output identity (· = []))
-      (fun state => OwnsWithRows path output identity (· = []) state ∧ state.flushed = true) :=
-    ⟨append_sim effects output identity _, flush_sim effects output identity _⟩
   obtain ⟨exact, ⟨held, eof⟩, flushed⟩ :=
-    buildStream_sim crc layout options streaming finishing (fun _ live empty => ⟨live.1, empty⟩)
-      nextRow (next_sim effects output identity) created written count owned writeRan
+    (owned_buildStream_sim effects False.elim output identity crc layout options).forward
+      created written count owned writeRan
   have durable := effects.sync output identity written after held flushed syncRan
   have initially : project created = { rows := before.rows } := by rw [createdState]; rfl
   have finalProjection : project written = { rows := [], bytes := written.appended } := by simp [project, eof]
   rw [initially, finalProjection] at exact
   rw [durable]
   exact ⟨fresh, eof, flushed, exact, output, identity, created, openRan, held, rfl⟩
+
+/-- A successful pure writer run lifts to the same native schedule when
+the local primitives are healthy on the states where they are used. -/
+theorem buildFileWith_of_modelBuild_ok {ops : OutputOps (NativeWriteM handle inode) handle}
+    {path : System.FilePath} {nextRow : NativeWriteM handle inode (Option Entry)}
+    {crc : Checksum} {layout : Layout} {options : BuildOptions}
+    {before : NativeWriteState handle inode} {count : Nat} {bytes : ByteArray}
+    (effects : NativeWriteEffects ops path nextRow)
+    (available : HealthyNativeWrite ops path nextRow) (fresh : before.binding = none)
+    (model : modelBuild crc layout before.rows options = .ok (count, bytes)) :
+    ∃ after, (buildFileWith ops crc path layout nextRow id options).run before = .ok count after ∧
+      after.rows = [] ∧ after.appended = bytes ∧ after.flushed = true ∧
+      ∃ output identity created, (ops.openFile path .writeNew).run before = .ok output created ∧
+        after.BoundTo path output identity ∧ after.durable = some (identity, bytes) := by
+  have modelRun : ∃ file, (buildStream crc layout modelSink modelNext id options).run
+      { rows := before.rows } = .ok (count, file) ∧ file.bytes = bytes := by
+    unfold modelBuild at model
+    change ((buildStream crc layout modelSink modelNext id options).run
+      { rows := before.rows }).bind _ = _ at model
+    cases streamed : (buildStream crc layout modelSink modelNext id options).run
+        { rows := before.rows } with
+    | error error => rw [streamed] at model; cases model
+    | ok value =>
+      obtain ⟨returned, file⟩ := value
+      rw [streamed] at model
+      cases model
+      exact ⟨file, rfl, rfl⟩
+  obtain ⟨file, streamed, streamBytes⟩ := modelRun
+  obtain ⟨output, created, create⟩ := available.create before fresh
+  obtain ⟨_, identity, createdState⟩ := effects.create before created output create
+  have owned : OwnsWithRows path output identity (fun _ => True) created := by
+    simp [createdState, OwnsWithRows, NativeWriteState.BoundTo]
+  have initially : project created = { rows := before.rows } := by rw [createdState]; rfl
+  rw [← initially] at streamed
+  obtain ⟨written, write, projection, ⟨bound, exhausted⟩, flushed⟩ :=
+    (owned_buildStream_sim effects id output identity crc layout options).backward
+      available created file count owned streamed
+  have appended : written.appended = bytes := (congrArg ModelFile.bytes projection).trans streamBytes
+  obtain ⟨after, sync⟩ := available.sync output identity written bound flushed
+  refine ⟨after, ?_, ?_⟩
+  · unfold buildFileWith
+    rw [freshOutput_result]
+    simp only [create, write, sync]
+  · rw [effects.sync output identity written after bound flushed sync]
+    refine ⟨exhausted, appended, flushed, output, identity, created, create, bound, ?_⟩
+    rw [appended]
 
 /-- The original sync failure is returned after cleanup from the reached
 state, including a failure observed after the barrier has taken effect. -/
