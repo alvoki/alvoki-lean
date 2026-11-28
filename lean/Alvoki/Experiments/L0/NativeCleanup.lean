@@ -85,8 +85,8 @@ structure RootUnlock (P : W → Prop) (lock : IO.FS.Handle) (t : W) : Prop where
 /-- The recovery/callback producer supplies either the exact attached WAL
 authority after the phase swap, or an empty phase. P describes the data and
 trace observations to keep after custody is consumed. -/
-theorem release_rule (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (ref : Ref) (lock : IO.FS.Handle)
-    (owner : heap.holds ref old w)
+theorem release_of_swap (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (ref : Ref) (lock : IO.FS.Handle)
+    (value : ((ref.swap .offline : BaseIO _) w).val = old)
     (swapped : P ((ref.swap .offline : BaseIO _) w).state)
     (registered : ∀ wal, old.wal = some wal →
       ∃ session, heap.Ready wal session ((ref.swap .offline : BaseIO _) w).state)
@@ -94,7 +94,6 @@ theorem release_rule (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (re
     (primary : ∀ e u, P u → Post lock.unlock u (fun _ t => err e t) (fun _ t => err e t)) :
     NativeScope.Release ref lock w ok err := by
   let taken := (ref.swap .offline : BaseIO _) w
-  have value := heap.swap .offline owner
   unfold NativeScope.Release
   dsimp only
   rw [value]
@@ -104,6 +103,19 @@ theorem release_rule (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (re
     obtain ⟨session, ready⟩ := registered wal attached
     exact (wal_close heap frame ready swapped).weaken
       (fun _ t kept => unlock t kept) (fun e t kept => primary e t kept)
+
+/-- The recovery/callback producer supplies either the exact attached WAL
+authority after the phase swap, or an empty phase. P describes the data and
+trace observations to keep after custody is consumed. -/
+theorem release_rule (heap : Segmented.Native.PhaseMemory) (frame : Frame P) (ref : Ref) (lock : IO.FS.Handle)
+    (owner : heap.holds ref old w)
+    (swapped : P ((ref.swap .offline : BaseIO _) w).state)
+    (registered : ∀ wal, old.wal = some wal →
+      ∃ session, heap.Ready wal session ((ref.swap .offline : BaseIO _) w).state)
+    (unlock : ∀ u, P u → Post lock.unlock u (fun _ t => ok t) err)
+    (primary : ∀ e u, P u → Post lock.unlock u (fun _ t => err e t) (fun _ t => err e t)) :
+    NativeScope.Release ref lock w ok err := by
+  exact release_of_swap heap frame ref lock (heap.swap .offline owner) swapped registered unlock primary
 
 /-- The recovery/callback producer supplies either the exact attached WAL
 authority after the phase swap, or an empty phase. P describes the data and
