@@ -128,6 +128,23 @@ theorem stampRead_notReusable (p : Policy) (path : FilePath) (h : IO.FS.Handle)
   have impossible := second.2
   cases p <;> contradiction
 
+/-- A successful barrier followed by a reported failure on the same live
+description rules out a reusable no-fault sync law. Only the barrier reached
+in this attempt is interpreted against its selected report. -/
+theorem stampSync_notReusable (p : Policy) (h : IO.FS.Handle)
+    (entry : R w s)
+    (first : (nativeOpen.sync h).run w = .ok (.ok ()) t)
+    (later : (nativeOpen.sync h).run t = .error e u) :
+    ¬ Sim R (nativeOpen.sync h) ((openEffects p {}).sync .policy) Eq := by
+  intro reused
+  have model (v : OpenImage) : ((openEffects p {}).sync .policy).run v =
+      .ok (.ok ()) {v with policyDurable := true} := rfl
+  have step := reused w s entry
+  rw [first, model] at step
+  have next := reused t _ step.1
+  rw [later, model] at next
+  exact next
+
 def Markers (B : IO.FS.Handle → OpenTarget → Prop) (p : Policy)
     (markers : Option (IO.FS.Handle × IO.FS.Handle)) : Prop :=
   match p, markers with
