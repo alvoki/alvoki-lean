@@ -101,6 +101,29 @@ private def scanFailure (dir : FilePath) (policy : Policy) : IO Unit := do
     throw (IO.userError "recovery fold changed the installed history")
   SingleFile.close h
 
+@[extern "alvoki_test_fail_late_drain"]
+private opaque failLateDrain (_ : Unit) : IO Unit
+
+private def lateDrainError (dir : FilePath) : IO Unit := do
+  let h ← SingleFile.create dir .boundary
+  SingleFile.append h [7]
+  SingleFile.close h
+  let path := dir / "segment"
+  let good ← IO.FS.readBinFile path
+  let oversized := good ++ ⟨Array.replicate 100000 0⟩
+  IO.FS.writeBinFile path oversized
+  failLateDrain ()
+  let attempted ← (SingleFile.openExisting dir).toBaseIO
+  unless attempted matches .error (.hardwareFault _ _) do
+    throw (IO.userError "a positive short fread hid a late drain error")
+  unless (← IO.FS.readBinFile path) == oversized do
+    throw (IO.userError "a failed drain reached WAL repair")
+  for _ in [:2] do
+    let h ← SingleFile.openExisting dir
+    unless (← SingleFile.scan h) == [[7]] && (← IO.FS.readBinFile path) == good do
+      throw (IO.userError "recovery changed the selected survivor after a failed drain")
+    SingleFile.close h
+
 private def boundedRecovery (dir : FilePath) (policy : Policy) : IO Unit := do
   let h ← SingleFile.create dir policy
   SingleFile.append h [7]
@@ -292,6 +315,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.lateOpenFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
+  IO.FS.withTempDir WalRecoveryFiles.lateDrainError
   IO.FS.withTempDir WalRecoveryFiles.lostMarkerReply
   IO.FS.withTempDir WalRecoveryFiles.refuseNonempty
   IO.FS.withTempDir WalRecoveryFiles.refuseFailedListing

@@ -1,4 +1,5 @@
 import Alvoki.Experiments.WAL.Segmented.Native
+import Alvoki.Experiments.WAL.Proofs.BoundedRead
 import Alvoki.Experiments.WAL.Segmented.Proofs.Invariant
 
 namespace WalRecoverySlice.Segmented.Native
@@ -24,15 +25,16 @@ private theorem ReadOutcome.bind
 
 theorem foldSealedWith_read
     (read : Nat → α → EStateM ε σ α) (expected : Nat → α → α)
-    (before : σ) (healthy : Prop)
-    (reads : ∀ id acc, ReadOutcome healthy before (expected id acc) (read id acc before))
-    (first count : Nat) (seed : α) :
+    (before : σ) (healthy : Prop) (first count : Nat) (seed : α)
+    (reads : ∀ id, first ≤ id → id < first + count → ∀ acc,
+      ReadOutcome healthy before (expected id acc) (read id acc before)) :
     ReadOutcome healthy before (foldSealedWith (m := Id) expected first count seed)
       (foldSealedWith read first count seed before) := by
   induction count generalizing first seed with
   | zero => exact ⟨rfl, rfl⟩
   | succ count ih =>
-    exact ReadOutcome.bind (reads first seed) (ih (first + 1) (expected first seed))
+    exact ReadOutcome.bind (reads first (by omega) (by omega) seed)
+      (ih (first + 1) (expected first seed) (fun id lo hi acc => reads id (by omega) (by omega) acc))
 
 /-- Composition for the shared scan schedule. Its primitive premises account
 for scoped acquisition/close and exact bytes. Healthy progress is conditional
@@ -41,11 +43,16 @@ theorem scanReadyWith_read
     (session : CompactSession) (seed : α) (readSealed : Nat → α → EStateM ε σ α)
     (readActive : α → EStateM ε σ α) (sealed : Nat → α → α) (active : α → α)
     (before : σ) (healthy : Prop)
-    (sealedReads : ∀ id acc, ReadOutcome healthy before (sealed id acc) (readSealed id acc before))
+    (sealedReads : ∀ id, session.control.firstNeeded ≤ id → id < session.control.active → ∀ acc,
+      ReadOutcome healthy before (sealed id acc) (readSealed id acc before))
     (activeRead : ∀ acc, ReadOutcome healthy before (active acc) (readActive acc before)) :
     ReadOutcome healthy before (scanReadyWith (m := Id) session seed sealed active)
       (scanReadyWith session seed readSealed readActive before) := by
-  apply ReadOutcome.bind (foldSealedWith_read readSealed sealed before healthy sealedReads _ _ _)
+  have first := Nat.min_le_left session.control.active (session.control.discarded / session.control.capacity)
+  have span : session.control.firstNeeded + (session.control.active - session.control.firstNeeded) =
+      session.control.active := by unfold Control.firstNeeded; omega
+  apply ReadOutcome.bind (foldSealedWith_read readSealed sealed before healthy _ _ _
+    (fun id lo hi acc => sealedReads id lo (by rwa [span] at hi) acc))
   exact ReadOutcome.bind (activeRead _) ⟨rfl, rfl⟩
 
 theorem ReadOutcome.healthy
@@ -177,5 +184,137 @@ theorem compactBounds_eq {session : Session} {disk : Model.Disk}
   simp only [historyView]
   congr 1
   omega
+
+end WalRecoverySlice.Segmented.Native
+
+namespace WalRecoverySlice.Segmented.Native
+open SingleFile Persistence
+
+/-- The descriptor read is local to the installed cursor. Decode and the
+cursor check are derived by executing the native active-scan worker. -/
+theorem activeScanWith_read (read : Nat → EStateM String σ Bytes)
+    (before : σ) (healthy : Prop) (batches : List Bytes)
+    (bounded : ∀ b ∈ batches, b.length ≤ 32) (fits : batches.length ≤ 255)
+    (seed : α) (step : α → Nat → Bytes → α)
+    (data : ReadOutcome healthy before (encodeFrames 1 batches)
+      (read (historyCursor batches).endPos before)) :
+    ReadOutcome healthy before (foldBatches batches seed step)
+      (activeScanWith read (historyCursor batches) seed step before) := by
+  unfold activeScanWith
+  apply ReadOutcome.bind data
+  have decoded := scan_encodeFrames .boundary bounded fits
+  simp [historyCursor, decoded, fromDecode, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure,
+    ReadOutcome]
+
+private theorem scanMarker_read (read : OpenTarget → EStateM String σ Bytes)
+    (before : σ) (healthy : Prop) (policy : Policy) (image : Image) (marker : Marker)
+    (selected : policy = .boundary →
+      selectMarker image.slot0.live image.slot1.live = .ok marker)
+    (zero : ReadOutcome healthy before (image.slot0.live.take (markerSize + 1)) (read .marker0 before))
+    (one : ReadOutcome healthy before (image.slot1.live.take (markerSize + 1)) (read .marker1 before)) :
+    ReadOutcome healthy before (if policy == .boundary then some marker else none)
+      (scanMarkerWith read policy before) := by
+  cases policy with
+  | logOnly => exact ⟨rfl, rfl⟩
+  | boundary =>
+    simp only [scanMarkerWith, show (Policy.boundary == .boundary) = true by rfl, ↓reduceIte]
+    apply ReadOutcome.bind zero
+    apply ReadOutcome.bind one
+    have picked : selectMarker (image.slot0.live.take (markerSize + 1))
+        (image.slot1.live.take (markerSize + 1)) = .ok marker := by
+      simpa only [selectMarker, boundedMarker_decode] using selected rfl
+    simp [picked, fromDecode, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, ReadOutcome]
+
+/-- The child result follows from three scoped file observations and the
+settled image. This boundary does not assume a whole-child read result. -/
+theorem sealedScanWith_reads (read : OpenTarget → EStateM String σ Bytes)
+    (before : σ) (healthy : Prop) (policy : Policy) (image : Image) (batches : List Bytes)
+    (settled : Child.Settled policy image batches)
+    (bounded : ∀ b ∈ batches, b.length ≤ 32) (fits : batches.length ≤ 255)
+    (seed : α) (step : α → Nat → Bytes → α)
+    (zero : ReadOutcome healthy before (image.slot0.live.take (markerSize + 1)) (read .marker0 before))
+    (one : ReadOutcome healthy before (image.slot1.live.take (markerSize + 1)) (read .marker1 before))
+    (data : ReadOutcome healthy before (image.data.live.take 65536) (read .reader before)) :
+    ReadOutcome healthy before (foldBatches batches seed step)
+      (sealedScanWith read policy batches.length seed step before) := by
+  have canonical := congrArg FileImage.live settled.ready.1.1
+  have size := encoded_history_size batches 1 bounded
+  have dataFits : (encodeFrames 1 batches).length ≤ 65536 := by omega
+  rw [canonical, List.take_of_length_le dataFits] at data
+  let marker : Marker := ⟨(encodeFrames 1 batches).length, batches.length⟩
+  have selected (boundary : policy = .boundary) :
+      selectMarker image.slot0.live image.slot1.live = .ok marker := by
+    have slot0 := congrArg (fun i : Image => i.slot0.live) settled.clean
+    have slot1 := congrArg (fun i : Image => i.slot1.live) settled.clean
+    change image.slot0.durable = image.slot0.live at slot0
+    change image.slot1.durable = image.slot1.live at slot1
+    rw [← slot0, ← slot1]
+    exact (settled.ready.2 boundary).selectDurable bounded fits
+  unfold sealedScanWith
+  apply ReadOutcome.bind (scanMarker_read read before healthy policy image marker selected zero one)
+  apply ReadOutcome.bind data
+  have decoded := scan_encodeFrames .boundary bounded fits
+  have logOnly : (Policy.logOnly == .boundary) = false := rfl
+  have boundary : (Policy.boundary == .boundary) = true := rfl
+  cases policy <;>
+    simp [logOnly, boundary, marker, decoded, fromDecode, Bind.bind, EStateM.bind, Pure.pure,
+      EStateM.pure, ReadOutcome, Nat.add_comm]
+
+end WalRecoverySlice.Segmented.Native
+
+namespace WalRecoverySlice.Segmented.Native
+open SingleFile Persistence
+
+/-- From a ready snapshot, local marker, data, and positional read reports
+suffice for an exact retained observation. A scope report accounts for
+acquisition and release of only its named descriptor. -/
+theorem scanReadyWith_fileReads
+    (session : CompactSession) (history : List Bytes) (disk : Model.Disk)
+    (installed : ReadyLayout session.control history disk)
+    (before : σ) (healthy : Prop) (seed : α) (step : α → Nat → Bytes → α)
+    (sealed : Nat → OpenTarget → EStateM String σ Bytes)
+    (active : Nat → EStateM String σ Bytes)
+    (zero : ∀ id, session.control.selects id → id < session.control.active →
+      ReadOutcome healthy before ((disk.segment id).slot0.live.take (markerSize + 1))
+        (sealed id .marker0 before))
+    (one : ∀ id, session.control.selects id → id < session.control.active →
+      ReadOutcome healthy before ((disk.segment id).slot1.live.take (markerSize + 1))
+        (sealed id .marker1 before))
+    (data : ∀ id, session.control.selects id → id < session.control.active →
+      ReadOutcome healthy before ((disk.segment id).data.live.take 65536)
+        (sealed id .reader before))
+    (positioned : ReadOutcome healthy before
+      ((disk.segment session.control.active).data.live)
+      (active (disk.cursor session.control.active).endPos before)) :
+    ReadOutcome healthy before (session.bounds, foldBatchesFrom step session.control.discarded seed
+      (history.drop session.control.discarded))
+      (scanReadyWith session seed
+        (fun id acc => sealedScanWith (sealed id) session.control.policy session.control.capacity acc
+          (retainedStep session.control id step))
+        (fun acc => activeScanWith active (disk.cursor session.control.active) acc
+          (retainedStep session.control session.control.active step)) before) := by
+  let c := session.control
+  rw [← scanReadyWith_selected session history seed step installed.layout.lower installed.layout.upper]
+  apply scanReadyWith_read
+  · intro id lo hi acc
+    have chosen : c.selects id := ⟨lo, Nat.le_of_lt hi⟩
+    have full : (segmentHistory c.capacity id history).length = c.capacity :=
+      segmentHistory_full (Nat.le_trans (Nat.mul_le_mul_right c.capacity (by omega)) installed.layout.lower)
+    have fits : (segmentHistory c.capacity id history).length ≤ 255 := by
+      rw [full]
+      exact installed.layout.capacityFits
+    have leaf := sealedScanWith_reads (sealed id) before healthy c.policy (disk.segment id)
+      (segmentHistory c.capacity id history) (installed.layout.sealed id chosen hi)
+      (segmentHistory_bounded installed.layout id) fits acc (retainedStep c id step)
+      (zero id chosen hi) (one id chosen hi) (data id chosen hi)
+    rw [full] at leaf
+    simpa only [foldChild] using leaf
+  · intro acc
+    have same := congrArg FileImage.live installed.active.ready.1.1
+    rw [installed.active.position, same] at positioned
+    rw [installed.active.position]
+    exact activeScanWith_read active before healthy _ (segmentHistory_bounded installed.layout c.active)
+      (Nat.le_trans (segmentHistory_fits c.capacity c.active history) installed.layout.capacityFits)
+      acc (retainedStep c c.active step) positioned
 
 end WalRecoverySlice.Segmented.Native

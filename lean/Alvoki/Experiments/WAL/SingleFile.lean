@@ -60,19 +60,38 @@ private def markerHandle [Monad m] [MonadExceptOf String m]
     (policy : Policy) : m Decoded :=
   reopen (recoveryOps io data markers) policy
 
-/-- A marker can select at most 65535 bytes. The extra byte witnesses a
-suffix. Drain oversized input in fixed chunks to retain read-error priority. -/
-private def readPrefixFromStart (h : IO.FS.Handle) (limit : USize) : IO Bytes := do
-  h.rewind
-  let bytes ← h.read limit
-  if bytes.size == limit.toNat then
-    repeat
-      if (← h.read 8192).isEmpty then break
+def drainChunk : Nat := 8192
+
+/-- Linux regular files have signed 64-bit offsets. A complete chunk
+advances the stream by 8192 bytes. This bound includes the EOF probe. -/
+def drainFuel : Nat := 2^50 + 1
+
+def drainWith [Monad m] [MonadExceptOf ε m] (exhausted : ε)
+    (read : Nat → m ByteArray) : Nat → m Unit
+  | 0 => throw exhausted
+  | fuel + 1 => do
+    let next ← read drainChunk
+    if next.size == drainChunk then drainWith exhausted read fuel
+
+/-- A short successful chunk certifies EOF. Drain after a full prefix
+before returning it, so errors in the unselected suffix remain visible. -/
+def readPrefixWith [Monad m] [MonadExceptOf ε m] (exhausted : ε)
+    (rewind : m Unit) (read : Nat → m ByteArray) (limit fuel : Nat) : m Bytes := do
+  rewind
+  let bytes ← read limit
+  if bytes.size == limit then drainWith exhausted read fuel
   return bytes.data.toList
+
+@[extern "alvoki_wal_read_chunk"]
+private opaque readChunk (h : @& IO.FS.Handle) (count : USize) : IO ByteArray
+
+private def readPrefixFromStart (h : IO.FS.Handle) (limit : Nat) : IO Bytes :=
+  readPrefixWith (IO.userError "WAL drain exceeded Linux file extent")
+    h.rewind (fun n => readChunk h n.toUSize) limit drainFuel
 
 private def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
   readData h := readPrefixFromStart h 65536
-  readMarker h := readPrefixFromStart h (markerSize + 1).toUSize
+  readMarker h := readPrefixFromStart h (markerSize + 1)
   truncateAt h n := truncateAt h n
   sync h := syncHandle h
 
@@ -119,9 +138,11 @@ inductive Phase (handle payload : Type) (history : Type := List Bytes) where
   | poisoned (lock : handle)
   | closed
 
-private structure NativeFiles where
-  append : AppendFiles IO.FS.Handle
-  reader : IO.FS.Handle
+structure CompactFiles (handle : Type) where
+  append : AppendFiles handle
+  reader : handle
+
+private abbrev NativeFiles := CompactFiles IO.FS.Handle
 
 /-- An alias of a handle shares its phase and mutex; closing any alias closes all. -/
 structure Handle where private mk ::
@@ -252,10 +273,19 @@ private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
   let state ← newRef ready.phase
   return (state, ← newMutex)
 
+/-- The compact phase retains the descriptions reached by the same open. -/
+def compactPhase (ready : Opened handle (AppendFiles handle)) : Phase handle (CompactFiles handle) Unit :=
+  .active ready.lock ⟨appendFiles ready.writer ready.reader ready.markers, ready.reader⟩
+    ready.recovered.cursor ()
+
+@[inline] def storeCompactWith [Monad m] {ref mutex : Type} (newRef : Phase handle (CompactFiles handle) Unit → m ref)
+    (newMutex : m mutex) (ready : Opened handle (AppendFiles handle)) : m (ref × mutex) := do
+  let state ← newRef (compactPhase ready)
+  return (state, ← newMutex)
+
 private def installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
-  let state ← IO.mkRef (.active ready.lock
-    ⟨appendFiles ready.writer ready.reader ready.markers, ready.reader⟩ ready.recovered.cursor ())
-  return ⟨ready.policy, state, ← Std.BaseMutex.new⟩
+  let (state, mutex) ← storeCompactWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
+  return ⟨ready.policy, state, mutex⟩
 
 private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
 
@@ -287,13 +317,18 @@ def openExistingPosition (dir : FilePath) : IO (Handle × Cursor) :=
 def openExisting (dir : FilePath) : IO Handle :=
   return (← openExistingPosition dir).1
 
+@[inline] def finishCompactWith [Monad m]
+    (install : Opened handle (AppendFiles handle) → m ready)
+    (seed : α) (step : α → Nat → Bytes → α)
+    (opened : Opened handle (AppendFiles handle)) : m (ready × Cursor × α) := do
+  let result := foldBatches opened.recovered.batches seed step
+  return (← install opened, opened.recovered.cursor, result)
+
 /-- Fold the recovered segment without retaining its batch list in the handle.
 The step is pure and its result is exposed only after successful recovery. -/
 def openExistingFold (dir : FilePath) (seed : α) (step : α → Nat → Bytes → α) :
     IO (Handle × Cursor × α) :=
-  openLoaded dir fun ready => do
-    let result := foldBatches ready.recovered.batches seed step
-    return (← installReady ready, ready.recovered.cursor, result)
+  openLoaded dir (finishCompactWith installReady seed step)
 
 /-- Initialize the durable contents before the single-file installation
 schedule acquires its reader, writer and marker descriptions. -/
@@ -378,40 +413,51 @@ private def withReady (h : Handle) (run : NativeFiles → Cursor → IO α) : IO
 
 def position (h : Handle) : IO Cursor := withReady h fun _ cursor => pure cursor
 
-private def decodedOrError (decoded : Except String Decoded) : IO Decoded :=
-  match decoded with
+def fromDecode [Monad m] [MonadExceptOf String m] (result : Except String α) : m α :=
+  match result with
   | .ok value => pure value
-  | .error error => throw (IO.userError error)
+  | .error message => throw message
+
+def activeScanWith [Monad m] [MonadExceptOf String m] (read : Nat → m Bytes)
+    (cursor : Cursor) (seed : α) (step : α → Nat → Bytes → α) : m α := do
+  let bytes ← read cursor.endPos
+  let decoded ← fromDecode (WalRecoverySlice.scan bytes cursor.endPos .boundary)
+  if decoded.cursor ≠ cursor then throw "installed WAL cursor mismatch"
+  return foldBatches decoded.batches seed step
 
 /-- Read the installed extent on the reader acquired by open. Positional reads
 leave the descriptor offset alone. A failure leaves the active phase intact. -/
 def scanFold (h : Handle) (seed : α) (step : α → Nat → Bytes → α) : IO α :=
-  withReady h fun files cursor => do
-    let bytes ← readInstalled files.reader cursor.endPos.toUSize
-    let decoded ← decodedOrError (WalRecoverySlice.scan bytes.data.toList cursor.endPos .boundary)
-    unless decoded.cursor == cursor do throw (IO.userError "installed WAL cursor mismatch")
-    return foldBatches decoded.batches seed step
+  withReady h fun files cursor => checked <| activeScanWith
+    (fun n => do return (← readInstalled files.reader n.toUSize).data.toList) cursor seed step
 
-/-- Read a sealed child's exact committed contents. The segmented caller owns
-the root and validates the child binding before entering this read-only scope. -/
-def scanSealedFold (dir : FilePath) (policy : Policy) (count : Nat)
-    (seed : α) (step : α → Nat → Bytes → α) : IO α := do
-  let marker ← if policy == .boundary then do
-    let a ← IO.FS.withFile (dir / "commit.0") .read fun h =>
-      readPrefixFromStart h (markerSize + 1).toUSize
-    let b ← IO.FS.withFile (dir / "commit.1") .read fun h =>
-      readPrefixFromStart h (markerSize + 1).toUSize
-    match selectMarker a b with
-    | .ok value => pure (some value)
-    | .error error => throw (IO.userError error)
-    else pure none
-  let bytes ← IO.FS.withFile (dir / "segment") .read fun h => readPrefixFromStart h 65536
+def scanMarkerWith [Monad m] [MonadExceptOf String m] (readFile : OpenTarget → m Bytes)
+    (policy : Policy) : m (Option Marker) := do
+  if policy == .boundary then
+    let a ← readFile .marker0
+    let b ← readFile .marker1
+    return some (← fromDecode (selectMarker a b))
+  else
+    return none
+
+def sealedScanWith [Monad m] [MonadExceptOf String m] (readFile : OpenTarget → m Bytes)
+    (policy : Policy) (count : Nat) (seed : α) (step : α → Nat → Bytes → α) : m α := do
+  let marker ← scanMarkerWith readFile policy
+  let bytes ← readFile .reader
   let endPos := marker.map Marker.endPos |>.getD bytes.length
-  let decoded ← decodedOrError (WalRecoverySlice.scan bytes endPos .boundary)
+  let decoded ← fromDecode (WalRecoverySlice.scan bytes endPos .boundary)
   unless bytes.length == endPos && decoded.cursor.nextSeq == count + 1 &&
       (marker.all fun selected => selected.lastSeq == count) do
-    throw (IO.userError "sealed WAL cursor mismatch")
+    throw "sealed WAL cursor mismatch"
   return foldBatches decoded.batches seed step
+
+/-- Borrow only scoped read descriptions for a sealed child. -/
+def scanSealedFold (dir : FilePath) (policy : Policy) (count : Nat)
+    (seed : α) (step : α → Nat → Bytes → α) : IO α :=
+  checked <| sealedScanWith (fun role => do
+    let (path, _) := role.location dir
+    let limit := if role = .reader then 65536 else markerSize + 1
+    liftM (IO.FS.withFile path .read fun h => readPrefixFromStart h limit)) policy count seed step
 
 def scan (h : Handle) : IO (List Bytes) := do
   return (← scanFold h [] (fun acc _ batch => batch :: acc)).reverse

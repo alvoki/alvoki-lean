@@ -89,6 +89,33 @@ private theorem select_latest {image : Image} {slot : Nat} {selected : Marker} {
     | some prior =>
       simpa [Nat.not_lt_of_ge (Nat.le_of_lt (newer prior rfl))] using selectMarker_both alternate accepted
 
+/-- Decode the authoritative durable marker of a canonical boundary entry. -/
+theorem BoundaryEntry.selectDurable {image : Image} {batches : List Bytes}
+    (entry : BoundaryEntry image (historyCursor batches))
+    (bounded : ∀ b ∈ batches, b.length ≤ 32) (fits : batches.length ≤ 255) :
+    selectMarker image.slot0.durable image.slot1.durable =
+      .ok ⟨(encodeFrames 1 batches).length, batches.length⟩ := by
+  let count := batches.length
+  let bytes := encodeFrames 1 batches
+  let marker : Marker := ⟨bytes.length, count⟩
+  have active : (image.marker (count % 2)).durable = encodeMarker bytes.length count := by
+    simpa only [historyCursor, Nat.add_sub_cancel_left] using entry.selected
+  have accepted : decodeMarker (count % 2) (image.marker (count % 2)).durable = .ok (some marker) := by
+    rw [active]
+    have bound := encoded_history_size batches 1 bounded
+    have extent : bytes.length < 65536 := by dsimp [bytes]; omega
+    exact decodeMarker_encode _ _ (by omega) extent (by cases batches <;> simp [bytes, count, encodeFrames, frame_length])
+  obtain ⟨other, read, older⟩ := entry.other
+  simp only [historyCursor, Nat.add_sub_cancel_left] at read older
+  have otherSlot : 1 - count % 2 = (1 + count) % 2 := by omega
+  have same (slot : Nat) : (image.powerLoss.marker slot).live = (image.marker slot).durable := by
+    by_cases zero : slot = 0 <;> simp [Image.powerLoss, Image.marker, FileImage.powerLoss, zero]
+  have acc : decodeMarker (count % 2) (image.powerLoss.marker (count % 2)).live = .ok (some marker) := by
+    rwa [same]
+  have alt : decodeMarker (1 - count % 2) (image.powerLoss.marker (1 - count % 2)).live = .ok other := by
+    rwa [same, otherSlot]
+  exact select_latest (Nat.mod_lt _ (by decide)) acc alt older
+
 /-- A raw live view fixes the actual reader result and the canonical bytes
 that would remain if this recovery reached its truncation. -/
 private theorem Dirty.selects {policy known pending image} (dirty : Dirty policy known pending image) :
@@ -157,17 +184,8 @@ private theorem Dirty.selects {policy known pending image} (dirty : Dirty policy
     let bytes := encodeFrames 1 selected
     let marker : Marker := ⟨bytes.length, count⟩
     let d : Decoded := ⟨selected, historyCursor selected⟩
-    have active : (image.marker (count % 2)).live = encodeMarker bytes.length count := by
-      simpa only [historyCursor, Nat.add_sub_cancel_left, Image.liveSnapshot_marker] using entry.selected
-    have accepted : decodeMarker (count % 2) (image.marker (count % 2)).live = .ok (some marker) := by
-      rw [active]
-      have bound := encoded_history_size selected 1 bounded
-      have extent : bytes.length < 65536 := by dsimp [bytes]; omega
-      exact decodeMarker_encode _ _ (by omega) extent (by cases selected <;> simp [bytes, count, encodeFrames, frame_length])
-    obtain ⟨other, read, older⟩ := entry.other
-    simp only [historyCursor, Nat.add_sub_cancel_left, Image.liveSnapshot_marker] at read older
-    have otherSlot : 1 - count % 2 = (1 + count) % 2 := by omega
-    have picked := select_latest (Nat.mod_lt _ (by decide)) accepted (otherSlot ▸ read) older
+    have picked : selectMarker image.slot0.live image.slot1.live = .ok marker :=
+      entry.selectDurable bounded fits
     change image.data.live = bytes ++ suffix at physical
     have scanOK : scan image.data.live marker.endPos .boundary = .ok d := by
       rw [physical]

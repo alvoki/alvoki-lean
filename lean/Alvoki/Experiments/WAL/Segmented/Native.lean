@@ -346,23 +346,39 @@ def scanReadyWith [Monad m] (session : CompactSession) (seed : α)
   let acc ← foldSealedWith readSealed c.firstNeeded (c.active - c.firstNeeded) seed
   return (session.bounds, ← readActive acc)
 
-private def Store.recoverFold (s : Store) (seed : α) (step : Option (α → Nat → Bytes → α)) :
-    IO (CompactSession × α) := do
-  let c ← checked (selectControl s.callbacks)
-  let readSealed id acc := do
-    let (child, cursor, next) ← s.openChildFold c id acc step
-    SingleFile.close child
-    unless cursor.nextSeq == c.capacity + 1 do throw (IO.userError "incomplete sealed segment")
-    return next
-  let acc ← foldSealedWith readSealed c.firstNeeded (c.active - c.firstNeeded) seed
-  withActiveChild (error := IO.Error) (s.openChildFold c c.active acc step)
-    (fun acquired => SingleFile.close acquired.1) fun (child, cursor, next) => do
+def recoverSealedWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (capacity : Nat) (openChild : m (child × Cursor × α))
+    (close : child → m Unit) : m α := do
+  let (child, cursor, next) ← openChild
+  close child
+  unless cursor.nextSeq == capacity + 1 do throw (invalid "incomplete sealed segment")
+  return next
+
+/-- Shared recovery schedule. Child opening returns its reached cursor and
+accumulator. Only the active child can escape its scope. -/
+def recoverCompactWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (select : m Control)
+    (openChild : Control → Nat → α → m (child × Cursor × α))
+    (close : child → m Unit) (collect : Control → m Unit)
+    (register : Nat → child → m Unit) (seed : α) : m (CompactSession × α) := do
+  let c ← select
+  let acc ← foldSealedWith
+    (fun id acc => recoverSealedWith invalid c.capacity (openChild c id acc) close)
+    c.firstNeeded (c.active - c.firstNeeded) seed
+  withActiveChild (error := error) (openChild c c.active acc)
+    (fun acquired => close acquired.1) fun (child, cursor, next) => do
       let session : CompactSession := ⟨c, cursor.nextSeq - 1⟩
-      if session.activeCount > c.capacity then throw (IO.userError "oversized active segment")
-      if c.discarded > session.bounds.tail then throw (IO.userError "release beyond recovered data")
-      checked (collect s.callbacks c)
-      s.active.set (some (c.active, child))
+      if session.activeCount > c.capacity then throw (invalid "oversized active segment")
+      if c.discarded > session.bounds.tail then throw (invalid "release beyond recovered data")
+      collect c
+      register c.active child
       return (session, next)
+
+private def Store.recoverFold (s : Store) (seed : α) (step : Option (α → Nat → Bytes → α)) :
+    IO (CompactSession × α) :=
+  recoverCompactWith IO.userError (checked (selectControl s.callbacks))
+    (fun c id acc => s.openChildFold c id acc step) SingleFile.close
+    (fun c => checked (collect s.callbacks c)) (fun id child => s.active.set (some (id, child))) seed
 
 private def install (dir : FilePath) (fresh : Option (Policy × Nat))
     (seed : α) (step : Option (α → Nat → Bytes → α)) : IO (Handle × Bounds × α) := do

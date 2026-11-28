@@ -24,7 +24,7 @@ def frame (seq : Nat) (payload : Bytes) : Bytes :=
 structure Cursor where
   endPos : Nat := 0
   nextSeq : Nat := 1
-  deriving Repr, BEq
+  deriving Repr, BEq, DecidableEq
 
 structure Decoded where
   batches : List Bytes

@@ -76,3 +76,22 @@ lean_object *alvoki_wal_read_installed(b_lean_obj_arg handle, size_t count) {
     lean_sarray_set_size(bytes, offset);
     return lean_io_result_mk_ok(bytes);
 }
+
+/* Unlike Lean 4.36 Handle.read, inspect ferror even after positive fread.
+   A successful short result certifies EOF on this same description. */
+lean_object *alvoki_wal_read_chunk(b_lean_obj_arg handle, size_t count) {
+    FILE *stream = lean_get_external_data(handle);
+    if (count == 0 || count > 65536)
+        return lean_io_result_mk_error(lean_decode_io_error(EINVAL, NULL));
+
+    lean_object *bytes = lean_alloc_sarray(1, 0, count);
+    errno = 0;
+    size_t actual = fread(lean_sarray_cptr(bytes), 1, count, stream);
+    int error = errno;
+    if (ferror(stream) || (actual < count && !feof(stream))) {
+        lean_dec(bytes);
+        return lean_io_result_mk_error(lean_decode_io_error(error ? error : EIO, NULL));
+    }
+    lean_sarray_set_size(bytes, actual);
+    return lean_io_result_mk_ok(bytes);
+}
