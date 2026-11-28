@@ -17,14 +17,14 @@ private def withReplay (path : FilePath) (watermark : UInt64) (checkTables : IO 
   let through := watermark.toNat
   let (wal, bounds, replayed) ← Segmented.Native.openExistingFold path
     (.ok (∅ : MemTable)) (step through)
-  try
+  let result ← Segmented.Native.cleanupOnError (error := IO.Error) (do
     unless bounds.base ≤ through && through ≤ bounds.tail do
       throw (IO.userError "manifest watermark outside the WAL view")
     let mem ← IO.ofExcept (replayed.mapError IO.userError)
     checkTables
-    use wal mem
-  finally
-    Segmented.Native.close wal
+    use wal mem) (Segmented.Native.close wal)
+  Segmented.Native.close wal
+  return result
 
 private def require (ok : Bool) (message : String) : IO Unit :=
   unless ok do throw (IO.userError message)
