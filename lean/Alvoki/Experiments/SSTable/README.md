@@ -74,8 +74,11 @@ tables separately.
 
 Run `bash scripts/check-immutable-sstable.sh` with the pinned Lean toolchain,
 GCC and G++ on Linux x86-64. This is part of the standard reproduction suite.
-The [shared CRC32C library](../../Codec/README.md#crc32c) supplies the pinned
-Google archive to Lake-native consumers and to the focused check.
+Lake builds the audited modules and the native fixture from their imports.
+The focused check independently replays the compiled modules with
+`leanchecker` and audits the listed theorems. The same
+[shared CRC32C library](../../Codec/README.md#crc32c) supplies the pinned
+Google archive to the fixture and to other Lake-native consumers.
 [Lean Google CRC32C benchmark](../../../../benchmarks/sstable/checksums.md) ·
 [End-to-end lookup benchmark](../../../../benchmarks/sstable/unified.md)
 
