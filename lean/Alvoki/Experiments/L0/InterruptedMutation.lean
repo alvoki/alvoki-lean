@@ -121,4 +121,28 @@ theorem Prefix.issued (p : Prefix path root start)
   simp only [fits, ↓reduceIte] at atIssue
   exact ⟨reopened, history, atIssue.1, handle, binding, invoked, atIssue.2⟩
 
+/-- An interruption just before issuing the WAL instruction still has a
+known view, including after power loss and independent writeback. The
+first actual reopen consumes that disk and the second consumes its result. -/
+theorem Prefix.beforeAppend (p : Prefix path root start)
+    (entry : NativeReadScope.Entry physical path root image)
+    (files : NativeReadScope.Files physical root image start)
+    (heap : PhaseMemory) (ops : WithOpenReads.Runtime physical root p.lock p.ref image life heap)
+    (prior : Execution.Run before none image) (change : Change)
+    (scans : ∀ history w, SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) →
+      NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
+    (fits : image.view.tail + 1 < UInt64.size)
+    (restart : NativeAppendCut.Restarted physical root image.tables p.issue (physical p.issue).disk mode after)
+    (reopens : Reopens physical heap path root image life none)
+    (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
+    Retry physical root (NativeMutationScope.uncertainEvents before change) image none after ∧
+      PendingReadScope.TwoReads none physical path root image life
+        (NativeMutationScope.uncertainEvents before change) after a b rootLife := by
+  obtain ⟨trace, _, reached, _⟩ := p.issued entry files heap ops prior change scans fits
+  obtain ⟨_, _, _, installed, view⟩ := reached.child
+  have persistent := restart.filesAt reached.manifest reached.catalog
+    (installed.installed.offline (request := none) (.inl view))
+  have retry := Retry.rejected (change := change) trace persistent
+  exact ⟨retry, retry.readTwice reopens a b rootLife⟩
+
 end ExperimentalL0.InterruptedMutation
