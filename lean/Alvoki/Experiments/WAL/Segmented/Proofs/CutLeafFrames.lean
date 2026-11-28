@@ -71,8 +71,8 @@ theorem control (frames : Control P s c origin) (path : ControlCutIO.Prefix s c 
     | written ran => exact (frames _ _ prior _ _ (.write _)).ok ran before
     | flushed ran => exact (frames _ _ prior _ _ (.flush _)).ok ran before
     | synced ran => exact (frames _ _ prior _ _ (.syncWriter _)).ok ran before
-    | renamed ran => exact (frames _ _ prior _ _ .rename).ok ran before
-    | settled ran => exact (frames _ _ prior _ _ .directory).ok ran before
+    | renamed ran => exact (frames _ _ prior _ _ (.rename _)).ok ran before
+    | settled ran => exact (frames _ _ prior _ _ (.directory _)).ok ran before
 
 /-- The child descriptor must be named by this issued instruction of this
 specific worker. Each frame starts at the syscall's own world, also when

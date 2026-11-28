@@ -69,7 +69,7 @@ structure CutRuntime (disk : W → Disk) (store : Store) (session : Session) (st
   finished : ∀ {h batch w d} (r : ChildCutIO.Complete stop h batch w d) c,
     (disk w).liveControl = some c → (disk w).durableControl = some c → OwnedOperand disk store c r.operand → ChildCutIO.ReturnPrimitives disk c r
 
-private theorem owner {disk : W → Disk} {c : Context disk} (head : Control)
+theorem owner {disk : W → Disk} {c : Context disk} (head : Control)
     (same : head.policy = c.session.control.policy) (operand : ChildCutIO.Operand h w)
     (auth : AppendIO.ChildAuthority c.mem (segmentPath c.store.root head.active) head.active c.session.control.policy h)
     (alive : auth.Live w (.active .lock (SingleFile.appendBindings head.policy) pos bs))
