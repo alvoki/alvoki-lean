@@ -222,6 +222,20 @@ inductive Retry (req : Option WalRecoverySlice.Segmented.Contract.Request) (phys
       PinnedPost physical root (choose image view) life observed second rootLife →
       Retry req physical root image life events first second rootLife err
 
+/-- Postcondition for two actual opens. Every second call starts at the
+world returned by the first, including after an unsuccessful first open. -/
+def TwoReads (req : Option WalRecoverySlice.Segmented.Contract.Request) (physical : W → Footprint inode)
+    (path root : FilePath) (image : Selected) (life : Lifetime) (events : List Event) (start : W)
+    (firstKeys secondKeys : List UInt64) (rootLife : RootLifetime) : Prop :=
+    let first : RootCall := ⟨path, firstKeys, start⟩
+    Post first.run first.start
+      (fun replies w => ∃ view, PermittedView image.view req view ∧
+        WithOpenReads.Finished physical root (choose image view) life events first rootLife replies w ∧
+        PinnedPost physical root (choose image view) life (WithOpenReads.eventsAfter events firstKeys replies)
+          ⟨path, secondKeys, w⟩ rootLife)
+      (fun e w => Failure req physical root image life events first rootLife e w ∧
+        Retry req physical root image life events first ⟨path, secondKeys, w⟩ rootLife e)
+
 /-- The two public calls share the actual return world of the first call,
 including after a validation failure or a cleanup error. Once a survivor
 has been selected, the second public call uses the ordinary closed-file
@@ -233,14 +247,8 @@ theorem twice (entry : RestartEntry req physical path root image)
     (pinnedRuntime : ∀ v, PermittedView image.view req v → ∀ lock ref,
       WithOpenReads.Runtime physical root lock ref (choose image v) life heap)
     (prior : Admitted events image req) (firstKeys secondKeys : List UInt64) (rootLife : RootLifetime) :
-    let first : RootCall := ⟨path, firstKeys, start⟩
-    Post first.run first.start
-      (fun replies w => ∃ view, PermittedView image.view req view ∧
-        WithOpenReads.Finished physical root (choose image view) life events first rootLife replies w ∧
-        PinnedPost physical root (choose image view) life (WithOpenReads.eventsAfter events firstKeys replies)
-          ⟨path, secondKeys, w⟩ rootLife)
-      (fun e w => Failure req physical root image life events first rootLife e w ∧
-        Retry req physical root image life events first ⟨path, secondKeys, w⟩ rootLife e) := by
+    TwoReads req physical path root image life events start firstKeys secondKeys rootLife := by
+  unfold TwoReads
   intro first
   have fixed v (choice : PermittedView image.view req v) w ev
       (disk : NativeReadScope.Files physical root (choose image v) w)

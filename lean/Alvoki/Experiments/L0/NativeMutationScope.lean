@@ -185,4 +185,45 @@ theorem withOpen_of_append {physical : W → Footprint inode}
       (.ofRegistered registered source.2) _ ran
       (fun _ closed => .rejected fits closed (.rejected trace closed.files))
 
+
+/-- All observations use the same public reopen implementation. The
+request determines whether the first reopen must keep a known view or
+resolve a pending mutation. -/
+structure Reopens (physical : W → Footprint inode) (heap : PhaseMemory) (path root : System.FilePath)
+    (image : Selected) (life : NativeRead.Lifetime) (req : Option WalRecoverySlice.Segmented.Contract.Request) where
+  entry : NativeReadScope.RestartEntry req physical path root image
+  runtime : ∀ lock ref, PendingReadScope.Runtime req physical root lock ref image life heap
+  pinned : ∀ v, PermittedView image.view req v →
+    NativeReadScope.Entry physical path root (PendingReadScope.choose image v)
+  pinnedRuntime : ∀ v, PermittedView image.view req v → ∀ lock ref,
+    WithOpenReads.Runtime physical root lock ref (PendingReadScope.choose image v) life heap
+
+theorem Retry.readTwice (retry : Retry physical root events image req w)
+    (ops : Reopens physical heap path root image life req) (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
+    PendingReadScope.TwoReads req physical path root image life events w a b rootLife :=
+  PendingReadScope.twice ops.entry retry.files heap ops.runtime ops.pinned ops.pinnedRuntime retry.trace a b rootLife
+
+abbrev uncertainEvents (before : List Event) (change : Change) :=
+  ((before ++ [.reopened]) ++ [.writeUncertain change]) ++ [.stop]
+
+/-- A reported append error keeps the pending encoded mutation throughout
+both reopens. An error first reported by cleanup after append success
+already has a pinned extended view. -/
+theorem Failure.readTwice (failure : Failure physical heap root before image change e w)
+    (original : Reopens physical heap path root image life none)
+    (uncertain : Reopens physical heap path root image life (some (.append (encode change))))
+    (extended : Reopens physical heap path root (image.append (encode change)) life none)
+    (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
+    (PendingReadScope.TwoReads none physical path root image life (before ++ [.openFailed]) w a b rootLife) ∨
+    PendingReadScope.TwoReads none physical path root image life (uncertainEvents before change) w a b rootLife ∨
+    PendingReadScope.TwoReads (some (.append (encode change))) physical path root image life
+      (uncertainEvents before change) w a b rootLife ∨
+    PendingReadScope.TwoReads none physical path root (image.append (encode change)) life
+      (uncertainEvents before change) w a b rootLife := by
+  cases failure with
+  | unopened retry => exact .inl (retry.readTwice original a b rootLife)
+  | rejected _ _ retry => exact .inr (.inl (retry.readTwice original a b rootLife))
+  | reported _ _ retry => exact .inr (.inr (.inl (retry.readTwice uncertain a b rootLife)))
+  | cleanup written => exact .inr (.inr (.inr (written.lost.readTwice extended a b rootLife)))
+
 end ExperimentalL0.NativeMutationScope
