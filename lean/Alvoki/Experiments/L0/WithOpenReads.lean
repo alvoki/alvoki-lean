@@ -40,6 +40,7 @@ structure Finished (physical : W → Footprint inode) (root : FilePath) (image :
       NativeRecoverAt.CheckReceipt root ref image life opening recovered true ∧
       Native.Handle.AtRoot handle root ref ∧ Online physical root lock ref wal session image history entered ∧
       (readMany handle keys entered).val = replies ∧
+      Frame physical root wal image.tables entered (readMany handle keys entered).state ∧
       Online physical root lock ref wal session image history (readMany handle keys entered).state ∧
       allReleased life ref (root / "tables") handle keys entered
 
@@ -109,12 +110,12 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
     intro entered online
     let result := readMany handle keys entered
     have read := readMany_run online binding (ops.phase.refRead wal) (ops.tables wal entered online.owned) Frame.refl reopened keys
-    obtain ⟨trace, _, reached, released⟩ := read
+    obtain ⟨trace, frame, reached, released⟩ := read
     have stopped := trace.stop
     have finish (u) (closed : NativeReadRelease.Closed physical root lock ref image u) :
         Finished physical root image life events keys result.val u :=
       ⟨stopped, stopped.refines, lock, ref, closed, wal, session, history, handle, entered, w, t,
-        recovery, checkedTables, binding, online, rfl, reached, released⟩
+        recovery, checkedTables, binding, online, rfl, frame, reached, released⟩
     have release := NativeReadRelease.onlineTo ops.cleanup grant reached finish (fun e u h => Failure.cleanup (err := e) (finish u h))
     unfold NativeScope.Callback Post
     change (match readMany handle keys entered with | ⟨xs, v⟩ => _)
