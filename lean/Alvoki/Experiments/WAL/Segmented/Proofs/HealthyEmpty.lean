@@ -11,7 +11,7 @@ descriptor operations, ref allocation and mutex construction. -/
 theorem childOpen {id : Nat} (a : ChildAttempt store disk Q mem id policy w)
     (healthy : a.reports = {}) (prior : Child.Recoverable policy bs none ((disk w).segment id)) :
     ∃ h t, SingleFile.openExisting (segmentPath store.root id) w = .ok h t ∧
-      mem.Owns store.root id h bs t ∧ Q t := by
+      mem.Owns store.root policy id h bs t ∧ Q t := by
   let dir := segmentPath store.root id
   obtain ⟨ready, after, model⟩ := SingleFile.openExisting_healthy dir policy _ prior.dirty
   have observed := SingleFile.ConcreteRecovery.openExisting a.steps a.recovery a.runtime
@@ -27,9 +27,9 @@ theorem childOpen {id : Nat} (a : ChildAttempt store disk Q mem id policy w)
     have same : actual = bs := by simpa [WalRecoverySlice.Contract.Permitted] using permit
     exact ⟨h, t, rfl, same ▸ owned, frame⟩
 
-theorem childScan {id : Nat} (io : ChildUseIO mem Q) (owned : mem.Owns root id h bs w) (entry : Q w) :
+theorem childScan {id : Nat} (io : ChildUseIO mem Q) (owned : mem.Owns root p id h bs w) (entry : Q w) :
     ∃ t, SingleFile.scan h w = .ok bs t ∧ Q t := by
-  obtain ⟨p, ready, a, ref, m, rfl, pair, bound, cell, mutex, origin⟩ := owned
+  obtain ⟨ready, a, ref, m, rfl, pair, bound, cell, mutex, origin⟩ := owned
   have issued := ChildLockAt.issued origin bound
   obtain ⟨q0, _, m0, r0⟩ := io.lock _ _ _ _ issued entry mutex cell
   obtain ⟨got, q1, _, m1, r1⟩ := io.read _ _ _ _ issued q0 m0 r0

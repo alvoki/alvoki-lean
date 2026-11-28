@@ -40,7 +40,7 @@ runtime or filesystem primitives. The worker starts with the specific
 directory, exclusive lock and typed empty slot produced by acquisition. -/
 structure OpenOperations (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk)
     (known : Contract.View) (Q : W → Prop) (workerInputs : Store → (W → Prop) → Type)
-    (childOwns : (s : Store) → (P : W → Prop) → workerInputs s P → Nat → SingleFile.Handle → List Bytes → W → Prop)
+    (childOwns : (s : Store) → (P : W → Prop) → workerInputs s P → Policy → Nat → SingleFile.Handle → List Bytes → W → Prop)
     (req : Option Contract.Request := none) where
   acquire : AcquireIO dir (WaitingFor req known disk Q)
   worker : ∀ s : Store, s.root = acquire.canonical →

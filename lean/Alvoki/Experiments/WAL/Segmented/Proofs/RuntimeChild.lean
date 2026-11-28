@@ -162,8 +162,8 @@ the world-indexed live phase and mutex facts. -/
 def IssuedPair (ref : Ref) (mutex : Std.BaseMutex) : Prop :=
   ∃ h p dir w t, SingleFile.openExisting dir w = .ok h t ∧ h.Assembled p ref mutex
 
-def ChildMemory.Owns (mem : ChildMemory disk) (root : FilePath) (id : Nat) (h : SingleFile.Handle) (bs : List Bytes) (t : W) : Prop :=
-  ∃ (p : Policy) (ready : ModelOpened) (a : ActualOpened), ∃ ref mutex, ready.recovered.batches = bs ∧
+def ChildMemory.Owns (mem : ChildMemory disk) (root : FilePath) (p : Policy) (id : Nat) (h : SingleFile.Handle) (bs : List Bytes) (t : W) : Prop :=
+  ∃ (ready : ModelOpened) (a : ActualOpened), ∃ ref mutex, ready.recovered.batches = bs ∧
     OpenedTogether (mem.bound id) p a ready ∧ h.Assembled a.policy ref mutex ∧
     mem.cell t ref a.phase ∧ mem.mutex t mutex ∧ ChildLockAt (segmentPath root id) h a.lock
 
@@ -171,9 +171,9 @@ theorem ChildLockAt.issued (origin : ChildLockAt dir h fd) (bound : h.Assembled 
   obtain ⟨u, v, opened, _⟩ := origin
   exact ⟨h, p, dir, u, v, opened, bound⟩
 
-theorem ChildMemory.Owns.source {disk : W → Disk} {mem : ChildMemory disk} {id : Nat} (held : mem.Owns root id h bs t) :
+theorem ChildMemory.Owns.source {disk : W → Disk} {mem : ChildMemory disk} {id : Nat} (held : mem.Owns root p id h bs t) :
     ∃ fd, ChildLockAt (segmentPath root id) h fd := by
-  obtain ⟨_, _, a, _, _, _, _, _, _, _, lock⟩ := held
+  obtain ⟨_, a, _, _, _, _, _, _, _, lock⟩ := held
   exact ⟨a.lock, lock⟩
 
 private theorem lifted_ok {a : IO α} (seen : (liftM a : F α).run w = .ok (.ok x) t) : a w = .ok x t := by
@@ -204,7 +204,7 @@ structure ChildAttempt (s : Store) (disk : W → Disk) (Q : W → Prop) (mem : C
 theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q mem id p w)
     (prior : Child.Recoverable p bs pending ((disk w).segment id)) :
     IOReturns (SingleFile.openExisting (segmentPath s.root id)) w
-      (ChildOpened (mem.Owns s.root id) disk Q id p bs pending (disk w)) (ChildFailed disk Q id p bs pending (disk w)) := by
+      (ChildOpened (mem.Owns s.root p id) disk Q id p bs pending (disk w)) (ChildFailed disk Q id p bs pending (disk w)) := by
   let initial : OpenImage := {image := (disk w).segment id}
   let dir := segmentPath s.root id
   let reports := attempt.reports
@@ -228,7 +228,7 @@ theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q me
       have cur := mem.cursor id t ref a.lock a.writer a.reader a.markers a.recovered.cursor a.recovered.batches
         pair.writer (pair.phase ▸ cell)
       apply physical.opened initial rfl rfl reports prior model
-      · exact ⟨p, ready, a, ref, m, rfl, pair, built, cell, attempt.mutex _ _ mutex,
+      · exact ⟨ready, a, ref, m, rfl, pair, built, cell, attempt.mutex _ _ mutex,
           w, t, actual, rootLockFrom issued⟩
       · rw [← pair.batches]; exact cur
   case error.ok e t result after =>
@@ -268,11 +268,11 @@ structure ChildUseIO (mem : ChildMemory disk) (Q : W → Prop) : Prop where
     returnedWorld (fd.unlock v) = u → Q u ∧ AfterClose start (disk u) →
     Q (m.unlock u).state ∧ AfterClose start (disk (m.unlock u).state)
 
-theorem ChildUseIO.scan {id : Nat} {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns root id h bs w) (entry : Q w) :
+theorem ChildUseIO.scan {id : Nat} {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns root p id h bs w) (entry : Q w) :
     IOReturns (SingleFile.scan h) w
-      (fun bytes t => bytes = bs ∧ mem.Owns root id h bs t ∧ Q t ∧ Writebacks (disk w) (disk t))
-      (fun t => mem.Owns root id h bs t ∧ Q t ∧ Writebacks (disk w) (disk t)) := by
-  obtain ⟨p, ready, a, ref, m, rfl, pair, bound, cell, mutex, original⟩ := owned
+      (fun bytes t => bytes = bs ∧ mem.Owns root p id h bs t ∧ Q t ∧ Writebacks (disk w) (disk t))
+      (fun t => mem.Owns root p id h bs t ∧ Q t ∧ Writebacks (disk w) (disk t)) := by
+  obtain ⟨ready, a, ref, m, rfl, pair, bound, cell, mutex, original⟩ := owned
   have issued := ChildLockAt.issued original bound
   obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ issued entry mutex cell
   obtain ⟨got, q1, b1, m1, r1⟩ := io.read _ _ _ _ issued q0 m0 r0
@@ -280,12 +280,12 @@ theorem ChildUseIO.scan {id : Nat} {disk : W → Disk} {mem : ChildMemory disk} 
   obtain ⟨q2, b2, m2, r2⟩ := io.unlock _ _ _ _ issued q1 m1 r1
   unfold IOReturns
   rw [run, pair.batches]
-  exact ⟨rfl, ⟨p, ready, a, ref, m, rfl, pair, bound, r2, m2, original⟩, q2, (b0.trans b1).trans b2⟩
+  exact ⟨rfl, ⟨ready, a, ref, m, rfl, pair, bound, r2, m2, original⟩, q2, (b0.trans b1).trans b2⟩
 
-theorem ChildUseIO.close {id : Nat} {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns root id h bs w) (entry : Q w) :
+theorem ChildUseIO.close {id : Nat} {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns root p id h bs w) (entry : Q w) :
     IOReturns (SingleFile.close h) w (fun _ t => Q t ∧ AfterClose (disk w) (disk t))
       (fun t => Q t ∧ AfterClose (disk w) (disk t)) := by
-  obtain ⟨p, ready, a, ref, m, _, pair, bound, cell, mutex, original⟩ := owned
+  obtain ⟨ready, a, ref, m, _, pair, bound, cell, mutex, original⟩ := owned
   have issued := ChildLockAt.issued original bound
   have binds : h.Binds ref m := by subst h; exact ⟨rfl, rfl⟩
   obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ issued entry mutex cell
@@ -320,10 +320,10 @@ structure ChildPrimitives (s : Store) (disk : W → Disk) (Q : W → Prop) where
 
 def ChildPrimitives.access (primitives : ChildPrimitives s disk Q) : ChildAccess s disk Q where
   owns := primitives.memory.Owns s.root
-  source _ _ _ _ held := ChildMemory.Owns.source held
+  source _ _ _ _ _ held := ChildMemory.Owns.source held
   select p id _ _ _ q named prior := primitives.validation.acquire q named prior
     (fun u valid present policy retry => (primitives.attempt id p u valid present policy).openExisting retry)
-  scan _ _ _ _ owned := primitives.phase.scan owned
-  close _ _ _ _ owned := primitives.phase.close owned
+  scan _ _ _ _ _ owned := primitives.phase.scan owned
+  close _ _ _ _ _ owned := primitives.phase.close owned
 
 end WalRecoverySlice.Segmented.Native

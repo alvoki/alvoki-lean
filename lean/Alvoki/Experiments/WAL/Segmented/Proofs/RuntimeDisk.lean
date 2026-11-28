@@ -241,29 +241,29 @@ def AfterClose (before after : Disk) : Prop :=
 registered handle. Scanning consumes that binding; closing need only retain
 file contents, since the closed descriptor's cursor is no longer live. -/
 structure ChildAccess (s : Store) (disk : W → Disk) (Q : W → Prop) where
-  owns : Nat → SingleFile.Handle → List Bytes → W → Prop
-  source : ∀ id h bs u, owns id h bs u → ∃ fd, ChildLockAt (segmentPath s.root id) h fd
+  owns : Policy → Nat → SingleFile.Handle → List Bytes → W → Prop
+  source : ∀ p id h bs u, owns p id h bs u → ∃ fd, ChildLockAt (segmentPath s.root id) h fd
   select : ∀ p id bs pending u, Q u → id ∈ (disk u).liveNames →
     Child.Recoverable p bs pending ((disk u).segment id) →
     IOReturns (s.acquireChild p id) u
       (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ ∃ actual,
-        WalRecoverySlice.Contract.Permitted bs pending actual ∧ owns id h actual t ∧
+        WalRecoverySlice.Contract.Permitted bs pending actual ∧ owns p id h actual t ∧
         Child.Installed p ((disk t).segment id) ((disk t).cursor id) actual ∧
         (pending = none → Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
       (fun t => Q t ∧ ChildChange id (disk u) (disk t) ∧
         Child.Recoverable p bs pending ((disk t).segment id) ∧
         (pending = none → Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
-  scan : ∀ id h bs u, owns id h bs u → Q u → IOReturns (SingleFile.scan h) u
-    (fun bytes t => bytes = bs ∧ owns id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
-    (fun t => owns id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
-  close : ∀ id h bs u, owns id h bs u → Q u → IOReturns (SingleFile.close h) u
+  scan : ∀ p id h bs u, owns p id h bs u → Q u → IOReturns (SingleFile.scan h) u
+    (fun bytes t => bytes = bs ∧ owns p id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
+    (fun t => owns p id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
+  close : ∀ p id h bs u, owns p id h bs u → Q u → IOReturns (SingleFile.close h) u
     (fun _ t => Q t ∧ AfterClose (disk u) (disk t))
     (fun t => Q t ∧ AfterClose (disk u) (disk t))
 
 theorem ChildAccess.acquire (op : ChildAccess s disk Q) (p : Policy) (id : Nat) (bs : List Bytes) (u : W)
     (held : Q u) (named : id ∈ (disk u).liveNames) (clean : Child.Recoverable p bs none ((disk u).segment id)) :
     IOReturns (s.acquireChild p id) u
-      (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ op.owns id h bs t ∧
+      (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ op.owns p id h bs t ∧
         Child.Installed p ((disk t).segment id) ((disk t).cursor id) bs ∧
         (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
       (fun t => Q t ∧ ChildChange id (disk u) (disk t) ∧ Child.Recoverable p bs none ((disk t).segment id) ∧
@@ -359,7 +359,7 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
   let bs := segmentHistory c.capacity id history
   let Frame := fun t => Q t ∧ OpenLayout c history pending (disk t)
   let Failure := fun t => Q t ∧ Recoverable known req (disk t)
-  let held := fun h t => ops.owns id h bs t ∧ Frame t
+  let held := fun h t => ops.owns c.policy id h bs t ∧ Frame t
   have selected : c.selects id := ⟨lo, Nat.le_of_lt lt⟩
   have settled := o.readable.layout.sealed id selected lt
   have raw := ops.acquire c.policy id bs u keep (o.readable.layout.names id selected).1
@@ -372,7 +372,7 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
     · rintro t ⟨q, change, _, physical⟩
       exact ⟨q, (o.child change settled (physical settled)).retry permit⟩
   · rintro h v ⟨owned, q, prior⟩
-    apply mapIO (ops.scan id h bs v owned q)
+    apply mapIO (ops.scan c.policy id h bs v owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
       exact ⟨rfl, owns, qt, prior.writebacks same⟩
     · rintro t ⟨owns, qt, same⟩
@@ -380,14 +380,14 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
   · rintro h v ⟨owned, q, prior⟩
     have after {t} (post : Q t ∧ AfterClose (disk v) (disk t)) : Frame t ∧ Failure t :=
       ⟨⟨post.1, prior.cursors post.2⟩, ⟨post.1, (prior.cursors post.2).retry permit⟩⟩
-    exact mapIO (ops.close id h bs v owned q) (fun _ _ post => after post) (fun _ post => (after post).2)
+    exact mapIO (ops.close c.policy id h bs v owned q) (fun _ _ post => after post) (fun _ post => (after post).2)
 
 /-- Concrete custody after the active child was recovered. The same history
 supplies the selected files, active bytes, cursor, and owned child phase. -/
-def RecoveredChild (disk : W → Disk) (owns : Nat → SingleFile.Handle → List Bytes → W → Prop)
+def RecoveredChild (disk : W → Disk) (owns : Policy → Nat → SingleFile.Handle → List Bytes → W → Prop)
     (session : Session) (h : SingleFile.Handle) (t : W) : Prop :=
   ∃ history, session = sessionOf session.control history ∧
-    owns session.control.active h (segmentHistory session.control.capacity session.control.active history) t ∧
+    owns session.control.policy session.control.active h (segmentHistory session.control.capacity session.control.active history) t ∧
     ReadyLayout session.control history (disk t) ∧
     (disk t).liveControl = some session.control ∧ (disk t).durableControl = some session.control
 
@@ -399,7 +399,7 @@ theorem RecoveredChild.installed (child : RecoveredChild disk owns session h t) 
 protect the installed active child, its cursor, and the still-selected layout. -/
 def ActiveFrame (children : ChildAccess s disk Q) (c : Control) (history : List Bytes)
     (h : SingleFile.Handle) (w : W) : Prop :=
-  children.owns c.active h (segmentHistory c.capacity c.active history) w ∧ Q w ∧ ReadyLayout c history (disk w) ∧
+  children.owns c.policy c.active h (segmentHistory c.capacity c.active history) w ∧ Q w ∧ ReadyLayout c history (disk w) ∧
     (disk w).liveControl = some c ∧ (disk w).durableControl = some c
 
 structure StoreOperations (s : Store) (disk : W → Disk) (Q : W → Prop)
@@ -466,7 +466,7 @@ theorem StoreIO.recoverChild_selected (ops : StoreIO s disk Q)
   apply mapIO (s.recoverChild_post c history P0 P held bad ?source ?retry0 ?retry ?sync ?sealed ?acquire ?scan ?close ?collect ?layout)
   case success =>
     rintro ⟨_, child⟩ t ⟨final, rfl, allowed, _, _, owned, q, installed⟩
-    exact ⟨ops.children.source c.active child _ t owned, q, ⟨final, rfl, installed⟩, allowed, _, rfl, owned, installed⟩
+    exact ⟨ops.children.source c.policy c.active child _ t owned, q, ⟨final, rfl, installed⟩, allowed, _, rfl, owned, installed⟩
   case failure => exact fun _ h => h
   case source =>
     exact src.mapPost (fun _ _ result => ⟨result.2, result.1⟩) (fun _ result => ⟨result.1, result.2.recoverable prior⟩)
@@ -501,7 +501,7 @@ theorem StoreIO.recoverChild_selected (ops : StoreIO s disk Q)
       exact ⟨q', (entry.activeFail change kept).retry permit⟩
   case scan =>
     rintro final h u ⟨choice, upper, before, owned, q, installed⟩
-    apply mapIO (ops.children.scan c.active h _ u owned q)
+    apply mapIO (ops.children.scan c.policy c.active h _ u owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
       exact ⟨rfl, choice, upper, before, owns, qt, same.readyLayout installed.1, same.live.trans installed.2.1, same.durable.trans installed.2.2⟩
     · rintro t ⟨owns, qt, same⟩
@@ -510,7 +510,7 @@ theorem StoreIO.recoverChild_selected (ops : StoreIO s disk Q)
     rintro final h u ⟨choice, upper, before, owned, q, installed⟩
     have after {t} (r : Q t ∧ AfterClose (disk u) (disk t)) : bad t :=
       ⟨r.1, Recoverable.cursors ((show Installed (sessionOf c final) (disk u) from ⟨final, rfl, installed⟩).offline choice) r.2⟩
-    exact mapIO (ops.children.close c.active h _ u owned q) (fun _ _ post => after post) (fun _ post => after post)
+    exact mapIO (ops.children.close c.policy c.active h _ u owned q) (fun _ _ post => after post) (fun _ post => after post)
   case collect =>
     rintro final h u ⟨choice, upper, before, active⟩
     exact (CollectionIO.collect s c (ops.cleanup c final h) (ops.cleanupSync c final h) active).mapPost
