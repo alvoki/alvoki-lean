@@ -15,6 +15,14 @@ The component models and Linux adapters separate code facts from filesystem and 
 | Directory enumeration distinguishes clean end-of-directory from an error after partial results. | A partial listing cannot safely be treated as a complete view when recovery or collection selects names from it. |
 | Process exit and power loss have different persistence outcomes. | Process exit may retain cache-visible bytes; power loss selects an admitted joint image of file contents and directory entries. |
 
+For L0, the owned manifest staging inode is separate from the active
+manifest and the protected WAL and table inodes. A directory name by
+itself cannot establish this separation if a preinstalled hard link
+aliases an existing file. Each issued table primitive preserves the
+manifest path bindings. During publication, each manifest primitive
+frames the original table names, inode contents, WAL registration and
+admitted independent writebacks.
+
 ## Persistence after reported errors
 
 A successful synchronization is interpreted as settling the reached bytes

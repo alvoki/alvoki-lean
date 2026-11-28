@@ -53,7 +53,11 @@ with replay. Existing WAL acquisition, phase scopes, catalog lookup,
 client trace rules, and the public read pipeline are reused. The generic
 builder induction serves both the old writer proof and the native
 streaming writer. The same executable create/publish bind supplies both
-typed IO and the interruption proof.
+typed IO and the interruption proof. The same primitive reader
+induction underlies the fallible read and healthy read with advancing
+worlds. A temporary second rename in the actual DurableBlob publisher
+made the native manifest correspondence proof fail at compile time.
+Restoring the executable restored the proof.
 
 The former whole-callback bridge required a separate writer execution
 and an installation map from that run to the purported physical state.
