@@ -22,9 +22,35 @@ structure Primitives (ns : TableNamespace W) (P : W → Prop) where
     match IO.FS.Handle.mk path .read w with
     | .error _ t => P t
     | .ok h t => P t ∧ inodeOf h t = some inode ∧ ns.contents t inode = some bytes
-  reads : ∀ h inode bytes, ScopedRead
+  size : ∀ h inode bytes, ReadPost
     (fun w => P w ∧ inodeOf h w = some inode ∧ ns.contents w inode = some bytes)
-    (handleSource h) bytes
+    (· = bytes.size) (nativeReadPrimitives.size h)
+  pread : ∀ h inode bytes (offset : UInt64) (count : USize),
+    count.toNat ≤ maxRowSize → offset.toNat + count.toNat ≤ maxFileSize → ReadPost
+      (fun w => P w ∧ inodeOf h w = some inode ∧ ns.contents w inode = some bytes)
+      (· = bytes.extract offset.toNat (offset.toNat + count.toNat))
+      (nativeReadPrimitives.pread h offset count)
+
+private theorem Primitives.reads (p : Primitives ns P) (h inode bytes) : ScopedRead
+    (fun w => P w ∧ p.inodeOf h w = some inode ∧ ns.contents w inode = some bytes)
+    (handleSource h) bytes where
+  size := p.size h inode bytes
+  read offset count := by
+    by_cases fits : count ≤ maxRowSize ∧ offset + count ≤ maxFileSize
+    · have small : maxRowSize < USize.size := by
+        rcases System.Platform.numBits_eq with bits | bits <;> simp [USize.size, bits, maxRowSize]
+      have countCast := USize.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt fits.1 small)
+      have offsetCast := UInt64.toNat_ofNat_of_lt' (n := offset)
+        (Nat.lt_of_le_of_lt (by omega : offset ≤ maxFileSize) (by decide))
+      have read := p.pread h inode bytes offset.toUInt64 count.toUSize
+      rw [offsetCast, countCast] at read
+      simpa [handleSource, ReadPrimitives.source, Nat.not_lt_of_ge fits.1, Nat.not_lt_of_ge fits.2]
+        using read fits.1 fits.2
+    · intro w valid
+      have outside : maxRowSize < count ∨ maxFileSize < offset + count := by omega
+      rcases outside with large | large <;>
+        simp [handleSource, ReadPrimitives.source, large, Bind.bind, instMonadEIO._aux_13, EST.bind] <;>
+        exact valid
 
 /-- The correct binding is read *after* stat. This allows unrelated state
 to move while stat holds the protected catalog invariant. -/
