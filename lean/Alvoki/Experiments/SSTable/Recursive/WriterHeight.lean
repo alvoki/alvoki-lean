@@ -102,7 +102,7 @@ inductive FringePages (rank start stop : Nat) : List Page → Prop where
   | cons : PageRows mid stop page → Fringe rank page →
     RankedPages (rank + 1) start mid upper → FringePages rank start stop (page :: upper)
 
-private theorem RankedPages.upper_empty
+theorem RankedPages.upper_empty
     (pending : RankedPages rank start stop pages)
     (small : stop < 2 ^ rank) : pages = [] := by
   cases pending with
@@ -115,6 +115,28 @@ private theorem RankedPages.upper_empty
       Nat.le_trans (by simp) (Nat.mul_le_mul_left _ (show 1 ≤ _ from by
         simpa only [Array.length_toList] using nonempty))
     omega
+
+/-- A row cap below the weight of the highest available rank reserves a slot
+above the current regular pages. -/
+theorem RankedPages.length_lt (pending : RankedPages rank start stop pages)
+    (fuel : Nat) (positive : 0 < fuel) (cap : stop < 2 ^ (rank + fuel - 1)) :
+    pages.length < fuel := by
+  induction fuel generalizing rank start stop pages with
+  | zero => omega
+  | succ fuel ih =>
+    cases fuel with
+    | zero =>
+      have small : stop < 2 ^ rank := by simpa using cap
+      simp [pending.upper_empty small]
+    | succ fuel =>
+      cases pending with
+      | nil => simp
+      | cons rows regular above =>
+        have upperCap := rows.tiles.lower
+        have same : rank + 1 + (fuel + 1) - 1 = rank + (fuel + 1 + 1) - 1 := by omega
+        have smaller := ih above (by omega) (by rw [same]; omega)
+        simp
+        omega
 
 private theorem page_append {first stop rank : Nat} {page : Page} {ref : Ref}
     (rows : PageRows first stop page) (regular : Regular rank page)
@@ -154,7 +176,7 @@ private def heightError : String := "SSTable index height exceeds format limit"
 
 /-- The pure reference interpreter leaves other failures available. This
 predicate excludes a height failure and characterizes a returned result. -/
-private def Post (action : ModelM α) (result : α → Prop) : Prop :=
+def Post (action : ModelM α) (result : α → Prop) : Prop :=
   ∀ file, match action.run file with
   | .error message => message ≠ heightError
   | .ok (value, _) => result value
@@ -247,7 +269,7 @@ private theorem proper_rank (rank : Nat) (ranked : 2 ^ rank ≤ maxFileSize) :
   have grows : 2 ^ maxHeight ≤ 2 ^ rank := Nat.pow_le_pow_right (by decide) (by omega)
   omega
 
-private theorem push_post (crc : Checksum) (layout : Layout) (options : BuildOptions)
+theorem push_post (crc : Checksum) (layout : Layout) (options : BuildOptions)
     (rank height offset start middle fuel : Nat) (pageList : List Page) (ref : Ref)
     (pending : RankedPages rank start middle pageList) (arrives : ref.firstRow = middle)
     (positive : 0 < ref.count) (cap : ref.firstRow + ref.count ≤ maxFileSize)
@@ -353,7 +375,7 @@ private theorem finish_post (crc : Checksum) (layout : Layout) (options : BuildO
           change observedHeight.1 < height + (fuel + 1)
           omega
 
-private theorem RankedPages.fringe {rank start stop : Nat} {pageList : List Page}
+theorem RankedPages.fringe {rank start stop : Nat} {pageList : List Page}
     (pending : RankedPages rank start stop pageList) :
     pageList = [] ∨ FringePages rank start stop pageList := by
   cases pending with
