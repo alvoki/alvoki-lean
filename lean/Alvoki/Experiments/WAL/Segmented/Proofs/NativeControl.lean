@@ -4,27 +4,35 @@ namespace WalRecoverySlice.Segmented.Model
 
 open System
 
+/-- An exclusive create yields the staged writer. Another open of the
+same inode gets a distinct open file description and has no writer barrier. -/
+private inductive ControlDescription where
+  | stagedWriter
+  | reopened
+  deriving DecidableEq
+
 /-- The normalized staging effect records only a complete proposal. Invalid
 private stage bytes cannot become CONTROL: a retry reserves and rewrites
 the staging path, and a failed stage never advances to rename. -/
 private def controlEffects (root : FilePath) (held : Nat) (r : Effects) :
-    Native.ControlPrimitives M FilePath Nat where
+    Native.ControlPrimitives M ControlDescription Nat where
   clearStage path :=
     if path == root / "CONTROL.next" then pure () else throw "wrong staging path"
   openWriter path mode :=
     match mode with
-    | .writeNew => if path == root / "CONTROL.next" then pure path else throw "wrong writer path"
+    | .writeNew => if path == root / "CONTROL.next" then pure .stagedWriter else throw "wrong writer path"
+    | .read => if path == root / "CONTROL.next" then pure .reopened else throw "wrong reader path"
     | _ => throw "wrong writer mode"
   disableBuffering writer :=
-    if writer == root / "CONTROL.next" then pure () else throw "wrong CONTROL writer"
+    if writer = .stagedWriter then pure () else throw "wrong CONTROL writer"
   write writer bytes := do
-    unless writer == root / "CONTROL.next" do throw "wrong CONTROL writer"
+    unless writer = .stagedWriter do throw "wrong CONTROL writer"
     let some c := ControlCodec.decode bytes | throw "invalid staged bytes"
     fun s => namespaceChange (r.stage s.step) (fun d p => d.stage c p) s
   flush writer :=
-    if writer == root / "CONTROL.next" then pure () else throw "wrong CONTROL writer"
+    if writer = .stagedWriter then pure () else throw "wrong CONTROL writer"
   syncWriter writer :=
-    if writer == root / "CONTROL.next" then
+    if writer = .stagedWriter then
       fun s => barrier (r.syncControl s.step) Disk.syncStage s
     else throw "wrong CONTROL writer"
   rename source target :=
