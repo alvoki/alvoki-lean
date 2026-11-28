@@ -49,3 +49,8 @@ lean_lib CRC32C where
 
 lean_exe crc32cCheck where
   root := `Alvoki.Checks.Tests.CRC32C
+
+lean_lib Alvoki.Checks.Tests.SSTableProducer
+
+lean_exe immutableSSTableCheck where
+  root := `Alvoki.Experiments.SSTable.UnifiedFixtures
