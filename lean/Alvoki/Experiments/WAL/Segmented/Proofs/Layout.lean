@@ -149,12 +149,13 @@ theorem reopenPrefix_spec {σ : Type} (ops : Ops (ExceptT String (EStateM Unit �
     readOutcome layout failure
       (c, (segmentWindow c.capacity c.firstNeeded (c.active - c.firstNeeded) history).toArray)
       ((reopenPrefix ops).run start) := by
-  unfold reopenPrefix
+  simp only [reopenPrefix, selectControl, bind_assoc]
   apply readOutcome_bind readControl
   intro s valid
   have nonzero : c.capacity ≠ 0 := by omega
   simp only [nonzero, decide_false, Bool.false_or, Bool.false_eq_true,
     Nat.not_lt_of_ge capacity.2, ↓reduceIte, Nat.not_lt_of_ge (Nat.le_trans release upper)]
+  simp only [bind_assoc, pure_bind]
   apply readOutcome_bind (stabilize s valid)
   intro next stable
   have first : c.firstNeeded ≤ c.active := Nat.min_le_left ..
@@ -177,7 +178,7 @@ theorem reopen_spec {σ : Type} (ops : Ops (ExceptT String (EStateM Unit σ)))
       ((reopenPrefix ops).run start))
     (activeRead : ∀ s, layout s →
       readOutcome opened failure (segmentHistory c.capacity c.active history) ((ops.openSegment c.policy c.active).run s))
-    (cleanup : ∀ s, opened s → readOutcome installed failure () ((collect ops c).run s)) :
+    (cleanup : ∀ s, opened s → readOutcome installed failure () ((collect ops.toRootOps c).run s)) :
     readOutcome installed failure
       ⟨c, history.length - c.active * c.capacity, ⟨c.discarded, history.drop c.discarded⟩⟩
       ((reopen ops).run start) := by

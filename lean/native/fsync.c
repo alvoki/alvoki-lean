@@ -47,3 +47,32 @@ lean_object *alvoki_wal_truncate_at(b_lean_obj_arg handle, b_lean_obj_arg count)
 
     return lean_io_result_mk_ok(lean_box(0));
 }
+
+/* Borrow the installed reader without changing its stdio position. The
+   largest accepted single-file extent is 255 frames of at most 52 bytes. */
+lean_object *alvoki_wal_read_installed(b_lean_obj_arg handle, size_t count) {
+    if (count > 255 * 52)
+        return lean_io_result_mk_error(lean_decode_io_error(EOVERFLOW, NULL));
+
+    int fd = fileno(lean_get_external_data(handle));
+    if (fd < 0)
+        return lean_io_result_mk_error(lean_decode_io_error(errno, NULL));
+
+    lean_object *bytes = lean_alloc_sarray(1, 0, count);
+    size_t offset = 0;
+    while (offset < count) {
+        ssize_t n = pread(fd, lean_sarray_cptr(bytes) + offset, count - offset, (off_t)offset);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0) {
+            int error = errno;
+            lean_dec(bytes);
+            return lean_io_result_mk_error(lean_decode_io_error(error, NULL));
+        }
+        if (n == 0)
+            break;
+        offset += (size_t)n;
+    }
+    lean_sarray_set_size(bytes, offset);
+    return lean_io_result_mk_ok(bytes);
+}

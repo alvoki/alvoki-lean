@@ -48,14 +48,14 @@ theorem discard_refines (effects : Model.Effects) (session : Session) (k : Nat) 
   have seek : session.view.tail = history.length := by rw [view, historyView_tail ready.layout.discardedFits]
   have base : session.view.base = session.control.discarded := congrArg Contract.View.base view
   by_cases beyond : session.view.tail < k
-  · simp only [discardThrough, beyond, ↓reduceIte]
+  · simp only [discardThrough, discardControl, bind_assoc, pure_bind, beyond, ↓reduceIte]
     exact entry.offline (request := some (.discardThrough k)) (known := session.view) (.inl rfl)
   · have fits : k ≤ session.view.tail := Nat.le_of_not_gt beyond
     by_cases unchanged : k ≤ session.view.base
     · have same : session.view.discardThrough k = session.view := by
         simp only [Contract.View.discardThrough, Nat.max_eq_right unchanged, Nat.sub_eq_zero_of_le unchanged,
           List.drop_zero]
-      simpa [discardThrough, beyond, unchanged, DiskPost, Pure.pure, ExceptT.pure, EStateM.pure, same] using
+      simpa [discardThrough, discardControl, bind_assoc, pure_bind, beyond, unchanged, DiskPost, Pure.pure, ExceptT.pure, EStateM.pure, same] using
         And.intro entry (discardApplied fits |>.trans (congrArg some same))
     · let next := {session.control with discarded := k}
       have advance : session.control.discarded ≤ k := by rw [← base]; omega
@@ -82,11 +82,11 @@ theorem discard_refines (effects : Model.Effects) (session : Session) (k : Nat) 
           rcases durableChoice with old | new
           · exact ⟨session.control, old.trans durable, oldReady.choice oldAllowed⟩
           · exact ⟨next, new, newReady.choice newAllowed⟩
-      simp only [discardThrough, beyond, unchanged, ↓reduceIte]
+      simp only [discardThrough, discardControl, bind_assoc, pure_bind, beyond, unchanged, ↓reduceIte]
       apply Model.bindPost (P := fun _ d => d = state.disk.published next)
       · have cases := Model.publish_cases effects next state
-        change DiskPost _ _ ((publish (Model.ops effects) next).run state)
-        cases result : (publish (Model.ops effects) next).run state with
+        change DiskPost _ _ ((publish ((Model.ops effects).toRootOps) next).run state)
+        cases result : (publish ((Model.ops effects).toRootOps) next).run state with
         | error _ s =>
           rw [result] at cases
           exact recoveryDuring cases
@@ -107,8 +107,8 @@ theorem discard_refines (effects : Model.Effects) (session : Session) (k : Nat) 
         exact collected.durableControl.elim (fun same => same.trans diskNew) (fun same => same.trans liveNew)
       apply Model.bindPost (P := fun _ disk => Installed (sessionOf next history) disk)
       · have cases := Model.collect_cases effects next published
-        change DiskPost _ _ ((collect (Model.ops effects) next).run published)
-        cases result : (collect (Model.ops effects) next).run published with
+        change DiskPost _ _ ((collect ((Model.ops effects).toRootOps) next).run published)
+        cases result : (collect ((Model.ops effects).toRootOps) next).run published with
         | error _ s =>
           rw [result] at cases
           exact (install cases).offline newAllowed

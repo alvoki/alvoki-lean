@@ -68,7 +68,7 @@ theorem appendActiveModel_run (session : Session) (reports : ∀ cursor,
           ⟨session.control, session.activeCount + 1, session.view.append batch⟩) after
       | .ok (.error err) after => .ok (.error err) after
       | .error token after => .error token after := by
-  unfold appendActiveModel Native.appendOwnedWith checkAppend
+  unfold appendActiveModel Native.appendOwnedWith Native.appendOwnedCore checkAppend
   simp [Nat.not_lt.mpr size, Nat.not_le.mpr position, room, writeRequested, Bind.bind, ExceptT.bind,
     ExceptT.mk, ExceptT.pure, Pure.pure]
   simp only [ExceptT.run, EStateM.bind, ExceptT.bindCont, EStateM.pure, ↓reduceIte]
@@ -388,10 +388,10 @@ theorem appendActiveModel_rejected (session : Session) (id : Nat)
       .ok (.error (if batch.length > 32 then "batch out of bounds" else
         "segmented WAL position exhausted")) s := by
   by_cases size : batch.length > 32
-  · simp only [appendActiveModel, Native.appendOwnedWith, checkAppend, size, ↓reduceIte]
+  · simp only [appendActiveModel, Native.appendOwnedWith, Native.appendOwnedCore, checkAppend, size, ↓reduceIte]
     rfl
   · have exhausted := rejected.resolve_left size
-    simp only [appendActiveModel, Native.appendOwnedWith, checkAppend, size, exhausted, ↓reduceIte]
+    simp only [appendActiveModel, Native.appendOwnedWith, Native.appendOwnedCore, checkAppend, size, exhausted, ↓reduceIte]
     rfl
 
 /-- Retain the outer phase alongside the reached child and disk. Phase
@@ -578,7 +578,7 @@ theorem nativeControl_bootstrap (root : System.FilePath) (held : Nat) (r : Effec
     (policy : Policy) (capacity : Nat) :
     Segmented.create (nativeControlOps root held r) policy capacity =
       Segmented.create (ops r) policy capacity := by
-  unfold Segmented.create
+  unfold Segmented.create createControl
   split
   · rfl
   · dsimp only
@@ -830,7 +830,7 @@ theorem publishPreparedChild (root : System.FilePath) (held : Nat) (reports : Ef
     DiskPost (fun _ d => Installed (sessionOf next history) d ∧
       (sessionOf next history).view = historyView c history ∧ ReadyLayout next history d)
       (Recoverable (historyView c history) none)
-      ((Segmented.publish (nativeControlOps root held reports) next).run s) := by
+      ((Segmented.publish ((nativeControlOps root held reports).toRootOps) next).run s) := by
   intro next
   have old : Installed (sessionOf c history) s.disk := ⟨history, rfl, layout, live, durable⟩
   have fits := successor_controlRepresentable old room
@@ -857,7 +857,7 @@ theorem publishPreparedChild (root : System.FilePath) (held : Nat) (reports : Ef
     · exact ⟨⟨c, l.trans live, oldView⟩, ⟨c, r.trans durable, oldView⟩⟩
     · exact ⟨⟨next, l, nextView⟩, r.elim
         (fun saved => ⟨c, saved.trans durable, oldView⟩) (fun saved => ⟨next, saved, nextView⟩)⟩
-  cases ran : (Segmented.publish (nativeControlOps root held reports) next).run s with
+  cases ran : (Segmented.publish ((nativeControlOps root held reports).toRootOps) next).run s with
   | error => rw [ran] at cuts; exact stopped cuts
   | ok response after =>
     rw [ran] at cuts
@@ -949,7 +949,7 @@ def nativeAppendModel (root : System.FilePath) (held : Nat) (removal : RootRepor
     (acquireSuccessor root removal effects create)
     (fun child => closeActive child.segment session.control.policy close)
     (liftRootAction (nativeControlOps root held effects).syncRoot)
-    (fun control => liftRootAction (Segmented.publish (nativeControlOps root held effects) control))
+    (fun control => liftRootAction (Segmented.publish ((nativeControlOps root held effects).toRootOps) control))
     (writeAs session reports (if session.activeCount = session.control.capacity then
       .acquired (successor session).active else .stored session.control.active))
     (registerSuccessor (successor session).active)
@@ -962,7 +962,7 @@ theorem nativeAppendModel_active (root : System.FilePath) (held : Nat) (removal 
     (registered : state.1.activeEntry = some session.control.active) :
     (nativeAppendModel root held removal effects create close session session.control.active reports).run state =
       (appendActiveModel session session.control.active reports).run state := by
-  simp only [nativeAppendModel, appendActiveModel, Native.appendOwnedWith, room, ↓reduceIte]
+  simp only [nativeAppendModel, appendActiveModel, Native.appendOwnedWith, Native.appendOwnedCore, room, ↓reduceIte]
   -- At this branch the guard is read-only. Its continuation reads exactly
   -- the entry written by bootstrap, recovery or the previous rotation.
   by_cases size : batch.length > 32
@@ -977,7 +977,7 @@ private def resumeSuccessor (root : System.FilePath) (held : Nat) (effects : Eff
     (reports : ∀ cursor, SingleFile.AppendReports session.control.policy cursor batch)
     (child : AppendChild) : ActiveAppendM Session := do
   liftRootAction (nativeControlOps root held effects).syncRoot
-  liftRootAction (Segmented.publish (nativeControlOps root held effects) (successor session))
+  liftRootAction (Segmented.publish ((nativeControlOps root held effects).toRootOps) (successor session))
   writeAs session reports (.acquired (successor session).active) child batch
   registerSuccessor (successor session).active (some ((successor session).active, child))
   pure ⟨successor session, 1, session.view.append batch⟩
@@ -996,7 +996,7 @@ private theorem nativeAppendModel_rotation_run (root : System.FilePath) (held : 
           (fun child => closeActive child.segment session.control.policy close)
           (resumeSuccessor root held effects session reports)).run s := by
   unfold resumeSuccessor
-  simp [nativeAppendModel, Native.appendOwnedWith, writeAs, AppendChild.segment, writeRequested, successor, checkAppend,
+  simp [nativeAppendModel, Native.appendOwnedWith, Native.appendOwnedCore, writeAs, AppendChild.segment, writeRequested, successor, checkAppend,
     full, Nat.not_lt.mpr size, Nat.not_le.mpr room, Bind.bind, ExceptT.bind,
     ExceptT.mk, ExceptT.pure, Pure.pure]
   rfl
@@ -1035,7 +1035,7 @@ theorem readyAfterPublishingSuccessor (root : System.FilePath) (held : Nat) (eff
     (created : (prepareNativeChild root removal (fun step => effects.prepare step (successor session).active)
       create session.control.policy (successor session).active).run start = .ok (.ok phase) prepared)
     (synced : ((nativeControlOps root held effects).syncRoot).run prepared = .ok (.ok ()) settled)
-    (published : (Segmented.publish (nativeControlOps root held effects) (successor session)).run settled =
+    (published : (Segmented.publish ((nativeControlOps root held effects).toRootOps) (successor session)).run settled =
       .ok (.ok ()) after) :
     (∃ next : Session, next.control = successor session ∧ next.activeCount = 0 ∧
       next.view = session.view ∧ Installed next after.disk) ∧
@@ -1064,7 +1064,7 @@ theorem readyAfterPublishingSuccessor (root : System.FilePath) (held : Nat) (eff
   have successorReady := publishPreparedChild root held effects session.control history settled
     layout live durable fullChild.symm (visible ▸ room) ⟨named, saved⟩ empty
   dsimp only at successorReady
-  change DiskPost _ _ ((Segmented.publish (nativeControlOps root held effects) (successor session)).run settled)
+  change DiskPost _ _ ((Segmented.publish ((nativeControlOps root held effects).toRootOps) (successor session)).run settled)
     at successorReady
   rw [published] at successorReady
   have count : (sessionOf (successor session) history).activeCount = 0 := by
@@ -1096,7 +1096,7 @@ private theorem resumeSuccessor_disk (root : System.FilePath) (held : Nat) (effe
     (prepared : State × SingleFile.AppendPhase) :
     erasePhase ((resumeSuccessor root held effects session reports (.acquired (successor session).active)).run prepared) =
       ((nativeControlOps root held effects).syncRoot >>= fun _ =>
-        Segmented.publish (nativeControlOps root held effects) (successor session) >>= fun _ =>
+        Segmented.publish ((nativeControlOps root held effects).toRootOps) (successor session) >>= fun _ =>
           appendAfterPublish session prepared.2 reports).run prepared.1 := by
   simp only [resumeSuccessor, writeAs, writeRequested, AppendChild.segment, ↓reduceIte, liftRootAction, Bind.bind, ExceptT.bind, ExceptT.run,
     ExceptT.mk, EStateM.bind, ExceptT.bindCont, Pure.pure, ExceptT.pure]
@@ -1107,7 +1107,7 @@ private theorem resumeSuccessor_disk (root : System.FilePath) (held : Nat) (effe
     | error => rfl
     | ok _ =>
       simp only [liftRootAction, ExceptT.run, EStateM.bind, ExceptT.bindCont]
-      cases Segmented.publish (nativeControlOps root held effects) (successor session) settled with
+      cases Segmented.publish ((nativeControlOps root held effects).toRootOps) (successor session) settled with
       | error => rfl
       | ok response published =>
         cases response with
@@ -1177,11 +1177,11 @@ private theorem resumeSuccessor_refines (root : System.FilePath) (held : Nat) (e
   change DiskPost (fun _ d => Installed (sessionOf next history) d ∧
     (sessionOf next history).view = historyView session.control history ∧ ReadyLayout next history d)
     (Recoverable (historyView session.control history) none)
-    ((Segmented.publish (nativeControlOps root held effects) next).run settled) at publish
+    ((Segmented.publish ((nativeControlOps root held effects).toRootOps) next).run settled) at publish
   apply bindPost (P := fun _ d => Installed (sessionOf next history) d ∧
     (sessionOf next history).view = historyView session.control history ∧ ReadyLayout next history d)
-  · change DiskPost _ _ ((Segmented.publish (nativeControlOps root held effects) next).run settled)
-    cases ran : (Segmented.publish (nativeControlOps root held effects) next).run settled with
+  · change DiskPost _ _ ((Segmented.publish ((nativeControlOps root held effects).toRootOps) next).run settled)
+    cases ran : (Segmented.publish ((nativeControlOps root held effects).toRootOps) next).run settled with
     | error => rw [ran] at publish; exact noAppend_pending (view.symm ▸ publish)
     | ok response after =>
       rw [ran] at publish
@@ -1306,7 +1306,7 @@ private theorem resumeSuccessor_ready (root : System.FilePath) (held : Nat)
     | ok done =>
       cases done
       simp only [liftRootAction, ExceptT.run, EStateM.bind, ExceptT.bindCont] at returned
-      cases published : Segmented.publish (nativeControlOps root held effects) (successor session) settled with
+      cases published : Segmented.publish ((nativeControlOps root held effects).toRootOps) (successor session) settled with
       | error => rw [published] at returned; cases returned
       | ok report named =>
         rw [published] at returned
@@ -1377,7 +1377,7 @@ private theorem resumeSuccessor_error_owned (root : System.FilePath) (held : Nat
     | ok done =>
       cases done
       simp only [liftRootAction, ExceptT.run, EStateM.bind, ExceptT.bindCont] at ran
-      cases published : Segmented.publish (nativeControlOps root held effects) (successor session) settled with
+      cases published : Segmented.publish ((nativeControlOps root held effects).toRootOps) (successor session) settled with
       | error => rw [published] at ran; cases ran
       | ok response named =>
         rw [published] at ran
@@ -1981,10 +1981,10 @@ theorem nativeAppendModel_rejected (root : System.FilePath) (held : Nat)
       .ok (.error (if batch.length > 32 then "batch out of bounds" else
         "segmented WAL position exhausted")) state := by
   by_cases size : batch.length > 32
-  · simp only [nativeAppendModel, Native.appendOwnedWith, checkAppend, size, ↓reduceIte]
+  · simp only [nativeAppendModel, Native.appendOwnedWith, Native.appendOwnedCore, checkAppend, size, ↓reduceIte]
     rfl
   · have exhausted := invalid.resolve_left size
-    simp only [nativeAppendModel, Native.appendOwnedWith, checkAppend, size, exhausted, ↓reduceIte]
+    simp only [nativeAppendModel, Native.appendOwnedWith, Native.appendOwnedCore, checkAppend, size, exhausted, ↓reduceIte]
     rfl
 
 /-- A rejected request poisons the root but leaves the owned child live. -/
@@ -2111,7 +2111,7 @@ theorem nativeAppendModel_healthy (root : System.FilePath) (held : Nat) (removal
       (show Installed session state.1.disk from ⟨history, shape, entry, live, durable⟩) position
     have published := nativeControl_healthy root held (successor session) settled fits.1 fits.2
     let afterPublication : State := {settled with disk := settled.disk.published (successor session), step := settled.step + 4}
-    change (Segmented.publish (nativeControlOps root held healthy) (successor session)).run settled =
+    change (Segmented.publish ((nativeControlOps root held healthy).toRootOps) (successor session)).run settled =
       .ok (.ok ()) afterPublication at published
     obtain ⟨wrote, wroteOK⟩ := writeActive_healthy session.control.policy id (afterPublication, phase) []
       (by simp) (by decide) size own
@@ -2220,7 +2220,7 @@ def nativeBootstrapModel (root : System.FilePath) (held : Nat) (removal : RootRe
     prepareSegment := fun policy id => Native.registerPreparedWith
       (acquireSuccessor root removal effects create policy id) (registerSuccessor id) id
     syncRoot := liftRootAction ops.syncRoot
-    publishControl := fun c => liftRootAction (Segmented.publish ops c)
+    publishControl := fun c => liftRootAction (Segmented.publish ops.toRootOps c)
     readControl := liftRootAction ops.readControl
     openSegment := fun policy id => liftRootAction (ops.openSegment policy id)
     appendSegment := fun policy id batch => liftRootAction (ops.appendSegment policy id batch)
@@ -2238,17 +2238,17 @@ theorem nativeBootstrap_ready (root : System.FilePath) (held : Nat) (removal : R
         SingleFile.createModel (Native.segmentPath root 0) policy create = .ok (.ok ready) childAfter ∧
         SingleFile.storedPhase ready = after.2 ∧ childAfter.held = true := by
   by_cases zero : capacity = 0
-  · simp only [nativeBootstrapModel, Segmented.create, zero, decide_true, Bool.true_or, ↓reduceIte] at returned
+  · simp only [nativeBootstrapModel, Segmented.create, createControl, bind_assoc, pure_bind, zero, decide_true, Bool.true_or, ↓reduceIte] at returned
     cases returned
   by_cases large : capacity > 255
-  · simp only [nativeBootstrapModel, Segmented.create, large, decide_true, Bool.or_true, ↓reduceIte] at returned
+  · simp only [nativeBootstrapModel, Segmented.create, createControl, bind_assoc, pure_bind, large, decide_true, Bool.or_true, ↓reduceIte] at returned
     cases returned
   let c := initialControl policy capacity
   let make := prepareNativeChild root removal (fun step => effects.prepare step 0) create policy 0
   let start : State := {}
   have good : 0 < capacity := Nat.pos_of_ne_zero zero
   have bound : capacity ≤ 255 := Nat.le_of_not_gt large
-  simp only [nativeBootstrapModel, Segmented.create, Native.registerPreparedWith, zero, large, decide_false, Bool.false_or,
+  simp only [nativeBootstrapModel, Segmented.create, createControl, Native.registerPreparedWith, zero, large, decide_false, Bool.false_or,
     Bool.false_eq_true, ↓reduceIte, Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind] at returned
   simp only [acquireSuccessor, ExceptT.run] at returned
   cases made : make start with
@@ -2283,7 +2283,7 @@ theorem nativeBootstrap_ready (root : System.FilePath) (held : Nat) (removal : R
           simp only [Segmented.publish, ExceptT.bindCont, EStateM.bind, liftRootAction, ExceptT.run] at returned
           have publication := nativeControl_cuts root held effects c (Nat.zero_le _) (Nat.zero_le _) settled
           simp only [ExceptT.run, c, initialControl] at publication
-          cases published : Segmented.publish (nativeControlOps root held effects) ⟨policy, capacity, 0, 0⟩ settled with
+          cases published : Segmented.publish ((nativeControlOps root held effects).toRootOps) ⟨policy, capacity, 0, 0⟩ settled with
           | error => simp only [Segmented.publish] at published; rw [published] at returned; cases returned
           | ok response disk =>
             simp only [Segmented.publish] at published publication
@@ -2301,7 +2301,7 @@ theorem nativeBootstrap_ready (root : System.FilePath) (held : Nat) (removal : R
               have healthyRun : (Segmented.create (ops healthy) policy capacity).run {} =
                   .ok (.ok ⟨c, 0, ⟨0, []⟩⟩)
                     ⟨((( {} : Disk).prepare 0 false).syncRoot).published c, 6, none⟩ := by
-                simp only [Segmented.create, zero, large, decide_false, Bool.false_or, Bool.false_eq_true,
+                simp only [Segmented.create, createControl, bind_assoc, pure_bind, zero, large, decide_false, Bool.false_or, Bool.false_eq_true,
                   ↓reduceIte]
                 rfl
               dsimp only at baseline
@@ -2336,15 +2336,15 @@ private theorem bootstrapFailure_custody (root : System.FilePath) (held : Nat)
         SingleFile.storedPhase ready = after.2 ∧ acquired.held = true ∧
         ∃ files cursor history, after.2 = .active .lock files cursor history := by
   by_cases zero : capacity = 0
-  · simp only [nativeBootstrapModel, Segmented.create, zero, decide_true, Bool.true_or, ↓reduceIte] at ran
+  · simp only [nativeBootstrapModel, Segmented.create, createControl, bind_assoc, pure_bind, zero, decide_true, Bool.true_or, ↓reduceIte] at ran
     cases ran
     rfl
   by_cases large : capacity > 255
-  · simp only [nativeBootstrapModel, Segmented.create, large, decide_true, Bool.or_true, ↓reduceIte] at ran
+  · simp only [nativeBootstrapModel, Segmented.create, createControl, bind_assoc, pure_bind, large, decide_true, Bool.or_true, ↓reduceIte] at ran
     cases ran
     rfl
   let make := prepareNativeChild root removal (fun step => effects.prepare step 0) create policy 0
-  simp only [nativeBootstrapModel, Segmented.create, Native.registerPreparedWith, zero, large,
+  simp only [nativeBootstrapModel, Segmented.create, createControl, Native.registerPreparedWith, zero, large,
     decide_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte, Bind.bind, ExceptT.bind,
     ExceptT.run, ExceptT.mk, EStateM.bind, acquireSuccessor] at ran
   cases made : make.run {} with
@@ -2394,7 +2394,7 @@ private theorem bootstrapFailure_custody (root : System.FilePath) (held : Nat)
           simp only [Segmented.publish, ExceptT.bindCont, EStateM.bind, liftRootAction, ExceptT.run] at ran
           let initial := initialControl policy capacity
           have frame := nativeControl_framesEntry root held effects initial (Nat.zero_le _) (Nat.zero_le _) settled
-          cases published : (Segmented.publish (nativeControlOps root held effects) initial).run settled with
+          cases published : (Segmented.publish ((nativeControlOps root held effects).toRootOps) initial).run settled with
           | error =>
             simp only [Segmented.publish, ExceptT.run, initial, initialControl] at published
             rw [published] at ran
@@ -2428,7 +2428,7 @@ theorem nativeBootstrap_healthy (root : System.FilePath) (held : Nat) (removal :
   have published := nativeControl_healthy root held control settled (Nat.zero_le _) (Nat.zero_le _)
   refine ⟨⟨control, 0, ⟨0, []⟩⟩,
     ({settled with disk := settled.disk.published control, step := settled.step + 4}, phase), ?_⟩
-  simp only [nativeBootstrapModel, Segmented.create, Native.registerPreparedWith,
+  simp only [nativeBootstrapModel, Segmented.create, createControl, Native.registerPreparedWith,
     Nat.ne_of_gt positive, Nat.not_lt.mpr fits, decide_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte,
     Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind]
   simp only [acquireSuccessor, healthy, ExceptT.run] at made ⊢

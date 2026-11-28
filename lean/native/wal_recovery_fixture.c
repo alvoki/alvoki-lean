@@ -76,3 +76,21 @@ struct dirent *__wrap_readdir(DIR *directory) {
         listing_failure_countdown = 1;
     return entry;
 }
+
+static int fail_installed_read;
+
+lean_object *alvoki_test_fail_installed_read(b_lean_obj_arg unit) {
+    (void)unit;
+    fail_installed_read = 1;
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+lean_object *__real_alvoki_wal_read_installed(b_lean_obj_arg handle, size_t count);
+
+lean_object *__wrap_alvoki_wal_read_installed(b_lean_obj_arg handle, size_t count) {
+    if (fail_installed_read) {
+        fail_installed_read = 0;
+        return lean_io_result_mk_error(lean_decode_io_error(EIO, NULL));
+    }
+    return __real_alvoki_wal_read_installed(handle, count);
+}

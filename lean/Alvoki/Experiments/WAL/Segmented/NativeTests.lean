@@ -116,6 +116,38 @@ private def activeScope : IO Unit := do
   require ((← events.get) == ["continuation", "child close", "root unlock"])
     "successful transfer closed the active child"
 
+@[extern "alvoki_test_fail_installed_read"]
+private opaque failInstalledRead (_ : Unit) : IO Unit
+
+private def scansAndFolds (dir : FilePath) (p : Policy) : IO Unit := do
+  let h ← Native.create dir p 2
+  for pos in [1:7] do appendAt h [pos.toUInt8] pos
+  Native.discardThrough h 3
+  require ((← Native.bounds h) == ⟨3, 6⟩) "incorrect initial bounds"
+  let controlBefore ← IO.FS.readBinFile (dir / "CONTROL")
+  let activePath := dir / "segment-2" / "segment"
+  let dataBefore ← IO.FS.readBinFile activePath
+  failInstalledRead ()
+  let read ← (Native.scanFold h () (fun _ _ _ => ())).toBaseIO
+  require (read matches .error (.hardwareFault _ _)) "expected late active read error"
+  require ((← Native.bounds h) == ⟨3, 6⟩) "scan error changed ready bounds"
+  require ((← IO.FS.readBinFile (dir / "CONTROL")) == controlBefore &&
+      (← IO.FS.readBinFile activePath) == dataBefore) "scan error changed disk"
+  failed (Native.openExisting dir) "scan error released root custody"
+  failed (SingleFile.openExisting (dir / "segment-2")) "scan error released child custody"
+  let collect := fun (acc : List (Nat × Bytes)) pos batch => (pos, batch) :: acc
+  let (bounds, seen) ← Native.scanFold h [] collect
+  require (bounds == ⟨3, 6⟩ && seen.reverse == [(4, [4]), (5, [5]), (6, [6])])
+    "scan fold used wrong retained positions"
+  appendAt h [7] 7
+  Native.close h
+  for _ in [:2] do
+    let (reopened, bounds, folded) ← Native.openExistingFold dir [] collect
+    require (bounds == ⟨3, 7⟩ && folded.reverse == [(4, [4]), (5, [5]), (6, [6]), (7, [7])])
+      "recovery fold used wrong retained positions"
+    check reopened 3 [[4], [5], [6], [7]]
+    Native.close reopened
+
 private def invalidControl (dir : FilePath) : IO Unit := do
   let h ← Native.create dir .boundary 1
   appendAt h [7] 1
@@ -147,6 +179,7 @@ def run : IO Unit := do
     IO.FS.withTempDir fun dir => lifecycle dir p
     IO.FS.withTempDir fun dir => retryRotation dir p
     IO.FS.withTempDir fun dir => retryAfterRelease dir p
+    IO.FS.withTempDir fun dir => scansAndFolds dir p
   IO.FS.withTempDir invalidControl
   IO.FS.withTempDir freshOnly
   IO.println "Segmented WAL native fixtures passed"

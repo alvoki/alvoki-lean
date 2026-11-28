@@ -51,7 +51,7 @@ theorem close_ready (owned : store) (session : Session) (release : store → Exc
     closeWith (fun _ => .ok (.ready owned session)) release = release owned := rfl
 
 theorem close_alreadyClosed (release : store → Except String Unit) :
-    closeWith (fun _ => .ok .closed) release = .ok () := rfl
+    closeWith (session := Session) (fun _ => .ok .closed) release = .ok () := rfl
 
 /-- The child reference is emptied before calling close. If close fails the
 old child cannot be taken a second time by root cleanup. -/
@@ -959,14 +959,14 @@ private theorem rootSync_healthy (root : FilePath) (r : RootReports)
 
 private theorem collectNative_healthy (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (healthy : HealthyRoot r) (c : Control) (s : State) :
-    ∃ t, (Segmented.collect (nativeReopenOps root r reports) c).run s = .ok (.ok ()) t := by
+    ∃ t, (Segmented.collect ((nativeReopenOps root r reports).toRootOps) c).run s = .ok (.ok ()) t := by
   let callbacks := nativeReopenOps root r reports
   have listed : callbacks.listSegments.run s = .ok (.ok s.disk.liveNames) s.tick := by
     change read (r.listFault s.step) (rootListing s.disk.liveNames) s = _
     rw [healthy.listing, rootListing_eq]
     rfl
   have remove (ids : List Nat) (t : State) :
-      ∃ u, (Segmented.removeRetired callbacks c.firstNeeded ids).run t = .ok (.ok ()) u := by
+      ∃ u, (Segmented.removeRetired callbacks.toRootOps c.firstNeeded ids).run t = .ok (.ok ()) u := by
     induction ids generalizing t with
     | nil => exact ⟨t, rfl⟩
     | cons id tail ih =>
@@ -1401,7 +1401,7 @@ private theorem finishReopen_frame {callbacks : Ops M} (effects : CollectionEffe
       ExceptT.mk, EStateM.bind] at ran
     have facts := collectWith_cases effects c s
     simp only [ExceptT.run] at facts
-    cases collected : (Segmented.collect callbacks c) s with
+    cases collected : (Segmented.collect callbacks.toRootOps c) s with
     | error => rw [collected] at ran; cases ran
     | ok response reached =>
       rw [collected] at facts ran
