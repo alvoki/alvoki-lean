@@ -193,19 +193,21 @@ theorem failed (laws : Laws heap physical root lock ref image) (grant : Grant ro
     Release ref lock w (Closed physical root lock ref image) (fun _ => Closed physical root lock ref image) :=
   failedTo laws grant failure (fun _ h => h) (fun _ _ h => h)
 
-/-- Both public callbacks return closed data. Each receives only the
+/-- Public callbacks return closed data. Each receives only the
 assembled L0 handle, while the root descriptor is retained by withOpen. -/
 inductive RootOperation where
   | reads (keys : List UInt64)
   | mutation (change : Change)
+  | flush
 
 abbrev RootOperation.Result : RootOperation → Type
   | .reads _ => List Reply
-  | .mutation _ => Unit
+  | .mutation _ | .flush => Unit
 
 abbrev RootOperation.use : (op : RootOperation) → Native.Handle → IO op.Result
   | .reads keys, h => (readMany h keys : IO (List Reply))
   | .mutation change, h => Native.mutation h change
+  | .flush, h => Native.flush h
 
 structure RootScope where
   path : FilePath
