@@ -282,4 +282,41 @@ theorem recoverAt_of_open (d : Durable image history)
     · exact fun _ _ after => ⟨wal, after⟩
     · exact fun _ after => .inr ⟨wal, after⟩
 
+/-- The first failed manifest stat is propagated with its exact error and
+world. Neither WAL acquisition nor any table check runs on this branch. -/
+theorem recoverAt_manifestStatError (root : FilePath) (ref : Ref)
+    (failed : (root / "manifest" / "BLOB").metadata w = .error e t) :
+    Native.recoverAt root ref w = .error e t := by
+  have file : IO.FS.readBinFile (root / "manifest" / "BLOB") w = .error e t := by
+    simp only [IO.FS.readBinFile, Bind.bind, instMonadEIO._aux_13, EST.bind, failed]
+  have blob : (DurableBlob.native (root / "manifest")).reopen w = .error e t := by
+    rw [DurableBlob.native_reopen_schedule]
+    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, file]
+  have manifest : (Native.callbackComponents root ref).manifest.reopen.run w = .error e t := by
+    change (NativeManifest.backend _).reopen.run w = _
+    rw [NativeManifest.decodeReached, blob]
+  unfold Native.recoverAt Native.checked ExperimentalL0.recover
+  rw [ExceptT.run_bind]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, manifest]
+
+/-- A manifest error after the concrete root lock was granted skips the
+callback. The owned fresh reference contains no child and cleanup unlocks
+the root; the manifest exception stays primary even if unlock reports one. -/
+theorem withOpen_manifestStatError (path root : FilePath) (use : Native.Handle → IO α)
+    (resolved : Native.validatedRoot path start = .ok root t)
+    (opened : IO.FS.Handle.mk (root / "l0.lock") .append t = .ok lock u)
+    (held : lock.tryLock true u = .ok true v)
+    (failed : (root / "manifest" / "BLOB").metadata
+      (IO.mkRef (.opening : Phase Wal) v).state = .error e reached)
+    (old : let ref := (IO.mkRef (.opening : Phase Wal) v).val
+      ((ref.swap .offline : BaseIO (Phase Wal)) reached).val = .opening) :
+    let ref := (IO.mkRef (.opening : Phase Wal) v).val
+    let after := ((ref.swap .offline : BaseIO (Phase Wal)) reached).state
+    Native.withOpen path use start = .error e (lock.unlock.toBaseIO after).state := by
+  have result := NativeScope.withOpen_recoveryError path root use resolved opened held
+    (recoverAt_manifestStatError root _ failed)
+  dsimp only at old result ⊢
+  rw [old] at result
+  exact result
+
 end ExperimentalL0.NativeRecoverAt
