@@ -38,7 +38,8 @@ def phaseAt (phase : SingleFile.AppendPhase) (p : Policy) (id : Nat) (d : Disk) 
 description. Their final model cursor still indexes that description. -/
 def Context.rootFrame (c : Context disk) (h : SingleFile.Handle) (phase : SingleFile.AppendPhase)
     (t : W) (u : State) : Prop :=
-  c.Candidate h t (u,phase) ∧ phaseAt phase c.session.control.policy c.nextId u.disk
+  c.Candidate h t (u,phase) ∧ phaseAt phase c.session.control.policy c.nextId u.disk ∧
+    PrepareIO.PreparedFile disk c.nextId t ∧ c.nextId ∈ (disk t).durableNames
 
 inductive Point where | cleared | prepared | synced | published | written | unwind
 
@@ -82,13 +83,14 @@ structure LocalRotation (c : Context disk) (r : Reports batch) (h : SingleFile.H
   detach : Detach c r h w s
   prepare : ∀ t (u : Work), Prefix c r w s .cleared none t u → c.Base none t u.1.disk →
     PrepareIO.Successor c.store c.session.control.policy c.nextId r.removal r.effects r.create t u.1
-      (fun v n => c.Base none v n.disk) (fun child phase v => c.Bound c.nextId child v phase)
-  root : ∀ child t u, Prefix c r w s .prepared (some child) t u → c.ReadyFile none c.nextId child t u →
+      (fun v n => c.Base none v n.disk) (fun child phase v => c.Bound c.nextId child v phase) disk
+  root : ∀ child t u, Prefix c r w s .prepared (some child) t u → c.ReadyFile none c.nextId child t u → PrepareIO.PreparedFile disk c.nextId t →
     At (syncHandle c.store.directory) (ControlIO.rootSync r.effects) t u.1
-      (fun _ _ => c.rootFrame child u.2) (c.rootFrame child u.2)
-  control : ∀ child t u, Prefix c r w s .synced (some child) t u → c.ReadyFile none c.nextId child t u →
-    ControlIO.Primitives c.store (successor c.session) r.effects t u.1 (c.rootFrame child u.2)
-  write : ∀ child t u, Prefix c r w s .published (some child) t u → c.ReadyFile none c.nextId child t u → WriteSteps c none c.nextId child r t u
+      (fun _ _ => c.rootFrame child u.2) (fun v n => c.Candidate child v (n,u.2))
+  control : ∀ child t u, Prefix c r w s .synced (some child) t u → c.ReadyFile none c.nextId child t u → PrepareIO.PreparedFile disk c.nextId t →
+    c.nextId ∈ (disk t).durableNames → ControlIO.Primitives c.store (successor c.session) r.effects t u.1 (c.rootFrame child u.2)
+  write : ∀ child t u, Prefix c r w s .published (some child) t u → c.ReadyFile none c.nextId child t u → PrepareIO.PreparedFile disk c.nextId t →
+    c.nextId ∈ (disk t).durableNames → WriteSteps c none c.nextId child r t u
   install : ∀ child t u, Prefix c r w s .written (some child) t u → c.Candidate child t u → (∃ files cursor history, u.2 = .active .lock files cursor history) →
     let v := ((c.store.active.set (some (c.nextId,child)) : BaseIO _) t).state
     c.Base (some (c.nextId,child)) v u.1.disk ∧ c.Bound c.nextId child v u.2
@@ -115,7 +117,7 @@ private theorem wrote_active {r : Reports batch} (c : Context disk) (id : Nat) (
   rw [phase] at stat
   exact ⟨files, pos, bs, stat.1 ▸ phase⟩
 
-def LocalRotation.assemble {r : Reports batch} (io : LocalRotation c r old w s)
+def LocalRotation.assemble {disk : W → Disk} {c : Context disk} {r : Reports batch} (io : LocalRotation c r old w s)
     (held : c.ReadyFile (some (c.session.control.active, old)) c.session.control.active old w s)
     (active : (successor c.session).active ≤ ControlCodec.wordMax)
     (discarded : (successor c.session).discarded ≤ ControlCodec.wordMax)
@@ -123,9 +125,9 @@ def LocalRotation.assemble {r : Reports batch} (io : LocalRotation c r old w s)
     Rotation c.store c.session r w s (c.Done batch) c.Failed := by
   let id := c.nextId
   refine ⟨fun t st => Prefix c r w s .cleared none t st ∧ c.Base none t st.1.disk,
-    fun h t st => Prefix c r w s .prepared (some h) t st ∧ c.ReadyFile none id h t st,
-    fun h t st => Prefix c r w s .synced (some h) t st ∧ c.ReadyFile none id h t st,
-    fun h t st => Prefix c r w s .published (some h) t st ∧ c.ReadyFile none id h t st,
+    fun h t st => Prefix c r w s .prepared (some h) t st ∧ c.ReadyFile none id h t st ∧ PrepareIO.PreparedFile disk id t,
+    fun h t st => Prefix c r w s .synced (some h) t st ∧ c.ReadyFile none id h t st ∧ PrepareIO.PreparedFile disk id t ∧ id ∈ (disk t).durableNames,
+    fun h t st => Prefix c r w s .published (some h) t st ∧ c.ReadyFile none id h t st ∧ PrepareIO.PreparedFile disk id t ∧ id ∈ (disk t).durableNames,
     fun h t st => Prefix c r w s .written (some h) t st ∧ c.Candidate h t st ∧ ActivePhase st,
     fun h t st => Prefix c r w s .unwind (some h) t st ∧ c.Candidate h t st,
     ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -136,27 +138,27 @@ def LocalRotation.assemble {r : Reports batch} (io : LocalRotation c r old w s)
     · rintro ⟨⟩ ⟨⟩ _ _ ⟨x, ran⟩; exact ⟨.close ran, x⟩
     · exact fun _ st x => c.base_empty st x.1
   · rintro t st ⟨earlier,frame⟩
-    have acquired := (io.prepare t st earlier frame).acquire st.2
+    have acquired := (io.prepare t st earlier frame).acquire st.2 linux
     apply acquired.trace.map
-    · rintro h tag v after ⟨⟨rfl, bound, stayed⟩, returned, run⟩
-      exact ⟨rfl, .create earlier ⟨returned, run⟩, stayed, bound, prepare_matches c r st linux run⟩
+    · rintro h tag v after ⟨⟨rfl, bound, stayed, material⟩, returned, run⟩
+      exact ⟨rfl, .create earlier ⟨returned, run⟩, ⟨stayed, bound, prepare_matches c r st linux run⟩, material⟩
     · exact fun v after x => c.base_empty after x.2
-  · rintro child t u ⟨earlier,held⟩
-    have run := (ControlIO.syncRoot c.store r.directory (io.root child t u earlier held)).liftRoot u.2
+  · rintro child t u ⟨earlier,held,material⟩
+    have run := (ControlIO.syncRoot c.store r.directory (io.root child t u earlier held material)).liftRoot u.2
     apply run.record.map
-    · rintro ⟨⟩ ⟨⟩ v st ⟨⟨⟨frame, matched⟩, same⟩, ret⟩
-      exact ⟨.sync earlier ret, frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩
-    · rintro v st ⟨⟨⟨frame, _⟩, same⟩, ret⟩
+    · rintro ⟨⟩ ⟨⟩ v st ⟨⟨⟨frame, matched, material, named⟩, same⟩, ret⟩
+      exact ⟨.sync earlier ret, ⟨frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩, material, named⟩
+    · rintro v st ⟨⟨frame, same⟩, ret⟩
       exact ⟨.syncError earlier ret, frame.1, same ▸ frame.2⟩
-  · rintro child t u ⟨earlier,held⟩
-    have run := (ControlIO.publish (io.control child t u earlier held) r.directory active discarded).liftRoot u.2
+  · rintro child t u ⟨earlier,held,material,named⟩
+    have run := (ControlIO.publish (io.control child t u earlier held material named) r.directory active discarded).liftRoot u.2
     apply run.record.map
-    · rintro ⟨⟩ ⟨⟩ v st ⟨⟨⟨frame, matched⟩, same⟩, ret⟩
-      exact ⟨.publish earlier ret, frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩
+    · rintro ⟨⟩ ⟨⟩ v st ⟨⟨⟨frame, matched, material, named⟩, same⟩, ret⟩
+      exact ⟨.publish earlier ret, ⟨frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩, material, named⟩
     · rintro v st ⟨⟨⟨frame, _⟩, same⟩, ret⟩
       exact ⟨.publishError earlier ret, frame.1, same ▸ frame.2⟩
-  · rintro child t st ⟨earlier, held⟩
-    have write := (io.write child t st earlier held).run held (.acquired id) rfl
+  · rintro child t st ⟨earlier, held, material, named⟩
+    have write := (io.write child t st earlier held material named).run held (.acquired id) rfl
     apply write.record.map
     · rintro ⟨⟩ ⟨⟩ v u ⟨frame, ran⟩
       exact ⟨.write earlier ran, frame, wrote_active c id st ran.2 frame.2⟩
