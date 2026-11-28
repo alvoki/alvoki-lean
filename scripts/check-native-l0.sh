@@ -36,6 +36,17 @@ cc -O1 -fPIC -I"$prefix/include" "${sources[@]}" native/{fsync,read_dir_checked,
   .lake/build/native/libalvoki_crc32c.a -lstdc++ -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/native-l0"
 cc -shared -fPIC native/l0_interrupt_fixture.c -ldl -o "$out/l0_interrupt_fixture.so"
 "$out/native-l0" "$out/l0_interrupt_fixture.so"
+# Keep the standalone kernel checks aligned with their compiled dependencies.
+flush_proofs=(
+  NativeFlush NativeFlushRestart NativeFlushCatalog NativeFlushBoot NativeFlushExit
+  NativeFlushScope NativeFlushStore NativeFlushPublic HealthyFlushStore HealthyFlush
+  NativeTableAllocation NativeTableDirectory TableWriterSchedule NativeTableWriter NativeTableCreate
+  TableCreateSchedule NativeManifestPublish ManifestPublishSchedule ReserveScanCut NativeFlushInterrupted
+  MutationSequence MutationSequenceRoot ExitSchedule ReserveScanSource NativeFlushStoreCut
+)
+for module in "${flush_proofs[@]}"; do
+  compile "$l0/$module" proof
+done
 compile "$l0/NativeFacts" proof
 compile "$l0/WalProducerHandoff" proof
 leanchecker Alvoki.Experiments.L0.WalProducerHandoff
@@ -65,7 +76,7 @@ l0_proofs=(
   NativeAppendCut InterruptedMutation InterruptedWorker MutationExitCut NativeRecoverSelected PendingReadScope
   NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish
 )
-for module in "${l0_proofs[@]}"; do
+for module in "${l0_proofs[@]}" "${flush_proofs[@]}"; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 component_proofs=(
@@ -82,13 +93,22 @@ component_proofs=(
   WAL.Segmented.Proofs.ChildHeapCut WAL.Segmented.Proofs.AppendCutBody
   WAL.Segmented.Proofs.CutRuntime WAL.Segmented.Proofs.PublicAppendCut
   WAL.Segmented.Proofs.CutSite WAL.Segmented.Proofs.CutFrame WAL.Segmented.Proofs.CutLeafFrames
-  WAL.Segmented.Proofs.CutFrameMemory
+  WAL.Segmented.Proofs.CutFrameMemory SSTable.Proofs.BuilderRelation
+  WAL.Segmented.Proofs.ChildCutCoverage WAL.Segmented.Proofs.CloseCutCoverage
+  WAL.Segmented.Proofs.ControlCutCoverage WAL.Segmented.Proofs.PrepareCutCoverage
 )
 for module in "${component_proofs[@]}"; do
   leanchecker "Alvoki.Experiments.$module"
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
+import Alvoki.Experiments.L0.HealthyFlush
+import Alvoki.Experiments.L0.NativeFlushStoreCut
+import Alvoki.Experiments.L0.ReserveScanSource
+import Alvoki.Experiments.L0.NativeFlushInterrupted
+import Alvoki.Experiments.L0.MutationSequenceRoot
+import Alvoki.Experiments.L0.ManifestPublishSchedule
+import Alvoki.Experiments.L0.TableCreateSchedule
 import Alvoki.Experiments.L0.NativeFacts
 import Alvoki.Experiments.L0.Native
 import Alvoki.Experiments.L0.RestartRefinement
@@ -113,6 +133,35 @@ import Alvoki.Experiments.L0.PublicationCut
 import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeChild
 import Alvoki.Experiments.L0.WalProducerHandoff
 open ExperimentalL0
+
+#check_axioms MutationExitCut.updateTree_eq
+#check_axioms MutationExitCut.withSession_tree
+#check_axioms NativeFlushStoreCut.erase
+#check_axioms NativeFlushStoreCut.mediaResult
+#check_axioms NativeFlushStoreCut.restart
+#check_axioms MutationSequence.initialized
+#check_axioms MutationSequence.step
+#check_axioms MutationSequence.withOpen
+#check_axioms NativeTableWriter.erase
+#check_axioms NativeTableWriter.build
+#check_axioms NativeTableWriter.onePut
+#check_axioms NativeTableCreate.Schedule.erase
+#check_axioms NativeTableCreate.Schedule.cover
+#check_axioms NativeTableCreate.Schedule.Boundary.frame
+#check_axioms NativeManifestPublish.schedule_erase
+#check_axioms NativeManifestPublish.schedule_visit
+#check_axioms NativeManifestPublish.schedule_boundary
+#check_axioms NativeManifestPublish.rename_then_barrier_error
+#check_axioms NativeFlushStore.produce
+#check_axioms NativeFlush.withOpen
+#check_axioms NativeFlush.healthy
+#check_axioms NativeFlushRestart.finishedPublishedLookup
+#check_axioms NativeFlushRestart.orphanIgnored
+#check_axioms NativeFlushInterrupted.ingress
+#check_axioms NativeFlushInterrupted.beforeStore
+#check_axioms NativeFlushInterrupted.afterStoreCut
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.publicProgram_run
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.publicProgram_covered
 #check_axioms WalProducerHandoff.reopenAuthority
 #check_axioms WalProducerHandoff.reportedWrite
 #check_axioms WalProducerHandoff.retry

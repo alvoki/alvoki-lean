@@ -28,7 +28,7 @@ root from healthy primitive reports. On a populated root the Linux fixture
 injects a one-shot table size error after descriptor acquisition. It reads
 successfully on the same handle, counts descriptors across close and
 reads again after reopen. The [L0 guide](../lean/Alvoki/Experiments/L0/README.md)
-describes the remaining consumers of the earlier model bridge.
+describes the physical scopes and component model proofs.
 
 [NativeMutationScope.mutationThenReadTwice](../lean/Alvoki/Experiments/L0/NativeMutation.lean)
 connects public put and delete, acknowledgement loss, error cleanup and two
@@ -42,9 +42,17 @@ and [cleanup interruptions](../lean/Alvoki/Experiments/L0/MutationExitCut.lean)
 derive the retry input for process exit and power loss from the issued
 operation and the surviving files. The [progress check](../lean/Alvoki/Experiments/L0/HealthyMutation.lean)
 derives success on a healthy initialized root and follows the same
-committed write when the final unlock reports an error. Milestone 3 follows table creation, directory sync and manifest
-publication through the admissible interruption prefixes into survivor
-selection and a recovered read. Both deliver their observations to
-`Client.Step`, `Client.Allows` and `Execution.Run.refines`. PR #30 at
+committed write when the final unlock reports an error.
+
+The [same-handle sequence](../lean/Alvoki/Experiments/L0/MutationSequenceRoot.lean)
+executes put, a rotating delete at capacity one, and a public tombstone read.
+The second mutation uses the exact active registration produced by the
+first. The [flush scope](../lean/Alvoki/Experiments/L0/NativeFlushPublic.lean)
+takes the installed memtable through the streaming writer, table directory
+sync, manifest rename and barrier. Each returned outcome supplies a concrete
+reopen on the reached filesystem. [Interrupted flush](../lean/Alvoki/Experiments/L0/NativeFlushInterrupted.lean)
+uses the physical survivor and the existing public read chain. The
+[review inventory](design/l0-native-review.md) gives the producer graph,
+primitive contracts and candidate review units. PR #30 at
 `876256a6005d0845519b15aada3b224275dbf3db` remains the reviewed
 research reference.

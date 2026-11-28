@@ -1,0 +1,65 @@
+# Reviewing the native L0 refinement
+
+PR #5 has one integrated executable candidate. The starting points for
+review are the [flush scope](../../lean/Alvoki/Experiments/L0/NativeFlushPublic.lean),
+the [interrupted flush](../../lean/Alvoki/Experiments/L0/NativeFlushInterrupted.lean)
+and the [same-handle mutation sequence](../../lean/Alvoki/Experiments/L0/MutationSequenceRoot.lean).
+The [client contract](../../lean/Alvoki/Experiments/L0/Client.lean) and
+[`Execution.Run.refines`](../../lean/Alvoki/Experiments/L0/Execution.lean)
+also apply when the reply is lost.
+
+## Review units in dependency order
+
+| Unit | Producer and external boundary | Consumer on this branch |
+| --- | --- | --- |
+| Single-file WAL | [ConcreteRecovery](../../lean/Alvoki/Experiments/WAL/Proofs/ConcreteRecovery.lean), ConcreteOpen, ConcreteAppend and ConcreteCreate relate file roles, cursor, descriptor and selected marker to bytes. POSIX reads, writes, sync, namespace queries and exclusive handle ownership are local inputs. | The segmented acquisition, append-in-place and successor workers reuse the same single-file proofs. |
+| Segmented WAL | [RuntimeStoreOpen](../../lean/Alvoki/Experiments/WAL/Segmented/Proofs/RuntimeStoreOpen.lean) and RuntimeChild return the actual registration. [AppendRuntime](../../lean/Alvoki/Experiments/WAL/Segmented/Proofs/AppendRuntime.lean) returns authority on success, or the exact uncertain request and owned slot on error. CONTROL, slot transfer and child preparation stay inside the component. | Both the first and second public mutations use these producers. The second consumes the registration and child memory left by the first. Close and retry use the same WAL acquisition laws as the original read scope. |
+| WAL interruption | [PublicAppendCut](../../lean/Alvoki/Experiments/WAL/Segmented/Proofs/PublicAppendCut.lean), the child, close, prepare and CONTROL coverage modules connect native issued operations to the WAL disk model. Successful previous calls determine the next operand. | [InterruptedWorker](../../lean/Alvoki/Experiments/L0/InterruptedWorker.lean) obtains a permitted pending append from the observed execution. It needs local primitive disk effects, caller-file frames and reboot selection. |
+| Runtime ownership and scope | [NativeScope](../../lean/Alvoki/Experiments/L0/NativeScope.lean), [NativeReadRelease](../../lean/Alvoki/Experiments/L0/NativeReadRelease.lean) and [MutationExitCut](../../lean/Alvoki/Experiments/L0/MutationExitCut.lean) implement ordered bind, primary-error precedence, phase ownership, and cleanup. Runtime assumptions concern the named references and acquired descriptors. | Read, mutation and flush share grant, release, and close. A reported unlock error still leads to last-reference disposal under the local runtime contract. Failed fdopen before Lean 4.36 constructs the handle remains outside that contract. |
+| SSTable IO and allocation | [BuilderRelation](../../lean/Alvoki/Experiments/SSTable/Proofs/BuilderRelation.lean) carries the generic streaming induction. [NativeTableWriter](../../lean/Alvoki/Experiments/L0/NativeTableWriter.lean) binds the actual row supplier, exclusive writer and synced bytes. [NativeTableCreate](../../lean/Alvoki/Experiments/L0/NativeTableCreate.lean) combines allocation and directory fsync. | The table producer hands the live and durable inode and its checked image to manifest publication. The L0 codec, table layout, directory naming and freshness test specialize this unit. The original pure builder and public table reader continue to consume the same image predicate. |
+| Manifest publication | [NativeManifestPublish](../../lean/Alvoki/Experiments/L0/NativeManifestPublish.lean) and [ManifestPublishSchedule](../../lean/Alvoki/Experiments/L0/ManifestPublishSchedule.lean) bind staged bytes, the specific writer, rename, and directory handle. Typed version validity is the manifest-specific input. | Flush consumes the old manifest before rename, the admitted old/new bindings after rename and the settled new binding after the directory barrier. These modules contain no memtable or WAL replay proof. |
+| L0 composition | [NativeFlushCatalog](../../lean/Alvoki/Experiments/L0/NativeFlushCatalog.lean) carries the initialized live and durable catalog through recovery and scan. [NativeFlushStore](../../lean/Alvoki/Experiments/L0/NativeFlushStore.lean) consumes the reached rows and calls the two filesystem producers. [NativeFlushRestart](../../lean/Alvoki/Experiments/L0/NativeFlushRestart.lean) interprets the chosen watermark, table order, replay suffix and resulting map. | Every reached selection supplies the existing [WithOpenReads](../../lean/Alvoki/Experiments/L0/WithOpenReads.lean) scope. Recovery can fail before a callback, a read can report an error, or close can fail after the reads. |
+
+The first three units are WAL review candidates. The streaming induction
+and raw publication schedule can each be reviewed with their existing
+component proofs. Keep the L0-specific physical directory mapping, replay
+watermark and client traces together. These boundaries describe the
+current graph and require no branch extraction.
+
+## What changes at a flush cut
+
+| Last completed effect | Physical recovery input |
+| --- | --- |
+| Reservation, scan, allocation, streaming, or table-directory sync | The old manifest still selects the old database. Newly created files can remain as unreachable orphans. Allocation consults the actual namespace and skips occupied names. |
+| Staged manifest file synced | The new table is available under its durable name. The active manifest is still old. |
+| Rename took effect, parent sync pending or reported an error | Process exit retains the current active manifest. Power loss can select an allowed directory survivor. If it selects the new manifest, its table bytes and name were made durable earlier. |
+| Manifest directory sync succeeded | Only the new manifest survives. Publication of the in-memory session, delivery of the client reply, and finalization may still be interrupted. |
+
+A failed or interrupted syscall uses the primitive's admitted physical
+effects. A reported error can follow an effective rename or directory
+barrier. At reboot the [physical selection rule](../../lean/Alvoki/Experiments/L0/NativeFlushBoot.lean)
+reads live entries on process exit and durable entries after power loss.
+It puts no restriction on unreferenced orphan names. The Linux fixtures
+exercise error returns and abrupt process exits while the kernel is
+running. Persistent media and loss of kernel state are modeled by the
+filesystem laws. [Filesystem assumptions](filesystem-assumptions.md)
+
+## Proof cost
+
+The flush-specific obligations are equality to the installed sorted
+memtable, freshness in the presence of orphans, durability of the file
+before publishing its name, and agreement of the selected watermark
+with replay. Existing WAL acquisition, phase scopes, catalog lookup,
+client trace rules, and the public read pipeline are reused. The generic
+builder induction serves both the old writer proof and the native
+streaming writer. The same executable create/publish bind supplies both
+typed IO and the interruption proof.
+
+The former whole-callback bridge required a separate writer execution
+and an installation map from that run to the purported physical state.
+Deleting the unused bridge and its product-world consumers removed
+1,358 lines of Lean while retaining the component-level model proofs.
+The new path still incurs the cost of checking every primitive in the
+WAL rotation and cleanup schedules. Grouping those proofs with their
+executable producers gives reviewers a way to check that cost separately
+from L0 history reasoning.

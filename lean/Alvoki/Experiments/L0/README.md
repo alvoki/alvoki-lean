@@ -39,6 +39,8 @@ falls through to older tables. A tombstone stops the search and a backend
 read error propagates. The caller serializes all operations, discards a
 session after a mutating error, and reopens before proceeding.
 
+See the [native refinement review inventory](../../../../docs/design/l0-native-review.md) for the integrated producer graph, cut cases, and remaining primitive contracts.
+
 ## Verification boundary
 
 [ComponentContract](ComponentContract.lean) projects adapter state to a
