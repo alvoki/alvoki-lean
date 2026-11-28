@@ -127,4 +127,41 @@ theorem interrupted {p : Policy} {batch : Bytes} {files : AppendFiles IO.FS.Hand
   rw [ran] at result
   exact ⟨result.1, result.2.1⟩
 
+/-- A completed worker ends at a pure return, a checked validation
+error, or the first failing concrete primitive. This boundary still
+precedes phase installation and the enclosing mutex unlock. -/
+inductive Terminal (actual : Ops F) : Program Cursor → W → Except IO.Error (Except String Cursor) → W → Prop where
+  | ok (v) : Terminal actual (.ret v) w (.ok (.ok v)) w
+  | rejected (e) : Terminal actual (.stop e) w (.ok (.error e)) w
+  | error {op : Op} {cont : op.Result → Program Cursor} :
+      (op.eval actual).run w = .error e t → Terminal actual (.call op cont) w (.error e) t
+  | fault {op : Op} {cont : op.Result → Program Cursor} :
+      (op.eval actual).run w = .ok (.error e) t → Terminal actual (.call op cont) w (.ok (.error e)) t
+
+def Terminal.Report {actual : Ops F} (model : Ops M) (file : W → Image)
+    {rest : Program Cursor} {w outcome t} (r : Terminal actual rest w outcome t) : Prop :=
+  match rest with
+  | .call op _ => (∃ e, (op.eval model).run (file w) = .ok (.error e) (file t)) ∨ (op.eval model).run (file w) = .error () (file t)
+  | _ => True
+
+theorem terminal {p : Policy} {batch : Bytes} {files : AppendFiles IO.FS.Handle}
+    (report : AppendReports p (historyCursor history) batch)
+    (path : Issued (nativeOps files) (appendBatch programOps p (historyCursor history) batch) start rest w)
+    (file : W → Image) (prior : Reports (modeledOps report) initial path (file w))
+    (last : Terminal (nativeOps files) rest w outcome t) (final : last.Report (modeledOps report) file)
+    (entry : Ready p initial history) (clean : initial.powerLoss = initial)
+    (bounded : ∀ b ∈ history, b.length ≤ 32) (fits : history.length < 255) (size : batch.length ≤ 32) :
+    Dirty p history (some batch) (file t) ∧ (p = .logOnly → (file t).MarkersSettled) := by
+  have ran := Prefix.modelRun prior.paired
+  rw [eval_append (modeledOps report) p (historyCursor history) batch (fun _ _ => rfl)] at ran
+  have result := appendPrimitive_refines report.effects report.writebacks p initial history batch report.torn entry clean bounded fits size
+  change Dirty p history (some batch) (reached ((appendBatch (modeledOps report) p (historyCursor history) batch).run initial)) ∧ _ at result
+  rw [ran] at result
+  cases last with
+  | ok | rejected => exact ⟨result.1,result.2.1⟩
+  | error _ | fault _ =>
+    rw [Program.eval, ExceptT.run_bind] at result
+    rcases final with ⟨_, eq⟩ | eq <;>
+      simp only [Bind.bind, EStateM.bind, eq, reached] at result <;> exact ⟨result.1,result.2.1⟩
+
 end WalRecoverySlice.SingleFile.ConcreteAppendCut

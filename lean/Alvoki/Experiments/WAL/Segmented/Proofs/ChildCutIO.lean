@@ -46,7 +46,7 @@ structure Primitives (disk : W → Disk) (c : Control) (r : Receipt stop h batch
   returnedFrame : r.path.Earlier (fun _ _ a b => AppendCut.ActiveFiles c (disk a) (disk b))
   stoppedFrame : ∀ d, stop r.action r.atCall d → AppendCut.ActiveFiles c (disk r.atOp) d
 
-private theorem earlierFrame {disk : W → Disk} {start : W} (path : Issued actual source start rest w)
+theorem earlierFrame {disk : W → Disk} {start : W} (path : Issued actual source start rest w)
     (frames : path.Earlier (fun _ _ a b => AppendCut.ActiveFiles c (disk a) (disk b))) :
     AppendCut.ActiveFiles c (disk start) (disk w) := by
   induction path with
