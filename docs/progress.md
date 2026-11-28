@@ -50,7 +50,7 @@ The second mutation uses the exact active registration produced by the
 first. The [flush scope](../lean/Alvoki/Experiments/L0/NativeFlushPublic.lean)
 takes the installed memtable through the streaming writer, table directory
 sync, manifest rename and barrier. Each returned outcome supplies a concrete
-reopen on the reached filesystem. [Interrupted flush](../lean/Alvoki/Experiments/L0/NativeFlushInterrupted.lean)
+reopen on the reached filesystem. [Interrupted flush](../lean/Alvoki/Experiments/L0/NativeFlushObserver.lean)
 uses the physical survivor and the existing public read chain. The
 [review inventory](design/l0-native-review.md) gives the producer graph,
 primitive contracts and candidate review units. PR #30 at

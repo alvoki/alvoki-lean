@@ -43,7 +43,8 @@ flush_proofs=(
   NativeTableAllocation NativeTableDirectory TableWriterSchedule NativeTableWriter NativeTableCreate
   TableCreateSchedule NativeManifestPublish ManifestPublishSchedule ReserveScanCut NativeFlushInterrupted
   MutationSequence MutationSequenceRoot ExitSchedule ReserveScanSource NativeFlushStoreCut NativeFlushBodyRestart
-  HealthyTableRead HealthyPublishedRecovery MutationIngressCut NativeFlushPinned ObservedIO NativeFlushObserver
+  HealthyTableRead HealthyPublishedRecovery HealthyPublishedOpen HealthyPinnedLookup HealthyFlushRead
+  MutationIngressCut NativeFlushPinned ObservedIO NativeFlushObserver MutationAllCuts
 )
 for module in "${flush_proofs[@]}"; do
   compile "$l0/$module" proof
@@ -103,7 +104,8 @@ for module in "${component_proofs[@]}"; do
 done
 lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
-import Alvoki.Experiments.L0.HealthyFlush
+import Alvoki.Experiments.L0.HealthyFlushRead
+import Alvoki.Experiments.L0.MutationAllCuts
 import Alvoki.Experiments.L0.NativeFlushObserver
 import Alvoki.Experiments.L0.MutationIngressCut
 import Alvoki.Experiments.L0.HealthyPublishedRecovery
@@ -166,6 +168,10 @@ open ExperimentalL0
 #check_axioms NativeFlushStore.healthyPinned
 #check_axioms NativeFlush.withOpen
 #check_axioms NativeFlush.healthy
+#check_axioms HealthyPublishedRecovery.withOpen
+#check_axioms NativeFlush.healthyRead
+#check_axioms MutationAllCuts.erases
+#check_axioms MutationAllCuts.interrupted
 #check_axioms NativeFlushRestart.finishedPublishedLookup
 #check_axioms NativeFlushRestart.orphanIgnored
 #check_axioms NativeFlushInterrupted.ingress

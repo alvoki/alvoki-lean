@@ -49,7 +49,11 @@ For flush, `NativeFlushObserver.erase` relates the observer to the
 actual public IO result and world. Its reverse theorem `classify` takes
 a raw cut at that callback and recovers its position in reservation,
 storage or finalization. `interrupted` passes that position to the
-survivor proof and then to the public read.
+survivor proof and then to the public read. For append,
+[`MutationAllCuts.interrupted`](../../lean/Alvoki/Experiments/L0/MutationAllCuts.lean)
+starts with one raw cut and passes the precise pending or settled history
+through two public reopens. This includes a guard rejection and the
+second phase borrow before append.
 
 ## What changes at a flush cut
 
@@ -91,6 +95,13 @@ share the bind and scope rules but keep these two contracts separate.
 A conditional healthy execution also needs positive syscall reports.
 The capacity-one recovery witness reuses the same segmented worker as
 the empty example and the same public read pipeline as the safety proof.
+For a recovered nonempty memtable and a key present in its sorted rows,
+[`NativeFlush.healthyRead`](../../lean/Alvoki/Experiments/L0/HealthyFlushRead.lean)
+also forces the next public get to succeed under the healthy reports.
+The returned descriptor selects the very inode and bytes that were synced
+before rename. Capacity one and an unrotated selected WAL bound this
+positive example. The safety and interruption theorems apply across
+admitted WAL shapes.
 
 The former whole-callback bridge required a separate writer execution
 and an installation map from that run to the purported physical state.
