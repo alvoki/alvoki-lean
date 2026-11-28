@@ -1,6 +1,7 @@
 import Alvoki.Experiments.DurableBlob.FileRead
 import Alvoki.Experiments.WAL.Proofs.NativePost
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeReopen
+import Alvoki.Experiments.WAL.Segmented.Proofs.Writeback
 
 namespace WalRecoverySlice.Segmented.Native
 open Alvoki.NativePost System
@@ -56,11 +57,11 @@ theorem Store.readControl_fromFile (s : Store) {P : W → Prop} {state : W → �
 barrier may already have made the live CONTROL and child names durable. -/
 theorem Store.syncRoot_io (s : Store) {disk : W → Disk} {P : W → Prop}
     (sync : IOReturns (syncHandle s.directory) w
-      (fun _ t => P t ∧ disk t = (disk w).syncRoot)
-      (fun t => P t ∧ (disk t = disk w ∨ disk t = (disk w).syncRoot))) :
+      (fun _ t => P t ∧ Writebacks (disk w).syncRoot (disk t))
+      (fun t => P t ∧ (Writebacks (disk w) (disk t) ∨ Writebacks (disk w).syncRoot (disk t)))) :
     Returns s.callbacks.syncRoot w
-      (fun _ t => P t ∧ disk t = (disk w).syncRoot)
-      (fun t => P t ∧ (disk t = disk w ∨ disk t = (disk w).syncRoot)) :=
+      (fun _ t => P t ∧ Writebacks (disk w).syncRoot (disk t))
+      (fun t => P t ∧ (Writebacks (disk w) (disk t) ∨ Writebacks (disk w).syncRoot (disk t))) :=
   Returns.liftIO sync
 
 def Keeps (P : W → Prop) (a : IO α) :=

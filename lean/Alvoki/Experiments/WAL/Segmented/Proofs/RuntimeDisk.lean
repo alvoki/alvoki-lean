@@ -425,8 +425,7 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
   case retry => exact fun _ result => ⟨result.1, result.2.retry⟩
   case sync =>
     rintro t ⟨q, same⟩
-    have raw := Returns.liftIO (ops.sync t q)
-    apply Returns.mapPost raw
+    apply Returns.mapPost (s.syncRoot_io (ops.sync t q))
     · rintro _ u ⟨q', steps⟩
       exact ⟨q', (barrier same).writebacks steps⟩
     · rintro u ⟨q', steps | steps⟩
