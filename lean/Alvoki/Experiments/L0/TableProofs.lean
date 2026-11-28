@@ -148,7 +148,7 @@ theorem nativeTableAt_afterStat {dir : System.FilePath} {id : UInt64}
   simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat]
   simp [resume, regular, nativeTableReadScope, IO.FS.withFile, ExceptT.mk, ExceptT.run,
     Bind.bind, instMonadEIO._aux_13, EST.bind]
-  cases opened : IO.FS.Handle.mk (tablePath dir id) .read checked <;> simp [opened]
+  cases opened : IO.FS.Handle.mk (tablePath dir id) .read checked <;> simp
 
 theorem nativeTableAt_acquired {dir : System.FilePath} {id : UInt64}
     {use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α}

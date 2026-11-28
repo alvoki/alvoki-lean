@@ -209,6 +209,10 @@ private theorem bindings_frame {before after : Catalog} {ids : List UInt64} (kep
         · exact ⟨_, head⟩
         · exact rest.2 key member
 
+theorem Durable.boundTable (d : Durable image history) (tableId : UInt64)
+    (member : tableId ∈ image.version.tables) : ∃ rows, image.tables tableId = some rows :=
+  (bindings_frame (fun _ _ bound => bound) d.bindings).2 tableId member
+
 private def Durable.frame (d : Durable before history)
     (view : after.view = before.view) (version : after.version = before.version)
     (kept : before.tables.Preserves after.tables) : Durable after history where

@@ -43,7 +43,7 @@ compile "$l0/ScheduleSteps" proof
 compile "$l0/TableProofs" proof
 compile "$l0/TableAllocationProofs" proof
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
 lean --stdin <<'LEAN'
@@ -140,6 +140,10 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms TableNamespace.lookup
 #check_axioms TableNamespace.scopedLookup
 #check_axioms TableNamespace.scopedCheck
+#check_axioms NativeTableReads.product
+#check_axioms NativeTableReads.productFrame
+#check_axioms NativeTableReads.Interpretation.lookupEffect
+#check_axioms NativeTableReads.Interpretation.checkHealthy
 #check_axioms CallbackEvidence.lookupFromCatalog
 #check_axioms TableNamespace.Represents.frame
 #check_axioms recoverKeepsCatalog

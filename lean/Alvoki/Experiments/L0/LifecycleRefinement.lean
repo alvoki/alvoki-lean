@@ -90,20 +90,50 @@ theorem recovery_progress
     (representable : ∀ c, (wal.diskState middle).disk.liveControl = some c →
       c.capacity ≤ 255 ∧ c.active ≤ WalRecoverySlice.Segmented.ControlCodec.wordMax ∧
       c.discarded ≤ WalRecoverySlice.Segmented.ControlCodec.wordMax)
-    (checks : ∀ id, id ∈ version.tables → ∀ state, ∃ next, (ops).tables.check id state = .ok () next) :
+    (reads : NativeTableReads.Interpretation (ops).tables (selected ∘ Prod.snd) tns)
+    (catalog : namespaceState.Represents middle.2 (selected middle.2).tables)
+    (openKeeps : ∀ checked view, (ops).reopenWal middle = .ok view checked →
+      (tns).Keeps middle checked (selected middle.2).tables)
+    (tablePrimitives : ∀ state id rows, id ∈ version.tables →
+      (tns).Bound state id rows → NativeTableReads.HealthySource tns state id (reads.world state)) :
     ∃ session after, recover ops (Phase.opening, before) = .ok session after ∧
       Installed session (selected after.2) history := by
   obtain ⟨checked, opened, _⟩ :=
     wal.reopenHealthy middle binding rootOK childrenOK closeOK unlockOK representable
+  have manifestEffect := evidence.effects.reopenManifest (Phase.opening, before)
+  rw [manifest] at manifestEffect
+  have walEffect := evidence.effects.reopenWal middle
+  rw [opened] at walEffect
+  have selectedChecked : selected checked.2 = selected before := walEffect.2.trans manifestEffect.2
+  have boundCatalog : (tns).Represents checked (selected before).tables := by
+    have kept := TableNamespace.Represents.frame (ns := tns) (before := middle) catalog
+      (openKeeps _ _ opened)
+    have same : selected middle.2 = selected before := manifestEffect.2
+    rw [same] at kept
+    exact kept
   have healthy (ids : List UInt64) (included : ∀ id, id ∈ ids → id ∈ version.tables)
-      (state : Phase W × S) : ∃ after, checkTables (ops).tables ids state = .ok () after := by
+      (state : Phase W × S) (same : selected state.2 = selected before)
+      (catalog : (tns).Represents state (selected before).tables) :
+      ∃ after, checkTables (ops).tables ids state = .ok () after := by
     induction ids generalizing state with
     | nil => exact ⟨state, rfl⟩
     | cons id ids ih =>
-      obtain ⟨next, first⟩ := checks id (included id (by simp)) state
-      obtain ⟨after, rest⟩ := ih (fun key member => included key (List.mem_cons_of_mem _ member)) next
+      have member := included id (by simp)
+      obtain ⟨rows, bound⟩ := durable.boundTable id (manifestEffect.1 ▸ member)
+      have source := catalog id rows bound
+      obtain ⟨next, first, keeps⟩ :=
+        reads.checkHealthy source (tablePrimitives state id rows member source)
+      have nextSelected := reads.checkEffect state id
+      rw [first] at nextSelected
+      have kept : (tns).Represents next (selected before).tables := by
+        apply catalog.frame
+        simpa [Function.comp_apply, same] using keeps
+      obtain ⟨after, rest⟩ :=
+        ih (fun key member => included key (List.mem_cons_of_mem _ member))
+          next (nextSelected.trans same) kept
       exact ⟨after, by simp [checkTables, Bind.bind, EStateM.bind, first, rest]⟩
   obtain ⟨after, tables⟩ := healthy version.tables (fun _ member => member) checked
+    selectedChecked boundCatalog
   obtain ⟨session, ran, ready⟩ := recover_progress (s := (Phase.opening, before)) evidence.effects durable manifest opened tables
   exact ⟨session, after, ran, ready⟩
 

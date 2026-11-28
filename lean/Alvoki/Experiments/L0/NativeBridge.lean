@@ -3,7 +3,7 @@ import Alvoki.Experiments.L0.WalRecovery
 import Alvoki.Experiments.L0.Refinement
 import Alvoki.Experiments.L0.ManifestComposition
 import Alvoki.Experiments.L0.TableAllocationProofs
-import Alvoki.Experiments.L0.DurableCatalog
+import Alvoki.Experiments.L0.NativeTableReads
 
 namespace ExperimentalL0.NativeBridge
 open WalRecoverySlice.Segmented
@@ -213,25 +213,7 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (.ready (selected s).version) (.online (selected after).view) (.ready (selected after).version) ∧
           (selected after).tables = (selected s).tables)
   create : Nonempty (TableCreationEvidence ops.tables.create selected namespaceState)
-  check : ∀ s id, match ops.tables.check id s with
-    | .ok _ after | .error _ after => selected after = selected s
-  lookup : ∀ s id key rows, (selected s).tables id = some rows →
-    match ops.tables.lookup id key s with
-    | .ok result after => selected after = selected s ∧
-        namespaceState.Keeps s after (selected s).tables ∧
-        ∃ (handle : IO.FS.Handle) (inodeAt : IO.FS.Handle → Option namespaceState.inode),
-          inodeAt handle = namespaceState.names s (tablePath namespaceState.directory id) ∧
-          (∀ identity bytes, inodeAt handle = some identity →
-            namespaceState.contents s identity = some bytes →
-            nativeReadPrimitives.ReadsExactly handle bytes) ∧
-          ∃ (start checked entered done : Void IO.RealWorld) (metadata : IO.FS.Metadata),
-            (nativeTableStat (tablePath namespaceState.directory id)).run start =
-              .ok (.ok metadata) checked ∧ isTableFile metadata = true ∧
-            IO.FS.Handle.mk (tablePath namespaceState.directory id) .read checked =
-              .ok handle entered ∧
-            (nativeTableAt namespaceState.directory id (·.lookup key)).run start =
-              .ok (.ok result) done
-    | .error _ after => selected after = selected s ∧ namespaceState.Keeps s after (selected s).tables
+  reads : Nonempty (NativeTableReads.Interpretation ops.tables selected namespaceState)
 
 private theorem selected_eq {a b : Selected}
     (view : a.view = b.view) (version : a.version = b.version) (tables : a.tables = b.tables) :
@@ -245,19 +227,8 @@ theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
     | .ok result after => result = lookupRows rows key ∧ selected after = selected s ∧
         ns.Represents after (selected after).tables
     | .error _ after => selected after = selected s ∧ ns.Represents after (selected after).tables := by
-    have read := evidence.lookup s tableId key rows bound
-    cases ran : ops.tables.lookup tableId key s with
-    | ok value after =>
-      rw [ran] at read
-      obtain ⟨frame, keeps, handle, inodeAt, picked, primitives,
-        start, checked, entered, done, metadata, stat, regular, acquired, returned⟩ := read
-      have expected := TableNamespace.scopedLookup (catalog tableId rows bound) handle key
-        stat regular acquired inodeAt picked primitives
-      have same := Except.ok.inj (EST.Out.ok.inj (returned.symm.trans expected)).1
-      exact ⟨same, frame, frame.symm ▸ catalog.frame keeps⟩
-    | error error after =>
-      rw [ran] at read
-      exact ⟨read.1, read.1.symm ▸ catalog.frame read.2⟩
+    obtain ⟨reads⟩ := evidence.reads
+    exact reads.lookupEffect catalog tableId key bound
 
 theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected namespaceState) :
     ComponentEffects ops selected where
@@ -290,7 +261,9 @@ theorem CallbackEvidence.effects (evidence : CallbackEvidence ops selected names
   publish s proposal valid := by
     obtain ⟨manifest⟩ := evidence.manifest
     exact manifest.publishEffect s proposal valid
-  check := evidence.check
+  check s id := by
+    obtain ⟨reads⟩ := evidence.reads
+    exact reads.checkEffect s id
 
 theorem CallbackEvidence.get {ops : Components (StorageM σ)}
     (evidence : CallbackEvidence ops selected ns)

@@ -148,8 +148,11 @@ Native check and lookup call the shared `nativeTableAt` adapter.
 the reached open error, or passes the exact handle from `Handle.mk`
 to `nativeTableAction` and forwards its result. No separate action or
 scope result is needed. The SSTable producer supplies the typed result
-from the immutable image on that inode. The runtime closes the
-descriptor when its last reference drops. Check and lookup return only
+from the immutable image on that inode. The reached result is now computed
+by [NativeTableReads](NativeTableReads.lean) from one evaluation of the
+native scope. On its product carrier only the IO world is advanced, so
+the table namespace and logical projection are structurally unchanged.
+The runtime closes the descriptor when its last reference drops. Check and lookup return only
 unit or a mutation observation.
 
 The lifecycle proof keeps the namespace on the storage carrier. Changing
@@ -157,9 +160,10 @@ phase for publication or cleanup leaves the catalog projection unchanged.
 The empty initialization witness starts the client trace, and the lifecycle
 consumes the reached catalog postconditions of write, flush, recover and
 get. On a returned WAL open error it carries the WAL producer's root and
-child release facts for the same disk left by recovery. Healthy recovery
-uses the WAL progress theorem together with successful manifest and
-required table checks.
+child release facts for the same disk left by recovery. Healthy recovery uses the WAL progress theorem, a successful manifest
+open and the reached table catalog. Each required check takes its inode
+and image from that catalog and derives callback success from local
+healthy stat, open and read reports.
 
 Bootstrap, WAL release, orphan collection, snapshots, concurrency,
 compaction and automatic flush are separate work.
@@ -237,9 +241,9 @@ observations.
 | --- | --- | --- |
 | Stat, acquisition of the inode selected by the protected name, exact positional reads during its immutable lifetime | Filesystem and runtime effects at `nativeTableStat`, `Handle.mk` and the SSTable read primitives | `TableNamespace.scopedLookup` and `scopedCheck` |
 | Descriptor drop and outer lock release | Runtime last-reference behavior and unlock effects. L0 must prove the outer cleanup calls release on the reached ownership state | `Lifecycle.recovery_offline` and the outer native scope |
-| Reached callback result corresponds to the executed native lookup | L0 native callback interpreter must connect the reached IO report to the logical carrier | `CallbackEvidence.lookupFromCatalog` |
+| Concrete dispatch uses the native read interpreter on its reached carrier | L0 native callback setup. The interpreter itself computes the lookup result and keeps the reported world, so an independent result equality is gone | `CallbackEvidence.lookupFromCatalog` |
 | Durable catalog insertion and preservation of unrelated physical bindings | Filesystem create, file sync and directory sync effects. L0 must represent the reached writer and prove local table, manifest and WAL namespace frames | `TableCreationEvidence.catalogInserted`, `catalogAfter` and the lifecycle postconditions |
-| Healthy manifest and table checks in the reached integrated state | L0 must connect the manifest and SSTable producers to the callback interpretation. `scopedCheck` now supplies a healthy native table result under the primitive reports | `Lifecycle.recovery_progress` |
+| Healthy recovery state and primitive reports | L0 must supply the reached manifest-open result and catalog frame across WAL open. The filesystem supplies healthy table primitives. `scopedCheck` now yields the table callback result | `Lifecycle.recovery_progress` |
 | Restart selection, reply delivery and loss | Filesystem survivor choice and runtime/client observations. L0 must connect the resulting image and observations to the interpreter | `recoverReachedFlush` and `Execution.Run.flushObserved` |
 | Repeated public operation steps on actual native states | L0 must compose the lifecycle theorems with the concrete operation dispatch and effect interpretation | `Execution.Run.refines` |
 | Ready view, recoverability after restart and segmented append | WAL producers for append, rotation, CONTROL and uncertainty selection | `WalRecovery.Interpretation` and the append law |
