@@ -172,6 +172,7 @@ open ExperimentalL0
 #check_axioms NativeFlush.healthyRead
 #check_axioms MutationAllCuts.erases
 #check_axioms MutationAllCuts.interrupted
+#check_axioms MutationAllCuts.committed
 #check_axioms NativeFlushRestart.finishedPublishedLookup
 #check_axioms NativeFlushRestart.orphanIgnored
 #check_axioms NativeFlushInterrupted.ingress
