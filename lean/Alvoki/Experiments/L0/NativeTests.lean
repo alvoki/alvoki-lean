@@ -88,7 +88,8 @@ closed. The other two modes stop or fail inside the issued WAL operation. -/
 private def appendChild (root : FilePath) (mode : String) (rotate : Bool) : IO Unit := do
   Native.withOpen root fun db => do
     let mutation := if rotate then Native.delete db 42 else Native.put db 42 99
-    if mode == "error" then
+    if mode == "error" || mode == "published-error" then
+      if mode == "published-error" then Std.Async.System.setEnvVar "ALVOKI_L0_AFTER_CONTROL" "1"
       let id := if rotate then "segment-1" else "segment-0"
       Std.Async.System.setEnvVar "ALVOKI_L0_FAIL_WAL_SYNC" (root / "wal" / id / "segment").toString
       expectError mutation
@@ -113,7 +114,7 @@ private def appendRetry (executable library mode : String) (rotate : Bool) : IO 
     }
     let expectedExit := if mode == "control" then 73 else if mode == "lost" then 74 else 0
     check (proc.exitCode == expectedExit) s!"append {mode}, rotation={rotate}: {proc.stderr}"
-    check (proc.stdout == (if mode == "error" then "returned\n" else ""))
+    check (proc.stdout == (if mode == "error" || mode == "published-error" then "returned\n" else ""))
       "unexpected completion acknowledgement"
     let expected := if mode == "lost" then (if rotate then none else some 99) else some 11
     for _ in [0, 1] do
@@ -216,6 +217,7 @@ def main (args : List String) : IO Unit := do
     for rotate in [false, true] do
       for mode in ["lost", "error"] do appendRetry executable.toString library mode rotate
     appendRetry executable.toString library "control" true
+    appendRetry executable.toString library "published-error" true
     interruption executable.toString library "table"
     interruption executable.toString library "rename"
   | _ => throw (IO.userError "expected the process-interruption fixture library")
