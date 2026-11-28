@@ -92,4 +92,17 @@ theorem success_path {id : UInt64}
           obtain ⟨rfl,rfl⟩ := ran
           exact ⟨reserved,built,fd,entered,rfl,build,acquire,barrier⟩
 
+/-- In the successful direction, recovering the allocator result needs the
+actual sequence of stat reports. The remaining observations are for the file
+writer and the two parent-directory syscalls in that same invocation. -/
+theorem success_of_reports (candidate : Candidate dir origin)
+    (built : Native.buildSynced (tablePath dir candidate.number.toUInt64) candidate.number.toUInt64 rows
+      candidate.reserved = .ok () t)
+    (opened : IO.FS.Handle.mk dir .read t = .ok fd u)
+    (synced : Native.syncHandle fd u = .ok () finish) :
+    Native.checked (Native.createTable dir rows) origin = .ok candidate.number.toUInt64 finish := by
+  rw [create_schedule]
+  simp only [IO.FS.withFile, Bind.bind, instMonadEIO._aux_13, EST.bind, candidate.allocate,
+    built, opened, synced, Pure.pure, instMonadEIO._aux_5, EST.pure]
+
 end ExperimentalL0.NativeTableCreate

@@ -97,4 +97,38 @@ theorem create {ns : TableNamespace W} {media : Media ns}
       rw [Post,opened] at d
       exact d.1
 
+/-- Positive reports for the parent directory only after this invocation's
+newly created SSTable has returned from its own flush and fsync. -/
+structure HealthyDirectory (ns : TableNamespace W) (rows : Rows) {origin : W}
+    (candidate : Candidate ns.directory origin) : Prop where
+  openFile : ∀ built, Native.buildSynced (tablePath ns.directory candidate.number.toUInt64)
+    candidate.number.toUInt64 rows candidate.reserved = .ok () built →
+    ∃ fd entered, IO.FS.Handle.mk ns.directory .read built = .ok fd entered
+  barrier : ∀ built fd entered, Native.buildSynced (tablePath ns.directory candidate.number.toUInt64)
+    candidate.number.toUInt64 rows candidate.reserved = .ok () built →
+    IO.FS.Handle.mk ns.directory .read built = .ok fd entered → ∃ finish, Native.syncHandle fd entered = .ok () finish
+
+/-- Bounded rows and successful reports from the actual occupied-name probes,
+exclusive stream, directory open and fsync force success of public creation. -/
+theorem healthy {ns : TableNamespace W} {media : Media ns} (io : Runtime media P rows origin)
+    (start : P origin) (catalog : ∀ t, P t → ns.Represents t old ∧ media.stable.Represents t old)
+    (candidate : Candidate ns.directory origin)
+    (valid : ImmutableSSTable.Unified.modelBuild Alvoki.CRC32C.extend (tableLayout candidate.number.toUInt64)
+      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) {} = .ok (count, bytes))
+    (writer : NativeTableWriter.Healthy (tablePath ns.directory candidate.number.toUInt64)
+      candidate.number.toUInt64 rows candidate.reserved)
+    (dir : HealthyDirectory ns rows candidate) :
+    ∃ finish, Native.checked (Native.createTable ns.directory rows) origin = .ok candidate.number.toUInt64 finish ∧
+      P finish ∧ Created media old rows candidate.number.toUInt64 finish := by
+  have absent := allocate_fresh io.probe 0 start
+  rw [Post, candidate.allocate] at absent
+  have leaves := io.writer _ _ candidate.allocate absent.1 absent.2
+  obtain ⟨t, built, _⟩ := NativeTableWriter.healthy leaves absent.1 valid writer
+  obtain ⟨fd, u, opened⟩ := dir.openFile t built
+  obtain ⟨finish, synced⟩ := dir.barrier t fd u built opened
+  have returned := success_of_reports candidate built opened synced
+  have safe := (create io start catalog).returned
+  rw [Post, returned] at safe
+  exact ⟨finish, returned, safe⟩
+
 end ExperimentalL0.NativeTableCreate
