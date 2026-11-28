@@ -899,6 +899,11 @@ private theorem rootRemove_healthy (root : FilePath) (r : RootReports)
       healthy.present, read, named, decide_false, Bool.false_eq_true, ↓reduceIte]
     exact ⟨_, rfl⟩
 
+theorem nativeRemove_healthy (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (healthy : HealthyRoot r) (id : Nat) (s : State) :
+    ∃ after, ((nativeReopenOps root r reports).removeSegment id).run s = .ok (.ok ()) after :=
+  rootRemove_healthy root r healthy id s
+
 private theorem rootSync_healthy (root : FilePath) (r : RootReports)
     (healthy : HealthyRoot r) (s : State) :
     (rootSync root r).run s = .ok (.ok ()) {s.tick with disk := s.disk.syncRoot} := by

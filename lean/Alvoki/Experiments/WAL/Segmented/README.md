@@ -124,8 +124,8 @@ The public single-file recovery schedule supplies the child
 `Recoverable` and `Installed` facts and the cached scan result from local
 primitive effects. Segmented reopen binds that child to its root session.
 The single-file append producer consumes its stored writer and marker
-descriptions. Native segmented append, rotation and bootstrap still need
-their own producers.
+descriptions. The segmented producer reuses that append phase across
+ordinary appends and installs the newly created successor on rotation.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
 [Native CONTROL publication](Proofs/NativeControl.lean) uses the shared
@@ -145,8 +145,7 @@ A failed staging step cannot reach rename, and a retry clears and rewrites
 the stage. Staging failures normalize to before or after a complete
 proposal with no effect on visible CONTROL or selected child names.
 Primitive error messages are abstracted to the modeled error outcome.
-Power loss uses the existing durable-image projection. Bootstrap and
-rotation still owe representability and successor-child authority.
+Power loss uses the existing durable-image projection.
 
 [Native reopen proofs](Proofs/NativeReopen.lean) compose the single-file
 producer with the shared root operations. The root directory descriptor
@@ -180,6 +179,28 @@ schedule returns the session and that same child. The shared installer
 constructs the active entry from the session's segment ID and returned
 child. The native adapter passes that entry to the reference setter.
 Append takes its writer authority from that stored child. Root unlock follows child close even when close reports an error.
+
+### Public append and bootstrap
+
+[Native append](Proofs/NativeAppend.lean) uses one postcondition for
+both append paths. Bootstrap and public reopen supply `AppendReady`.
+On success, the root phase contains the acknowledged session, the
+absolute position advances by one, and the reached active child
+supplies the next `AppendReady`. On failure or process stop, the
+reached disk accepts the single pending request. Guard rejection
+leaves the disk and child phase unchanged. The outer phase can be
+poisoned while those resources still need cleanup.
+
+The successor stays outside CONTROL until its child files and name
+are durable. The shared initialization interprets exact successful
+writes on the created child; failed private initialization can leave
+unselected artifacts. Publication before the first write can therefore
+leave a selected empty child with exactly the old tail. Recovery
+consumes its reached image and pins the selected view. The position
+bound is established at bootstrap, preserved by acknowledged appends
+and the admissible recovery choices, and bounds the decoded CONTROL
+fields. Linux descriptor and name bindings and primitive outcomes,
+including interruption, remain the external interpretation boundary.
 
 ### Public open contract for the append consumer
 

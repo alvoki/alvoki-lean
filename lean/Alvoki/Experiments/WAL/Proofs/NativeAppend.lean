@@ -146,6 +146,33 @@ theorem append_refines (reports : ∀ cursor, AppendReports policy cursor batch)
       obtain ⟨rfl, ready, settled⟩ := facts.2.2 next rfl
       exact ⟨facts.1, facts.2.1, .ack, rfl, ready, settled⟩
 
+def healthyAppendReports : AppendReports policy cursor batch where
+  effects := {
+    appendData := .full .old none
+    dataSync := .after none
+    writeMarker := .full .old none
+    markerSync := fun _ => .after none
+  }
+
+theorem appendModel_healthy (policy : Policy) (image : Image) (known : List Bytes)
+    (bounded : ∀ b ∈ known, b.length ≤ 32) (room : known.length < 255)
+    (size : batch.length ≤ 32) :
+    ∃ after, appendModel (policy := policy) (batch := batch) (fun _ => healthyAppendReports)
+      ⟨image, .active .lock (appendBindings policy) (historyCursor known) known⟩ =
+        .ok (.ok ()) after := by
+  have seqFits : ¬255 < 1 + known.length := by omega
+  have offsetFits : ¬65535 < (encodeFrames 1 known).length + (frame (1 + known.length) batch).length := by
+    have bytes := encoded_history_size known 1 bounded
+    rw [frame_length]
+    omega
+  simp only [activeResult, appendWorker_eq]
+  cases policy <;>
+    simp [healthyAppendReports, appendPrimitives, scheduledOps, appendBatch, ops, historyCursor,
+      maxPayload, Nat.not_lt.mpr size, seqFits, offsetFits, reduceBEq, Policy.ctorIdx,
+      Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, ExceptT.bindCont, Pure.pure,
+      ExceptT.pure, EStateM.bind, EStateM.pure, withWritebacks, Write.result, Primitive.syncResult] <;>
+    first | rfl | exact ⟨_, rfl⟩
+
 /-- A lost reply after the final barrier has the same public uncertainty
 as an error, while recovery still uses the exact reached image. -/
 theorem AppendGuarantee.lostReply (outcome : AppendGuarantee policy known batch result) :
