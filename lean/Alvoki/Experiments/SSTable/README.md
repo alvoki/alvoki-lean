@@ -99,7 +99,11 @@ range. Both index levels and the in-block search consume those facts.
 This theorem concerns successful immutable reads. The reader's structural
 and checksum checks reject malformed packets as they are visited. A checked
 footer and CRC do not authenticate bytes or certify global key order in an
-externally supplied image. The [error propagation proofs](Proofs/UnifiedReadErrors.lean)
+externally supplied image. The [read-safety proof](Proofs/UnifiedReadSafety.lean) compares
+successful checked byte and typed lookups with the healthy reference.
+It requires exact results for successful primitive calls and permits
+errors on any call. The reached-state propagation on failure is covered
+separately by the reader's error proofs. The [error propagation proofs](Proofs/UnifiedReadErrors.lean)
 cover footer and root failures during open and failures at the leaf, data and
 row probes selected by lookup, seek and iteration. They also cover caller
 codec failures in typed reads. In the stateful model, an error returns the

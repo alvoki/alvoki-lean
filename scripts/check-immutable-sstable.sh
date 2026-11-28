@@ -15,7 +15,7 @@ modules=(
   "$table".{UnifiedFormat,UnifiedIntegrity,UnifiedBuilder,UnifiedReader,UnifiedNative,UnifiedFixtures}
   "$table".Proofs.{Reader,Search,Typed,UnifiedMetadata,UnifiedData,UnifiedImage,UnifiedSearch}
   "$table".Proofs.{UnifiedGroups,UnifiedReads,UnifiedOpen,UnifiedBuilder,UnifiedEndToEnd}
-  "$table".Proofs.{UnifiedNativeReader,UnifiedReadErrors,NativeWrite,UnifiedNativeEndToEnd}
+  "$table".Proofs.{UnifiedNativeReader,UnifiedReadErrors,UnifiedReadSafety,NativeWrite,UnifiedNativeEndToEnd}
   Alvoki.Checks.Tests.SSTableProducer
   Alvoki.Checks.Audit.AxiomPolicy
 )
@@ -27,6 +27,7 @@ lake env lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
 import Alvoki.Experiments.SSTable.Proofs.UnifiedReadErrors
+import Alvoki.Experiments.SSTable.Proofs.UnifiedReadSafety
 import Alvoki.Checks.Tests.SSTableProducer
 import Alvoki.Experiments.SSTable.Proofs.Typed
 open ImmutableSSTable
@@ -39,6 +40,9 @@ open ImmutableSSTable
 #check_axioms SSTableProducerCheck.checkedLookup
 #check_axioms SSTableProducerCheck.uncertainResult
 #check_axioms Unified.open_built_table
+#check_axioms Unified.Image.checkedLookup_sound
+#check_axioms Unified.checkedLookup_success
+#check_axioms Unified.checkedTypedLookup_success
 #check_axioms Unified.Image.openCheckedWith_represents_at
 #check_axioms ReadSnapshot.readsExactly
 #check_axioms Unified.openCheckedWith_acquire_error
