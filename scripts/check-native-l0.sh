@@ -49,17 +49,17 @@ for module in NativeManifest NativeRead NativeReadClient NativeRecovery NativeTa
   compile "$l0/$module" proof
 done
 compile Alvoki/Experiments/WAL/Segmented/Proofs/RuntimeChild proof
-for module in NativeMutation HealthyMutation NativeAppendCut; do
+for module in NativeMutation HealthyMutation InterruptedWorker; do
   compile "$l0/$module" proof
 done
 for module in PreparedFile ControlCutIO PrepareCutIO ChildCutIO CutSchedule; do
   compile "Alvoki/Experiments/WAL/Segmented/Proofs/$module" proof
 done
 compile Alvoki/Checks/Audit/AxiomPolicy proof
-for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendRecovery NativeWrite NativeWriteRelease NativeMutation HealthyMutation NativeMutationScope NativeMutationReopens NativeAppendCut NativeRecoverSelected PendingReadScope NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish; do
+for module in Codecs CodecProofs Lifecycle Native NativeFacts NativeTableReads WalRecovery ManifestComposition ManifestRecovery DurableCatalog RestartRefinement NativeBridge LifecycleRefinement ScheduleSteps TableSchedule TableProofs TableAllocation TableAllocationProofs TableRows TableRowProofs NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendRecovery NativeWrite NativeWriteRelease NativeMutation HealthyMutation NativeMutationScope NativeMutationReopens NativeAppendCut InterruptedMutation InterruptedWorker NativeRecoverSelected PendingReadScope NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish; do
   leanchecker "Alvoki.Experiments.L0.$module"
 done
-for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Proofs.ConcreteRecovery WAL.Proofs.ConcreteOpen WAL.Segmented.Proofs.NativeRootIO WAL.Segmented.Proofs.NativeChildIO WAL.Segmented.Proofs.StoreAcquisition WAL.Segmented.Proofs.RuntimeStoreOpen WAL.Segmented.Proofs.RuntimeChild WAL.Segmented.Proofs.RuntimeDisk WAL.Segmented.Proofs.HealthyEmpty WAL.Proofs.ConcreteAppend WAL.Proofs.ConcreteCreate WAL.Segmented.Proofs.AppendIngress WAL.Segmented.Proofs.AppendRotationIO WAL.Segmented.Proofs.ControlCutIO WAL.Segmented.Proofs.PrepareCutIO WAL.Segmented.Proofs.PreparedFile WAL.Segmented.Proofs.AppendRuntime WAL.Segmented.Proofs.CutSchedule WAL.Segmented.Proofs.ChildCutIO WAL.Proofs.ConcreteAppendCut; do
+for module in DurableBlob.FileRead SSTable.Proofs.UnifiedReadSafety WAL.Proofs.NativePost WAL.Proofs.ConcreteRecovery WAL.Proofs.ConcreteOpen WAL.Segmented.Proofs.NativeRootIO WAL.Segmented.Proofs.NativeChildIO WAL.Segmented.Proofs.StoreAcquisition WAL.Segmented.Proofs.RuntimeStoreOpen WAL.Segmented.Proofs.RuntimeChild WAL.Segmented.Proofs.RuntimeDisk WAL.Segmented.Proofs.HealthyEmpty WAL.Proofs.ConcreteAppend WAL.Proofs.ConcreteCreate WAL.Segmented.Proofs.AppendIngress WAL.Segmented.Proofs.AppendRotationIO WAL.Segmented.Proofs.ControlCutIO WAL.Segmented.Proofs.PrepareCutIO WAL.Segmented.Proofs.PreparedFile WAL.Segmented.Proofs.AppendRuntime WAL.Segmented.Proofs.CutSchedule WAL.Segmented.Proofs.ChildCutIO WAL.Proofs.ConcreteAppendCut WAL.Segmented.Proofs.CreateCutIO WAL.Segmented.Proofs.AppendPrefixLayout WAL.Segmented.Proofs.ChildHeapCut WAL.Segmented.Proofs.AppendCutBody WAL.Segmented.Proofs.CutRuntime; do
   leanchecker "Alvoki.Experiments.$module"
 done
 lean --stdin <<'LEAN'
@@ -76,7 +76,7 @@ import Alvoki.Experiments.L0.TableAllocationProofs
 import Alvoki.Experiments.L0.NativeManifest
 import Alvoki.Experiments.L0.NativeRecovery
 import Alvoki.Experiments.L0.NativeMutation
-import Alvoki.Experiments.L0.NativeAppendCut
+import Alvoki.Experiments.L0.InterruptedWorker
 import Alvoki.Experiments.WAL.Segmented.Proofs.ChildCutIO
 import Alvoki.Experiments.WAL.Segmented.Proofs.PreparedFile
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutIO
@@ -148,6 +148,11 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeMutationScope.mutationThenReadTwice
 #check_axioms NativeReadRelease.mutation_released
 #check_axioms NativeAppendCut.Restarted.uncertain
+#check_axioms InterruptedMutation.Prefix.beforeAppend
+#check_axioms InterruptedMutation.Worker.interrupted
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.recoverBody
+#check_axioms WalRecoverySlice.Segmented.Native.CreateCutIO.program_run
+#check_axioms WalRecoverySlice.Segmented.Native.PrepareCutIO.Prefix.continuation
 #check_axioms WalRecoverySlice.Segmented.Native.AppendIO.LocalIO.healthy
 #check_axioms WalRecoverySlice.Segmented.Native.PrepareIO.selectedOnly_counterexample
 #check_axioms WalRecoverySlice.Segmented.Native.PrepareIO.Successor.healthy

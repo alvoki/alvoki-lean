@@ -329,6 +329,14 @@ Lean 4.36 can leak a raw descriptor before a Lean handle exists.
 
 ## Process interruption checks
 
+For append, the fixture stops the process immediately after data fsync
+and immediately after marker fsync on both the existing and rotating
+segment. Under boundary policy the two reopens return the old value in
+the first case and the mutation in the second. Additional cases stop at
+CONTROL rename, lose the reply after scope exit, or inject a segment
+fsync error before and after CONTROL publication. Each process test
+retains the kernel cache. Power-loss outcomes are checked by the proof.
+
 The Linux native fixture cuts the child process after the table directory
 sync and before manifest publication, or immediately after manifest rename
 and before its directory sync. In each case two successful reopens check
