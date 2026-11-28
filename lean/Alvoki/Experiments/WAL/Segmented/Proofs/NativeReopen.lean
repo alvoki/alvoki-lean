@@ -850,6 +850,51 @@ def nativeReopenOps (root : FilePath) (r : RootReports)
     removeSegment := rootRemove root r
     openSegment := nativeChildRead root r childReports }
 
+theorem nativeRemove_framesEntry (root : FilePath) (r : RootReports) (id : Nat) :
+    FramesEntry ((nativeReopenOps root r (fun _ _ => {})).removeSegment id) := by
+  intro s
+  change (reached (rootRemove root r id s)).activeEntry = s.activeEntry
+  unfold rootRemove Native.removeSegmentWith
+  apply framesEntry_bind
+  · intro t
+    simp only [↓reduceIte, ExceptT.run]
+    cases rootPresent r s id <;> rfl
+  · intro found
+    simp only
+    cases found
+    · intro _; rfl
+    · apply framesEntry_bind
+      · intro t
+        simp only [↓reduceIte, ExceptT.run]
+        cases r.members s.step id <;> rfl
+      · intro names
+        apply framesEntry_bind
+        · have loop (items : List String) :
+              FramesEntry (items.foldlM (m := M) (fun (_ : Unit) (name : String) state =>
+                read (r.unlinkFault s.step (Native.segmentPath root id / name)) (.ok ()) state) ()) := by
+            induction items with
+            | nil => intro _; rfl
+            | cons item tail ih =>
+              apply framesEntry_bind
+              · intro t
+                change (reached (read (r.unlinkFault s.step (Native.segmentPath root id / item)) (.ok ()) t)).activeEntry = t.activeEntry
+                cases r.unlinkFault s.step (Native.segmentPath root id / item) with
+                | none => rfl
+                | some fault => cases fault <;> rfl
+              · intro done
+                cases done
+                exact ih
+          intro t
+          have framed := loop names.toList t
+          have eq := Array.foldlM_toList (m := M) (xs := names) (init := ())
+            (f := fun _ (name : String) state =>
+              read (r.unlinkFault s.step (Native.segmentPath root id / name)) (.ok ()) state)
+          rw [eq] at framed
+          exact framed
+        · intro _ t
+          simp only [↓reduceIte, ExceptT.run]
+          exact namespace_framesEntry _ _ _
+
 /-- A fault-free root does not require an empty retired directory. The
 checked listing may contain any number of members. -/
 structure HealthyRoot (r : RootReports) : Prop where
@@ -898,6 +943,11 @@ private theorem rootRemove_healthy (root : FilePath) (r : RootReports)
   · simp only [ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind,
       healthy.present, read, named, decide_false, Bool.false_eq_true, ↓reduceIte]
     exact ⟨_, rfl⟩
+
+theorem nativeRemove_healthy (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (healthy : HealthyRoot r) (id : Nat) (s : State) :
+    ∃ after, ((nativeReopenOps root r reports).removeSegment id).run s = .ok (.ok ()) after :=
+  rootRemove_healthy root r healthy id s
 
 private theorem rootSync_healthy (root : FilePath) (r : RootReports)
     (healthy : HealthyRoot r) (s : State) :
@@ -1474,7 +1524,7 @@ def installScopedModel (owned : RootBinding directory lock) (r : RootReports)
     M (Native.Phase (ReopenedStore directory lock)) :=
   Native.installReopenedWith (reopenScopedModel owned.root r reports closeError)
     (fun entry => match entry with
-      | some (index, ready) => pure ⟨owned, index, ready⟩
+      | some (index, ready) => fun s => .ok (.ok ⟨owned, index, ready⟩) {s with activeEntry := some index}
       | none => throw "missing active child")
 
 private theorem installScopedModel_run (owned : RootBinding directory lock) (r : RootReports)
@@ -1482,7 +1532,8 @@ private theorem installScopedModel_run (owned : RootBinding directory lock) (r :
     (installScopedModel owned r reports closeError).run s =
       match (reopenScopedModel owned.root r reports closeError).run s with
       | .ok (.ok (session, ready)) after =>
-        .ok (.ok (.ready ⟨owned, session.control.active, ready⟩ session)) after
+        .ok (.ok (.ready ⟨owned, session.control.active, ready⟩ session))
+          {after with activeEntry := some session.control.active}
       | .ok (.error err) after => .ok (.error err) after
       | .error token after => .error token after := by
   simp only [installScopedModel, Native.installReopenedWith, Bind.bind, ExceptT.bind,
@@ -1493,6 +1544,90 @@ private theorem installScopedModel_run (owned : RootBinding directory lock) (r :
     cases response with
     | error => rfl
     | ok pair => cases pair; rfl
+
+theorem installScopedModel_registered
+    (ran : (installScopedModel owned r reports closeError).run before =
+      .ok (.ok (.ready store session)) after) :
+    after.activeEntry = some store.activeId := by
+  rw [installScopedModel_run] at ran
+  split at ran <;> cases ran
+  rfl
+
+/-- The exact phase issued by the child producer is positioned after the
+active suffix of the installed segmented history. -/
+theorem installScopedModel_appendPhase (owned : RootBinding directory lock) (r : RootReports)
+    (openReports : Nat → Nat → SingleFile.OpenReports) (closeError : Option String)
+    {s t : State} (prior : Recoverable known request s.disk) {session : Session}
+    {store : ReopenedStore directory lock}
+    (installed : (installScopedModel owned r openReports closeError).run s =
+      .ok (.ok (.ready store session)) t) :
+    ∃ history, session = sessionOf session.control history ∧
+      ReadyLayout session.control history t.disk ∧ t.disk.liveControl = some session.control ∧
+      t.disk.durableControl = some session.control ∧ store.binding = owned ∧
+      store.activeId = session.control.active ∧
+      SingleFile.storedPhase store.activeChild =
+        .active .lock (SingleFile.appendBindings session.control.policy)
+          (t.disk.cursor store.activeId) (segmentHistory session.control.capacity store.activeId history) ∧
+      store.activeChild.recovered.batches = segmentHistory session.control.capacity store.activeId history ∧
+      ∃ (before : State) (childAfter : SingleFile.OpenImage),
+        SingleFile.openExistingModel (Native.segmentPath owned.root store.activeId)
+          session.control.policy (openReports before.step store.activeId)
+          {image := before.disk.segment store.activeId} = .ok (.ok store.activeChild) childAfter ∧
+        childAfter.held = true := by
+  rw [installScopedModel_run] at installed
+  cases ran : (reopenScopedModel owned.root r openReports closeError).run s with
+  | error => rw [ran] at installed; cases installed
+  | ok response after =>
+    rw [ran] at installed
+    cases response with
+    | error => cases installed
+    | ok pair =>
+      obtain ⟨next, ready⟩ := pair
+      cases installed
+      obtain ⟨before, sealed, childAfter, prefixResult, opened, image⟩ :=
+        reopenScopedModel_delivered owned.root r openReports closeError ran
+      obtain ⟨_, _, _, _, childPrior⟩ := reopenPrefix_active (nativeRootEffects owned.root r openReports)
+        (nativeValidatedChildEffects owned.root r openReports) prior prefixResult
+      have child := SingleFile.openExisting_refines (Native.segmentPath owned.root session.control.active) session.control.policy (openReports before.step session.control.active)
+        {image := before.disk.segment session.control.active} rfl childPrior.dirty childPrior.markers
+      rw [opened] at child
+      have phase := SingleFile.openedAppendPhase child
+      obtain ⟨_, _, _, _, _, held, _, _, permitted, _, childReady, _, _⟩ := child.2.2
+      have bounds : ∀ b ∈ ready.recovered.batches, b.length ≤ 32 := by
+        intro b mem
+        apply childPrior.dirty.bounded b
+        rcases permitted with same | same
+        · exact List.mem_append_left _ (same ▸ mem)
+        · exact same ▸ mem
+      have fits : ready.recovered.batches.length ≤ 255 := by
+        rcases permitted with same | same
+        · rw [same]
+          have := childPrior.dirty.fits
+          simp only [List.length_append] at this
+          omega
+        · rw [same]
+          exact childPrior.dirty.fits
+      have disk := reopenScopedModel_refines owned.root r openReports closeError s prior
+      rw [ran] at disk
+      obtain ⟨history, shape, layout, live, durable⟩ := disk.1
+      let suffix := segmentHistory session.control.capacity session.control.active history
+      have suffixFits : suffix.length ≤ 255 := by
+        dsimp only [suffix]
+        rw [segmentHistory_active_length layout.layout.upper]
+        have high := layout.layout.upper
+        have cap := layout.layout.capacityFits
+        rw [Nat.add_mul, Nat.one_mul] at high
+        omega
+      have other := (Persistence.ready_powerLoss_reopen layout.active.ready
+        (segmentHistory_bounded layout.layout session.control.active) suffixFits).1
+      have issued := (Persistence.ready_powerLoss_reopen childReady bounds fits).1
+      dsimp only at other issued
+      rw [image, issued] at other
+      have same : ready.recovered.batches = suffix := by
+        injection other with result
+        exact congrArg Decoded.batches (Except.ok.inj result)
+      refine ⟨history, shape, layout, live, durable, rfl, rfl, ?_, same, before, childAfter, opened, held⟩
+      simp only [phase, same, layout.active.position, suffix]
 
 /-- The append consumer uses the active reference installed by the same
 schedule that produced the public session. -/
@@ -1533,7 +1668,7 @@ theorem installScopedModel_healthy (owned : RootBinding directory lock) (r : Roo
       .ok (.ok (.ready ⟨owned, session.control.active, ready⟩ session)) after := by
   obtain ⟨session, ready, after, ran⟩ :=
     reopenScopedModel_healthy owned.root r reports closeError s prior rootOK childrenOK representable
-  exact ⟨session, ready, after, by rw [installScopedModel_run, ran]⟩
+  exact ⟨session, ready, _, by rw [installScopedModel_run, ran]⟩
 
 /-- Only the root lock is live outside the scoped recovery. On success the
 active child moves into the ready store. On failure the child scope has
