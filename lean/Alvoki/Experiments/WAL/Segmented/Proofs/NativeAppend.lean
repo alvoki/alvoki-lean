@@ -82,7 +82,7 @@ private def erasePhase (result : EStateM.Result Unit (State × SingleFile.Append
   | .ok value s => .ok value s.1
   | .error token s => .error token s.1
 
-private theorem writeActive_refines (c : Control) (history : List Bytes) (batch : Bytes)
+theorem writeActive_refines (c : Control) (history : List Bytes) (batch : Bytes)
     (s : State) (entry : ReadyLayout c history s.disk)
     (live : s.disk.liveControl = some c) (durable : s.disk.durableControl = some c)
     (room : history.length < (c.active + 1) * c.capacity) (size : batch.length ≤ 32)
@@ -1074,7 +1074,7 @@ theorem readyAfterPublishingSuccessor (root : System.FilePath) (held : Nat) (eff
   exact ⟨⟨sessionOf (successor session) history, rfl, count, successorReady.2.1.trans visible.symm,
     successorReady.1⟩, authority⟩
 
-private theorem noAppend_pending {disk : Disk} {known : Contract.View} {batch : Bytes}
+theorem noAppend_pending {disk : Disk} {known : Contract.View} {batch : Bytes}
     (ready : Recoverable known none disk) : Recoverable known (some (.append batch)) disk := by
   obtain ⟨⟨c, l, h, p, readable, permits⟩, ⟨d, r, h', p', saved, permits'⟩⟩ := ready
   refine ⟨⟨c, l, h, p, readable, ?_⟩, ⟨d, r, h', p', saved, ?_⟩⟩
