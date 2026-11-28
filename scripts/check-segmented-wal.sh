@@ -30,7 +30,9 @@ lean -c "$scratch/native_tests.c" "$seg/NativeTests.lean"
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" \
   "$scratch/blob_contract.c" "$scratch/blob_protocol.c" \
   "$scratch/contract.c" "$scratch/protocol.c" "$scratch/control_codec.c" "$scratch/native.c" "$scratch/native_tests.c" \
-  native/fsync.c native/read_dir_checked.c -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
+  native/fsync.c native/read_dir_checked.c native/wal_recovery_fixture.c \
+  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir -Wl,--wrap=alvoki_wal_read_installed \
+  -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/native_tests"
 "$scratch/native_tests"
 # Proofs compose the segmented directory protocol with the existing per-segment model.
@@ -40,7 +42,7 @@ lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
 done
-for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen NativeControl NativeAppend; do
+for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen NativeControl NativeAppend CompactScan; do
   lean -o "$scratch/$seg/Proofs/$proof.olean" "$seg/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Segmented.Proofs.$proof"
 done
@@ -68,6 +70,7 @@ import Alvoki.Experiments.WAL.Segmented.Proofs.Execution
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeReopen
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeControl
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeAppend
+import Alvoki.Experiments.WAL.Segmented.Proofs.CompactScan
 open WalRecoverySlice.Segmented
 #check_axioms Recoverable.withUnselectedArtifact
 #check_axioms ControlCodec.decode_encode
@@ -193,4 +196,7 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.nativeChild_recoverable
 #check_axioms Model.nativeChild_sealed
 #check_axioms Model.nativeChild_selected
+#check_axioms Native.compactBounds_eq
+#check_axioms Native.scanReadyWith_read
+#check_axioms Native.ReadOutcome.healthy
 LEAN

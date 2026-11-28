@@ -51,7 +51,7 @@ def nativeControlOps (root : FilePath) (held : Nat) (r : Effects) : Ops M :=
 theorem nativeControl_run (root : FilePath) (held : Nat) (r : Effects) (c : Control)
     (active : c.active ≤ ControlCodec.wordMax)
     (discarded : c.discarded ≤ ControlCodec.wordMax) :
-    Segmented.publish (nativeControlOps root held r) c = Segmented.publish (ops r) c := by
+    Segmented.publish ((nativeControlOps root held r).toRootOps) c = Segmented.publish ((ops r).toRootOps) c := by
   simp [Segmented.publish, nativeControlOps, Native.publishControlWith, controlEffects, ops,
     active, discarded, ControlCodec.decode_encode c active discarded,
     DurableBlob.publishWith]
@@ -65,7 +65,7 @@ theorem nativeControl_cuts (root : FilePath) (held : Nat) (r : Effects) (c : Con
     (active : c.active ≤ ControlCodec.wordMax)
     (discarded : c.discarded ≤ ControlCodec.wordMax) (before : State) :
     DiskPost (fun _ d => d = before.disk.published c) (PublishCut before.disk c)
-      ((Segmented.publish (nativeControlOps root held r) c).run before) := by
+      ((Segmented.publish ((nativeControlOps root held r).toRootOps) c).run before) := by
   rw [nativeControl_run root held r c active discarded]
   exact publish_cases r c before
 
@@ -73,7 +73,7 @@ theorem nativeControl_cuts (root : FilePath) (held : Nat) (r : Effects) (c : Con
 theorem nativeControl_framesEntry (root : FilePath) (held : Nat) (r : Effects)
     (c : Control) (active : c.active ≤ ControlCodec.wordMax)
     (discarded : c.discarded ≤ ControlCodec.wordMax) :
-    FramesEntry (Segmented.publish (nativeControlOps root held r) c) := by
+    FramesEntry (Segmented.publish ((nativeControlOps root held r).toRootOps) c) := by
   intro before
   rw [nativeControl_run root held r c active discarded]
   revert before
@@ -97,7 +97,7 @@ theorem nativeControl_framesEntry (root : FilePath) (held : Nat) (r : Effects)
 theorem nativeControl_slot (root : FilePath) (held : Nat) (r : Effects)
     (c : Control) (active : c.active ≤ ControlCodec.wordMax)
     (discarded : c.discarded ≤ ControlCodec.wordMax) (s : State)
-    (ran : (Segmented.publish (nativeControlOps root held r) c).run s = .ok (.ok ()) after) :
+    (ran : (Segmented.publish ((nativeControlOps root held r).toRootOps) c).run s = .ok (.ok ()) after) :
     after.activeEntry = s.activeEntry := by
   have frame := nativeControl_framesEntry root held r c active discarded s
   rw [ran] at frame
@@ -105,22 +105,22 @@ theorem nativeControl_slot (root : FilePath) (held : Nat) (r : Effects)
 
 theorem nativeControl_healthy (root : FilePath) (held : Nat) (c : Control) (s : State)
     (active : c.active ≤ ControlCodec.wordMax) (discarded : c.discarded ≤ ControlCodec.wordMax) :
-    (Segmented.publish (nativeControlOps root held healthy) c).run s =
+    (Segmented.publish ((nativeControlOps root held healthy).toRootOps) c).run s =
       .ok (.ok ()) {s with disk := s.disk.published c, step := s.step + 4} := by
   rw [nativeControl_run root held healthy c active discarded]
   rfl
 
 theorem nativeControl_rejected (root : FilePath) (held : Nat) (r : Effects) (c : Control) (s : State)
     (invalid : ¬ (c.active ≤ ControlCodec.wordMax ∧ c.discarded ≤ ControlCodec.wordMax)) :
-    (Segmented.publish (nativeControlOps root held r) c).run s =
+    (Segmented.publish ((nativeControlOps root held r).toRootOps) c).run s =
       .ok (.error "segmented WAL position exhausted") s := by
   simp [Segmented.publish, nativeControlOps, Native.publishControlWith, DurableBlob.publishWith, invalid]
   rfl
 
 private theorem nativeControl_removeRetired (root : FilePath) (held : Nat) (r : Effects)
     (first : Nat) (ids : List Nat) :
-    Segmented.removeRetired (nativeControlOps root held r) first ids =
-      Segmented.removeRetired (ops r) first ids := by
+    Segmented.removeRetired ((nativeControlOps root held r).toRootOps) first ids =
+      Segmented.removeRetired ((ops r).toRootOps) first ids := by
   induction ids with
   | nil => rfl
   | cons id ids ih =>
@@ -128,7 +128,7 @@ private theorem nativeControl_removeRetired (root : FilePath) (held : Nat) (r : 
     rfl
 
 private theorem nativeControl_collect (root : FilePath) (held : Nat) (r : Effects) (c : Control) :
-    Segmented.collect (nativeControlOps root held r) c = Segmented.collect (ops r) c := by
+    Segmented.collect ((nativeControlOps root held r).toRootOps) c = Segmented.collect ((ops r).toRootOps) c := by
   simp only [Segmented.collect, nativeControl_removeRetired]
   rfl
 
@@ -140,7 +140,7 @@ theorem nativeDiscard_run (root : FilePath) (held : Nat) (r : Effects)
     (discarded : position ≤ ControlCodec.wordMax) :
     Segmented.discardThrough (nativeControlOps root held r) session position =
       Segmented.discardThrough (ops r) session position := by
-  unfold Segmented.discardThrough
+  unfold Segmented.discardThrough discardControl
   split
   · rfl
   split

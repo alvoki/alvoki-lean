@@ -56,7 +56,7 @@ inductive PublishCut (d : Disk) (c : Control) : Disk → Prop where
 
 theorem publish_cases (effects : Effects) (c : Control) (s : State) :
     DiskPost (fun _ d => d = s.disk.published c) (PublishCut s.disk c)
-      ((Segmented.publish (ops effects) c).run s) := by
+      ((Segmented.publish ((ops effects).toRootOps) c).run s) := by
   change DiskPost _ _ ((DurableBlob.publishWith _ _ _ _ : M Unit).run s)
   unfold DurableBlob.publishWith
   apply bindPost (P := fun _ d => ∃ p, d = s.disk.stage c p)
@@ -130,8 +130,8 @@ theorem rotateIfFull_cases (e : Effects) (ss : Session) (s : State) :
     intro _ u named
     have h := publish_cases e (successor ss) u
     apply bindPost (P := fun _ d => d = u.disk.published (successor ss))
-    · change DiskPost _ _ ((Segmented.publish (ops e) (successor ss)).run u)
-      generalize hres : (Segmented.publish (ops e) (successor ss)).run u = res at h ⊢
+    · change DiskPost _ _ ((Segmented.publish ((ops e).toRootOps) (successor ss)).run u)
+      generalize hres : (Segmented.publish ((ops e).toRootOps) (successor ss)).run u = res at h ⊢
       cases res with
       | error _ t => exact RotationCut.publishing (named ▸ h)
       | ok x t => cases x with
