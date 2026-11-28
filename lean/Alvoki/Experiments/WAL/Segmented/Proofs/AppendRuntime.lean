@@ -137,4 +137,38 @@ theorem LocalIO.append {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg
     exact ⟨edge.frame q, edge.writes.recoverable (physical.recoverable recover),
       slot,root,locks,op.cell,op.mutex,op.parts,regFacts.1,.inl (heap.unlock _ poison),heap.unlock _ stored⟩
 
+/-- An admission guard can reject the payload or absolute position before
+either child path starts. Close then consumes the original active child. -/
+theorem LocalIO.rejected {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg batch w)
+    (entry : Active mem heap wal reg w) (framed : Q w)
+    (invalid : batch.length > 32 ∨ reg.session.view.tail ≥ Contract.maxPosition) :
+    ∃ err t, Native.append wal batch w = .error err t ∧ Q t ∧
+      Recoverable reg.session.view (some (.append batch)) (disk t) ∧
+      Custody heap wal reg.store (some (reg.session.control.active,reg.child)) t := by
+  obtain ⟨root,registered,a,phase,live,ready⟩ := entry
+  obtain ⟨sep,outer,slot⟩ := registered
+  have aligned : heap.separate op.cell reg.store.active ∧ heap.holds op.cell (.ready reg.store reg.session) w := by
+    rw [← op.parts.1]; exact ⟨sep,outer⟩
+  let begin := issuedWorld op.cell op.mutex reg.store w
+  have read := heap.read (heap.lock op.mutex aligned.2)
+  obtain ⟨e,ran⟩ := append_rejected op.parts reg.store reg.session w batch read.1 invalid
+  have poison : heap.holds op.cell (.poisoned reg.store) begin := heap.set _ _ _
+  have child : heap.holds reg.store.active (some (reg.session.control.active,reg.child)) begin :=
+    op.memory.slotSet _ _ _ aligned.1 (heap.readFrame op.cell (heap.lock op.mutex slot))
+  have edges := op.memory.entry.trans (op.memory.unlock begin _ (op.memory.entry.frame framed) poison)
+  have prior : Recoverable reg.session.view (some (.append batch)) (disk w) := ready.installed.offline (.inl rfl)
+  exact ⟨_,_,ran,edges.frame framed,edges.writes.recoverable prior,root,⟨a.fd,a.source.openedChild⟩,
+    op.cell,op.mutex,op.parts,aligned.1,.inl (heap.unlock _ poison),heap.unlock _ child⟩
+
+theorem LocalIO.run {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg batch w)
+    (entry : Active mem heap wal reg w) (framed : Q w) (linux : System.Platform.isWindows = false) :
+    IOReturns (Native.append wal batch) w (Succeeded mem heap Q wal reg batch) (Failed disk heap Q wal reg batch) := by
+  by_cases size : batch.length ≤ 32
+  · by_cases room : reg.session.view.tail < Contract.maxPosition
+    · exact op.append entry framed size room linux
+    · obtain ⟨e,t,ran,q,d,held⟩ := op.rejected entry framed (.inr (Nat.le_of_not_gt room))
+      unfold IOReturns; rw [ran]; exact ⟨q,d,_,held⟩
+  · obtain ⟨e,t,ran,q,d,held⟩ := op.rejected entry framed (.inl (Nat.lt_of_not_ge size))
+    unfold IOReturns; rw [ran]; exact ⟨q,d,_,held⟩
+
 end WalRecoverySlice.Segmented.Native.AppendIO
