@@ -147,4 +147,36 @@ theorem uncertainReopen (survivor : Survivor physical root before session w imag
       (WithOpenReads.Failure physical root image life stopped ⟨path, keys, w⟩ rootLife) :=
   WithOpenReads.withOpen entry files heap runtime (survivor.uncertain prior).stop keys rootLife
 
+/-- On the published branch replay starts at the exact WAL tail. Every recovered
+lookup reaches the newly installed table first, including lookups for absent keys. -/
+theorem publishedLookup {id : UInt64}
+    (installed : Installed recovered (published before session id) history)
+    (fits : before.view.tail < UInt64.size)
+    (phase : (ref.get : IO (Lifecycle.Phase NativeRead.Wal)) start = .ok (.online wal recovered) w) (key : UInt64) :
+    Call.mk dir id (.lookup key) w ∈ publicCalls ref dir key start := by
+  obtain ⟨d, version, mem⟩ := installed
+  have replayed := d.replay_pending
+  change (before.view.batches.drop
+    (before.view.tail.toUInt64.toNat - before.view.base)).mapM decode = some d.pending at replayed
+  rw [UInt64.toNat_ofNat_of_lt' fits] at replayed
+  simp [Contract.View.tail] at replayed
+  apply callsFirst phase
+  · rw [mem, replayed]
+    rfl
+  · rw [version]
+    rfl
+
+/-- Under the old manifest the orphan cannot appear anywhere in the reached
+lookup trace, even when every older table is visited. -/
+theorem orphanIgnored {id : UInt64} (fresh : before.tables id = none)
+    (installed : Installed recovered before history)
+    (phase : (ref.get : IO (Lifecycle.Phase NativeRead.Wal)) start = .ok (.online wal recovered) w)
+    (member : c ∈ publicCalls ref dir key start) : c.id ≠ id := by
+  obtain ⟨durable, version, _⟩ := installed
+  have listed := callsInManifest phase member
+  rw [version] at listed
+  intro eq
+  obtain ⟨rows, bound⟩ := durable.boundTable c.id listed
+  simp [eq, fresh] at bound
+
 end ExperimentalL0.NativeFlushRestart

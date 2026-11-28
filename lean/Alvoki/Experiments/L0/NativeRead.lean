@@ -327,6 +327,60 @@ def publicCalls (ref : IO.Ref (Phase Wal)) (dir : System.FilePath) (key : UInt64
   | .ok (.online _ session) entered => calls (get (logged dir) session key (entered, []))
   | _ => []
 
+/-- Each prior entry remains in the log and each new entry comes from the
+manifest list at this particular lookup. -/
+private theorem loggedTables (dir : System.FilePath) (key : UInt64) (ids : List UInt64)
+    (w : W) (log : List Call) :
+    let after := calls (lookupTables (logged dir).tables key ids (w, log))
+    (∀ c ∈ log, c ∈ after) ∧ (∀ c ∈ after, c ∈ log ∨ c.id ∈ ids) := by
+  induction ids generalizing w log with
+  | nil => exact ⟨fun _ h => h, fun _ h => .inl h⟩
+  | cons id ids ih =>
+    let call := Call.mk dir id (.lookup key) w
+    have single (c : Call) (member : c ∈ call :: log) : c ∈ log ∨ c.id ∈ id :: ids := by
+      rcases List.mem_cons.mp member with rfl | old
+      · exact .inr (.head _)
+      · exact .inl old
+    simp only [lookupTables, logged, Bind.bind, EStateM.bind]
+    cases ran : lower (nativeTableAt dir id (·.lookup key)) w with
+    | error => exact ⟨fun _ h => .tail _ h, single⟩
+    | ok x t =>
+      cases x with
+      | some => exact ⟨fun _ h => .tail _ h, single⟩
+      | none =>
+        have rest := ih t (call :: log)
+        refine ⟨fun c h => rest.1 c (.tail _ h), ?_⟩
+        intro c member
+        rcases rest.2 c member with old | later
+        · exact single c old
+        · exact .inr (.tail _ later)
+
+private theorem publicCalls_miss (phase : (ref.get : IO (Phase Wal)) start = .ok (.online wal session) w)
+    (miss : session.mem[key]? = none) :
+    publicCalls ref dir key start = calls (lookupTables (logged dir).tables key session.version.tables (w, [])) := by
+  simp only [publicCalls, phase, get, miss, Bind.bind, EStateM.bind]
+  cases lookupTables (logged dir).tables key session.version.tables (w, []) <;> rfl
+
+theorem callsInManifest (phase : (ref.get : IO (Phase Wal)) start = .ok (.online wal session) w)
+    (member : c ∈ publicCalls ref dir key start) : c.id ∈ session.version.tables := by
+  cases observed : session.mem[key]? with
+  | some m => simp [publicCalls, phase, get, observed, calls, Pure.pure, EStateM.pure] at member
+  | none =>
+    rw [publicCalls_miss phase observed] at member
+    exact ((loggedTables dir key session.version.tables w []).2 c member).resolve_left (by simp)
+
+theorem callsFirst {id : UInt64} (phase : (ref.get : IO (Phase Wal)) start = .ok (.online wal session) w)
+    (miss : session.mem[key]? = none) (first : session.version.tables = id :: rest) :
+    Call.mk dir id (.lookup key) w ∈ publicCalls ref dir key start := by
+  rw [publicCalls_miss phase miss, first]
+  simp only [lookupTables, logged, Bind.bind, EStateM.bind]
+  cases ran : lower (nativeTableAt dir id (·.lookup key)) w with
+  | error => exact .head _
+  | ok x t =>
+    cases x with
+    | some => exact .head _
+    | none => exact (loggedTables dir key rest t _).1 _ (.head _)
+
 def Released (life : Lifetime) (ref : IO.Ref (Phase Wal)) (dir : System.FilePath)
     (key : UInt64) (start : W) : Prop :=
   ∀ c ∈ publicCalls ref dir key start, c.Balanced life
