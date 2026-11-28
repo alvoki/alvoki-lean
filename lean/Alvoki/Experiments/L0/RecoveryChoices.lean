@@ -78,8 +78,13 @@ theorem Retry.afterAppend
     (retry : Retry (.offline old (some (.append batch))) (.ready version)
       (.online view) (.ready observed)) :
     (view = old ∨ view = old.append batch) ∧ observed = version := by
-  simpa [walChoices, manifestChoices, Contract.Request.apply, eq_comm (a := old.append batch)]
-    using retry.opened
+  have chosen := retry.opened
+  by_cases room : old.tail < Contract.maxPosition
+  · simpa [walChoices, manifestChoices, Contract.Request.apply, room, eq_comm (a := old.append batch)]
+      using chosen
+  · have unchanged : view = old ∧ observed = version := by
+      simpa [walChoices, manifestChoices, Contract.Request.apply, room] using chosen
+    exact ⟨.inl unchanged.1, unchanged.2⟩
 
 /-- An uncertain flush can change only the manifest choice. The WAL has
 already settled every write used to build the new table. -/

@@ -39,7 +39,11 @@ theorem wal_append
   have same := wal_trace_unique earlier prior.refinesOnline
   cases same
   cases step with
-  | ack applied => exact (Option.some.inj applied).symm
+  | ack applied =>
+    simp only [Contract.Request.apply] at applied
+    split at applied
+    · exact (Option.some.inj applied).symm
+    · contradiction
 
 /-- Reading the cached view of a reached WAL session is a public scan of
 the exact installed state. No independent scan-content premise is needed. -/
