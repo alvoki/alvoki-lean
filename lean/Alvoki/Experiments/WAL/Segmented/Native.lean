@@ -8,20 +8,20 @@ namespace WalRecoverySlice.Segmented.Native
 open System
 
 @[extern "alvoki_fsync"]
-private opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
+opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_wal_unbuffered"]
 private opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_read_dir_checked"]
-private opaque entries (path : @& FilePath) : IO (Array IO.FS.DirEntry)
+opaque entries (path : @& FilePath) : IO (Array IO.FS.DirEntry)
 
-private def metadata? (path : FilePath) : IO (Option IO.FS.Metadata) := do
+def metadata? (path : FilePath) : IO (Option IO.FS.Metadata) := do
   try return some (← path.symlinkMetadata) catch
     | .noFileOrDirectory .. => return none
     | err => throw err
 
-private def regular (path : FilePath) (md : IO.FS.Metadata) : IO Unit := do
+def regular (path : FilePath) (md : IO.FS.Metadata) : IO Unit := do
   unless md.type == .file && md.numLinks == 1 do
     throw <| IO.userError s!"expected singly linked regular file at {path}"
 
@@ -36,10 +36,10 @@ def segmentPath (root : FilePath) (id : Nat) := root / segmentName id
 
 def policyStamp (p : Policy) := if p == .boundary then "v3 boundary" else "v3 log"
 
-private def childName (name : String) : Bool :=
+def childName (name : String) : Bool :=
   ["lock", "policy", "segment", "commit.0", "commit.1"].contains name
 
-private def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) := do
+def inspectChild (dir : FilePath) : IO (Array IO.FS.DirEntry) := do
   unless (← dir.symlinkMetadata).type == .dir do throw <| IO.userError s!"expected segment directory at {dir}"
   let names ← entries dir
   for item in names do
@@ -59,7 +59,7 @@ the ID is retired or was never published. A partial deletion is retryable. -/
     members.forM fun item => unlink (dir / name item)
     rmdir dir
 
-private def removeSegment (root : FilePath) (id : Nat) : IO Unit :=
+def removeSegment (root : FilePath) (id : Nat) : IO Unit :=
   removeSegmentWith (fun dir => return (← metadata? dir).isSome)
     inspectChild (·.fileName) IO.FS.removeFile IO.FS.removeDir root id
 
@@ -75,19 +75,19 @@ private abbrev FileM := ExceptT String IO
   let granted ← tryLock lock
   if granted then pure lock else throw "segmented WAL already open"
 
-private def checked (a : FileM α) : IO α := do
+def checked (a : FileM α) : IO α := do
   match ← a.run with
   | .ok x => return x
   | .error e => throw <| IO.userError e
 
-private def acquireRoot (root : FilePath) : IO IO.FS.Handle :=
+def acquireRoot (root : FilePath) : IO IO.FS.Handle :=
   checked <| acquireRootWith
     (fun path => do
       let md ← metadata? path
       return md.map fun item => item.type == .file && item.numLinks == 1)
     (fun path mode => IO.FS.Handle.mk path mode) (fun handle => handle.tryLock) root
 
-private structure Store where
+structure Store where private mk ::
   root : FilePath
   lock : IO.FS.Handle
   directory : IO.FS.Handle
@@ -97,7 +97,7 @@ private structure Store where
     (close : child → m Unit) : m Unit := do
   if let some (_, child) ← take then close child
 
-private def Store.closeChild (s : Store) : IO Unit :=
+def Store.closeChild (s : Store) : IO Unit :=
   closeChildWith (s.active.swap none) SingleFile.close
 
 /-- A reported cleanup error never replaces the operation's primary error. -/
@@ -112,7 +112,7 @@ private def Store.closeChild (s : Store) : IO Unit :=
   cleanupOnError (error := error) closeChild unlock
   unlock
 
-private def Store.release (s : Store) : IO Unit := do
+def Store.release (s : Store) : IO Unit := do
   releaseWith (error := IO.Error) s.closeChild s.lock.unlock
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
@@ -138,7 +138,7 @@ def requiredChildNames (p : Policy) : List String :=
       (← readPolicy (dir / "policy")) == expected do
     throw s!"segment policy mismatch at {id}"
 
-private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
+def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
   let dir := segmentPath s.root id
   checked <| validateChildWith
     (fun path => do return (← inspectChild path).map (·.fileName))
@@ -155,7 +155,7 @@ private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFi
   close child
   return batches
 
-private def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
+def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
   readSealedChildWith (error := IO.Error) (s.acquireChild p id) SingleFile.scan SingleFile.close
 
 /-- Transfer the child to the caller on success. Release it on a reported
@@ -178,7 +178,7 @@ def collectId (ids : List Nat) (name : String) : Except String (List Nat) :=
 @[inline] def listedIds (name : entry → String) (items : Array entry) : Except String (List Nat) :=
   items.foldlM (fun ids item => collectId ids (name item)) []
 
-private def Store.listIds (s : Store) : FileM (List Nat) := do
+def Store.listIds (s : Store) : FileM (List Nat) := do
   match listedIds (·.fileName) (← entries s.root) with
   | .ok ids => return ids
   | .error err => throw err
@@ -197,7 +197,7 @@ read of the same protected path. Its decode and checks are shared. -/
     | throw "invalid segmented WAL control"
   return control
 
-private def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
+def controlMetadata (path : FilePath) : FileM (Bool × Nat) := do
   let md ← path.symlinkMetadata
   return (md.type == .file && md.numLinks == 1, md.byteSize.toNat)
 
@@ -242,7 +242,7 @@ private def controlPrimitives : ControlPrimitives FileM IO.FS.Handle IO.FS.Handl
   rename stage active := liftM (IO.FS.rename stage active)
   syncDirectory directory := liftM (syncHandle directory)
 
-private def Store.callbacks (s : Store) : Ops FileM where
+def Store.callbacks (s : Store) : Ops FileM where
   prepareSegment p id := s.prepare p id
   syncRoot := syncRootWith (fun directory => liftM (syncHandle directory)) s.directory
   publishControl := publishControlWith controlPrimitives s.root s.directory
@@ -288,7 +288,7 @@ structure Handle where private mk ::
   let lock ← lockRoot root
   allocate root directory lock
 
-private def acquireStore (dir : FilePath) : IO Store :=
+def acquireStore (dir : FilePath) : IO Store :=
   acquireStoreWith IO.FS.realPath IO.FS.Handle.mk acquireRoot (fun root directory lock => do
     let active ← IO.mkRef none
     return {root, directory, lock, active}) dir
@@ -305,7 +305,7 @@ private def acquireStore (dir : FilePath) : IO Store :=
   let owned ← storeActive (some (session.control.active, child))
   return .ready owned session
 
-private def Store.recoverChild (store : Store) : IO (Session × SingleFile.Handle) :=
+def Store.recoverChild (store : Store) : IO (Session × SingleFile.Handle) :=
   checked <| Segmented.reopenWith store.callbacks
     (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
       (store.acquireChild policy id) SingleFile.close (fun child => do
