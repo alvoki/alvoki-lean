@@ -94,7 +94,7 @@ private def writeFlushed (h : IO.FS.Handle) (bytes : Bytes) : IO Unit := do
   h.write (encodeBytes bytes)
   h.flush
 
-private def nativeAppend : AppendIO FileM IO.FS.Handle where
+def Internal.nativeAppend : AppendIO FileM IO.FS.Handle where
   appendFlushed h bytes := writeFlushed h bytes
   writeFromStart h bytes := do
     h.rewind
@@ -323,7 +323,56 @@ def create (dir : FilePath) (policy : Policy) : IO Handle :=
 /-- An ACK follows the required barriers. Errors leave the shared phase poisoned. -/
 def append (h : Handle) (payload : Bytes) : IO Unit := withMutex h do
   checked (appendWith (← h.state.get) h.state.set
-    (fun files cursor => appendBatch (appendOps nativeAppend files) h.policy cursor payload) payload)
+    (fun files cursor => appendBatch (appendOps Internal.nativeAppend files) h.policy cursor payload) payload)
+
+/-- Execution of a returned public append on the exact active ref. The
+phase becomes poisoned before the first write and is reinstalled only
+after the worker's completed barriers. The mutex is released on both channels. -/
+theorem append_active_run (bound : h.Assembled policy cell mutex) (start : Void IO.RealWorld)
+    (active : ((cell.get : BaseIO _) (mutex.lock start).state).val = .active fd files cursor entries)
+    (batch : Bytes) :
+    let read := (cell.get : BaseIO _) (mutex.lock start).state
+    let began := ((cell.set (.poisoned fd) : BaseIO Unit) read.state).state
+    append h batch start =
+      match (appendBatch (appendOps Internal.nativeAppend files) policy cursor batch).run began with
+      | .error e t => .error e (mutex.unlock t).state
+      | .ok (.error err) t => .error (IO.userError err) (mutex.unlock t).state
+      | .ok (.ok next) t =>
+        let stored := ((cell.set (.active fd files next (entries ++ [batch])) : BaseIO Unit) t).state
+        .ok () (mutex.unlock stored).state := by
+  subst h
+  let h : Handle := ⟨policy, cell, mutex⟩
+  let locked := (mutex.lock start).state
+  let read := (cell.get : BaseIO _) locked
+  let began := ((cell.set (.poisoned fd) : BaseIO Unit) read.state).state
+  have withMutex_run (a : IO Unit) : withMutex h a start =
+      match a locked with
+      | .ok x t => .ok x (h.mutex.unlock t).state
+      | .error e t => .error e (h.mutex.unlock t).state := by
+    have base (a : BaseIO Unit) (w : Void IO.RealWorld) :
+        (liftM a : IO Unit) w = .ok (a w).val (a w).state := by
+      change BaseIO.toEIO a w = _
+      cases ran : a w
+      simp [BaseIO.toEIO, ran]
+    unfold withMutex
+    simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, base, tryFinally,
+      tryFinally', MonadFinally.tryFinally', instMonadFinallyEIO._aux_1,
+      Functor.map, instMonadEIO._aux_1]
+    cases a (h.mutex.lock start).state <;> rfl
+  dsimp only
+  unfold append
+  rw [withMutex_run]
+  have readRun : (cell.get : IO _) locked = .ok read.val read.state := rfl
+  have poison : (cell.set (.poisoned fd) : FileM Unit).run read.state = .ok (.ok ()) began := rfl
+  change read.val = _ at active
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, readRun, active, appendWith]
+  unfold checked
+  simp only [ExceptT.bind, ExceptT.mk, ExceptT.run, ExceptT.bindCont, Bind.bind, instMonadEIO._aux_13, EST.bind] at poison ⊢
+  rw [poison]
+  simp only
+  cases issued : (appendBatch (appendOps Internal.nativeAppend files) policy cursor batch).run began with
+  | error => simp only [ExceptT.run] at issued; dsimp only [began, read, locked] at issued ⊢; simp only [EST.bind, issued]; rfl
+  | ok response t => simp only [ExceptT.run] at issued; dsimp only [began, read, locked] at issued ⊢; simp only [EST.bind, issued, ExceptT.bindCont]; cases response <;> rfl
 
 def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload) : m (List Bytes) :=
   match phase with
