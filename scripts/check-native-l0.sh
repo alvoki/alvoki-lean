@@ -146,6 +146,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.reopenAfterRestart
 #check_axioms TableNamespace.scopedLookup
 #check_axioms nativeTableAt_success
+#check_axioms nativeTableAt_reached
 #check_axioms TableNamespace.scopedCheck
 #check_axioms NativeTableReads.product
 #check_axioms NativeTableReads.productFrame

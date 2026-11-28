@@ -103,6 +103,20 @@ private def nativeSchedule : IO Unit := IO.FS.withTempDir fun root => do
     try expectError (Native.get db 7)
     finally IO.FS.rename hidden newTable
     check ((← Native.get db 7).isNone) "failed read changed the session"
+    -- Corrupt the checked-open input after recovery so the get fails only
+    -- after the table descriptor has been acquired.
+    let descriptors : FilePath := "/proc/self/fd"
+    if ← descriptors.pathExists then
+      let baseline := (← descriptors.readDir).size
+      for _ in List.range 3 do
+        check ((← Native.get db 8) == some 20) "descriptor fixture lost the value"
+        check ((← descriptors.readDir).size == baseline) "successful get retained a descriptor"
+      IO.FS.writeBinFile newTable ByteArray.empty
+      try
+        for _ in List.range 3 do
+          expectError (Native.get db 8)
+          check ((← descriptors.readDir).size == baseline) "failed get retained a descriptor"
+      finally IO.FS.writeBinFile newTable intendedBytes
   let orphan := root / "tables" / "table-2"
   IO.FS.writeBinFile orphan ⟨#[42]⟩
   Native.withOpen root fun db => do

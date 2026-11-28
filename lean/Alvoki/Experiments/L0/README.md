@@ -152,8 +152,22 @@ from the immutable image on that inode. The reached result is now computed
 by [NativeTableReads](NativeTableReads.lean) from one evaluation of the
 native scope. On its product carrier only the IO world is advanced, so
 the table namespace and logical projection are structurally unchanged.
-The runtime closes the descriptor when its last reference drops. Check and lookup return only
-unit or a mutation observation.
+`nativeTableAt_reached` distinguishes stat failure, rejected metadata,
+acquisition failure and the outcome of the action on an acquired handle.
+For the concrete check and lookup, the descriptor is held in the local
+SSTable source and reader. The check discards the opened table. Lookup
+decodes to a value or tombstone. Errors carry strings or an IO error.
+The reader has no application-state write or user-supplied continuation.
+This confines the descriptor on both return branches provided the native
+read primitives do not retain the borrowed reference.
+
+The runtime boundary is last-reference release before control returns to
+the caller's next operation, for a successfully constructed local handle
+with no escaping alias. It frames the protected storage and other owned
+resources. Failed construction is a separate boundary. Lean 4.36 on
+Linux can leak a raw file descriptor on failed `fdopen`, before a Lean
+handle exists. The runtime premise for that error path must exclude this
+case or supply its cleanup. See [filesystem assumptions](../../../../docs/design/filesystem-assumptions.md#lean-runtime-resource-pitfall).
 
 The lifecycle proof keeps the namespace on the storage carrier. Changing
 phase for publication or cleanup leaves the catalog projection unchanged.

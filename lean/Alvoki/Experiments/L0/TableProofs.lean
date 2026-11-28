@@ -167,6 +167,48 @@ theorem nativeTableAt_afterStat {dir : System.FilePath} {id : UInt64}
     Bind.bind, instMonadEIO._aux_13, EST.bind]
   cases opened : IO.FS.Handle.mk (tablePath dir id) .read checked <;> simp
 
+/-- On either return branch, attribute the reached world to the last
+operation that actually ran. A rejected stat never acquires a descriptor. -/
+theorem nativeTableAt_reached {dir : System.FilePath} {id : UInt64}
+    {use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α}
+    {start : Void IO.RealWorld} :
+    (nativeTableAt dir id use).run start =
+      match (nativeTableStat (tablePath dir id)).run start with
+      | .error error checked => .error error checked
+      | .ok (.error error) checked => .ok (.error error) checked
+      | .ok (.ok md) checked =>
+        if isTableFile md then
+          match IO.FS.Handle.mk (tablePath dir id) .read checked with
+          | .ok handle entered => (nativeTableAction handle id use).run entered
+          | .error error reached => .error error reached
+        else .ok (.error "expected a singly linked regular SSTable") checked := by
+  let resume (md : IO.FS.Metadata) : ExceptT String IO α :=
+    if isTableFile md then nativeTableReadScope (tablePath dir id)
+      (fun held => nativeTableAction held id use)
+    else throw "expected a singly linked regular SSTable"
+  cases stat : (nativeTableStat (tablePath dir id)).run start with
+  | error error checked =>
+    change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _
+    rw [ExceptT.run_bind]
+    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, stat]
+  | ok result checked =>
+    cases result with
+    | error error =>
+      change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _
+      rw [ExceptT.run_bind]
+      simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat]
+      rfl
+    | ok md =>
+      by_cases regular : isTableFile md = true
+      · simpa [regular] using (nativeTableAt_afterStat (use := use) stat regular)
+      · change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _
+        rw [ExceptT.run_bind]
+        simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat, ite_eq_right regular]
+        have rejected : resume md = throw "expected a singly linked regular SSTable" := by
+          simp [resume, regular]
+        rw [rejected]
+        rfl
+
 /-- A successful scoped action must have passed stat and acquired the
 descriptor at the derived name. These are the effects of that execution. -/
 theorem nativeTableAt_success {dir : System.FilePath} {id : UInt64}
@@ -176,37 +218,18 @@ theorem nativeTableAt_success {dir : System.FilePath} {id : UInt64}
       (nativeTableStat (tablePath dir id)).run start = .ok (.ok md) checked ∧
       isTableFile md = true ∧
       IO.FS.Handle.mk (tablePath dir id) .read checked = .ok handle entered := by
-  let resume (md : IO.FS.Metadata) : ExceptT String IO α :=
-    if isTableFile md then nativeTableReadScope (tablePath dir id)
-      (fun held => nativeTableAction held id use)
-    else throw "expected a singly linked regular SSTable"
-  cases stat : (nativeTableStat (tablePath dir id)).run start with
-  | error error checked =>
-    change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _ at ran
-    rw [ExceptT.run_bind] at ran
-    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, stat] at ran
-  | ok result checked =>
-    cases result with
-    | error error =>
-      change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _ at ran
-      rw [ExceptT.run_bind] at ran
-      simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat] at ran
-      change EST.Out.ok (Except.error error : Except String α) checked = _ at ran
-      cases (EST.Out.ok.inj ran).1
-    | ok md =>
-      by_cases regular : isTableFile md = true
-      · rw [nativeTableAt_afterStat stat regular] at ran
-        cases opened : IO.FS.Handle.mk (tablePath dir id) .read checked with
-        | error error entered => simp [opened] at ran
-        | ok handle entered => exact ⟨md, checked, handle, entered, rfl, regular, opened⟩
-      · change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _ at ran
-        rw [ExceptT.run_bind] at ran
-        simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat] at ran
-        have rejected : resume md = throw "expected a singly linked regular SSTable" := by
-          simp [resume, regular]
-        rw [rejected] at ran
-        change EST.Out.ok (Except.error "expected a singly linked regular SSTable" : Except String α) checked = _ at ran
-        cases (EST.Out.ok.inj ran).1
+  rw [nativeTableAt_reached] at ran
+  split at ran
+  · cases ran
+  · cases (EST.Out.ok.inj ran).1
+  · rename_i md checked stat
+    split at ran
+    · rename_i regular
+      split at ran
+      · rename_i handle entered opened
+        exact ⟨md, checked, handle, entered, stat, regular, opened⟩
+      · cases ran
+    · cases (EST.Out.ok.inj ran).1
 
 theorem nativeTableAt_acquired {dir : System.FilePath} {id : UInt64}
     {use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α}
