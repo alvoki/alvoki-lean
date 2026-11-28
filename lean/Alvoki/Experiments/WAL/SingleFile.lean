@@ -7,27 +7,27 @@ namespace WalRecoverySlice.SingleFile
 open System
 
 @[extern "alvoki_fsync"]
-private opaque syncHandle (h : @& IO.FS.Handle) : IO Unit
+opaque Internal.syncHandle (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_wal_unbuffered"]
-private opaque disableBuffering (h : @& IO.FS.Handle) : IO Unit
+opaque Internal.disableBuffering (h : @& IO.FS.Handle) : IO Unit
 
 @[extern "alvoki_read_dir_checked"]
-private opaque readDirChecked (path : @& FilePath) : IO (Array IO.FS.DirEntry)
+opaque Internal.readDirChecked (path : @& FilePath) : IO (Array IO.FS.DirEntry)
 
-private def openStream (file : FilePath) (mode : IO.FS.Mode) : IO IO.FS.Handle := do
+def Internal.openStream (file : FilePath) (mode : IO.FS.Mode) : IO IO.FS.Handle := do
   let h ← IO.FS.Handle.mk file mode
-  disableBuffering h
+  Internal.disableBuffering h
   return h
 
 private abbrev FileM := ExceptT String IO
 private def encodeBytes (xs : Bytes) : ByteArray := ⟨xs.toArray⟩
 
-private def writeAndSync (file : FilePath) (bytes : ByteArray) : IO Unit := do
-  let h ← openStream file .writeNew
+def Internal.writeAndSync (file : FilePath) (bytes : ByteArray) : IO Unit := do
+  let h ← Internal.openStream file .writeNew
   h.write bytes
   h.flush
-  syncHandle h
+  Internal.syncHandle h
 
 @[extern "alvoki_wal_truncate_at"]
 private opaque truncateAt (h : @& IO.FS.Handle) (count : @& Nat) : IO Unit
@@ -66,7 +66,7 @@ private def readFromStart (h : IO.FS.Handle) : IO Bytes := do
 def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
   readFromStart h := readFromStart h
   truncateAt h n := truncateAt h n
-  sync h := syncHandle h
+  sync h := Internal.syncHandle h
 
 structure AppendFiles (handle : Type) where
   writer : handle
@@ -99,7 +99,7 @@ def Internal.nativeAppend : AppendIO FileM IO.FS.Handle where
   writeFromStart h bytes := do
     h.rewind
     writeFlushed h bytes
-  sync h := syncHandle h
+  sync h := Internal.syncHandle h
 
 def checked (action : FileM α) : IO α := do
   match ← action.run with
@@ -221,7 +221,7 @@ structure OpenFiles (handle : Type) where
 
 def nativeOpen : OpenIO FileM IO.FS.Handle where
   openFile _ path mode := IO.FS.Handle.mk path mode
-  unbuffered h := disableBuffering h
+  unbuffered h := Internal.disableBuffering h
   readPolicy path h := do
     let bytes ← h.readBinToEnd
     match String.fromUTF8? bytes with
@@ -229,7 +229,7 @@ def nativeOpen : OpenIO FileM IO.FS.Handle where
     | none => throw s!"Tried to read file '{path}' containing non UTF-8 data."
   tryLock h := h.tryLock
   unlock h := h.unlock
-  sync h := syncHandle h
+  sync h := Internal.syncHandle h
 
 def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
     (markers : Option (IO.FS.Handle × IO.FS.Handle)) : FileM Decoded :=
@@ -259,9 +259,9 @@ theorem installReady_run (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)
       Handle.Assembled handle ready.policy allocated.val guard.val :=
   ⟨_, rfl, rfl⟩
 
-private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
+def Internal.acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
 
-private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
+def Internal.install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
   checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= Internal.installReady
 
 /-- Open a previously initialized directory, holding a nonblocking exclusive file
@@ -304,9 +304,9 @@ schedule acquires its reader, writer and marker descriptions. -/
 /-- Initialize an empty caller-owned directory. Existing files are never replaced;
 an interrupted initialization is not automatically retried. -/
 def create (dir : FilePath) (policy : Policy) : IO Handle :=
-  createWith (error := IO.Error) IO.userError (acquire dir) (·.unlock)
-    (fun path => do return (← readDirChecked path).map (·.fileName))
-    writeAndSync install dir policy
+  createWith (error := IO.Error) IO.userError (Internal.acquire dir) (·.unlock)
+    (fun path => do return (← Internal.readDirChecked path).map (·.fileName))
+    Internal.writeAndSync Internal.install dir policy
 
 @[inline] def appendWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload)
     (store : Phase handle payload → m Unit)

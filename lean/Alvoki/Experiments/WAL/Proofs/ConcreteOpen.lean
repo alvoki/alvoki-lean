@@ -26,8 +26,8 @@ def LockedAt (dir : FilePath) (w : W) (h : IO.FS.Handle) (t : W) : Prop :=
 
 /-- The policy handle passed to the first namespace barrier is the one
 in the actual file set whose decoder returned at this world. -/
-def WorkerDone (dir : FilePath) (origin : W) (stamp : IO.FS.Handle) (finish : W) : Prop :=
-  ∃ lock locked, LockedAt dir origin lock locked ∧ ∃ files began,
+def WorkerDoneFrom (dir : FilePath) (gate : IO.FS.Handle → W → Prop) (stamp : IO.FS.Handle) (finish : W) : Prop :=
+  ∃ lock locked, gate lock locked ∧ ∃ files began,
     (openFilesWith nativeOpen dir).run locked = .ok (.ok files) began ∧ files.stamp = stamp ∧
     ∃ decoded, (recoverNative files.policy files.reader files.writer files.markers).run began =
       .ok (.ok decoded) finish
@@ -43,30 +43,30 @@ def BufferTarget : OpenTarget → Bool
 
 /-- Each open is attached to the previous successful operation in this
 particular invocation. A returned primitive error supplies no next stage. -/
-inductive FileStage (dir : FilePath) (p : Policy) (origin : W) : OpenTarget → W → Prop where
-  | policy : LockedAt dir origin lock t → FileStage dir p origin .policy t
-  | reader : FileStage dir p origin .policy w →
+inductive FileStageFrom (dir : FilePath) (p : Policy) (gate : IO.FS.Handle → W → Prop) : OpenTarget → W → Prop where
+  | policy : gate lock t → FileStageFrom dir p gate .policy t
+  | reader : FileStageFrom dir p gate .policy w →
       (nativeOpen.openTarget dir .policy).run w = .ok (.ok h) u →
       (nativeOpen.readPolicy (dir / "policy") h).run u = .ok (.ok (stampText p)) t →
-      FileStage dir p origin .reader t
-  | buffered : FileStage dir p origin target w → BufferNext p target next →
+      FileStageFrom dir p gate .reader t
+  | buffered : FileStageFrom dir p gate target w → BufferNext p target next →
       (nativeOpen.openTarget dir target).run w = .ok (.ok h) u →
-      (nativeOpen.unbuffered h).run u = .ok (.ok ()) t → FileStage dir p origin next t
-  | directory : WorkerDone dir origin stamp w →
-      (nativeOpen.sync stamp).run w = .ok (.ok ()) t → FileStage dir p origin .directory t
+      (nativeOpen.unbuffered h).run u = .ok (.ok ()) t → FileStageFrom dir p gate next t
+  | directory : WorkerDoneFrom dir gate stamp w →
+      (nativeOpen.sync stamp).run w = .ok (.ok ()) t → FileStageFrom dir p gate .directory t
 
-def Fresh (dir : FilePath) (p : Policy) (origin : W) (target : OpenTarget)
+def FreshFrom (dir : FilePath) (p : Policy) (gate : IO.FS.Handle → W → Prop) (target : OpenTarget)
     (h : IO.FS.Handle) (t : W) : Prop :=
-  ∃ w, FileStage dir p origin target w ∧ (nativeOpen.openTarget dir target).run w = .ok (.ok h) t
+  ∃ w, FileStageFrom dir p gate target w ∧ (nativeOpen.openTarget dir target).run w = .ok (.ok h) t
 
-private theorem Fresh.reader (fresh : Fresh dir p origin .policy stamp t)
+private theorem FreshFrom.reader (fresh : FreshFrom dir p gate .policy stamp t)
     (read : (nativeOpen.readPolicy (dir / "policy") stamp).run t = .ok (.ok (stampText p)) v) :
-    FileStage dir p origin .reader v := by
+    FileStageFrom dir p gate .reader v := by
   obtain ⟨_, stage, opened⟩ := fresh
   exact .reader stage opened read
 
-private theorem Fresh.buffered (fresh : Fresh dir p origin target h t) (step : BufferNext p target next)
-    (run : (nativeOpen.unbuffered h).run t = .ok (.ok ()) v) : FileStage dir p origin next v := by
+private theorem FreshFrom.buffered (fresh : FreshFrom dir p gate target h t) (step : BufferNext p target next)
+    (run : (nativeOpen.unbuffered h).run t = .ok (.ok ()) v) : FileStageFrom dir p gate next v := by
   obtain ⟨_, stage, opened⟩ := fresh
   exact .buffered stage step opened run
 
@@ -86,25 +86,26 @@ theorem SimResult.bind {a : F α} {b : OpenM β} {f : α → F γ} {g : β → O
 /-- The local namespace/descriptor assumptions required during single-file
 acquisition. A relation B ties each acquired description to an OpenTarget. -/
 structure OpenSteps (dir : FilePath) (policy : Policy) (r : OpenReports)
-    (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop) (origin : W) : Prop where
-  openFile : ∀ target w s, FileStage dir policy origin target w → R w s →
+    (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop) (origin : W)
+    (gate : IO.FS.Handle → W → Prop := LockedAt dir origin) : Prop where
+  openFile : ∀ target w s, FileStageFrom dir policy gate target w → R w s →
     SimResult R (nativeOpen.openTarget dir target) ((openEffects policy r).openTarget dir target)
       (fun h model => model = target ∧ B h target) w s
-  unbuffered : ∀ h target w s, BufferTarget target = true → Fresh dir policy origin target h w → B h target → R w s →
+  unbuffered : ∀ h target w s, BufferTarget target = true → FreshFrom dir policy gate target h w → B h target → R w s →
     SimResult R (nativeOpen.unbuffered h) ((openEffects policy r).unbuffered target) Eq w s
-  policyRead : ∀ h w s, Fresh dir policy origin .policy h w → B h .policy → R w s →
+  policyRead : ∀ h w s, FreshFrom dir policy gate .policy h w → B h .policy → R w s →
     SimResult R (nativeOpen.readPolicy (dir / "policy") h)
       ((openEffects policy r).readPolicy (dir / "policy") .policy)
       (fun x y => x = y ∧ y = stampText policy) w s
-  syncPolicy : ∀ h w s, WorkerDone dir origin h w → B h .policy → R w s →
+  syncPolicy : ∀ h w s, WorkerDoneFrom dir gate h w → B h .policy → R w s →
     SimResult R (nativeOpen.sync h) ((openEffects policy r).sync .policy) Eq w s
-  syncDirectory : ∀ h w s, Fresh dir policy origin .directory h w → B h .directory → R w s →
+  syncDirectory : ∀ h w s, FreshFrom dir policy gate .directory h w → B h .directory → R w s →
     SimResult R (nativeOpen.sync h) ((openEffects policy r).sync .directory) Eq w s
 
-theorem OpenSteps.bindFreshOpen (steps : OpenSteps dir p r R B origin)
-    (stage : FileStage dir p origin target w) (frame : R w s)
+theorem OpenSteps.bindFreshOpen (steps : OpenSteps dir p r R B origin gate)
+    (stage : FileStageFrom dir p gate target w) (frame : R w s)
     {f : IO.FS.Handle → F α} {g : OpenTarget → OpenM β}
-    (next : ∀ h t u, Fresh dir p origin target h t → B h target → R t u →
+    (next : ∀ h t u, FreshFrom dir p gate target h t → B h target → R t u →
       SimResult R (f h) (g target) out t u) :
     SimResult R (nativeOpen.openTarget dir target >>= f) ((openEffects p r).openTarget dir target >>= g) out w s := by
   apply (steps.openFile target w s stage frame).bind
@@ -161,8 +162,8 @@ structure Files (B : IO.FS.Handle → OpenTarget → Prop) (p : Policy)
   markers : Markers B p a.markers
   model : b = ⟨.policy, p, .reader, .writer, markersFor p⟩
 
-private theorem files (steps : OpenSteps dir p r R B origin)
-    (locked : LockedAt dir origin lock start) (initial : R start model) :
+private theorem files (steps : OpenSteps dir p r R B origin gate)
+    (locked : gate lock start) (initial : R start model) :
     SimResult R (openFilesWith nativeOpen dir) (openFilesWith (openEffects p r) dir) (Files B p) start model := by
   unfold openFilesWith
   apply steps.bindFreshOpen (.policy locked) initial
@@ -195,8 +196,8 @@ private theorem files (steps : OpenSteps dir p r R B origin)
 /-- Each contract observes one instruction in this particular worker's
 issued prefix, starting from its actual acquired descriptions. -/
 structure WorkerSteps (dir : FilePath) (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop)
-    (r : OpenReports) (origin : W) : Prop where
-  issued : ∀ {a b p lock start began base}, Files B p a b → LockedAt dir origin lock start →
+    (r : OpenReports) (origin : W) (gate : IO.FS.Handle → W → Prop := LockedAt dir origin) : Prop where
+  issued : ∀ {a b p lock start began base}, Files B p a b → gate lock start →
     (openFilesWith nativeOpen dir).run start = .ok (.ok a) began → R began base →
     RecoveryOps (fun w i => R w {base with image := i}) (recoveryOps nativeRecovery a.reader a.markers)
       (scheduledOps (ops r.worker) r.writebacks) p began base.image
@@ -230,8 +231,8 @@ private theorem scheduledReadModel (effects : Effects) (schedule : WritebackSche
         rw [← ok]
         unfold Image.withMarker
         split <;> exact live_settle _ _
-theorem worker (steps : WorkerSteps dir R B r origin) (files : Files B p a b)
-    (locked : LockedAt dir origin lock start) (opened : (openFilesWith nativeOpen dir).run start = .ok (.ok a) w)
+theorem worker (steps : WorkerSteps dir R B r origin gate) (files : Files B p a b)
+    (locked : gate lock start) (opened : (openFilesWith nativeOpen dir).run start = .ok (.ok a) w)
     (pre : R w base) : SimResult R (recoverNative a.policy a.reader a.writer a.markers)
       (workerEffect r b.policy b.reader b.writer b.markers) Eq w base := by
   have schedule := steps.issued files locked opened pre
@@ -267,8 +268,8 @@ structure OpenedTogether (B : IO.FS.Handle → OpenTarget → Prop) (p : Policy)
   phase : a.phase = .active a.lock (appendFiles a.writer a.reader a.markers)
     a.recovered.cursor a.recovered.batches
 
-private theorem install (steps : OpenSteps dir p r R B origin) (recovery : WorkerSteps dir R B r origin)
-    (lock : B h .lock) (locked : LockedAt dir origin h start) (initial : R start model) :
+theorem installFrom (steps : OpenSteps dir p r R B origin gate) (recovery : WorkerSteps dir R B r origin gate)
+    (lock : B h .lock) (locked : gate h start) (initial : R start model) :
     SimResult R (installWith nativeOpen recoverNative appendFiles dir h)
       (installWith (openEffects p r) (workerEffect r) appendFiles dir .lock) (fun a b => OpenedTogether B p a b ∧ a.lock = h) start model := by
   unfold installWith
@@ -278,7 +279,7 @@ private theorem install (steps : OpenSteps dir p r R B origin) (recovery : Worke
       (workerEffect r b.policy b.reader b.writer b.markers) Eq began base := worker recovery pair locked opened frame
   apply decoded.bind
   rintro decoded _ t u ran _ frame rfl
-  have done : WorkerDone dir origin a.stamp t := ⟨h, start, locked, a, began, opened, rfl, decoded, ran⟩
+  have done : WorkerDoneFrom dir gate a.stamp t := ⟨h, start, locked, a, began, opened, rfl, decoded, ran⟩
   obtain ⟨stamp, policy, reader, writer, markers, rfl⟩ := pair
   have set : SimResult R (settleWith nativeOpen dir a.stamp)
       (settleWith (openEffects p r) dir .policy) Eq t u := by
@@ -428,7 +429,7 @@ private theorem openBody (steps : OpenSteps dir p r R B w) (recovery : WorkerSte
     · exact frame
     · exact ⟨rfl, held, frame, opened, fresh, issued⟩
   rintro h _ locked u ⟨rfl, held, frame, lockRun⟩
-  have installed := ((install steps recovery held lockRun frame).atPost).bind
+  have installed := ((installFrom steps recovery held lockRun frame).atPost).bind
     (f := fun a => liftM (Internal.installReady a)) (g := pure)
     (fun _ _ _ _ info => allocate rt info.2.1 (info.2.2.symm ▸ lockRun) info.1 edge)
   apply (catchCall installed).trace.bind

@@ -44,13 +44,13 @@ structure OpenImage where
 abbrev OpenM := ExceptT String (EStateM Unit OpenImage)
 abbrev OpenResult (α : Type) := EStateM.Result Unit OpenImage (Except String α)
 
-private def finish (abort : Option Abort) (value : α) (s : OpenImage) : OpenResult α :=
+def finish (abort : Option Abort) (value : α) (s : OpenImage) : OpenResult α :=
   match abort with
   | none => .ok (.ok value) s
   | some .error => .ok (.error "primitive error") s
   | some .interrupted => .error () s
 
-private def unchanged (abort : Option Abort) (value : α) : OpenM α := finish abort value
+def unchanged (abort : Option Abort) (value : α) : OpenM α := finish abort value
 
 private def barrier (report : Primitive) (effect : OpenImage → OpenImage) : OpenM Unit :=
   fun s => match report with
@@ -316,7 +316,7 @@ structure CreateReports where
   names : Array String := #["lock"]
   writeFault : FilePath → Option Abort := fun _ => none
 
-private def createWrite (dir : FilePath) (policy : Policy) (r : CreateReports) (path : FilePath)
+def createWrite (dir : FilePath) (policy : Policy) (r : CreateReports) (path : FilePath)
     (bytes : ByteArray) : OpenM Unit := fun s =>
   let file : FileImage := ⟨bytes.data.toList, bytes.data.toList⟩
   let next :=
@@ -331,7 +331,7 @@ private def createWrite (dir : FilePath) (policy : Policy) (r : CreateReports) (
     | none => finish none () next
     | some fault => finish (some fault) () s
 
-private def emptyCreateImage (policy : Policy) : OpenImage :=
+def emptyCreateImage (policy : Policy) : OpenImage :=
   -- The absent marker is unused in log-only mode, represented canonically.
   {image := if policy == .boundary then {freshImage with slot0 := ⟨[], []⟩} else freshImage}
 
