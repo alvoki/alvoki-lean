@@ -66,7 +66,8 @@ theorem withOpen {physical : W → Footprint inode} {media : NativeTableCreate.M
     (cleanup : ∀ lock ref img, NativeReadRelease.Laws heap physical root lock ref img)
     (release : ∀ lock ref img, NativeWriteRelease.Laws heap none physical root lock ref img)
     (manifest : NativeManifestPublish.Media inode) (stop : NativeManifestPublish.Stop)
-    (storage : ∀ lock ref wal s t, NativeFlushStore.Runtime physical root lock ref wal image s media manifest stop t)
+    (storage : ∀ lock ref wal s history t, SessionAt physical root lock ref wal s image history t (.updating wal) →
+      s.mem.isEmpty = false → image.view.tail < UInt64.size → NativeFlushStore.Runtime physical root lock ref wal image s media manifest stop t)
     (reader : ReadRuntime physical path root life heap) (keys : List UInt64) (rootLife : RootLifetime) :
     let call : RootScope := ⟨path,.flush,start⟩
     Post (Native.withOpen path Native.flush) start
@@ -82,8 +83,8 @@ theorem withOpen {physical : W → Footprint inode} {media : NativeTableCreate.M
     intro lock ref wal s history handle entered t grant binding run reached durable called
     apply callback reached called grant heap (cleanup lock ref image).cached (phase lock ref)
       (cleanup lock ref) (release lock ref) run
-    intro _ fits
-    have produced := NativeFlushStore.produce (storage lock ref wal s t)
+    intro nonempty fits
+    have produced := NativeFlushStore.produce (storage lock ref wal s history t reached nonempty fits)
       ⟨⟨reached.owned,reached.phase,reached.child⟩,reached.manifest,reached.catalog,durable⟩ reached.installed fits
     have selected := produced.1
     cases ran : store root image s t <;> rw [ran] at selected <;> simpa only [Post, ran] using selected

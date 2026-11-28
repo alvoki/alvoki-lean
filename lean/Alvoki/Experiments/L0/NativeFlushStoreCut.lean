@@ -118,7 +118,7 @@ theorem mediaResult (cut : Cut stop root image s origin t)
     (tableStops : TableStops stop physical root media image s origin)
     (valid : Installed s image history) (fits : image.view.tail < UInt64.size) :
     Result physical root media image s t := by
-  have table := NativeTableCreate.create io.table start fun _ p => ⟨p.live,p.durable⟩
+  have table := io.tableProduced start
   have returned := table.returned
   change NativeScope.Post (NativeFlush.createTable root s.mem.toList) origin _ _ at returned
   rcases cut with early | ⟨id,w,allocated,later⟩
@@ -129,7 +129,8 @@ theorem mediaResult (cut : Cut stop root image s origin t)
     have ready : Ready physical root lock ref wal image s id media w := ⟨pre.toHeld,created⟩
     rcases later with (rfl | ⟨_,fault⟩) | ⟨_,z,ran,rfl⟩
     · exact old pre
-    · obtain ⟨r,allowed⟩ := fault.state (io.publish id w allocated) ready (io.reserved id w allocated ready) pre.manifest
+    · obtain ⟨frame,allowed⟩ := fault.state (io.pinned id w allocated ready) NativeFlushStore.FileFrame.refl (io.reserved start id w allocated) pre.manifest
+      let r := ready.advance frame
       exact ⟨_,.admitted id created.fresh.1 fits r.created.live allowed,r.created.durable,r.disk⟩
     · have prod := NativeFlushStore.produce io start valid fits
       rw [NativeFlush.store_eq] at prod
