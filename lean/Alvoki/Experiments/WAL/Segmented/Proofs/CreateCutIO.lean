@@ -39,7 +39,7 @@ def Leaf.action : (op : Leaf) → IO op.Result
   | .ref ready => IO.mkRef ready.phase
   | .mutex => Std.BaseMutex.new
 
-private def world : EST.Out IO.Error IO.RealWorld α → W
+def world : EST.Out IO.Error IO.RealWorld α → W
   | .ok _ w | .error _ w => w
 
 /-- Enrich a native IO action with its actually reachable primitive calls.
