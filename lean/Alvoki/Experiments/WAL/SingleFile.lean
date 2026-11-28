@@ -251,6 +251,9 @@ def Handle.Assembled (h : Handle) (policy : Policy)
     (ref : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle))) (mutex : Std.BaseMutex) : Prop :=
   h = ⟨policy, ref, mutex⟩
 
+theorem Handle.Assembled.unique {h : Handle} (one : h.Assembled p r m) (two : h.Assembled p' r' m') :
+    p = p' ∧ r = r' ∧ m = m' := Handle.mk.inj (one.symm.trans two)
+
 theorem installReady_run (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle))
     (w : Void IO.RealWorld) :
     let allocated := (IO.mkRef ready.phase : BaseIO _) w

@@ -78,7 +78,7 @@ def Failed (disk : W → Disk) (heap : PhaseMemory) (Q : W → Prop) (wal : Hand
     (reg : Registration) (batch : Bytes) (w : W) : Prop :=
   Q w ∧ Recoverable reg.session.view (some (.append batch)) (disk w) ∧ ∃ slot, Custody heap wal reg.store slot w
 
-private theorem LocalIO.begin {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg batch w)
+theorem LocalIO.begin {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg batch w)
     (entry : Active mem heap wal reg w) (framed : Q w) :
     let c := inputContext mem heap Q op.cell reg
     let begin := issuedWorld op.cell op.mutex reg.store w

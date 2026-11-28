@@ -40,8 +40,7 @@ structure Primitives (disk : W → Disk) (c : Control) (r : Receipt stop h batch
   poison : (disk (poisonAt r.cell r.fd r.mutex start)).segment c.active = (disk start).segment c.active
   completed : r.path.Earlier (fun op v a b =>
     (op.eval (modeledOps report)).run ((disk a).segment c.active) = .ok (.ok v) ((disk b).segment c.active))
-  syscall : ∀ d, stop r.action r.atCall d →
-    (r.op.eval (modeledOps report)).run ((disk r.atOp).segment c.active) = .error () (d.segment c.active)
+  syscall : (r.op.eval (modeledOps report)).run ((disk r.atOp).segment c.active) = .error () (cut.segment c.active)
   heapFrame : AppendCut.ActiveFiles c (disk start) (disk (poisonAt r.cell r.fd r.mutex start))
   returnedFrame : r.path.Earlier (fun _ _ a b => AppendCut.ActiveFiles c (disk a) (disk b))
   stoppedFrame : ∀ d, stop r.action r.atCall d → AppendCut.ActiveFiles c (disk r.atOp) d
@@ -70,8 +69,8 @@ theorem recoverable (r : Receipt stop h batch start cut) (prim : Primitives disk
     rw [Nat.add_mul, Nat.one_mul] at room
     omega
   have child := SingleFile.ConcreteAppendCut.interrupted prim.report r.path paired r.site
-    (fun a w child => ∃ d, stop a w d ∧ d.segment c.active = child)
-    ⟨cut, r.stopped, rfl⟩ (fun _ _ ⟨d, stopped, eq⟩ => eq ▸ prim.syscall d stopped)
+    (fun a w child => stop a w cut ∧ cut.segment c.active = child)
+    ⟨r.stopped, rfl⟩ (fun _ _ ⟨_, eq⟩ => eq ▸ prim.syscall)
     ready.ready ready.clean (known ▸ segmentHistory_bounded entry.layout _) limit size
   have frame := (prim.heapFrame.trans (earlierFrame r.path prim.returnedFrame)).trans (prim.stoppedFrame _ r.stopped)
   apply frame.recoverable entry live durable room position
