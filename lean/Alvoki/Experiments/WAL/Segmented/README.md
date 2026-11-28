@@ -209,18 +209,21 @@ from the child produced by the single successor acquisition in a rotation.
 Writing checks that provenance; registration also checks the reached
 child phase is active. These are proof-only identities. Reported errors
 after the request guard include the reached slot and child phase. The
-slot is empty after rotation. An in-place error leaves the original
-entry poisoned, which the single-file close proof consumes on the
-reached image. The full segmented close composition and the actual
-release of a scoped successor lock remain open. Process interruption
-has no post-stop cleanup schedule.
+rotating error continuation consumes the SingleFile close result on the
+acquired successor's reached image. Public close takes the stored child
+before releasing it, from either the active phase retained by guard
+rejection or the poisoned phase left by an in-place error. The shared
+release schedule unlocks the root even after a child close error and keeps
+the primary error. A second close has no release step. Process
+interruption has no post-stop cleanup schedule.
 
 Public create validates the acquired root before running bootstrap. The
-internal bootstrap theorem certifies its returned session. Its composition
-with public acquisition, installation, failure cleanup and healthy
-progress remains open. An unsuccessful first initialization may leave
-artifacts. The public create contract gives no automatic retry guarantee.
-
+shared public scope installs the ready phase after bootstrap succeeds and
+uses the same release schedule on the reached resources after a reported
+failure. The healthy proof supplies the ready session and append authority
+for a root listing that contains only the lock. An unsuccessful first
+initialization may leave artifacts. The public create contract gives no
+automatic retry guarantee.
 
 ### Public open contract for the append consumer
 

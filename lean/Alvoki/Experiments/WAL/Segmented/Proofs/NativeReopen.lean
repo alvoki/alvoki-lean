@@ -1524,7 +1524,7 @@ def installScopedModel (owned : RootBinding directory lock) (r : RootReports)
     M (Native.Phase (ReopenedStore directory lock)) :=
   Native.installReopenedWith (reopenScopedModel owned.root r reports closeError)
     (fun entry => match entry with
-      | some (index, ready) => pure ⟨owned, index, ready⟩
+      | some (index, ready) => fun s => .ok (.ok ⟨owned, index, ready⟩) {s with activeEntry := some index}
       | none => throw "missing active child")
 
 private theorem installScopedModel_run (owned : RootBinding directory lock) (r : RootReports)
@@ -1532,7 +1532,8 @@ private theorem installScopedModel_run (owned : RootBinding directory lock) (r :
     (installScopedModel owned r reports closeError).run s =
       match (reopenScopedModel owned.root r reports closeError).run s with
       | .ok (.ok (session, ready)) after =>
-        .ok (.ok (.ready ⟨owned, session.control.active, ready⟩ session)) after
+        .ok (.ok (.ready ⟨owned, session.control.active, ready⟩ session))
+          {after with activeEntry := some session.control.active}
       | .ok (.error err) after => .ok (.error err) after
       | .error token after => .error token after := by
   simp only [installScopedModel, Native.installReopenedWith, Bind.bind, ExceptT.bind,
@@ -1543,6 +1544,14 @@ private theorem installScopedModel_run (owned : RootBinding directory lock) (r :
     cases response with
     | error => rfl
     | ok pair => cases pair; rfl
+
+theorem installScopedModel_registered
+    (ran : (installScopedModel owned r reports closeError).run before =
+      .ok (.ok (.ready store session)) after) :
+    after.activeEntry = some store.activeId := by
+  rw [installScopedModel_run] at ran
+  split at ran <;> cases ran
+  rfl
 
 /-- The exact phase issued by the child producer is positioned after the
 active suffix of the installed segmented history. -/
@@ -1654,7 +1663,7 @@ theorem installScopedModel_healthy (owned : RootBinding directory lock) (r : Roo
       .ok (.ok (.ready ⟨owned, session.control.active, ready⟩ session)) after := by
   obtain ⟨session, ready, after, ran⟩ :=
     reopenScopedModel_healthy owned.root r reports closeError s prior rootOK childrenOK representable
-  exact ⟨session, ready, after, by rw [installScopedModel_run, ran]⟩
+  exact ⟨session, ready, _, by rw [installScopedModel_run, ran]⟩
 
 /-- Only the root lock is live outside the scoped recovery. On success the
 active child moves into the ready store. On failure the child scope has

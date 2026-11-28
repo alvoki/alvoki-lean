@@ -838,6 +838,19 @@ theorem close_opened_report (ready : Opened OpenTarget (AppendFiles OpenTarget))
   simp only [closeModel, storedPhase_eq, installed, closeWith, lock, runBind, clear_run, unlock_run]
   cases r.unlockError <;> simp [finish]
 
+/-- Clearing a live phase and unlocking its owned description has the
+same resource effect before or after an unsuccessful append. -/
+theorem closeModel_owned (policy : Policy) (r : OpenReports) (s : OpenImage)
+    {phase : Phase OpenTarget (AppendFiles OpenTarget)}
+    (owned : phase = .poisoned .lock ∨ ∃ files cursor history,
+      phase = .active .lock files cursor history) :
+    closeModel policy r phase s =
+      .ok (if r.unlockError then .error "primitive error" else .ok ())
+        {s with closed := true, held := false} := by
+  rcases owned with rfl | ⟨_, _, _, rfl⟩ <;>
+    simp only [closeModel, closeWith, runBind, clear_run, unlock_run] <;>
+    cases r.unlockError <;> simp [finish]
+
 /-- An uncertain append retains the original private lock in the poisoned
 phase. The public close schedule still clears that phase and releases it. -/
 theorem close_poisoned (policy : Policy) (r : OpenReports) (s : OpenImage) :

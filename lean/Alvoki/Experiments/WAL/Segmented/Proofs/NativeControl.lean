@@ -69,32 +69,37 @@ theorem nativeControl_cuts (root : FilePath) (held : Nat) (r : Effects) (c : Con
   rw [nativeControl_run root held r c active discarded]
   exact publish_cases r c before
 
-/-- A successful publication changes the filesystem but not the root's
-active-entry reference. -/
+/-- Publication only changes the filesystem on every outcome. -/
+theorem nativeControl_framesEntry (root : FilePath) (held : Nat) (r : Effects)
+    (c : Control) (active : c.active ≤ ControlCodec.wordMax)
+    (discarded : c.discarded ≤ ControlCodec.wordMax) :
+    FramesEntry (Segmented.publish (nativeControlOps root held r) c) := by
+  intro before
+  rw [nativeControl_run root held r c active discarded]
+  revert before
+  change FramesEntry (DurableBlob.publishWith _ _ _ _ : M Unit)
+  unfold DurableBlob.publishWith
+  apply framesEntry_bind
+  · intro state; exact namespace_framesEntry (r.stage state.step) (fun d p => d.stage c p) state
+  intro _
+  apply framesEntry_bind
+  · intro state; exact barrier_framesEntry (r.syncControl state.step) Disk.syncStage state
+  intro _
+  apply framesEntry_bind
+  · intro s
+    dsimp only [ExceptT.run]
+    cases s.disk.staged with
+    | none => rfl
+    | some control => exact namespace_framesEntry (r.rename s.step) (fun d p => d.rename control p) s
+  · intro _ s
+    exact barrier_framesEntry (r.root s.step) Disk.syncRoot s
+
 theorem nativeControl_slot (root : FilePath) (held : Nat) (r : Effects)
     (c : Control) (active : c.active ≤ ControlCodec.wordMax)
     (discarded : c.discarded ≤ ControlCodec.wordMax) (s : State)
     (ran : (Segmented.publish (nativeControlOps root held r) c).run s = .ok (.ok ()) after) :
     after.activeEntry = s.activeEntry := by
-  rw [nativeControl_run root held r c active discarded] at ran
-  have frames : FramesEntry (Segmented.publish (ops r) c) := by
-    change FramesEntry (DurableBlob.publishWith _ _ _ _ : M Unit)
-    unfold DurableBlob.publishWith
-    apply framesEntry_bind
-    · intro state; exact namespace_framesEntry (r.stage state.step) (fun d p => d.stage c p) state
-    intro _
-    apply framesEntry_bind
-    · intro state; exact barrier_framesEntry (r.syncControl state.step) Disk.syncStage state
-    intro _
-    apply framesEntry_bind
-    · intro s
-      dsimp only [ExceptT.run]
-      cases s.disk.staged with
-      | none => rfl
-      | some control => exact namespace_framesEntry (r.rename s.step) (fun d p => d.rename control p) s
-    · intro _ s
-      exact barrier_framesEntry (r.root s.step) Disk.syncRoot s
-  have frame := frames s
+  have frame := nativeControl_framesEntry root held r c active discarded s
   rw [ran] at frame
   exact frame
 
