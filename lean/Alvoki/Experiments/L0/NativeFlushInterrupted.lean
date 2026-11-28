@@ -1,4 +1,4 @@
-import Alvoki.Experiments.L0.ReserveScanCut
+import Alvoki.Experiments.L0.ReserveScanSource
 import Alvoki.Experiments.L0.NativeFlushStore
 import Alvoki.Experiments.L0.NativeFlushCatalog
 
@@ -59,6 +59,18 @@ theorem Ingress.exitState {p : Prefix path root start} (inScope : Ingress p phys
   exact MutationExitCut.afterWrite_state _ ran p.lock p.session
 
 noncomputable abbrev prelude (ref : Ref) := ReserveScanCut.reserveScan ref fun s => !s.mem.isEmpty
+
+/-- The last-syscall tree of the prelude is the path projection of a program
+whose resumed execution is precisely the public callback on this handle. -/
+theorem Ingress.preludeSource {p : Prefix path root start} (inScope : Ingress p physical media image events) :
+    let prog := ReserveScanCut.program p.ref (fun s => !s.mem.isEmpty)
+    prog.path = prelude p.ref ∧ ∃ h, Native.Handle.AtRoot h root p.ref ∧
+      prog.resume (ReserveScanCut.applyTail pure (ReserveScanCut.flushRemainder root) p.ref) = Native.flush h ∧
+      Native.withOpen path Native.flush start = finish (ε := IO.Error) (Native.flush h)
+        (finish (ε := IO.Error) ((Native.phaseCell p.ref).close WalRecoverySlice.Segmented.Native.close)
+          p.lock.unlock) p.callback := by
+  obtain ⟨h, bound, called, _⟩ := inScope.dispatch
+  exact ⟨rfl, h, bound, ReserveScanCut.flush bound, called⟩
 
 theorem prelude_state (issued : NativeFlush.Issued root ref wal s image start) :
     ((prelude ref).run start).state = NativeFlush.origin ref wal s start := by

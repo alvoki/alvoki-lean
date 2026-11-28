@@ -750,6 +750,23 @@ def Handle.Parts (h : Handle) (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMut
 
 theorem Handle.parts (h : Handle) : ∃ cell mutex, h.Parts cell mutex := ⟨_, _, rfl, rfl⟩
 
+/-- The native guarded scan reads exactly one phase and releases the mutex,
+including when that phase reports an error. -/
+theorem scan_parts (h : Handle) (parts : h.Parts cell mutex) (w : Void IO.RealWorld) :
+    scan h w =
+      let phase := (cell.get : BaseIO _) (mutex.lock w).state
+      let t := (mutex.unlock phase.state).state
+      match phase.val with
+      | .ready _ s => .ok s.view t
+      | .poisoned _ => .error (IO.userError "segmented WAL requires reopen") t
+      | .closed => .error (IO.userError "segmented WAL closed") t := by
+  unfold scan
+  rw [locked_run, parts.1, parts.2]
+  let got := (cell.get : BaseIO _) (mutex.lock w).state
+  have ran : (cell.get : IO _) (mutex.lock w).state = .ok got.val got.state := rfl
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+  cases eq : got.val <;> rfl
+
 /-- On a ready handle the check, child mutation, and public reply all run
 after the same phase has been poisoned. Errors leave it poisoned. Success
 publishes the returned session before the guard releases the mutex. -/
