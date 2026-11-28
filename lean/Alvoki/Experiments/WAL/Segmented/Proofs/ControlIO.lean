@@ -93,10 +93,33 @@ structure Primitives (store : Store) (c : Control) (reports : Effects)
   syncWriter : ∀ h t u, WriterStage store c start .flushed h t →
     (stage reports c).run initial = .ok (.ok ()) u → R t u →
     At (syncHandle h) (syncStage reports) t u (fun _ _ v n => R v n) R
-  renameFile : ∀ h t u, WriterStage store c start .synced h t → R t u →
+  renameFile : ∀ h t u v, WriterStage store c start .synced h t →
+    (stage reports c).run initial = .ok (.ok ()) v → (syncStage reports).run v = .ok (.ok ()) u → R t u →
     At (IO.FS.rename (store.root / "CONTROL.next") (store.root / "CONTROL")) (rename reports) t u (fun _ _ v n => R v n) R
-  directory : ∀ h t u, WriterStage store c start .renamed h t → R t u →
+  directory : ∀ h t u v n, WriterStage store c start .renamed h t →
+    (stage reports c).run initial = .ok (.ok ()) v → (syncStage reports).run v = .ok (.ok ()) n →
+    (rename reports).run n = .ok (.ok ()) u → R t u →
     At (syncHandle store.directory) (rootSync reports) t u (fun _ _ v n => R v n) R
+
+/-- A ghost state with an absent staged proposal cannot be supplied at the
+rename site, irrespective of any filesystem observations. -/
+theorem proposalAtRename (stageRun : (stage reports c).run initial = .ok (.ok ()) v)
+    (syncRun : (syncStage reports).run v = .ok (.ok ()) u) : u.disk.staged = some c := by
+  simp only [stage, syncStage, ExceptT.run] at stageRun syncRun
+  cases st : reports.stage initial.step with
+  | before abort => cases abort <;> simp_all [namespaceChange, outcome, st]
+  | after persist failed =>
+    cases failed with
+    | some e => cases e <;> simp_all [namespaceChange, outcome, st]
+    | none =>
+      simp [namespaceChange, outcome, st] at stageRun
+      cases stageRun
+      cases sy : reports.syncControl initial.tick.step with
+      | before abort => cases abort <;> simp_all [barrier, outcome, sy]
+      | after failure =>
+        cases failure with
+        | some abort => cases abort <;> simp_all [barrier, outcome, sy]
+        | none => simp [barrier, outcome, sy] at syncRun; cases syncRun; rfl
 
 private theorem cleared (p : Primitives store c reports w s R) :
     IOReturns (removeRegular (store.root / "CONTROL.next")) w (fun _ _ => True) (StageError reports c s R) := by
@@ -177,11 +200,11 @@ theorem publish (p : Primitives store c reports start initial R)
   apply (staged p).bind
   rintro h _ t u ⟨flushed, frame, stageRun⟩
   apply (trace (p.syncWriter h t u flushed stageRun frame)).bind
-  rintro _ _ x y ⟨frame, sync, _⟩
+  rintro _ _ x y ⟨frame, sync, syncRun⟩
   have synced := flushed.synced sync
-  apply (trace (p.renameFile h x y synced frame)).bind
-  rintro _ _ z n ⟨frame, changed, _⟩
-  exact p.directory h z n (synced.renamed changed) frame
+  apply (trace (p.renameFile h x y u synced stageRun syncRun frame)).bind
+  rintro _ _ z n ⟨frame, changed, renameRun⟩
+  exact p.directory h z n u y (synced.renamed changed) stageRun syncRun renameRun frame
 
 theorem syncRoot (store : Store) (held : Nat)
     (issued : At (syncHandle store.directory) (rootSync reports) w s ok fail) :
