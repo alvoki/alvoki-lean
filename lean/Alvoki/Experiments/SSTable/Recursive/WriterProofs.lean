@@ -657,7 +657,7 @@ private theorem finishImage_ok {layout : Layout} {crc : Checksum} {options : Bui
 
 /-- Successful runs of the executable streaming writer produce the exact
 recursive image for the supplier they consumed. Packet and count limits are
-properties of the run. This statement does not require success. -/
+properties of that successful run. Healthy progress has a separate contract. -/
 theorem modelBuild_ok {crc : Checksum} {layout : Layout} {options : BuildOptions}
     {rows : List Entry} {count : Nat} {bytes : ByteArray}
     (built : modelBuild crc layout rows options = .ok (count, bytes)) :

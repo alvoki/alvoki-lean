@@ -75,6 +75,9 @@ structure PendingPage (layout : Layout) (crc : Checksum) (bytes : ByteArray)
   coverage : RefCovers rows first (stop - first) page.refs
   children : ∀ ref ∈ page.refs.toList, WrittenChild layout crc bytes rows endAt childHeight ref
 
+/-- The list starts at the lowest level. Its higher tail covers the chronological
+prefix, and the current page covers the rows from the end of that prefix to
+`stop`. Every reference already points into the written prefix. -/
 inductive PendingPages (layout : Layout) (crc : Checksum) (bytes : ByteArray)
     (rows : List Entry) (endAt : Nat) : Nat → Nat → List Page → Prop where
   | nil : PendingPages layout crc bytes rows endAt height 0 []
