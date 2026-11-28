@@ -114,8 +114,26 @@ Keep the old logical history, `Ready`/`Dirty`, `Installed`, prefix/segment
 partition and CONTROL publication proofs as abstract correctness
 evidence. The descriptor-level prefix/drain, canonical boundary selection,
 scoped read fold and active-cleanup lemmas can be reused by the compact
-producer and its future consumer. A pinned detached L0 worktree is the
-next consumer checkpoint after standalone review.
+producer and its future consumer. The next consumer checkpoint uses a pinned detached L0 worktree.
+
+1. Use the compact bounds observation for online write and flush positions.
+   Keep the existing watermark publication and WAL release boundary.
+2. Reopen the manifest first. Give its watermark to a private
+   `openExistingFold` accumulator that skips older entries and defers L0
+   decode errors. Register the exact reached child on returned WAL
+   success. Check the watermark against the returned bounds, then surface
+   the first deferred decode error, then validate required tables. An
+   invalid WAL wins at every point before the fold result is published.
+3. Replace the cached `scanAfterReopen` proof handoff with the compact
+   fold postcondition. Compose against the reached disk and exact
+   registered child, retaining the first reported error if cleanup also
+   fails. Rerun the append, flush and failed-open cut fixtures before
+   comparing the joint candidate with the pinned L0 benchmark.
+
+The earlier migration fixture exercised decode and replay on both
+policies, including error ordering. It is available at the initial
+candidate pin.
+[Migration fixture](https://github.com/alvoki/alvoki-lean/blob/6db5fd73f7e03402a88269c85fb38d4815abc12d/lean/Alvoki/Checks/Tests/CompactWalReplay.lean)
 
 ## Verification and performance smoke run
 

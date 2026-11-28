@@ -271,6 +271,7 @@ acquisition and release of only its named descriptor. -/
 theorem scanReadyWith_fileReads
     (session : CompactSession) (history : List Bytes) (disk : Model.Disk)
     (installed : ReadyLayout session.control history disk)
+    (used : session.activeCount = history.length - session.control.active * session.control.capacity)
     (before : σ) (healthy : Prop) (seed : α) (step : α → Nat → Bytes → α)
     (sealed : Nat → OpenTarget → EStateM String σ Bytes)
     (active : Nat → EStateM String σ Bytes)
@@ -286,7 +287,9 @@ theorem scanReadyWith_fileReads
     (positioned : ReadOutcome healthy before
       ((disk.segment session.control.active).data.live)
       (active (disk.cursor session.control.active).endPos before)) :
-    ReadOutcome healthy before (session.bounds, foldBatchesFrom step session.control.discarded seed
+    ReadOutcome healthy before
+      ((⟨session.control.discarded, history.length⟩ : Bounds),
+        foldBatchesFrom step session.control.discarded seed
       (history.drop session.control.discarded))
       (scanReadyWith session seed
         (fun id acc => sealedScanWith (sealed id) session.control.policy session.control.capacity acc
@@ -294,7 +297,11 @@ theorem scanReadyWith_fileReads
         (fun acc => activeScanWith active (disk.cursor session.control.active) acc
           (retainedStep session.control session.control.active step)) before) := by
   let c := session.control
-  rw [← scanReadyWith_selected session history seed step installed.layout.lower installed.layout.upper]
+  have bounds : session.bounds = ⟨c.discarded, history.length⟩ := by
+    change (⟨c.discarded, c.active * c.capacity + session.activeCount⟩ : Bounds) = _
+    change session.activeCount = history.length - c.active * c.capacity at used
+    rw [used, Nat.add_comm, Nat.sub_add_cancel installed.layout.lower]
+  rw [← bounds, ← scanReadyWith_selected session history seed step installed.layout.lower installed.layout.upper]
   apply scanReadyWith_read
   · intro id lo hi acc
     have chosen : c.selects id := ⟨lo, Nat.le_of_lt hi⟩
