@@ -29,6 +29,42 @@ are medians of uninstrumented trials, with min–max in the generated
 summaries. Call p50/p95/p99 are nearest-rank quantiles from the separate
 latency pass. Syscall counts come from one separate trace per case.
 
+### Historical capture provenance
+
+The original environment records carry the exact source and harness
+checkouts, working-tree status, commands and binary digests. The
+component tmpfs run records source and harness `79d5db67`. Both
+overlay runs record `3cafc888`. Those three runs used the same
+recorded executable digest. The runtime source in those checkouts is
+`a375c871` plus the benchmark commits. The L0 tmpfs run records an
+L0 checkout at `79194035` with the harness overlay from `9587ec9f`.
+[Component tmpfs](raw/components-tmpfs/environment.json) ·
+[Overlay](raw/components-overlay/environment.json) ·
+[Overlay with eviction advice](raw/components-overlay-advised/environment.json) ·
+[L0 tmpfs](raw/l0-tmpfs/environment.json)
+
+Both original tmpfs records contain `shm tmpfs ro,nosuid,nodev,relatime`.
+The harness captured `findmnt -T` and its per-mount `VFS-OPTIONS`
+before creating the scratch directory. In the current sandbox, the
+same query selects a read-only `/dev/shm` mount record. Opening the
+directory and reading `mnt_id` from `/proc/self/fdinfo/<fd>` instead
+identifies the writable `/dev` tmpfs. Its device number matches the
+directory's `stat` result, and `fstatvfs` on the descriptor reports
+that it is writable. The writable parent mount shadows the read-only
+record that `findmnt` selects.
+
+The archived component trace shows a successful exclusive file create
+and `fsync` under `/dev/shm` in `sst-build-sync`. The L0
+`l0-flush-64` trace shows successful creates and a manifest rename
+under `/dev/shm`. Mount shadowing reproduces the mismatch today.
+The historical runs did not record descriptor mount IDs, so their
+exact mount topology cannot be confirmed retrospectively. For repeat
+runs, compare `findmnt -T "$data_dir" -o ID,TARGET,VFS-OPTIONS,FS-OPTIONS`
+with the mount ID of the opened data directory in `/proc/self/fdinfo`
+and the corresponding `/proc/self/mountinfo` entry.
+[Component traces](raw/components-tmpfs/syscall-traces.tar.gz) ·
+[L0 traces](raw/l0-tmpfs/syscall-traces.tar.gz)
+
 ## WAL and SSTable on tmpfs
 
 | WAL workload | `logOnly` median wall | `boundary` median wall |

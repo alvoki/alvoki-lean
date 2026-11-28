@@ -15,3 +15,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: bash scripts/bootstrap.sh "$RUNNER_TEMP/alvoki-toolchains"
       - run: ALVOKI_TOOLCHAINS="$RUNNER_TEMP/alvoki-toolchains" bash scripts/check.sh
+      - name: Build storage benchmark
+        working-directory: lean
+        run: |
+          export ELAN_HOME="$RUNNER_TEMP/alvoki-toolchains/elan"
+          "$ELAN_HOME/bin/lake" build storageBench
