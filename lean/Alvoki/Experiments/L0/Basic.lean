@@ -100,14 +100,20 @@ def write [Monad m] [MonadExceptOf String m] (ops : Components m)
   ops.append (encode change)
   return { session with mem := insert session.mem change }
 
+/-- Both production IO and the interruption observer follow the allocated
+table id into the manifest that names it. -/
+@[inline] abbrev flushTableWith [Monad m] (create : Rows → m UInt64)
+    (publish : L0Manifest.Version → m Unit) (session : Session) (tail : Nat) : m Session := do
+  let id ← create session.mem.toList
+  let version : L0Manifest.Version := ⟨id :: session.version.tables, tail.toUInt64⟩
+  publish version
+  return ⟨version, ∅⟩
+
 def flush [Monad m] [MonadExceptOf String m] (ops : Components m) (session : Session) : m Session := do
   if session.mem.isEmpty then return session
   let tail := (← ops.scan).tail
   unless tail < UInt64.size do throw "absolute WAL position exhausted"
-  let id ← ops.tables.create session.mem.toList
-  let version : L0Manifest.Version := ⟨id :: session.version.tables, tail.toUInt64⟩
-  ops.manifest.publish version
-  return ⟨version, ∅⟩
+  flushTableWith ops.tables.create ops.manifest.publish session tail
 
 def lookupTables [Monad m] (tables : Tables m) (key : UInt64) :
     List UInt64 → m (Option Mutation)

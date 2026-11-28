@@ -37,11 +37,8 @@ theorem atRoot (root : System.FilePath) (ref : Ref) (s : Session) :
 open NativeRead (Online SessionAt Footprint)
 open WalRecoverySlice.Segmented.Native (PhaseMemory)
 
-def store (root : System.FilePath) (image : Selected) (s : Session) : IO Session := do
-  let id ← createTable root s.mem.toList
-  let next := proposal image s id
-  publish root next
-  return ⟨next, ∅⟩
+def store (root : System.FilePath) (image : Selected) (s : Session) : IO Session :=
+  flushTableWith (createTable root) (publish root) s image.view.tail
 
 def hidden (ref : Ref) (wal : Wal) (start : W) : W :=
   ((ref.swap (.updating wal) : BaseIO _) ((ref.get : BaseIO _) start).state).state
