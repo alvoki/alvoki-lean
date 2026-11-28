@@ -28,7 +28,7 @@ lean_lib ComponentPrimitives where
 @[default_target]
 lean_lib Components where
   globs := #[`Alvoki.Experiments.DurableBlob.+, `Alvoki.Experiments.Manifest.+,
-    `Alvoki.Experiments.SSTable.+, `Alvoki.Experiments.WAL.+]
+    `Alvoki.Experiments.SSTable.+, `Alvoki.Experiments.WAL.+, `Alvoki.Experiments.SortedRun.+]
   moreLinkObjs := #[fsyncO, readDirCheckedO, sstableO]
 
 lean_lib Alvoki.Checks.Audit.AxiomPolicy
@@ -57,3 +57,8 @@ lean_lib Alvoki.Checks.Tests.SSTableProducer
 
 lean_exe immutableSSTableCheck where
   root := `Alvoki.Experiments.SSTable.UnifiedFixtures
+
+lean_exe sortedRunNativeCheck where
+  root := `Alvoki.Checks.Tests.SortedRunNative
+
+lean_lib Alvoki.Checks.Tests.SortedRunEffects
