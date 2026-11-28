@@ -119,4 +119,70 @@ private theorem successfulBody {physical : W → Footprint inode}
     exact ⟨sent, lost, lock, ref, wal, reg, issued, appended, mem, report, active, view, closed⟩
   exact NativeWriteRelease.outerAttached laws grant phase online custody stopped (fun _ t c => .cleanup (stopped t c))
 
+open NativeRead (SessionAt Online)
+open WalRecoverySlice.Segmented.Native (Store)
+open Alvoki.NativePost (IOReturns)
+
+private theorem SessionAtHeld {physical : W → Footprint inode}
+    (atStage : SessionAt physical root lock ref wal s image history w stage) :
+    NativeRecoverAt.Held physical root lock ref image stage w :=
+  ⟨atStage.owned, atStage.phase, atStage.catalog, atStage.manifest⟩
+
+/-- The public client of the segmented WAL postcondition. The guarded
+branch consumes the pre-append registration. The admitted branch consumes
+the handle, slot and disk produced by the concrete append on this world. -/
+theorem withOpen_of_append {physical : W → Footprint inode}
+    (entry : NativeReadScope.Entry physical path root image) (files : RestartFiles none physical root image start)
+    (heap : PhaseMemory) (runtime : ∀ lock ref, WithOpenReads.Runtime physical root lock ref image life heap)
+    (release : ∀ lock ref img req, NativeWriteRelease.Laws heap req physical root lock ref img)
+    (run : Execution.Run before none image) (change : Change)
+    (scans : ∀ lock ref wal session history u, SessionAt physical root lock ref wal session image history u (.updating wal) →
+      NativeRecoverAt.ScanPrimitives physical root wal image.tables u)
+    (append : ∀ lock ref wal session history issued,
+      SessionAt physical root lock ref wal session image history issued (.updating wal) →
+      image.view.tail + 1 < UInt64.size →
+      IOReturns (WalRecoverySlice.Segmented.Native.append wal (encode change)) issued
+        (fun pos t => pos = image.view.tail + 1 ∧
+          NativeRecoverAt.Held physical root lock ref (image.append (encode change)) (.updating wal) t ∧
+          ∃ (reg : Registration) (mem : ChildMemory (fun w => (physical w).disk)),
+            Active mem heap wal reg t ∧ reg.session.view = image.view.append (encode change))
+        (fun t => NativeWriteRelease.Held (some (.append (encode change))) physical root lock ref image (.updating wal) t ∧
+          ∃ store slot, NativeWriteRelease.WalCustody heap wal store slot t)) :
+    NativeScope.Post (Native.withOpen path (fun h => Native.mutation h change)) start
+      (fun _ => Written physical heap root (before ++ [.reopened]) image change)
+      (Failure physical heap root before image change) := by
+  apply WithOpenReads.withRecovered entry files heap runtime run
+  · exact fun _ _ files trace => .unopened (.known trace files)
+  · exact fun _ _ _ _ _ _ closed _ _ trace => .unopened (.known trace closed.files)
+  intro lock ref wal session history handle opening recovered grant _ _ binding installed attached trace
+  let ops := runtime lock ref
+  apply NativeRead.publishOnline (attached.sessionAt installed) (ops.phase.refRead wal) (ops.phase.refSwap wal)
+  intro entered online
+  have dispatch := NativeWrite.dispatch online binding heap ops.cleanup.cached ops.phase
+    (scans lock ref wal session history) change
+  by_cases fits : image.view.tail + 1 < UInt64.size
+  · simp only [fits, ↓reduceIte] at dispatch
+    obtain ⟨issued, atCall, ran⟩ := dispatch
+    have leaf := append _ _ _ _ _ _ atCall fits
+    unfold IOReturns at leaf
+    cases sent : WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
+    | ok pos t =>
+      rw [sent] at leaf ran
+      obtain ⟨rfl, held, reg, mem, active, view⟩ := leaf
+      have pubPhase : NativeRecoverAt.PhasePrimitives physical root lock ref (image.append (encode change)) := ⟨ops.phase.read, ops.phase.swap⟩
+      exact successfulBody grant pubPhase ops.cleanup.cached (release _ _ _ _) trace held active view sent ran
+    | error e t =>
+      rw [sent] at leaf ran
+      obtain ⟨held, store, slot, current⟩ := leaf
+      exact failedBody grant ops.phase (release _ _ _ _) held current e ran
+        (fun _ closed => .reported sent closed (.uncertain trace closed.files))
+  · simp only [fits, ↓reduceIte] at dispatch
+    obtain ⟨t, rejected, ran⟩ := dispatch
+    obtain ⟨reg, slot, source, disk, view⟩ := rejected.child
+    have registered := (ops.cleanup.cached _ rejected.owned _ reg).mp slot
+    exact failedBody grant ops.phase (release _ _ _ _)
+      (.ofRecover (SessionAtHeld rejected) (disk.offline (.inl view)))
+      (.ofRegistered registered source.2) _ ran
+      (fun _ closed => .rejected fits closed (.rejected trace closed.files))
+
 end ExperimentalL0.NativeMutationScope
