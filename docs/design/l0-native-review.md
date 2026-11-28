@@ -26,6 +26,25 @@ component proofs. Keep the L0-specific physical directory mapping, replay
 watermark and client traces together. These boundaries describe the
 current graph and require no branch extraction.
 
+## Interruption granularity
+
+The initial root and the successful callback grant identify the public
+operation being interrupted. Before callback invocation there is no
+client append or flush to acknowledge. Public open and recovery errors
+have their own outcomes. Within the operation a prefix can end at an
+ordinary boundary, during the currently issued primitive, or after the
+complete return. A bind starts its continuation only on its actual
+successful result. Error handlers and finalizers start on the world
+left by the preceding error.
+
+An FFI primitive such as checked directory enumeration may be stopped
+while its native implementation is running. Its in-flight contract
+specifies the possible protected-file effects throughout that call.
+Lean-level loops over returned entries and the WAL's read-to-EOF loop
+expose each iteration. In particular the second and later 1,024-byte
+reads have their own issued operands. Pure code between two observable
+effects uses the same physical world as their common boundary.
+
 ## What changes at a flush cut
 
 | Last completed effect | Physical recovery input |
