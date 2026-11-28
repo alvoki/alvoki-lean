@@ -24,6 +24,13 @@ still needs integration review.
 [Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 · [WAL fault assumptions](design/wal-recovery.md)
 
+**Compact WAL experiment.** Native handles carry cursors, CONTROL metadata
+and ownership. The read-only fold composes ordered child reads, and the
+scoped L0 replay fixture validates deferred decoding with the agreed error
+priority. The next proof premise is native correspondence for the bounded
+read and compact open producers before joint L0 integration.
+[Checkpoints, migration and measurements](design/wal-compact-implementation.md)
+
 **Verification baseline.** The integrated recovery candidate for #8 passed
 `bash scripts/reproduce.sh` on the repository after the legacy-engine
 cleanup. The command checks the kernel and axioms, modeled fault schedules,

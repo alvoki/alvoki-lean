@@ -35,16 +35,19 @@ def main():
         elif row["stage"] == "latency" and row["scope"] == "call":
             calls[(row["case"], row["operation"])].append(int(row["elapsed_ns"]))
     print("case\ttrials\titems\twall ms [min–max]\tCPU ms\titems/s\t"
-          "small allocs\tpeak RSS MiB")
+          "small allocs\tpeak RSS MiB\tcurrent RSS MiB")
     for case, rows in sorted(batches.items()):
         wall = [int(row["elapsed_ns"]) / 1e6 for row in rows]
         cpu = median(int(row["cpu_ns"]) / 1e6 for row in rows)
         allocs = median(int(row["small_allocations"]) for row in rows)
         rss = median(int(row["peak_rss_kib"]) / 1024 for row in rows)
+        current = [int(row["resident_rss_kib"]) / 1024
+                   for row in rows if row.get("resident_rss_kib")]
+        current_text = f"{median(current):.2f}" if current else "–"
         items = int(rows[0]["items"])
         rate = f"{median(items * 1000 / ms for ms in wall):.0f}" if items else "–"
         print(f"{case}\t{len(rows)}\t{items}\t{median(wall):.3f} "
-              f"[{min(wall):.3f}–{max(wall):.3f}]\t{cpu:.3f}\t{rate}\t{allocs:.0f}\t{rss:.2f}")
+              f"[{min(wall):.3f}–{max(wall):.3f}]\t{cpu:.3f}\t{rate}\t{allocs:.0f}\t{rss:.2f}\t{current_text}")
     print("\ncase\tcall\tsamples\tp50 µs\tp95 µs\tp99 µs")
     for (case, call), values in sorted(calls.items()):
         print(f"{case}\t{call}\t{len(values)}\t"

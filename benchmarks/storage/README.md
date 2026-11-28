@@ -5,6 +5,13 @@ Linux x86-64. An optional runner builds a native L0 benchmark from a pinned,
 detached worktree. Use [the first run](results.md) for findings and raw
 measurements.
 
+The [compact WAL comparison](../../docs/design/wal-compact-implementation.md#release-measurements)
+uses the same harness and adds `wal-*-scan-8192-cap128` and
+`wal-*-reopen-fold-8192-cap128`. It records current Linux process RSS
+from `/proc/self/smaps_rollup` at the end of each measured phase,
+before the separate correctness pass. Older CSVs remain readable.
+Select the common case names when running a baseline binary.
+
 ## Run locally
 
 Install the repository's pinned Lean toolchain, Git, GCC, G++, Python 3, and

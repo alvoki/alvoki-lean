@@ -1,0 +1,255 @@
+{
+  "source_head": "3470541f2ab79c614997dc16cd8424654bbcaf58",
+  "source_status": "M lean/Alvoki/Bench/Storage/Support.lean\n M lean/native/storage_bench_metrics.c",
+  "harness_head": "69162885d906baaa5b3b43a50524a9e224121039",
+  "harness_status": "",
+  "binary": "/workspace/work/compact-wal-perf-base/lean/.lake/build/bin/storageBench",
+  "binary_sha256": "3adfb2d316c6a46e1aac4689aa6a8c7a971191e92176b17b8527c9f332a31ae5",
+  "command": "benchmarks/storage/run.py --binary /workspace/work/compact-wal-perf-base/lean/.lake/build/bin/storageBench --data-dir /dev/shm --output /workspace/work/compact-perf-baseline --strace --sync-timing --case wal-log-in-place --case wal-log-rotate --case wal-log-short-history --case wal-log-long-history --case wal-log-reopen-128-cap128 --case wal-log-reopen-2048-cap128 --case wal-log-reopen-2048-cap16 --case wal-log-reopen-8192-cap128 --case wal-boundary-in-place --case wal-boundary-rotate --case wal-boundary-short-history --case wal-boundary-long-history --case wal-boundary-reopen-128-cap128 --case wal-boundary-reopen-2048-cap128 --case wal-boundary-reopen-2048-cap16 --case wal-boundary-reopen-8192-cap128",
+  "kernel": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "cpu": 0,
+  "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "governor": null,
+  "affinity_available": [
+    0
+  ],
+  "virtualization": "container-other",
+  "mount": "shm tmpfs ro,nosuid,nodev,relatime",
+  "block_devices": "NAME  ROTA TRAN   MODEL\nvda      1 virtio \npmem0    0",
+  "lean": "Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)",
+  "lake": "Lake version 5.0.0-src+611c117 (Lean version 4.36.0)",
+  "cc": "cc (Debian 14.2.0-19) 14.2.0",
+  "cxx": "c++ (Debian 14.2.0-19) 14.2.0",
+  "cases": [
+    {
+      "name": "wal-log-in-place",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        128,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-rotate",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        8,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-short-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        128,
+        64,
+        1
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-long-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        128,
+        64,
+        2049
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-reopen-128-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        128,
+        128,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-log-reopen-2048-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        128,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-log-reopen-2048-cap16",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        16,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-log-reopen-8192-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        128,
+        8192,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-in-place",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        128,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-rotate",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        8,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-short-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        128,
+        64,
+        1
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-long-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        128,
+        64,
+        2049
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-reopen-128-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        128,
+        128,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-reopen-2048-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        128,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-reopen-2048-cap16",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        16,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-reopen-8192-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        128,
+        8192,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    }
+  ],
+  "cache": "warm",
+  "seed": 20261128,
+  "warmups": 1,
+  "repeats": 7,
+  "strace": "strace -- version 6.13\nCopyright (c) 1991-2025 The strace developers <https://strace.io>.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\nOptional features enabled: stack-trace=libunwind stack-demangle m32-mpers mx32-mpers",
+  "sync_timing": true
+}
