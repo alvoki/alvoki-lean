@@ -152,6 +152,7 @@ open ExperimentalL0
 #check_axioms NativeTableWriter.build
 #check_axioms NativeRead.HealthyChecks.lookup
 #check_axioms HealthyReads.WalRoot.openBatches
+#check_axioms WalRecoverySlice.Segmented.Native.HealthyEmpty.selectedChild
 #check_axioms HealthyPublishedRecovery.recover
 #check_axioms NativeTableWriter.onePut
 #check_axioms NativeTableCreate.Schedule.erase
