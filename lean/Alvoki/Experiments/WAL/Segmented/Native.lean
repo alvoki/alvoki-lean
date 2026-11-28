@@ -125,7 +125,7 @@ interrupted rotation. Creation and the returned child use the same path. -/
   mkdir dir
   create dir p
 
-private def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle :=
+def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle :=
   prepareChildWith (removeSegment s.root) IO.FS.createDir SingleFile.create s.root p id
 
 @[inline] def registerPreparedWith [Monad m] (prepare : m child)
