@@ -57,8 +57,11 @@ private def walCodec (rounds : Nat) : IO Unit := do
   let batches := (List.range 128).map fun index => payload (index + 1)
   let bytes := (batches.zipIdx).flatMap fun (batch, index) => frame (index + 1) batch
   let limit := bytes.length
+  let input ← IO.mkRef bytes
   let ((), measurement) ← measure do
     for _ in [:rounds] do
+      -- Read through IO so the native compiler cannot cache a closed pure decode.
+      let bytes ← input.get
       let decoded ← IO.ofExcept (WalRecoverySlice.scan bytes limit .logOnly |>.mapError IO.userError)
       check (decoded.batches == batches && decoded.cursor.endPos == limit) "incorrect decoded frames"
   measurement.report "decode" (rounds * batches.length)
