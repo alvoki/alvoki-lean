@@ -116,6 +116,45 @@ private theorem writeActive_refines (c : Control) (history : List Bytes) (batch 
         simp only [phaseEq, erasePhase, reached, Disk.setSegment_here, Disk.setCursor_here]
         exact ⟨⟨exactChild.1, exactChild.2.1⟩, fun _ => ⟨⟨valid, settled⟩, rfl⟩⟩
 
+/-- Reusable authority of the current ready handle. Both append branches
+consume the same phase and disk layout. -/
+def AppendReady (session : Session) (state : State × SingleFile.AppendPhase) : Prop :=
+  ∃ history, session = sessionOf session.control history ∧
+    ReadyLayout session.control history state.1.disk ∧
+    state.1.disk.liveControl = some session.control ∧ state.1.disk.durableControl = some session.control ∧
+    state.2 = .active .lock (SingleFile.appendBindings session.control.policy)
+      (state.1.disk.cursor session.control.active)
+      (segmentHistory session.control.capacity session.control.active history)
+
+private theorem responsePhase_fromWrite (c : Control) (history : List Bytes) (batch : Bytes)
+    (s : State) (entry : ReadyLayout c history s.disk)
+    (fits : (segmentHistory c.capacity c.active history).length < 255)
+    (size : batch.length ≤ 32)
+    (reports : ∀ cursor, SingleFile.AppendReports c.policy cursor batch)
+    {phase : SingleFile.AppendPhase}
+    (source : phase = .active .lock (SingleFile.appendBindings c.policy)
+      (Persistence.historyCursor (segmentHistory c.capacity c.active history))
+      (segmentHistory c.capacity c.active history))
+    {after : State × SingleFile.AppendPhase}
+    (returned : (writeActive c.policy c.active reports).run (s, phase) = .ok (.ok ()) after) :
+    let suffix := segmentHistory c.capacity c.active history ++ [batch]
+    after.2 = .active .lock (SingleFile.appendBindings c.policy)
+      (after.1.disk.cursor c.active) suffix := by
+  subst phase
+  have child := SingleFile.append_refines reports entry.active.ready entry.active.clean
+    (segmentHistory_bounded entry.layout _) fits size
+  dsimp only at child
+  simp only [writeActive, ExceptT.run] at returned
+  rename_i _
+  split at returned
+  · rename_i target made
+    rw [made] at child
+    obtain ⟨_, canonical, _, _⟩ := child.2.2
+    cases returned
+    simp only [canonical, Disk.setCursor_here]
+  · cases returned
+  · cases returned
+
 /-- A native non-rotating append supplies the L0 acknowledgement or the
 recoverable image of precisely the attempted batch. -/
 theorem appendActiveModel_refines (c : Control) (history : List Bytes) (batch : Bytes)
@@ -170,6 +209,50 @@ theorem appendActiveModel_refines (c : Control) (history : List Bytes) (batch : 
         rw [historyView_tail entry.layout.discardedFits, segmentHistory_active_length entry.layout.upper]
         have := entry.layout.lower
         omega
+
+theorem appendActiveModel_ready (c : Control) (history : List Bytes) (batch : Bytes)
+    (s : State) (entry : ReadyLayout c history s.disk)
+    (live : s.disk.liveControl = some c) (durable : s.disk.durableControl = some c)
+    (room : history.length < (c.active + 1) * c.capacity) (size : batch.length ≤ 32)
+    (position : (historyView c history).tail < Contract.maxPosition)
+    (reports : ∀ cursor, SingleFile.AppendReports c.policy cursor batch)
+    (phase : SingleFile.AppendPhase)
+    (source : phase = .active .lock (SingleFile.appendBindings c.policy)
+      (Persistence.historyCursor (segmentHistory c.capacity c.active history))
+      (segmentHistory c.capacity c.active history))
+    {next : Session} {after : State × SingleFile.AppendPhase}
+    (returned : (appendActiveModel (sessionOf c history) c.active reports).run (s, phase) =
+      .ok (.ok next) after) :
+    AppendReady next after := by
+  have fits : (segmentHistory c.capacity c.active history).length < c.capacity := by
+    rw [segmentHistory_active_length entry.layout.upper]
+    rw [Nat.add_mul, Nat.one_mul] at room
+    have := entry.layout.lower
+    omega
+  have spare : (sessionOf c history).activeCount ≠ (sessionOf c history).control.capacity :=
+    Nat.ne_of_lt fits
+  have scheduled := appendActiveModel_run (sessionOf c history) reports (s, phase) spare size position
+  simp only [sessionOf] at scheduled returned
+  rw [scheduled] at returned
+  cases wrote : (writeActive c.policy c.active reports).run (s, phase) with
+  | error => rw [wrote] at returned; cases returned
+  | ok reply reached =>
+    rw [wrote] at returned
+    cases reply with
+    | error => cases returned
+    | ok unitValue =>
+      cases unitValue
+      cases returned
+      have post := writeActive_refines c history batch s entry live durable room size position reports
+      dsimp only at post
+      rw [← source, wrote] at post
+      obtain ⟨layout, l, r⟩ := post
+      have cursor := responsePhase_fromWrite c history batch s entry
+        (Nat.lt_of_lt_of_le fits entry.layout.capacityFits) size reports source wrote
+      have suffix := segmentHistory_append batch entry.layout.lower room
+      have view := historyView_append entry.layout.discardedFits batch
+      exact ⟨history ++ [batch], by simp [sessionOf, view, suffix],
+        layout, l, r, suffix.symm ▸ cursor⟩
 
 /-- A successful non-rotating append leaves the retained child description
 positioned at the new history. A failed write leaves that description poisoned. -/
@@ -1127,16 +1210,6 @@ theorem nativeAppendModel_rotation_refines (root : System.FilePath) (held : Nat)
             cases reported with
             | error => exact continued
             | ok unitValue => cases unitValue; exact continued
-
-/-- Reusable authority of the current ready handle. Both append branches
-consume the same phase and disk layout. -/
-def AppendReady (session : Session) (state : State × SingleFile.AppendPhase) : Prop :=
-  ∃ history, session = sessionOf session.control history ∧
-    ReadyLayout session.control history state.1.disk ∧
-    state.1.disk.liveControl = some session.control ∧ state.1.disk.durableControl = some session.control ∧
-    state.2 = .active .lock (SingleFile.appendBindings session.control.policy)
-      (state.1.disk.cursor session.control.active)
-      (segmentHistory session.control.capacity session.control.active history)
 
 /-- Disk postcondition for both branches of the shared executable schedule. -/
 theorem nativeAppendModel_refines (root : System.FilePath) (held : Nat)
