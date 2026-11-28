@@ -64,16 +64,24 @@ theorem ActiveFiles.recoverable (files : ActiveFiles c before after) (entry : Re
     · exact .inr (by simp [Contract.Request.apply, position, historyView_append layout.discardedFits])
   exact ⟨⟨c, files.live.trans live, choice⟩, ⟨c, files.durable.trans durable, choice⟩⟩
 
+/-- Both child append and child close begin at this mutex and its phase
+reference. A cut in either instruction needs no result from the read. -/
+inductive ChildEntry (h : SingleFile.Handle) (w : W) : {α : Type} → IO α → W → Prop where
+  | mutex : h.Binds cell mutex → ChildEntry h w (liftM mutex.lock : IO Unit) w
+  | read : h.Binds cell mutex → ChildEntry h w (cell.get : IO _) (mutex.lock w).state
+
 /-- Concrete steps of closing an owned child. All steps other than the
 filesystem unlock use the indicated child's mutex or its private phase ref. -/
 inductive ClosePoint (h : SingleFile.Handle) (fd : IO.FS.Handle) (w : W)
     (op : AppendIO.CloseOperand h fd w) : {α : Type} → IO α → W → Prop where
-  | mutex : ClosePoint h fd w op (liftM op.mutex.lock) w
-  | read : ClosePoint h fd w op (op.cell.get : IO _) (op.mutex.lock w).state
   | close : ClosePoint h fd w op (op.cell.set .closed : IO _)
       ((op.cell.get : BaseIO _) (op.mutex.lock w).state).state
   | unlock : ClosePoint h fd w op fd.unlock op.issue
   | leave : ClosePoint h fd w op (liftM op.mutex.unlock) (returnedWorld (fd.unlock op.issue))
+
+inductive CloseSite (h : SingleFile.Handle) (w : W) : {α : Type} → IO α → W → Prop where
+  | entry : ChildEntry h w action t → CloseSite h w action t
+  | observed (op : AppendIO.CloseOperand h fd w) : ClosePoint h fd w op action t → CloseSite h w action t
 
 /-- The actual old slot is taken before any old-child close instruction.
 An unregistered successor close uses the same close-point definition,
@@ -81,7 +89,6 @@ starting at the reached error world. -/
 inductive OldClose (store : Store) (w : W) : {α : Type} → IO α → W → Prop where
   | detach : OldClose store w (store.active.swap none : IO _) w
   | child {id : Nat} : ((store.active.swap none : BaseIO _) w).val = some (id, h) →
-      (op : AppendIO.CloseOperand h fd ((store.active.swap none : BaseIO _) w).state) →
-      ClosePoint h fd _ op action t → OldClose store w action t
+      CloseSite h ((store.active.swap none : BaseIO _) w).state action t → OldClose store w action t
 
 end WalRecoverySlice.Segmented.Native.AppendCut

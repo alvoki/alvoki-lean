@@ -77,21 +77,25 @@ inductive AfterSuccess (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (st
       stop (liftM mutex.unlock : IO Unit) (installedWorld cell store next t) d →
       AfterSuccess cell mutex store session batch w stop d
 
+theorem BeforeWorker.writes (cut : BeforeWorker cell mutex store w stop d) (volatile : VolatileIO disk stop) :
+    Writebacks (disk w) d := by
+  cases cut with
+  | lock cut => exact (volatile.stopped _ (.lock _) _ _ cut)
+  | read cut => exact ((volatile.lock mutex w).trans (volatile.stopped _ (.get _) _ _ cut))
+  | poison cut =>
+    exact (((volatile.lock mutex w).trans (volatile.get cell _)).trans
+      (volatile.stopped _ (.set _ _) _ _ cut))
+
 theorem recoverBefore {disk : W → Disk} {mem : ChildMemory disk}
     (op : LocalIO mem heap Q wal reg batch w) (prim : CutRuntime disk reg.store reg.session stop)
     (active : Active mem heap wal reg w) (cut : BeforeWorker op.cell op.mutex reg.store w stop d) :
     Recoverable reg.session.view none d := by
   obtain ⟨_,_,_,_,_,ready⟩ := active
   have prior : Recoverable reg.session.view none (disk w) := ready.installed.offline (.inl rfl)
-  cases cut with
-  | lock cut => exact (prim.volatile.stopped _ (.lock _) _ _ cut).recoverable prior
-  | read cut => exact ((prim.volatile.lock op.mutex w).trans (prim.volatile.stopped _ (.get _) _ _ cut)).recoverable prior
-  | poison cut =>
-    exact (((prim.volatile.lock op.mutex w).trans (prim.volatile.get op.cell _)).trans
-      (prim.volatile.stopped _ (.set _ _) _ _ cut)).recoverable prior
+  exact (cut.writes prim.volatile).recoverable prior
 
 theorem recoverAfterSuccess {disk : W → Disk} {mem : ChildMemory disk}
-    (op : LocalIO mem heap Q wal reg batch w) (prim : CutRuntime disk reg.store reg.session stop)
+    (op : LocalIO mem heap Q wal reg batch w) (volatile : VolatileIO disk stop)
     (active : Active mem heap wal reg w) (q : Q w) (size : batch.length ≤ 32)
     (room : reg.session.view.tail < Contract.maxPosition) (linux : System.Platform.isWindows = false)
     (cut : AfterSuccess op.cell op.mutex reg.store reg.session batch w stop d) :
@@ -101,10 +105,10 @@ theorem recoverAfterSuccess {disk : W → Disk} {mem : ChildMemory disk}
   cases cut with
   | install ran cut =>
     rw [IOReturns,ran] at returned
-    exact (prim.volatile.stopped _ (.set _ _) _ _ cut).recoverable (returned.1.offline (.inl returned.2))
+    exact (volatile.stopped _ (.set _ _) _ _ cut).recoverable (returned.1.offline (.inl returned.2))
   | leave ran cut =>
     rw [IOReturns,ran] at returned
-    exact ((prim.volatile.set op.cell _ _).trans (prim.volatile.stopped _ (.leave _) _ _ cut)).recoverable
+    exact ((volatile.set op.cell _ _).trans (volatile.stopped _ (.leave _) _ _ cut)).recoverable
       (returned.1.offline (.inl returned.2))
 
 private theorem uncertainNew {new : Contract.View} (pinned : Recoverable new none d)
@@ -129,10 +133,10 @@ theorem recoverPublic {disk : W → Disk} {mem : ChildMemory disk}
   | poison cut => exact allowPending (recoverBefore op prim active (.poison cut)) _
   | worker cut => exact recoverBody op prim active q size room linux cut
   | install ran cut =>
-    exact uncertainNew (recoverAfterSuccess op prim active q size room linux (.install ran cut))
+    exact uncertainNew (recoverAfterSuccess op prim.volatile active q size room linux (.install ran cut))
       (.inr (by simp [Contract.Request.apply,room]))
   | leave ran cut =>
-    exact uncertainNew (recoverAfterSuccess op prim active q size room linux (.leave ran cut))
+    exact uncertainNew (recoverAfterSuccess op prim.volatile active q size room linux (.leave ran cut))
       (.inr (by simp [Contract.Request.apply,room]))
   | fail ran cut =>
     have returned := afterWorker op active q size room linux

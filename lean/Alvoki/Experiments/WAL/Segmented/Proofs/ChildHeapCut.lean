@@ -25,8 +25,6 @@ def Receipt.operand (r : Receipt stop h batch w d) : Operand h w :=
   ⟨r.policy,r.known,r.cell,r.mutex,r.fd,r.files,r.assembled,r.active⟩
 
 inductive Before (a : Operand h start) : {α : Type} → IO α → W → Prop where
-  | lock : Before a (liftM a.mutex.lock) start
-  | read : Before a (a.cell.get : IO _) (a.mutex.lock start).state
   | poison : Before a (a.cell.set (.poisoned a.fd) : IO Unit) (readAt a.cell a.mutex start).state
 
 inductive After (a : Operand h start) (batch : Bytes) (t : W) :
@@ -63,8 +61,6 @@ structure ReturnPrimitives (disk : W → Disk) (c : Control) (r : Complete stop 
 theorem Before.writes (io : AppendCut.VolatileIO disk stop) {a : Operand h w} (visit : Before a action u)
     (cut : stop action u d) : Writebacks (disk w) d := by
   cases visit with
-  | lock => exact io.stopped _ (.lock _) _ _ cut
-  | read => exact (io.lock _ _).trans (io.stopped _ (.get _) _ _ cut)
   | poison => exact ((io.lock _ _).trans (io.get _ _)).trans (io.stopped _ (.set _ _) _ _ cut)
 
 theorem After.writes (io : AppendCut.VolatileIO disk stop) (visit : After a batch t outcome action u)

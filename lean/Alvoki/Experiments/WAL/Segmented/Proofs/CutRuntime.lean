@@ -15,6 +15,7 @@ abbrev Stop := ControlCutIO.Stops
 /-- This cut carries a witness from the actual child heap prefix, the
 append IO worker prefix, or the final phase update after that worker. -/
 inductive ChildStop (stop : Stop) (h : SingleFile.Handle) (batch : Bytes) (w : W) (d : Disk) : Prop where
+  | entry : ChildEntry h w action u → stop action u d → ChildStop stop h batch w d
   | before (a : ChildCutIO.Operand h w) : ChildCutIO.Before a action u → stop action u d → ChildStop stop h batch w d
   | inside (r : ChildCutIO.Receipt (fun a => stop a) h batch w d) : ChildStop stop h batch w d
   | after (r : ChildCutIO.Complete stop h batch w d) : ChildStop stop h batch w d
@@ -22,8 +23,7 @@ inductive ChildStop (stop : Stop) (h : SingleFile.Handle) (batch : Bytes) (w : W
 def sites (store : Store) (session : Session) (stop : Stop) : Sites store where
   slotRead w d := stop (store.active.get : IO _) w d
   oldClose w d := ∃ (α : Type) (a : IO α) (t : W), OldClose store w a t ∧ stop a t d
-  close h w d := ∃ (fd : IO.FS.Handle) (op : AppendIO.CloseOperand h fd w) (α : Type) (a : IO α) (t : W),
-    ClosePoint h fd w op a t ∧ stop a t d
+  close h w d := ∃ (α : Type) (a : IO α) (t : W), CloseSite h w a t ∧ stop a t d
   prepare _ _ w d := (∃ (p : PrepareCutIO.Point) (t : W) (α : Type) (a : IO α), PrepareCutIO.Prefix (PrepareCutIO.successorDir store session.control) w p t ∧
     PrepareCutIO.Issued (PrepareCutIO.successorDir store session.control) p a ∧ stop a t d) ∨
     ∃ origin leaf t, PrepareCutIO.Prefix (PrepareCutIO.successorDir store session.control) w .create origin ∧
@@ -98,11 +98,13 @@ private theorem write {disk : W → Disk} {c : Context disk} {r : Reports batch}
   have owns := (fun operand => owner (c := c) head sameP operand a (phase ▸ held) reached.read)
   obtain ⟨valid,l,r',cursorEq⟩ := base.2.1.readyLayout layout live durable
   rw [view]
+  have prior : Recoverable (historyView head hist) (some (.append batch)) (disk w) :=
+    (show Installed (sessionOf head hist) (disk w) from ⟨hist,rfl,valid,l,r'⟩).offline (.inl rfl)
   cases cut with
+  | entry site stopped => exact (prim.volatile.childEntry site stopped).recoverable prior
   | before operand site stopped =>
     have wb := site.writes prim.volatile stopped
-    have installed : Installed (sessionOf head hist) (disk w) := ⟨hist,rfl,valid,l,r'⟩
-    exact wb.recoverable (installed.offline (.inl rfl))
+    exact wb.recoverable prior
   | inside receipt =>
     obtain ⟨guard,p,known⟩ := owns receipt.operand
     exact ChildCutIO.recoverable receipt (prim.child _ _ l r' guard) p
@@ -184,8 +186,8 @@ theorem recoverBody {disk : W → Disk} {mem : ChildMemory disk}
     · rintro child t st ⟨path,candidate,live⟩ after stopped
       exact (prim.volatile.stopped _ (.set _ _) _ _ stopped).recoverable
         (candidate.1.2.1.recoverable (path.layout ready size room full linux))
-    · rintro child t st ⟨path,candidate⟩ after ⟨fd,operand,_,_,_,site,stopped⟩
-      exact (prim.volatile.close operand site stopped).recoverable
+    · rintro child t st ⟨path,candidate⟩ after ⟨_,_,_,site,stopped⟩
+      exact (prim.volatile.closeSite site stopped).recoverable
         (candidate.1.2.1.recoverable (path.layout ready size room full linux))
 
 end WalRecoverySlice.Segmented.Native.AppendCut

@@ -40,22 +40,32 @@ theorem VolatileIO.swap (io : VolatileIO disk stop) (r : IO.Ref α) (v : α) (w 
     Writebacks (disk w) (disk ((r.swap v : BaseIO _) w).state) := by
   exact io.returned _ (.swap r v) w
 
+theorem VolatileIO.childEntry (io : VolatileIO disk stop) (site : ChildEntry h w a t)
+    (cut : stop a t d) : Writebacks (disk w) d := by
+  cases site with
+  | mutex _ => exact io.stopped _ (.lock _) _ _ cut
+  | read _ => exact (io.lock _ _).trans (io.stopped _ (.get _) _ _ cut)
+
 theorem VolatileIO.close (io : VolatileIO disk stop) (op : AppendIO.CloseOperand h fd w)
     (site : ClosePoint h fd w op a t) (cut : stop a t d) : Writebacks (disk w) d := by
   have first := io.lock op.mutex w
   have read := first.trans (io.get op.cell _)
   have closed := read.trans (io.set op.cell .closed _)
   cases site with
-  | mutex => exact io.stopped _ (.lock _) _ d cut
-  | read => exact first.trans (io.stopped _ (.get _) _ d cut)
   | close => exact read.trans (io.stopped _ (.set _ _) _ d cut)
   | unlock => exact closed.trans (io.stopped _ (.release _) _ d cut)
   | leave => exact (closed.trans (io.returned _ (.release fd) op.issue)).trans (io.stopped _ (.leave _) _ d cut)
+
+theorem VolatileIO.closeSite (io : VolatileIO disk stop) (site : CloseSite h w a t) (cut : stop a t d) :
+    Writebacks (disk w) d := by
+  cases site with
+  | entry early => exact io.childEntry early cut
+  | observed op point => exact io.close op point cut
 
 theorem VolatileIO.oldClose (io : VolatileIO disk stop) (site : OldClose s w a t)
     (cut : stop a t d) : Writebacks (disk w) d := by
   cases site with
   | detach => exact io.stopped _ (.swap _ _) _ _ cut
-  | child taken op site => exact (io.swap s.active none w).trans (io.close op site cut)
+  | child taken site => exact (io.swap s.active none w).trans (io.closeSite site cut)
 
 end WalRecoverySlice.Segmented.Native.AppendCut
