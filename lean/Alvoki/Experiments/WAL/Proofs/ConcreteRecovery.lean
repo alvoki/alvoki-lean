@@ -167,21 +167,71 @@ inductive Prefix (actual : Ops F) (model : Ops M) (entry : Program α) (start : 
     (op.eval actual).run w = .ok (.ok x) t → (op.eval model).run i = .ok (.ok x) u →
     Prefix actual model entry start initial (cont x) t u
 
+/-- The previous successful segment read remains available across marker
+barriers, which leave the segment's live bytes unchanged. -/
+def Op.observed (old : Option Bytes) : (op : Op) → op.Result → Option Bytes
+  | .readData, bytes => some bytes
+  | .syncMarker _, _ => old
+  | _, _ => none
+
+def Op.shrinks (old : Option Bytes) : Op → Prop
+  | .truncate n => ∃ bytes, old = some bytes ∧ n < bytes.length
+  | _ => True
+
+def Program.shrinks (old : Option Bytes) : Program α → Prop
+  | .ret _ | .stop _ => True
+  | .call op next => op.shrinks old ∧ ∀ x, (next x).shrinks (op.observed old x)
+
+theorem reopen_shrinks (p : Policy) : (WalRecoverySlice.reopen programOps p).shrinks none := by
+  unfold WalRecoverySlice.reopen
+  dsimp only
+  repeat' first
+    | exact trivial
+    | exact ⟨_, rfl, by assumption⟩
+    | constructor
+    | intro v
+    | simp only [programOps, Bind.bind, Program.bind, Pure.pure,
+        Op.observed, throw]
+    | split
+
+def Observed (actual : Ops F) (i : Image) : Option Bytes → Prop
+  | none => True
+  | some bytes => (∃ w t, actual.readData.run w = .ok (.ok bytes) t) ∧
+    i.data.live = bytes ∧ bytes.length ≤ 2^63
+
+/-- At an issued truncate the new offset is below the live extent reported
+by that same reader and fits the scalar Nat ABI of the Linux x86-64 adapter. -/
+def Op.legal (actual : Ops F) (i : Image) : Op → Prop
+  | .truncate n => ∃ bytes, (∃ w t, actual.readData.run w = .ok (.ok bytes) t) ∧
+    i.data.live = bytes ∧ n < bytes.length ∧ n < 2^63
+  | _ => True
+
+structure ReadModel (model : Ops M) : Prop where
+  read : ∀ i bytes u, model.readData.run i = .ok (.ok bytes) u → u.data.live = bytes
+  marker : ∀ slot i x u, (model.syncMarker slot).run i = .ok (.ok x) u → u.data.live = i.data.live
+
 structure RecoveryOps (R : W → Image → Prop) (actual : Ops F) (model : Ops M)
     (p : Policy) (start : W) (initial : Image) : Prop where
+  readSize : ∀ next w i bytes t,
+    Prefix actual model (WalRecoverySlice.reopen programOps p) start initial (.call .readData next) w i →
+    actual.readData.run w = .ok (.ok bytes) t → bytes.length ≤ 2^63
   issue : ∀ (op : Op) (next : op.Result → Program Decoded) w i,
-    Prefix actual model (WalRecoverySlice.reopen programOps p) start initial (.call op next) w i → R w i →
+    Prefix actual model (WalRecoverySlice.reopen programOps p) start initial (.call op next) w i → op.legal actual i → R w i →
     At (op.eval actual) (op.eval model) w i (fun x y t u => R t u ∧ x = y) R
 
 private theorem interpret (steps : RecoveryOps R actual model p start initial)
-    (prog : Program Decoded) (prior : Prefix actual model (WalRecoverySlice.reopen programOps p) start initial prog w i)
-    (frame : R w i) : At (prog.eval actual) (prog.eval model) w i (fun x y t u => R t u ∧ x = y) R := by
-  induction prog generalizing w i with
+    (disk : ReadModel model) (old : Option Bytes) (prog : Program Decoded) (prior : Prefix actual model (WalRecoverySlice.reopen programOps p) start initial prog w i)
+    (shape : prog.shrinks old) (seen : Observed actual i old) (frame : R w i) : At (prog.eval actual) (prog.eval model) w i (fun x y t u => R t u ∧ x = y) R := by
+  induction prog generalizing old w i with
   | ret => exact ⟨frame, rfl⟩
   | stop => exact frame
   | call op next ih =>
     change At (_ >>= _) (_ >>= _) _ _ _ _
-    have leaf := steps.issue op next w i prior frame
+    have legal : op.legal actual i := by
+      cases op <;> try exact trivial
+      obtain ⟨bytes, rfl, shrink⟩ := shape.1
+      exact ⟨bytes, seen.1, seen.2.1, shrink, Nat.lt_of_lt_of_le shrink seen.2.2⟩
+    have leaf := steps.issue op next w i prior legal frame
     apply At.bind (mid := fun x y t u => R t u ∧ x = y ∧
       (op.eval actual).run w = .ok (.ok x) t ∧ (op.eval model).run i = .ok (.ok x) u)
     · unfold At at leaf ⊢
@@ -190,7 +240,13 @@ private theorem interpret (steps : RecoveryOps R actual model p start initial)
       case error.ok _ _ y _ => cases y <;> exact leaf
       all_goals exact leaf
     · rintro x _ t u ⟨r, rfl, a, b⟩
-      exact ih x (prior.next a b) r
+      apply ih x _ (prior.next a b) (shape.2 x) _ r
+      cases op <;> try exact trivial
+      case readData => exact ⟨⟨w, t, a⟩, disk.read _ _ _ b, steps.readSize _ _ _ _ _ prior a⟩
+      case syncMarker slot =>
+        cases old with
+        | none => exact trivial
+        | some bytes => exact ⟨seen.1, (disk.marker slot _ _ _ b).trans seen.2.1, seen.2.2⟩
 
 local instance : LawfulMonad IO := .mk' IO
   (id_map := fun x => funext fun w => by
@@ -201,12 +257,12 @@ local instance : LawfulMonad IO := .mk' IO
     simp only [Bind.bind, instMonadEIO._aux_13, EST.bind]
     cases x w <;> rfl)
 
-theorem reopen (steps : RecoveryOps R actual model p w i) (frame : R w i) :
+theorem reopen (steps : RecoveryOps R actual model p w i) (disk : ReadModel model) (frame : R w i) :
     At (WalRecoverySlice.reopen actual p) (WalRecoverySlice.reopen model p) w i
       (fun x y t u => R t u ∧ x = y) R := by
   have nativeThrow {α β : Type} (e : String) (f : α → F β) : (throw e >>= f) = throw e := rfl
   have modelThrow {α β : Type} (e : String) (f : α → M β) : (throw e >>= f) = throw e := rfl
   rw [← eval_reopen actual p nativeThrow, ← eval_reopen model p modelThrow]
-  exact interpret steps _ .initial frame
+  exact interpret steps disk none _ .initial (reopen_shrinks p) trivial frame
 
 end WalRecoverySlice.SingleFile.ConcreteRecovery

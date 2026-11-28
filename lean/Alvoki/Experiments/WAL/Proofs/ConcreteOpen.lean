@@ -201,6 +201,35 @@ structure WorkerSteps (dir : FilePath) (R : W → OpenImage → Prop) (B : IO.FS
     RecoveryOps (fun w i => R w {base with image := i}) (recoveryOps nativeRecovery a.reader a.markers)
       (scheduledOps (ops r.worker) r.writebacks) p began base.image
 
+private theorem live_settle (files : List WalFile) (i : Image) :
+    (settleFiles files i).data.live = i.data.live := by
+  induction files generalizing i with
+  | nil => rfl
+  | cons f fs ih =>
+    change (settleFiles fs (f.settle i)).data.live = _
+    rw [ih]
+    cases f <;> rfl
+
+private theorem scheduledReadModel (effects : Effects) (schedule : WritebackSchedule) :
+    ReadModel (scheduledOps (ops effects) schedule) where
+  read i bytes u ok := by
+    let j := settleFiles schedule.dataRead i
+    change EStateM.Result.ok (if effects.readDataError then Except.error "data read error" else Except.ok j.data.live) j =
+      EStateM.Result.ok (Except.ok bytes) u at ok
+    cases err : effects.readDataError <;> simp [err] at ok
+    rw [← ok.2, ok.1]
+  marker slot i value u ok := by
+    let j := settleFiles (schedule.markerSync slot) i
+    change (effects.markerSync slot).syncResult j (j.marker slot) (j.withMarker slot) = _ at ok
+    rcases a : effects.markerSync slot with abort | abort
+    · cases abort <;> simp [a, Primitive.syncResult, Abort.result] at ok
+    · cases abort with
+      | some e => cases e <;> simp [a, Primitive.syncResult, Abort.result] at ok
+      | none =>
+        simp [a, Primitive.syncResult] at ok
+        rw [← ok]
+        unfold Image.withMarker
+        split <;> exact live_settle _ _
 theorem worker (steps : WorkerSteps dir R B r origin) (files : Files B p a b)
     (locked : LockedAt dir origin lock start) (opened : (openFilesWith nativeOpen dir).run start = .ok (.ok a) w)
     (pre : R w base) : SimResult R (recoverNative a.policy a.reader a.writer a.markers)
@@ -208,7 +237,7 @@ theorem worker (steps : WorkerSteps dir R B r origin) (files : Files B p a b)
   have schedule := steps.issued files locked opened pre
   obtain ⟨_, pol, _, _, _, rfl⟩ := files
   rw [pol]
-  have obs := reopen schedule pre
+  have obs := reopen schedule (scheduledReadModel _ _) pre
   rw [← recoverScheduled_eq] at obs
   change At (recoverNative p a.reader a.writer a.markers) (recoverScheduled r.worker r.writebacks p)
     w base.image _ _ at obs
