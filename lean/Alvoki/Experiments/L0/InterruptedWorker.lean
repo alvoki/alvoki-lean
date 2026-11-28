@@ -95,7 +95,7 @@ theorem Worker.Observation.entry (worker : Worker p) (disk : W → WalRecoverySl
 
 /-- The complete public append admits either survivor on an unspecified
 abrupt instruction and hands the selected disk to two public reopens. -/
-theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
+theorem Worker.retry {p : Prefix path root start} (worker : Worker p)
     (entry : NativeReadScope.Entry physical path root image)
     (files : NativeReadScope.Files physical root image start)
     (heap : PhaseMemory) (runtime : ∀ lock ref, WithOpenReads.Runtime physical root lock ref image life heap)
@@ -110,12 +110,8 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
     (frames : ∀ store session, worker.phase = .ready store session →
       FrameRuntime (fun w => (physical w).disk) store session (Protected physical root image))
     (cut : worker.Observation change (fun w => (physical w).disk) stop last d)
-    (restart : NativeAppendCut.Restarted physical root image.tables last d mode after)
-    (reopens : Reopens physical heap path root image life (some (.append (encode change))))
-    (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
-    Retry physical root (NativeMutationScope.uncertainEvents before change) image (some (.append (encode change))) after ∧
-      PendingReadScope.TwoReads (some (.append (encode change))) physical path root image life
-        (NativeMutationScope.uncertainEvents before change) after a b rootLife := by
+    (restart : NativeAppendCut.Restarted physical root image.tables last d mode after) :
+    Retry physical root (NativeMutationScope.uncertainEvents before change) image (some (.append (encode change))) after := by
   obtain ⟨trace, history, issued, _⟩ := p.issued entry files heap (runtime _ _) prior change scans fits
   cases cut with
   | returned atEnd imageAt =>
@@ -137,7 +133,7 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
           change image.view.tail < 18446744073709551615
           omega
         simp [WalRecoverySlice.Segmented.Contract.Request.apply, room, view]
-    exact ⟨retry, retry.readTwice reopens a b rootLife⟩
+    exact retry
   | instruction cut =>
     let stop : Stop := BoundaryOr (fun w => (physical w).disk) stop
     obtain ⟨reg, _, op, active, selected, view, room⟩ := worker.prepared heap runtime io issued fits
@@ -159,7 +155,31 @@ theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
     have protectedAt := framePublic op (frames _ _ selected) (fun _ h => ⟨h.manifest, h.catalog⟩)
       active held (encode_size change) room linux actual
     have retry := restart.uncertain protectedAt.1 protectedAt.2 (view ▸ pending) trace
-    exact ⟨retry, retry.readTwice reopens a b rootLife⟩
+    exact retry
+
+theorem Worker.interrupted {p : Prefix path root start} (worker : Worker p)
+    (entry : NativeReadScope.Entry physical path root image)
+    (files : NativeReadScope.Files physical root image start)
+    (heap : PhaseMemory) (runtime : ∀ lock ref, WithOpenReads.Runtime physical root lock ref image life heap)
+    (prior : Execution.Run before none image) (change : Change)
+    (scans : ∀ history w, SessionAt physical root p.lock p.ref p.wal p.session image history w (.updating p.wal) →
+      NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
+    (fits : image.view.tail + 1 < UInt64.size)
+    (io : AppendPrimitives runtime change)
+    (linux : System.Platform.isWindows = false)
+    (prim : ∀ store session, worker.phase = .ready store session →
+      CutRuntime (fun w => (physical w).disk) store session (tagAt (BoundaryOr (fun w => (physical w).disk) stop) last))
+    (frames : ∀ store session, worker.phase = .ready store session →
+      FrameRuntime (fun w => (physical w).disk) store session (Protected physical root image))
+    (cut : worker.Observation change (fun w => (physical w).disk) stop last d)
+    (restart : NativeAppendCut.Restarted physical root image.tables last d mode after)
+    (reopens : Reopens physical heap path root image life (some (.append (encode change))))
+    (a b : List UInt64) (rootLife : NativeReadRelease.RootLifetime) :
+    Retry physical root (NativeMutationScope.uncertainEvents before change) image (some (.append (encode change))) after ∧
+      PendingReadScope.TwoReads (some (.append (encode change))) physical path root image life
+        (NativeMutationScope.uncertainEvents before change) after a b rootLife := by
+  have retry := worker.retry entry files heap runtime prior change scans fits io linux prim frames cut restart
+  exact ⟨retry, retry.readTwice reopens a b rootLife⟩
 
 /-- The mutex, read and poison before the worker can only write back the
 existing files. These observations need only the volatile primitive laws. -/
