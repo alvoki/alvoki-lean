@@ -477,16 +477,20 @@ theorem Writebacks.installed (steps : Writebacks before after)
           (ready.layout.sealed i selects lt).writeback file
     · simp [WalRecoverySlice.Segmented.Model.Disk.writeback, hit]
 
-structure Frame (physical : W → Footprint inode) (root : System.FilePath)
-    (wal : Wal) (tables : Catalog) (before after : W) : Prop where
+structure FrameTo (physical : W → Footprint inode) (root : System.FilePath)
+    (wal : Wal) (tables : Catalog) (before after : W) (next : Phase Wal) : Prop where
   lock : (physical after).rootLock = (physical before).rootLock
   ref : (physical after).phaseRef = (physical before).phaseRef
-  phase : (physical after).phase = (physical before).phase
+  phase : (physical after).phase = next
   child : (physical after).readyWal wal = (physical before).readyWal wal
   disk : Writebacks (physical before).disk (physical after).disk
   manifest : (physical after).manifest.active = (physical before).manifest.active
   survivors : (physical after).manifest.survivors = (physical before).manifest.survivors
   tablesKept : (tableNamespace physical root).Keeps before after tables
+
+abbrev Frame (physical : W → Footprint inode) (root : System.FilePath)
+    (wal : Wal) (tables : Catalog) (before after : W) :=
+  FrameTo physical root wal tables before after (physical before).phase
 
 theorem Frame.refl : Frame physical root wal tables w w :=
   ⟨rfl, rfl, rfl, rfl, .nil, rfl, rfl, fun _ _ _ _ _ a b => ⟨a, b⟩⟩
@@ -500,26 +504,38 @@ theorem Frame.trans (a : Frame physical root wal tables s t) (b : Frame physical
 /-- Recovery publishes precisely this session, having obtained the cached
 view from the acquired WAL, settled the encoded manifest, and checked
 the referenced tables on the reached namespace. -/
-structure Online (physical : W → Footprint inode) (root : System.FilePath)
+structure SessionAt (physical : W → Footprint inode) (root : System.FilePath)
     (lock : IO.FS.Handle) (ref : IO.Ref (Phase Wal)) (wal : Wal) (session : Session)
-    (image : Selected) (history : Rows) (w : W) : Prop where
+    (image : Selected) (history : Rows) (w : W) (stage : Phase Wal) : Prop where
   owned : Owned (physical w) root lock ref
-  phase : (physical w).phase = .online wal session
+  phase : (physical w).phase = stage
   child : ∃ child, (physical w).readyWal wal = some child ∧
     WalRecoverySlice.Segmented.Installed child (physical w).disk ∧ child.view = image.view
   manifest : (physical w).manifest.Stable (L0Manifest.encode image.version)
   catalog : (tableNamespace physical root).Represents w image.tables
   installed : Installed session image history
 
-theorem Online.frame (ready : Online physical root lock ref wal session image history s)
-    (step : Frame physical root wal image.tables s t) :
-    Online physical root lock ref wal session image history t := by
+abbrev Online (physical : W → Footprint inode) (root : System.FilePath)
+    (lock : IO.FS.Handle) (ref : IO.Ref (Phase Wal)) (wal : Wal) (session : Session)
+    (image : Selected) (history : Rows) (w : W) :=
+  SessionAt physical root lock ref wal session image history w (.online wal session)
+
+theorem SessionAt.advance (ready : SessionAt physical root lock ref wal session image history s current)
+    (step : FrameTo physical root wal image.tables s t next) :
+    SessionAt physical root lock ref wal session image history t next := by
   obtain ⟨child, cached, childDisk, view⟩ := ready.child
   exact ⟨⟨step.lock.trans ready.owned.1, step.ref.trans ready.owned.2⟩,
-    step.phase.trans ready.phase,
+    step.phase,
     ⟨child, step.child.trans cached, step.disk.installed childDisk, view⟩,
     ⟨step.manifest.trans ready.manifest.1, step.survivors.trans ready.manifest.2⟩,
     ready.catalog.frame step.tablesKept, ready.installed⟩
+
+theorem Online.frame (ready : Online physical root lock ref wal session image history s)
+    (step : Frame physical root wal image.tables s t) :
+    Online physical root lock ref wal session image history t := by
+  have kept := ready.advance step
+  rw [ready.phase] at kept
+  exact kept
 
 /-- Owned reference primitive. The phase read is required only when the
 caller demonstrably holds this lock and owns this exact phase reference. -/
