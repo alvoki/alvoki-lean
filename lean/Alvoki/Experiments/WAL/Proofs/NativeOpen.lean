@@ -1,4 +1,6 @@
 import Alvoki.Experiments.WAL.Proofs.NativeRecovery
+import Alvoki.Experiments.WAL.Proofs.Client
+import Alvoki.Experiments.WAL.Proofs.DirtyAppend
 
 namespace WalRecoverySlice.SingleFile
 
@@ -305,6 +307,247 @@ private theorem acquired_result (dir : FilePath) (r : OpenReports) (s : OpenImag
 private theorem unlock_run (r : OpenReports) (s : OpenImage) :
     ((openEffects policy r).unlock .lock).run s =
       finish (if r.unlockError then some .error else none) () {s with held := false} := rfl
+
+/-- A failed write can leave private partial artifacts. This report records
+durable completed writes; the caller may publish only after create returns. -/
+structure CreateReports where
+  opening : OpenReports := {}
+  listingFault : Option Abort := none
+  names : Array String := #["lock"]
+  writeFault : FilePath → Option Abort := fun _ => none
+
+private def createWrite (dir : FilePath) (policy : Policy) (r : CreateReports) (path : FilePath)
+    (bytes : ByteArray) : OpenM Unit := fun s =>
+  let file : FileImage := ⟨bytes.data.toList, bytes.data.toList⟩
+  let next :=
+    if path = dir / "policy" then {s with policyDurable := true}
+    else if path = dir / "segment" then {s with image := {s.image with data := file}}
+    else if path = dir / "commit.0" then {s with image := {s.image with slot0 := file}}
+    else {s with image := {s.image with slot1 := file}}
+  if path = dir / "policy" ∧ bytes ≠ (stampText policy).toUTF8 then
+    finish (some .error) () s
+  else
+    match r.writeFault path with
+    | none => finish none () next
+    | some fault => finish (some fault) () s
+
+private def emptyCreateImage (policy : Policy) : OpenImage :=
+  -- The absent marker is unused in log-only mode, represented canonically.
+  {image := if policy == .boundary then {freshImage with slot0 := ⟨[], []⟩} else freshImage}
+
+def createModel (dir : FilePath) (policy : Policy) (r : CreateReports) :
+    OpenResult (Opened OpenTarget (AppendFiles OpenTarget)) :=
+  (createWith (error := String) _root_.id (acquireWith (openEffects policy r.opening) dir)
+    (openEffects policy r.opening).unlock (fun path =>
+      if path == dir then unchanged r.listingFault r.names else throw "wrong directory")
+    (createWrite dir policy r)
+    (installWith (openEffects policy r.opening) (workerEffect r.opening) appendFiles)
+    dir policy).run (emptyCreateImage policy)
+
+private theorem freshCreateEntry (policy : Policy) :
+    Dirty policy [] none freshImage := by
+  exact ready_dirty policy freshImage [] (fresh_ready policy) rfl (by simp) (by simp)
+
+private theorem bindSucceeded {a : OpenM α} {b : α → OpenM β} {before after : OpenImage}
+    {value : β} (ok : (a >>= b).run before = .ok (.ok value) after) :
+    ∃ mid selected, a.run before = .ok (.ok selected) mid ∧ b selected mid = .ok (.ok value) after := by
+  rw [runBind] at ok
+  cases ran : a.run before with
+  | error => rw [ran] at ok; cases ok
+  | ok response mid =>
+    rw [ran] at ok
+    cases response with
+    | error => cases ok
+    | ok selected => exact ⟨mid, selected, rfl, ok⟩
+
+private theorem createWrite_succeeded (dir : FilePath) (policy : Policy) (r : CreateReports) (path : FilePath)
+    (bytes : ByteArray) (s t : OpenImage)
+    (wrote : (createWrite dir policy r path bytes).run s = .ok (.ok ()) t) :
+    let file : FileImage := ⟨bytes.data.toList, bytes.data.toList⟩
+    t = if path = dir / "policy" then {s with policyDurable := true}
+        else if path = dir / "segment" then {s with image := {s.image with data := file}}
+        else if path = dir / "commit.0" then {s with image := {s.image with slot0 := file}}
+        else {s with image := {s.image with slot1 := file}} := by
+  simp only [createWrite, ExceptT.run] at wrote
+  split at wrote
+  · cases wrote
+  · cases h : r.writeFault path with
+    | none => rw [h] at wrote; cases wrote; rfl
+    | some fault => rw [h] at wrote; cases fault <;> cases wrote
+
+private theorem initializeCreate_result (dir : FilePath) (policy : Policy) (r : CreateReports)
+    (distinct : dir / "policy" ≠ dir / "segment" ∧ dir / "policy" ≠ dir / "commit.0" ∧
+      dir / "segment" ≠ dir / "commit.0" ∧ dir / "policy" ≠ dir / "commit.1" ∧
+      dir / "segment" ≠ dir / "commit.1" ∧ dir / "commit.0" ≠ dir / "commit.1")
+    (ok : (initializeFilesWith (createWrite dir policy r) dir policy).run
+      {emptyCreateImage policy with held := true} = .ok (.ok ()) after) :
+    after = {image := freshImage, held := true, policyDurable := true} := by
+  obtain ⟨a,b,c,d,e,f⟩ := distinct
+  unfold initializeFilesWith at ok
+  obtain ⟨mid, _, stamp, rest⟩ := bindSucceeded ok
+  obtain ⟨data, _, segment, tail⟩ := bindSucceeded rest
+  have stampImage := createWrite_succeeded dir policy r _ _ _ _ stamp
+  have dataImage := createWrite_succeeded dir policy r _ _ _ _ segment
+  cases policy
+  · change (pure () : OpenM Unit).run data = _ at tail
+    rw [run_pure] at tail
+    cases tail
+    simp only [stampImage, dataImage, Ne.symm a, ↓reduceIte, emptyCreateImage]
+    rfl
+  · change ((createWrite dir .boundary r (dir / "commit.0") ⟨(encodeMarker 0 0).toArray⟩) >>=
+      fun _ => createWrite dir .boundary r (dir / "commit.1") ByteArray.empty).run data = _ at tail
+    obtain ⟨marker, _, first, second⟩ := bindSucceeded tail
+    have firstImage := createWrite_succeeded dir .boundary r _ _ _ _ first
+    have secondImage := createWrite_succeeded dir .boundary r _ _ _ _ second
+    simp only [secondImage, firstImage, dataImage, stampImage, Ne.symm a, Ne.symm b, Ne.symm c,
+      Ne.symm d, Ne.symm e, Ne.symm f, ↓reduceIte, emptyCreateImage]
+    rfl
+
+private theorem createScope_succeeded (action : OpenM α) (cleanup : OpenM Unit)
+    (s : OpenImage) (ok : (tryCatchThe String action (fun err => do
+      tryCatchThe String cleanup (fun _ => pure ())
+      throw err)).run s = .ok (.ok ready) after) :
+    action.run s = .ok (.ok ready) after := by
+  simp only [tryCatchThe, MonadExceptOf.tryCatch, ExceptT.tryCatch, ExceptT.run, ExceptT.mk,
+    Bind.bind, ExceptT.bind, EStateM.bind] at ok
+  cases ran : action s with
+  | error => rw [ran] at ok; cases ok
+  | ok report mid =>
+    rw [ran] at ok
+    cases report with
+    | ok =>
+      change action s = _
+      rw [ran]
+      simpa [Pure.pure, EStateM.pure] using ok
+    | error err =>
+      simp only [EStateM.bind] at ok
+      cases cleared : cleanup mid with
+      | error => simp [cleared] at ok
+      | ok result _ => cases result <;>
+          simp [cleared, EStateM.pure, Pure.pure, ExceptT.bindCont] at ok <;> cases ok
+
+private theorem joinDistinct (dir : FilePath) (p q : String)
+    (rp : (⟨p⟩ : FilePath).isAbsolute = false) (rq : (⟨q⟩ : FilePath).isAbsolute = false)
+    (different : p ≠ q) : dir / p ≠ dir / q := by
+  simpa [HDiv.hDiv, Div.div, FilePath.join, rp, rq, String.append_left_inj] using different
+theorem createPathsDistinct (dir : FilePath) (linux : System.Platform.isWindows = false) :
+    dir / "policy" ≠ dir / "segment" ∧ dir / "policy" ≠ dir / "commit.0" ∧
+    dir / "segment" ≠ dir / "commit.0" ∧ dir / "policy" ≠ dir / "commit.1" ∧
+    dir / "segment" ≠ dir / "commit.1" ∧ dir / "commit.0" ≠ dir / "commit.1" := by
+  refine ⟨joinDistinct dir _ _ ?_ ?_ (by decide), joinDistinct dir _ _ ?_ ?_ (by decide),
+    joinDistinct dir _ _ ?_ ?_ (by decide), joinDistinct dir _ _ ?_ ?_ (by decide),
+    joinDistinct dir _ _ ?_ ?_ (by decide), joinDistinct dir _ _ ?_ ?_ (by decide)⟩
+  all_goals
+    unfold FilePath.isAbsolute FilePath.pathSeparators
+    rw [linux]
+    rfl
+
+/-- On success the real create schedule supplied the empty durable files
+and ran the shared installer with the lock acquired by this call. -/
+theorem createModel_opened (dir : FilePath) (policy : Policy) (r : CreateReports)
+    (linux : System.Platform.isWindows = false)
+    (created : createModel dir policy r = .ok (.ok ready) after) :
+    OpenGuarantee policy [] none (.ok (.ok ready) after) ∧
+      (after.image = freshImage ∨ after.image =
+        reached ((recoverScheduled r.opening.worker r.opening.writebacks policy).run freshImage)) := by
+  unfold createModel createWith at created
+  obtain ⟨acquiredState, description, acquired, attempted⟩ := bindSucceeded created
+  obtain ⟨rfl, rfl⟩ :=
+    (acquired_result (policy := policy) dir r.opening (emptyCreateImage policy) rfl).1 _ _ acquired
+  have ran := createScope_succeeded _ _ _ attempted
+  obtain ⟨initialized, _, prepared, installed⟩ := bindSucceeded ran
+  unfold prepareCreateWith at prepared
+  obtain ⟨listed, names, listing, initializedFiles⟩ := bindSucceeded prepared
+  simp only [BEq.rfl, ↓reduceIte, unchanged, ExceptT.run] at listing
+  cases fault : r.listingFault with
+  | some abort => rw [fault] at listing; cases abort <;> cases listing
+  | none =>
+    rw [fault] at listing
+    cases listing
+    by_cases bad : r.names.any (· != "lock") = true
+    · simp only [bad, ↓reduceIte] at initializedFiles
+      cases initializedFiles
+    · simp only [bad] at initializedFiles
+      have exactImage := initializeCreate_result dir policy r (createPathsDistinct dir linux) initializedFiles
+      subst initialized
+      have valid := install_result (policy := policy) dir r.opening
+        {image := freshImage, held := true, policyDurable := true} rfl
+        (freshCreateEntry policy) (fun _ => ⟨rfl, rfl⟩)
+      dsimp only at valid
+      simp only [ExceptT.run] at valid
+      rw [installed] at valid
+      exact ⟨valid.1, valid.2.1⟩
+
+/-- No-fault create reaches the installer after writing the empty durable
+child. The same worker that services reopen installs its ready phase. -/
+theorem createModel_healthy (dir : FilePath) (policy : Policy)
+    (linux : System.Platform.isWindows = false) :
+    ∃ ready after, createModel dir policy {} = .ok (.ok ready) after := by
+  let r : CreateReports := {}
+  let before := emptyCreateImage policy
+  let held := {before with held := true}
+  let fresh : OpenImage := {image := freshImage, held := true, policyDurable := true}
+  have initialized : (initializeFilesWith (createWrite dir policy r) dir policy).run held =
+      .ok (.ok ()) fresh := by
+    obtain ⟨a,b,c,d,e,f⟩ := createPathsDistinct dir linux
+    cases policy <;>
+      simp [initializeFilesWith, createWrite, Bind.bind, ExceptT.bind, ExceptT.bindCont,
+        ExceptT.mk, ExceptT.run, EStateM.bind, Pure.pure, ExceptT.pure, EStateM.pure,
+        emptyCreateImage, r, held, before, fresh, freshImage, stampText, Ne.symm a, Ne.symm b,
+        Ne.symm c, Ne.symm d, Ne.symm e, Ne.symm f, finish, reduceBEq, Policy.ctorIdx] <;> rfl
+  have files : (openFilesWith (openEffects policy r.opening) dir).run fresh =
+      .ok (.ok (expectedFiles policy)) fresh := by cases policy <;> rfl
+  have selected := (ready_powerLoss_reopen (fresh_ready policy) (by simp) (by simp)).1
+  change (reopen (ops healthyReopen) policy).run freshImage =
+    .ok (.ok ⟨[], historyCursor []⟩) freshImage at selected
+  have scheduled : (recoverScheduled healthyReopen {} policy).run freshImage =
+      .ok (.ok ⟨[], historyCursor []⟩) freshImage := by
+    rw [recoverScheduled_eq]
+    exact selected
+  have recovered : (workerEffect r.opening policy .reader .writer (markersFor policy)).run fresh =
+      .ok (.ok ⟨[], historyCursor []⟩) fresh := by
+    simp [workerEffect, ExceptT.run, r, fresh]
+    exact congrArg (fun outcome =>
+      match outcome with
+      | .ok response image => EStateM.Result.ok response {fresh with image}
+      | .error token image => EStateM.Result.error token {fresh with image}) scheduled
+  have settle : (settleWith (openEffects policy r.opening) dir .policy).run fresh =
+      .ok (.ok ()) {fresh with namesDurable := true} := rfl
+  have installed : ∃ ready after, (installWith (openEffects policy r.opening)
+      (workerEffect r.opening) appendFiles dir .lock).run fresh = .ok (.ok ready) after := by
+    unfold installWith
+    simp only [runBind, files, expectedFiles, recovered, settle, run_pure]
+    exact ⟨_, _, rfl⟩
+  obtain ⟨ready, after, installed⟩ := installed
+  refine ⟨ready, after, ?_⟩
+  unfold createModel createWith
+  have heldLock : (acquireWith (openEffects policy r.opening) dir).run before = .ok (.ok .lock) held := rfl
+  rw [runBind, heldLock]
+  change (tryCatchThe String
+      (prepareCreateWith _root_.id (fun path => if path == dir then unchanged r.listingFault r.names
+          else throw "wrong directory") (createWrite dir policy r) dir policy >>= fun _ =>
+        installWith (openEffects policy r.opening) (workerEffect r.opening) appendFiles dir .lock)
+      _).run held = _
+  have listed : (unchanged (α := Array String) r.listingFault r.names).run held =
+      .ok (.ok #["lock"]) held := rfl
+  have prepared : (prepareCreateWith _root_.id (fun path => if path == dir then unchanged r.listingFault r.names
+          else throw "wrong directory") (createWrite dir policy r) dir policy).run held =
+      .ok (.ok ()) fresh := by
+    unfold prepareCreateWith
+    simp only [runBind, BEq.rfl, ↓reduceIte, listed]
+    have clean : ( (#["lock"] : Array String).any (· != "lock")) = false := by simp
+    simpa [clean] using initialized
+  have completed : (prepareCreateWith _root_.id (fun path => if path == dir then unchanged r.listingFault r.names
+          else throw "wrong directory") (createWrite dir policy r) dir policy >>= fun _ =>
+        installWith (openEffects policy r.opening) (workerEffect r.opening) appendFiles dir .lock).run held =
+      .ok (.ok ready) after := by
+    rw [runBind, prepared]
+    exact installed
+  simp only [tryCatchThe, MonadExceptOf.tryCatch, ExceptT.tryCatch, ExceptT.run, ExceptT.mk,
+    Bind.bind, EStateM.bind, Pure.pure]
+  simp only [Bind.bind, ExceptT.run] at completed
+  rw [completed]
+  rfl
 
 /-- Public open assembles the acquired descriptions, scheduled worker and
 namespace barriers. Error cleanup returns no ready phase. -/

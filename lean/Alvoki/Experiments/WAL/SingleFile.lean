@@ -266,19 +266,32 @@ schedule acquires its reader, writer and marker descriptions. -/
     writeDurable (dir / "commit.0") (encodeBytes (encodeMarker 0 0))
     writeDurable (dir / "commit.1") ByteArray.empty
 
+@[inline] def prepareCreateWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (list : FilePath → m (Array String))
+    (writeDurable : FilePath → ByteArray → m Unit)
+    (dir : FilePath) (policy : Policy) : m Unit := do
+  let names ← list dir
+  if names.any (· != "lock") then
+    throw (invalid "WAL directory is not empty")
+  else initializeFilesWith writeDurable dir policy
+
+/-- The lock belongs to the create scope until the ready handle is returned. -/
+@[inline] def createWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (acquire : m lock) (unlock : lock → m Unit)
+    (list : FilePath → m (Array String)) (writeDurable : FilePath → ByteArray → m Unit)
+    (install : FilePath → lock → m ready) (dir : FilePath) (policy : Policy) : m ready := do
+  let lock ← acquire
+  tryCatchThe error (prepareCreateWith invalid list writeDurable dir policy >>= fun _ => install dir lock)
+    (fun err => do
+      tryCatchThe error (unlock lock) (fun _ => pure ())
+      throw err)
+
 /-- Initialize an empty caller-owned directory. Existing files are never replaced;
 an interrupted initialization is not automatically retried. -/
-def create (dir : FilePath) (policy : Policy) : IO Handle := do
-  let lock ← acquire dir
-  try
-    let entries ← readDirChecked dir
-    if entries.any (fun entry => entry.fileName != "lock") then
-      throw <| IO.userError "WAL directory is not empty"
-    initializeFilesWith writeAndSync dir policy
-    install dir lock
-  catch e =>
-    lock.unlock
-    throw e
+def create (dir : FilePath) (policy : Policy) : IO Handle :=
+  createWith (error := IO.Error) IO.userError (acquire dir) (·.unlock)
+    (fun path => do return (← readDirChecked path).map (·.fileName))
+    writeAndSync install dir policy
 
 @[inline] def appendWith [Monad m] [MonadExceptOf String m] (phase : Phase handle payload)
     (store : Phase handle payload → m Unit)

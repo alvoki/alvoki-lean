@@ -115,12 +115,18 @@ private def Store.closeChild (s : Store) : IO Unit :=
 private def Store.release (s : Store) : IO Unit := do
   releaseWith (error := IO.Error) s.closeChild s.lock.unlock
 
-private def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
-  -- Only an unpublished successor can already occupy this ID after an interrupted rotation.
-  removeSegment s.root id
-  let dir := segmentPath s.root id
-  IO.FS.createDir dir
-  SingleFile.create dir p
+/-- Only an unpublished successor can already occupy this ID after an
+interrupted rotation. Creation and the returned child use the same path. -/
+@[inline] def prepareChildWith [Monad m]
+    (remove : Nat → m Unit) (mkdir : FilePath → m Unit)
+    (create : FilePath → Policy → m child) (root : FilePath) (p : Policy) (id : Nat) : m child := do
+  remove id
+  let dir := segmentPath root id
+  mkdir dir
+  create dir p
+
+private def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle :=
+  prepareChildWith (removeSegment s.root) IO.FS.createDir SingleFile.create s.root p id
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   s.closeChild
