@@ -1,0 +1,48 @@
+#!/bin/sh
+set -ex
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mkdir -p /proc /sys /dev /run /tmp /mnt
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+modprobe virtio_pci
+modprobe virtio_blk
+modprobe dm-mod
+
+experiment=
+fs=
+io=
+for arg in $(cat /proc/cmdline); do
+  case "$arg" in
+    alvoki.writeback=1) experiment=1 ;;
+    fs=*) fs=${arg#fs=} ;;
+    io=*) io=${arg#io=} ;;
+  esac
+done
+test "$experiment" = 1
+case "$io" in buffered|dsync|direct|direct-dsync) ;; *) exit 2;; esac
+case "$fs" in ext4|xfs) ;; *) exit 2;; esac
+modprobe "$fs"
+size=$(cat /sys/class/block/vda/size)
+test "$size" = 2097152
+dmsetup create guestdisk --table "0 $size linear /dev/vda 0"
+case "$fs" in
+  ext4)
+    mkfs.ext4 -F -b 4096 /dev/mapper/guestdisk
+    tune2fs -l /dev/mapper/guestdisk | grep -E 'Filesystem features|Block size|Inode size'
+    opts=data=ordered
+    ;;
+  xfs)
+    mkfs.xfs -f -b size=4096 -m reflink=0 /dev/mapper/guestdisk
+    opts=defaults
+    ;;
+esac
+mount -t "$fs" -o "$opts" /dev/mapper/guestdisk /mnt
+grep ' /mnt ' /proc/mounts
+uname -r
+if [ "$io" = buffered ]; then
+  export MEASURE_PAGE_FLAGS=1
+fi
+/probe "$io" || echo "PROBE_FAILED=$?"
+umount /mnt
+poweroff -f
