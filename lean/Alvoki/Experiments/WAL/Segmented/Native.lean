@@ -639,6 +639,15 @@ private theorem locked_run (handle : Handle) (action : IO α) (w : Void IO.RealW
     Functor.map, instMonadEIO._aux_1]
   cases action (handle.mutex.lock w).state <;> rfl
 
+/-- The exact child and input of its close operation, after taking the
+registered slot under the WAL mutex. -/
+def CloseChildAt (heap : PhaseMemory) (wal : Handle) (session : Session)
+    (w : Void IO.RealWorld) (child : SingleFile.Handle) (u : Void IO.RealWorld) : Prop :=
+  ∃ store, heap.holds wal.state (.ready store session) w ∧
+    heap.holds store.active (some (session.control.active, child)) w ∧
+    let closed := (wal.state.swap .closed : BaseIO _) (wal.mutex.lock w).state
+    u = ((store.active.swap none : BaseIO _) closed.state).state
+
 /-- A segmented close removes its own store and its registered active slot.
 Only the stored directory lock and the child's actual phase lock can issue
 a file unlock, each at its particular syscall input. -/
