@@ -63,7 +63,7 @@ private def readFromStart (h : IO.FS.Handle) : IO Bytes := do
   h.rewind
   return (← h.readBinToEnd).data.toList
 
-private def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
+def nativeRecovery : RecoveryIO FileM IO.FS.Handle where
   readFromStart h := readFromStart h
   truncateAt h n := truncateAt h n
   sync h := syncHandle h
@@ -101,7 +101,7 @@ private def nativeAppend : AppendIO FileM IO.FS.Handle where
     writeFlushed h bytes
   sync h := syncHandle h
 
-private def checked (action : FileM α) : IO α := do
+def checked (action : FileM α) : IO α := do
   match ← action.run with
   | .ok value => return value
   | .error error => throw <| IO.userError error
@@ -219,7 +219,7 @@ structure OpenFiles (handle : Type) where
     let _ ← attempt (io.unlock lock)
     rethrow err
 
-private def nativeOpen : OpenIO FileM IO.FS.Handle where
+def nativeOpen : OpenIO FileM IO.FS.Handle where
   openFile _ path mode := IO.FS.Handle.mk path mode
   unbuffered h := disableBuffering h
   readPolicy path h := do
@@ -231,7 +231,7 @@ private def nativeOpen : OpenIO FileM IO.FS.Handle where
   unlock h := h.unlock
   sync h := syncHandle h
 
-private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
+def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
     (markers : Option (IO.FS.Handle × IO.FS.Handle)) : FileM Decoded :=
   recoverWith nativeRecovery reader markers policy
 
@@ -240,9 +240,16 @@ private def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
   let state ← newRef ready.phase
   return (state, ← newMutex)
 
-private def installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
+def installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
   let (state, mutex) ← storeReadyWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
   return ⟨ready.policy, state, mutex⟩
+
+/-- The handle contains exactly the phase cell and mutex allocated by the
+install step; proofs compare this construction without exposing raw handles
+to clients as an executable constructor. -/
+def Handle.Assembled (h : Handle) (policy : Policy)
+    (ref : IO.Ref (Phase IO.FS.Handle (AppendFiles IO.FS.Handle))) (mutex : Std.BaseMutex) : Prop :=
+  h = ⟨policy, ref, mutex⟩
 
 private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
 

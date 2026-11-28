@@ -55,11 +55,11 @@ private def barrier (report : Primitive) (effect : OpenImage → OpenImage) : Op
   | .before abort => finish (some abort) () s
   | .after abort => finish abort () (effect s)
 
-private def stampText : Policy → String
+def stampText : Policy → String
   | .boundary => "v3 boundary"
   | .logOnly => "v3 log"
 
-private def openEffects (policy : Policy) (r : OpenReports) : OpenIO OpenM OpenTarget where
+def openEffects (policy : Policy) (r : OpenReports) : OpenIO OpenM OpenTarget where
   openFile target _ _ := unchanged (r.openFault target) target
   unbuffered target := unchanged (r.bufferingFault target) ()
   readPolicy _ target := unchanged (if target = .policy then r.readFault else some .error) (stampText policy)
@@ -81,7 +81,7 @@ private def openEffects (policy : Policy) (r : OpenReports) : OpenIO OpenM OpenT
 def markersFor (policy : Policy) : Option (OpenTarget × OpenTarget) :=
   if policy == .boundary then some (.marker0, .marker1) else none
 
-private def workerEffect (r : OpenReports) (policy : Policy)
+def workerEffect (r : OpenReports) (policy : Policy)
     (data appender : OpenTarget) (markers : Option (OpenTarget × OpenTarget)) : OpenM Decoded :=
   if data = .reader ∧ appender = .writer ∧ markers = markersFor policy then
     fun s => match (recoverScheduled r.worker r.writebacks policy).run s.image with
@@ -89,7 +89,7 @@ private def workerEffect (r : OpenReports) (policy : Policy)
       | .error token image => .error token {s with image}
   else throw "wrong recovery descriptions"
 
-private def attempt (action : OpenM α) : OpenM (Except String α) :=
+def attempt (action : OpenM α) : OpenM (Except String α) :=
   fun s => match action.run s with
   | .ok result after => .ok (.ok result) after
   | .error token after => .error token after
@@ -101,7 +101,7 @@ private theorem attempt_run (action : OpenM α) (s : OpenImage) :
 
 /-- The caller owns the expected policy and bindings of the existing segment.
     Each effect below is selected by the native schedule's reached arguments. -/
-private def openAttempt (dir : FilePath) (policy : Policy) (r : OpenReports)
+def openAttempt (dir : FilePath) (policy : Policy) (r : OpenReports)
     (s : OpenImage) : OpenResult (Opened OpenTarget (AppendFiles OpenTarget)) :=
   match (openExistingWith (openEffects policy r) attempt throw (workerEffect r) appendFiles pure dir).run s with
   | .ok result after => .ok result after
@@ -359,10 +359,10 @@ private theorem openAttempt_refines (dir : FilePath) (policy : Policy) (r : Open
           cases un : r.unlockError <;>
             simpa [runBind, attempt_run, unlock_run, finish, un, run_throw, OpenGuarantee, workerProvenance, postState] using installed
 
-private def settleImage (files : List WalFile) (state : OpenImage) : OpenImage :=
+def settleImage (files : List WalFile) (state : OpenImage) : OpenImage :=
   {state with image := settleFiles files state.image}
 
-private def settleResult (files : List WalFile) : OpenResult α → OpenResult α
+def settleResult (files : List WalFile) : OpenResult α → OpenResult α
   | .ok response after => .ok response (settleImage files after)
   | .error token after => .error token (settleImage files after)
 
