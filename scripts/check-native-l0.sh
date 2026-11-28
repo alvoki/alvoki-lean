@@ -82,6 +82,8 @@ component_proofs=(
   WAL.Segmented.Proofs.CreateCutIO WAL.Segmented.Proofs.AppendPrefixLayout
   WAL.Segmented.Proofs.ChildHeapCut WAL.Segmented.Proofs.AppendCutBody
   WAL.Segmented.Proofs.CutRuntime WAL.Segmented.Proofs.PublicAppendCut
+  WAL.Segmented.Proofs.CutSite WAL.Segmented.Proofs.CutFrame WAL.Segmented.Proofs.CutLeafFrames
+  WAL.Segmented.Proofs.CutFrameMemory
 )
 for module in "${component_proofs[@]}"; do
   leanchecker "Alvoki.Experiments.$module"
@@ -180,6 +182,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms MutationExitCut.suffix_state
 #check_axioms MutationExitCut.afterReturn
 #check_axioms MutationExitCut.rejected
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.framePublic
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.PublicStop.located
 #check_axioms WalRecoverySlice.Segmented.Native.AppendCut.recoverPublic
 #check_axioms WalRecoverySlice.Segmented.Native.AppendCut.recoverAfterSuccess
 #check_axioms WalRecoverySlice.Segmented.Native.AppendCut.recoverBody
