@@ -95,6 +95,10 @@ share the bind and scope rules but keep these two contracts separate.
 A conditional healthy execution also needs positive syscall reports.
 The capacity-one recovery witness reuses the same segmented worker as
 the empty example and the same public read pipeline as the safety proof.
+The CONTROL bytes read on the reopened disk identify the selected child.
+The ordinary acquisition and validation frames carry its recoverability
+to the policy read where the child opener consumes it. The caller supplies
+the healthy primitive reports for this WAL.
 For a recovered nonempty memtable and a key present in its sorted rows,
 [`NativeFlush.healthyRead`](../../lean/Alvoki/Experiments/L0/HealthyFlushRead.lean)
 also forces the next public get to succeed under the healthy reports.
