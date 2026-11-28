@@ -24,9 +24,8 @@ private def observedCell (sites : Sites) (last : W) (r : Ref) : Cell Observed Wa
   swap v := observeBase sites last (r.swap v)
 
 noncomputable def worker (sites : Sites) (last : W) (change : Change) (wal : Wal) : Observed Nat :=
-  let program := publicProgram wal.parts.choose wal.parts.choose_spec.choose (encode change)
+  publicProgram wal.parts.choose wal.parts.choose_spec.choose (encode change)
     (tagAt (BoundaryOr sites.disk sites.walStop) last)
-  ⟨WalRecoverySlice.Segmented.Native.append wal (encode change),program.cuts⟩
 
 /-- The same position guard and second borrow that run in native IO now
 interpret the selected child's complete public append schedule. -/
@@ -47,7 +46,13 @@ private theorem gate_run (sites : Sites) (last : W) (r : Ref) (change : Change) 
       apply congrArg (Bind.bind (r.get : IO (Phase Wal)))
       funext phase
       dsimp only
-      cases phase.wal <;> rfl
+      cases phase.wal with
+      | none => rfl
+      | some h =>
+        change ((worker sites last change h).run >>= _) = _
+        rw [show (worker sites last change h).run = _ from WalRecoverySlice.Segmented.Native.AppendCut.publicProgram_run
+          h.parts.choose_spec.choose_spec (tagAt (BoundaryOr sites.disk sites.walStop) last) (encode change)]
+        rfl
     exact congrArg (fun a : IO Unit => a >>= fun _ => pure {s with mem := insert s.mem change}) same
   · rfl
 
@@ -69,6 +74,17 @@ noncomputable def post (sites : Sites) (d : Disk) (r : Ref) (lock : IO.FS.Handle
   ⟨closeScope r lock (fun w => NativeWrite.afterWrite r (restored rep w)),
     fun w last => d = sites.disk last ∧ Cut sites.localStop (afterStore r lock s (restored rep w)) w last⟩
 
+private noncomputable def store (sites : Sites) (d : Disk) (ref : Ref) (change : Change) (s : Session) (v : View) :
+    ObservedIO Session :=
+  ⟨fun w => (gate sites w ref change s v).run w, fun w last => (gate sites last ref change s v).cuts w d⟩
+
+private theorem store_eq (sites : Sites) (d : Disk) (r : Ref) (change : Change) (s : Session) (v : View) :
+    store sites d r change s v = ⟨ordinaryGate r change s v, fun w last => (gate sites last r change s v).cuts w d⟩ := by
+  unfold store
+  congr 1
+  funext w
+  rw [gate_run]
+
 noncomputable def terminal (sites : Sites) (d : Disk) (ref : Ref) (lock : IO.FS.Handle) (change : Change) :
     Destination → ObservedIO Unit
   | .invalid => ⟨closeScope ref lock (throw (IO.userError "L0 requires reopen")),fun w last => d = sites.disk last ∧
@@ -76,9 +92,7 @@ noncomputable def terminal (sites : Sites) (d : Disk) (ref : Ref) (lock : IO.FS.
   | .skipped s => post sites d ref lock s (.ok s)
   | .scanned s (.error e) => post sites d ref lock s (.error e)
   | .scanned s (.ok v) =>
-    let store : ObservedIO Session := ⟨ordinaryGate ref change s v,
-      fun w last => (gate sites last ref change s v).cuts w d⟩
-    store.thenResult (post sites d ref lock s)
+    (store sites d ref change s v).thenResult (post sites d ref lock s)
 
 noncomputable def program (sites : Sites) (d : Disk) (r : Ref) (lock : IO.FS.Handle) (change : Change) :
     ObservedIO Unit :=
@@ -95,6 +109,7 @@ private theorem terminal_run (sites : Sites) (d : Disk) (r : Ref) (lock : IO.FS.
     cases rep with
     | error => rfl
     | ok v =>
+      simp only [terminal,store_eq]
       change closeScope r lock _ ((ordinaryGate r change s v).toBaseIO w).state = _
       apply scoped_congr
       change NativeWrite.afterWrite r (restored ((ordinaryGate r change s v).toBaseIO w).val
@@ -183,7 +198,8 @@ inductive Covered (p : Prefix path root start) (change : Change) (image : Select
   | rejected : ¬ image.view.tail + 1 < UInt64.size → d = sites.disk last →
       Cut sites.localStop (suffix p.ref p.lock p.session false) (NativeWrite.guardWorld p.ref p.wal p.callback) last →
       Covered p change image sites last d
-  | inside : image.view.tail + 1 < UInt64.size → (canonical p).Observation change sites.disk sites.walStop last d →
+  | inside : image.view.tail + 1 < UInt64.size →
+      (worker sites last change p.wal).cuts p.issue d →
       Covered p change image sites last d
   | afterReturn : image.view.tail + 1 < UInt64.size → d = sites.disk last →
       Cut sites.localStop (MutationExitCut.remaining p change) (returnedWorld (MutationExitCut.output p change)) last →
@@ -216,7 +232,7 @@ private theorem gateCut (p : Prefix path root start) (sites : Sites) (change : C
     rw [observed] at later
     change ((worker sites last change p.wal) >>= fun _ => pure ()).cuts p.issue d at later
     rw [Observed.resultCuts] at later
-    exact .inside fits (.instruction later)
+    exact .inside fits later
 
 private theorem ordinaryGate_ok (p : Prefix path root start) (change : Change) (reached : Reached p image)
     (fits : image.view.tail + 1 < UInt64.size) :
@@ -235,6 +251,7 @@ private theorem classifyAt (p : Prefix path root start) (change : Change) (sites
   rcases Program.classifyIf _ _ _ _ raw with early | late
   · exact .before early.2 (liftPrelude _ _ early.1)
   rw [atPhase.scanned] at late
+  simp only [terminal,store_eq] at late
   change (gate sites last p.ref change p.session image.view).cuts (NativeWrite.guardWorld p.ref p.wal p.callback) d ∨
     (post sites d p.ref p.lock p.session _).cut _ last at late
   by_cases fits : image.view.tail + 1 < UInt64.size
@@ -308,7 +325,7 @@ theorem interrupted {physical : W → NativeRead.Footprint inode} (p : Prefix pa
     exact .inl (MutationExitCut.rejected p entry files heap (runtime _ _) prior change scans full atCut (denied full) (disk ▸ boot)).2
   | inside fits hit =>
     have retry := (canonical p).retry entry files heap runtime prior change scans fits appendIO linux (inner fits)
-      (framing fits) hit boot
+      (framing fits) (.instruction hit) boot
     exact .inr (.inl ⟨retry,retry.readTwice⟩)
   | afterReturn fits disk atCut =>
     have recovered := (MutationExitCut.afterReturn p entry files heap runtime prior change scans fits appendIO linux
@@ -316,5 +333,42 @@ theorem interrupted {physical : W → NativeRead.Footprint inode} (p : Prefix pa
     cases accepted : MutationExitCut.accepted (MutationExitCut.output p change) with
     | false => exact .inr (.inl (by simpa only [accepted,MutationExitCut.pending,MutationExitCut.selected,Bool.false_eq_true,↓reduceIte] using recovered))
     | true => exact .inr (.inr (by simpa only [accepted,MutationExitCut.pending,MutationExitCut.selected,↓reduceIte] using recovered))
+
+private theorem terminalHit (p : Program) (valid : W → Prop) (stop : LeafStop) (k : Destination → ObservedIO Unit)
+    (hit : (k (p.eval w).val).cut (p.eval w).state last) : (p.observeIf valid stop k).cut w last := by
+  induction p generalizing w with
+  | reached => exact hit
+  | call op next ih => exact .inr ⟨(op w).val,(op w).state,rfl,ih _ hit⟩
+
+/-- Once the real public WAL action has returned success every prefix of
+publication and cleanup, including its first boundary, retains the extended
+view. These are raw cuts of the same whole-scope observer. -/
+theorem committed {physical : W → NativeRead.Footprint inode} (p : Prefix path root start) (change : Change)
+    (entry : NativeReadScope.Entry physical path root image) (files : NativeReadScope.Files physical root image start)
+    (heap : PhaseMemory) (runtime : ∀ lock ref, WithOpenReads.Runtime physical root lock ref image life heap)
+    (prior : Execution.Run before none image)
+    (scans : ∀ hist w, NativeRead.SessionAt physical root p.lock p.ref p.wal p.session image hist w (.updating p.wal) →
+      NativeRecoverAt.ScanPrimitives physical root p.wal image.tables w)
+    (fits : image.view.tail + 1 < UInt64.size) (io : AppendPrimitives runtime change) (linux : System.Platform.isWindows = false)
+    (outerStop : LeafStop) (innerStop : Stop) (success : MutationExitCut.output p change = .ok pos t)
+    (cut : Cut outerStop (MutationExitCut.remaining p change) t last)
+    (keep : Frames (Frame physical root image.tables) outerStop (MutationExitCut.remaining p change) t)
+    (boot : NativeAppendCut.Restarted physical root image.tables last (physical last).disk mode after) :
+    (program ⟨outerStop,innerStop,fun w => (physical w).disk⟩ (physical last).disk p.ref p.lock change).cut p.callback last ∧
+    Recovery physical heap path root (image.append (encode change)) life none (uncertainEvents before change) after := by
+  obtain ⟨_,hist,online⟩ := p.online entry files heap (runtime _ _) prior
+  have atPhase := reached p online (runtime _ _) (scans hist)
+  have endpoint : returnedWorld (MutationExitCut.output p change) = t := by rw [success]; rfl
+  have answer := (MutationExitCut.afterReturn p entry files heap runtime prior change scans fits io linux
+    (endpoint ▸ cut) (endpoint ▸ keep) boot).2
+  refine ⟨?_, by simpa only [success,MutationExitCut.selected,MutationExitCut.pending,MutationExitCut.accepted,↓reduceIte] using answer⟩
+  apply terminalHit
+  rw [atPhase.scanned]
+  simp only [terminal,store_eq]
+  apply Or.inr
+  refine ⟨rfl,?_⟩
+  change Cut _ (afterStore _ _ _ (restored ((ordinaryGate _ _ _ _).toBaseIO _).val _)) _ _
+  simp only [EIO.toBaseIO,ordinaryGate_ok p change atPhase fits,success,restored,afterStore]
+  simpa only [MutationExitCut.remaining,success,MutationExitCut.accepted] using cut
 
 end ExperimentalL0.MutationAllCuts

@@ -140,17 +140,41 @@ private theorem updateOutput (cell : IO.Ref (Phase Store)) (mu : Std.BaseMutex) 
   cases a : s.appendSession session batch (issuedWorld cell mu s w) <;>
     simp [Bind.bind, instMonadEIO._aux_13, EST.bind, a] <;> rfl
 
-theorem publicProgram_run {wal : Handle} (parts : wal.Parts cell mu) (stop : Stop) (batch : Bytes) (w : W)
-    (ready : ((cell.get : BaseIO _) (mu.lock w).state).val = .ready s session) :
-    (publicProgram cell mu batch stop).run w = append wal batch w := by
-  rw [append_ready_run parts batch w ready]
-  unfold publicProgram appendPositionWith
-  simp only [bindRun]
-  have held : (leaf stop (liftM mu.lock : IO Unit)).run w = .ok () (mu.lock w).state := rfl
-  simp only [held]
-  simp only [Observed.finallyUnlock_run, updateOutput cell mu stop batch w ready]
-  simp only [issuedWorld]
-  cases s.appendSession session batch ((cell.set (.poisoned s) : BaseIO _) ((cell.get : BaseIO _) (mu.lock w).state).state).state <;> rfl
+/-- Erasure holds on every public handle phase, including both guards that
+reject before a child is touched. The mutex finalizer and reply projection
+use the very same session action on both reported outcomes. -/
+theorem publicProgram_run {wal : Handle} (parts : wal.Parts cell mu) (stop : Stop) (batch : Bytes) :
+    (publicProgram cell mu batch stop).run = append wal batch := by
+  have lifted (a : IO Session) : checked (liftM a) = a := by
+    funext t
+    unfold checked
+    change ((Except.ok <$> a : IO (Except String Session)) >>= _) t = _
+    cases run : a t <;>
+      simp [Functor.map,instMonadEIO._aux_1,Bind.bind,instMonadEIO._aux_13,EST.bind,
+        Pure.pure,instMonadEIO._aux_5,EST.pure,run]
+  let action : IO Session := updateWith IO.userError (cell.get : IO _) (fun ph => cell.set ph)
+    (fun store s => checked (liftM (store.appendSession s batch)))
+  have erase :
+      (updateWith IO.userError (leaf stop (cell.get : IO _)) (fun ph => leaf stop (cell.set ph : IO Unit))
+        (fun store s => (sourceSites store s stop).appendSession s batch)).run = action := by
+    unfold action updateWith
+    apply congrArg (Bind.bind (cell.get : IO _))
+    funext phase
+    dsimp only
+    cases phase with
+    | closed | poisoned => rfl
+    | ready store s =>
+      apply congrArg (Bind.bind (cell.set (.poisoned store) : IO _))
+      funext _
+      change ((sourceSites store s stop).appendSession s batch).run >>= _ = _
+      rw [Sites.erase,lifted]
+      rfl
+  let guarded : IO Session := do mu.lock; try action finally mu.unlock
+  have outer : append wal batch = appendPositionWith guarded := by obtain ⟨rfl,rfl⟩ := parts; rfl
+  rw [outer]
+  change ((do let _ ← (liftM mu.lock : IO Unit); try _ finally mu.unlock : IO Session) >>= _) = _
+  rw [erase]
+  rfl
 
 /-- Reverse coverage: every raw observation emitted by this instantiation
 of the actual update goes to an admitted stop, including both unlock paths. -/
