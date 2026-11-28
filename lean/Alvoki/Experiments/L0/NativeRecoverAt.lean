@@ -70,7 +70,8 @@ abbrev Attached (physical : W → Footprint inode) (root : FilePath) (lock : IO.
 
 def Failed (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
     (ref : Ref) (image : Selected) (w : W) : Prop :=
-  Opening physical root lock ref image w ∨ ∃ wal, Attached physical root lock ref image wal w
+  (Opening physical root lock ref image w ∧ (physical w).manifest.active = L0Manifest.encode image.version) ∨
+    ∃ wal, Attached physical root lock ref image wal w
 
 theorem Held.frame (held : Held physical root lock ref image phase s)
     (step : NativeRead.Frame physical root wal image.tables s t) :
@@ -93,13 +94,17 @@ theorem manifest (d : Durable image history) (opening : Opening physical root lo
       (Failed physical root lock ref image) := by
   have result := NativeManifest.reopen prim ManifestFrame.refl bytes d.unique
   change Returns (NativeManifest.backend (root / "manifest")).reopen _ _ _
+  have retry {t} (same : (physical t).manifest = (physical start).manifest ∨
+      (physical t).manifest = (physical start).manifest.barrier) :
+      (physical t).manifest.active = L0Manifest.encode image.version := by
+    rcases same with h | h <;> simpa only [h, DurableBlob.Image.barrier] using bytes
   unfold Returns
   cases ran : (NativeManifest.backend (root / "manifest")).reopen.run start with
-  | error _ t => rw [ran] at result; exact .inl (opening.frame result.1)
+  | error _ t => rw [ran] at result; exact .inl ⟨opening.frame result.1, retry result.2⟩
   | ok v t =>
     rw [ran] at result
     cases v with
-    | error _ => exact .inl (opening.frame result.1)
+    | error _ => exact .inl ⟨opening.frame result.1, retry result.2⟩
     | ok v =>
       obtain ⟨rfl, step, _, stable⟩ := result
       have after := opening.frame step
@@ -126,33 +131,25 @@ theorem tables (d : Durable image history) (attached : Attached physical root lo
 
 /-- Physical effects of a swap of the owned phase reference. Only the
 phase slot is replaced. The before/after relation permits WAL writeback. -/
-structure Swapped (physical : W → Footprint inode) (root : FilePath) (wal : Wal)
-    (tables : Catalog) (next : Phase Wal) (s t : W) : Prop where
-  lock : (physical t).rootLock = (physical s).rootLock
-  ref : (physical t).phaseRef = (physical s).phaseRef
-  phase : (physical t).phase = next
-  child : (physical t).readyWal wal = (physical s).readyWal wal
-  disk : NativeRead.Writebacks (physical s).disk (physical t).disk
-  active : (physical t).manifest.active = (physical s).manifest.active
-  survivors : (physical t).manifest.survivors = (physical s).manifest.survivors
-  tablesKept : (tableNamespace physical root).Keeps s t tables
+abbrev Swapped (physical : W → Footprint inode) (root : FilePath) (wal : Wal)
+    (tables : Catalog) (next : Phase Wal) (s t : W) :=
+  NativeRead.FrameTo physical root wal tables s t next
 
 theorem Swapped.held (step : Swapped physical root wal image.tables next s t)
     (before : Held physical root lock ref image old s) : Held physical root lock ref image next t :=
   ⟨⟨step.lock.trans before.owned.1, step.ref.trans before.owned.2⟩,
     step.phase, before.catalog.frame step.tablesKept,
-    ⟨step.active.trans before.manifest.1, step.survivors.trans before.manifest.2⟩⟩
+    ⟨step.manifest.trans before.manifest.1, step.survivors.trans before.manifest.2⟩⟩
 
 theorem Swapped.keepsChild (step : Swapped physical root wal image.tables next s t)
     (before : Child physical image wal s) : Child physical image wal t := by
   obtain ⟨c, cached, valid, view⟩ := before
   exact ⟨c, step.child.trans cached, step.disk.installed valid, view⟩
 
-theorem published (step : Swapped physical root wal image.tables (.online wal session) s t)
-    (before : Attached physical root lock ref image wal s) (installed : Installed session image history) :
-    NativeRead.Online physical root lock ref wal session image history t := by
-  have held := step.held before.1
-  exact ⟨held.owned, held.phaseEq, step.keepsChild before.2, held.manifest, held.catalog, installed⟩
+theorem Attached.sessionAt (attached : Attached physical root lock ref image wal w)
+    (installed : Installed session image history) :
+    NativeRead.SessionAt physical root lock ref wal session image history w (.recovering wal) :=
+  ⟨attached.1.owned, attached.1.phaseEq, attached.2, attached.1.manifest, attached.1.catalog, installed⟩
 
 /-- Local runtime/storage correspondence. The optional session at an
 owned WAL handle denotes its two actual heap bindings. -/
@@ -194,5 +191,95 @@ theorem checked {a : F α} (safe : Returns a w ok failed) :
   | ok v t =>
     cases v <;> simpa [Bind.bind, instMonadEIO._aux_13, EST.bind, ran, Pure.pure,
       instMonadEIO._aux_5, EST.pure, throw, throwThe, MonadExceptOf.throw, instMonadExceptOfEIO._aux_1, EST.throw] using safe
+
+/-- Read and swap semantics are restricted to the particular phase reference
+under the root's verified ownership, including either primitive's reached footprint. -/
+structure PhasePrimitives (physical : W → Footprint inode) (root : FilePath)
+    (lock : IO.FS.Handle) (ref : Ref) (image : Selected) : Prop where
+  read : ∀ w, Owned (physical w) root lock ref → ∃ t,
+    (ref.get : IO (Phase Wal)) w = .ok (physical w).phase t ∧
+    ManifestFrame physical root image.tables w t ∧ (physical t).manifest = (physical w).manifest
+  swap : ∀ w, Owned (physical w) root lock ref → ∀ wal next, ∃ t,
+    (ref.swap next : IO (Phase Wal)) w = .ok (physical w).phase t ∧
+    Swapped physical root wal image.tables next w t
+
+private theorem readOpening (prim : PhasePrimitives physical root lock ref image)
+    (ready : ManifestReady physical root lock ref image w) :
+    Returns (Native.componentCell ref).read w
+      (fun phase t => phase = .opening ∧ ManifestReady physical root lock ref image t) failed := by
+  obtain ⟨t, ran, frame, same⟩ := prim.read w ready.1.owned
+  apply Returns.liftIO
+  unfold IOReturns
+  rw [ran]
+  have before : Opening physical root lock ref image w :=
+    ⟨ready.1.owned, ready.1.phaseEq, ready.1.catalog, ready.2⟩
+  have after := before.frame frame
+  exact ⟨ready.1.phaseEq, ⟨after.owned, after.phase, after.catalog, same ▸ ready.1.manifest⟩, after.disk⟩
+
+private theorem attach (prim : PhasePrimitives physical root lock ref image)
+    (held : Held physical root lock ref image .opening w) (child : Child physical image wal w) :
+    Returns ((Native.componentCell ref).swap (.recovering wal)) w
+      (fun _ t => Attached physical root lock ref image wal t) failed := by
+  obtain ⟨t, ran, step⟩ := prim.swap w held.owned wal (.recovering wal)
+  apply Returns.liftIO
+  unfold IOReturns
+  rw [ran]
+  exact ⟨Swapped.held step held, Swapped.keepsChild step child⟩
+
+/-- Applied to the segmented disk producer at its concrete recovery entry.
+The failure branch retains the same root/phase and a recoverable disk. -/
+def OpenDiskPost (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
+    (physical : W → Footprint inode) (root : FilePath) (lock : IO.FS.Handle)
+    (ref : Ref) (image : Selected) (w : W) : Prop :=
+  IOReturns (WalRecoverySlice.Segmented.Native.openExisting (root / "wal")) w
+    (fun h t => ∃ c, heap.Ready h c t ∧ WalRecoverySlice.Segmented.Installed c (physical t).disk ∧
+      c.view = image.view ∧ Held physical root lock ref image .opening t)
+    (fun t => WalRecoverySlice.Segmented.Recoverable image.view none (physical t).disk ∧
+      Held physical root lock ref image .opening t)
+
+/-- Assemble the concrete native callbacks. The private WAL handle returned
+by open is installed before scan and carried through every table check.
+A failure before that swap keeps opening custody; a later failure records
+the very handle that cleanup must take. -/
+theorem recoverAt_of_open (d : Durable image history)
+    (opening : Opening physical root lock ref image start)
+    (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
+    (manifestPrim : NativeManifest.Primitives (root / "manifest")
+      (ManifestFrame physical root image.tables start) (fun w => (physical w).manifest))
+    (heap : WalRecoverySlice.Segmented.Native.PhaseMemory) (cache : Cached heap physical root lock ref)
+    (openDisk : ∀ w, ManifestReady physical root lock ref image w →
+      OpenDiskPost heap physical root lock ref image w)
+    (phase : PhasePrimitives physical root lock ref image)
+    (scanPrim : ∀ wal w, Attached physical root lock ref image wal w →
+      ScanPrimitives physical root wal image.tables w)
+    (tablePrim : ∀ wal w, Attached physical root lock ref image wal w →
+      NativeRead.Primitives (tableNamespace physical root) life (NativeRead.Frame physical root wal image.tables w)) :
+    NativeScope.Post (Native.recoverAt root ref) start
+      (fun session t => Installed session image history ∧ ∃ wal, Attached physical root lock ref image wal t)
+      (fun _ t => Failed physical root lock ref image t) := by
+  apply checked
+  apply NativeRecovery.recover (Native.callbackComponents root ref) image d (manifest d opening bytes manifestPrim)
+  · intro w ready
+    apply NativeRecovery.reopenWal (Native.componentCell ref) _ (Native.storageCallbacks root).openWal
+      (Native.storageCallbacks root).scan (readOpening phase ready)
+      (acquired := fun h t => Held physical root lock ref image .opening t ∧ Child physical image h t)
+      (attached := Attached physical root lock ref image)
+    · intro t can
+      apply (Returns.liftIO (openDisk t can)).mapPost
+      · rintro wal u ⟨c, readyWal, disk, view, held⟩
+        exact ⟨held, c, (cache u held.owned wal c).mpr readyWal, disk, view⟩
+      · rintro u ⟨disk, held⟩
+        exact .inl ⟨⟨held.owned, held.phaseEq, held.catalog, disk⟩, held.manifest.1⟩
+    · intro wal t acquired
+      exact attach phase acquired.1 acquired.2
+    · intro wal t attached
+      apply (Returns.liftIO (scanned heap cache attached (scanPrim wal t attached))).mapPost
+      · rintro v u ⟨view, after⟩
+        exact ⟨view, wal, after⟩
+      · exact fun _ impossible => False.elim impossible
+  · rintro w ⟨wal, attached⟩
+    apply (tables d attached (tablePrim wal w attached)).mapPost
+    · exact fun _ _ after => ⟨wal, after⟩
+    · exact fun _ after => .inr ⟨wal, after⟩
 
 end ExperimentalL0.NativeRecoverAt
