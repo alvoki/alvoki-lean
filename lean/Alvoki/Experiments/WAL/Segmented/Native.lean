@@ -129,13 +129,13 @@ private def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFi
   prepareChildWith (removeSegment s.root) IO.FS.createDir SingleFile.create s.root p id
 
 @[inline] def registerPreparedWith [Monad m] (prepare : m child)
-    (register : (Nat × child) → m Unit) (id : Nat) : m Unit := do
+    (register : Option (Nat × child) → m Unit) (id : Nat) : m Unit := do
   let child ← prepare
-  register (id, child)
+  register (some (id, child))
 
 private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   s.closeChild
-  registerPreparedWith (s.prepareChild p id) (fun entry => s.active.set (some entry)) id
+  registerPreparedWith (s.prepareChild p id) s.active.set id
 
 def requiredChildNames (p : Policy) : List String :=
   if p == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
@@ -374,7 +374,7 @@ before preparation. The successor goes into the store only on success. -/
     (getActive : m (Option (Nat × child))) (closeOld : m Unit)
     (prepare : Policy → Nat → m child) (close : child → m Unit)
     (syncRoot : m Unit) (publish : Control → m Unit)
-    (write : child → Bytes → m Unit) (install : (Nat × child) → m Unit) : m Session := do
+    (write : child → Bytes → m Unit) (install : Option (Nat × child) → m Unit) : m Session := do
   check
   let current := session.control
   if session.activeCount = current.capacity then
@@ -384,7 +384,7 @@ before preparation. The successor goes into the store only on success. -/
       syncRoot
       publish next
       write child batch
-      install (next.active, child)
+      install (some (next.active, child))
       pure ⟨next, 1, session.view.append batch⟩
   else
     let some (id, child) ← getActive | throw (invalid "no active segment")
@@ -398,7 +398,7 @@ def append (h : Handle) (batch : Bytes) : IO Nat := do
     liftM <| appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
       IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
       (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
-      SingleFile.append (fun entry => store.active.set (some entry))
+      SingleFile.append store.active.set
   return next.tailPosition
 
 def discardThrough (h : Handle) (k : Nat) : IO Unit := do

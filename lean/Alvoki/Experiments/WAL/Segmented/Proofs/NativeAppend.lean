@@ -855,8 +855,9 @@ private def acquireSuccessor (root : System.FilePath) (removal : RootReports)
 private def storeActiveEntry (entry : Nat × Nat) : ActiveAppendM Unit := fun s =>
   .ok (.ok ()) ({s.1 with activeEntry := some entry.1}, s.2)
 
-private def registerSuccessor (expected : Nat) (entry : Nat × Nat) : ActiveAppendM Unit :=
-  if entry = (expected, expected) then storeActiveEntry entry else throw "wrong successor registration"
+private def registerSuccessor (expected : Nat) (entry : Option (Nat × Nat)) : ActiveAppendM Unit :=
+  if entry = some (expected, expected) then storeActiveEntry (expected, expected)
+  else throw "wrong successor registration"
 
 private def readActiveEntry : ActiveAppendM (Option (Nat × Nat)) := fun s =>
   .ok (.ok (s.1.activeEntry.map fun id => (id, id))) s
@@ -903,7 +904,7 @@ private def resumeSuccessor (root : System.FilePath) (held : Nat) (effects : Eff
   liftRootAction (nativeControlOps root held effects).syncRoot
   liftRootAction (Segmented.publish (nativeControlOps root held effects) (successor session))
   writeActive session.control.policy id reports
-  registerSuccessor (successor session).active ((successor session).active, id)
+  registerSuccessor (successor session).active (some ((successor session).active, id))
   pure ⟨successor session, 1, session.view.append batch⟩
 
 private theorem nativeAppendModel_rotation_run (root : System.FilePath) (held : Nat)
