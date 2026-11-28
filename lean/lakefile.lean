@@ -60,3 +60,5 @@ lean_exe immutableSSTableCheck where
 
 lean_exe recursiveSSTableCheck where
   root := `Alvoki.Experiments.SSTable.Recursive.Fixtures
+
+lean_lib Alvoki.Checks.Tests.RecursiveSSTableProducer

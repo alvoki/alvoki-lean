@@ -1,6 +1,6 @@
 # ALVSST06 candidate
 
-Baseline: main at `a375c871879e51558be60661d86f73b9cbaa904c`. The
+The candidate starts from main at `a375c871879e51558be60661d86f73b9cbaa904c`. The
 [L0 read investigation](https://github.com/alvoki/alvoki-lean/pull/30)
 provides the reached-state proof pattern. Keep ALVSST05 available as the
 comparison path and build ALVSST06 in independent modules. Files require
@@ -115,7 +115,7 @@ These are design estimates.
 | Binary Fuse | About 9–10 at 8-bit fingerprints (~0.39% FPR, size dependent) | Three probes. Better large-partition space than classic Xor. Segment sizing, retries and peeling require extra construction state and proof. |
 | Ribbon | Can approach the information-theoretic 6.64 at 1%, with configuration-dependent overhead | Banded linear equations trade construction space and complexity for fewer persisted bits. A bounded region can stage its equations. The solver and query agreement need proof. |
 
-References: [Bloom analysis and double hashing](https://www.eecs.harvard.edu/~michaelm/postscripts/rsa2008.pdf),
+See [Bloom analysis and double hashing](https://www.eecs.harvard.edu/~michaelm/postscripts/rsa2008.pdf),
 [blocked Bloom](https://doi.org/10.1145/1498698.1594220),
 [Xor](https://arxiv.org/abs/1912.08258),
 [Binary Fuse](https://arxiv.org/abs/2201.01174),
@@ -161,9 +161,18 @@ search and row-index cursors. The resulting `Image.open_represents`
 proves public lookup, seek and arbitrary cursor behavior from the exact
 recursive image. `checkedNativeLookup` uses the acquired descriptor and
 gives the public lookup result on success with a preserved frame on
-every returned outcome. Its `Image` premise still needs a universal
-producer theorem for the recursive builder at the reached durable
-inode. The native fixture exercises that handoff on concrete inputs.
+every returned outcome.
+
+The kernel-checked vertical experiment runs the actual builder with
+three ordered rows and minimum targets, proves the two-level image
+at the synced inode, and composes it with checked open and public lookup.
+It proves a healthy open and the public table contract, and derives the
+framed lookup under local read primitive contracts for that inode.
+The experiment uses a constant checksum to keep kernel reduction small.
+The native fixture uses CRC32C and exercises the same executable schedules.
+A universal producer theorem establishing the recursive image for arbitrary
+successful builds remains open.
+[Vertical Lean experiment](../../lean/Alvoki/Checks/Tests/RecursiveSSTableProducer.lean)
 
 The paired measurements are recorded separately.
 [Reproduction and raw measurements](../../benchmarks/sstable/recursive.md)
