@@ -83,6 +83,44 @@ private def interruption (executable library cut : String) : IO Unit :=
       check (L0Manifest.decode (← IO.FS.readBinFile active) == some ⟨[2, 0], 3⟩)
         "retry reused the orphan's ID"
 
+/-- Simulate acknowledgement loss at the caller after the public scope has
+closed. The other two modes stop or fail inside the issued WAL operation. -/
+private def appendChild (root : FilePath) (mode : String) (rotate : Bool) : IO Unit := do
+  Native.withOpen root fun db => do
+    let mutation := if rotate then Native.delete db 42 else Native.put db 42 99
+    if mode == "error" then
+      let id := if rotate then "segment-1" else "segment-0"
+      Std.Async.System.setEnvVar "ALVOKI_L0_FAIL_WAL_SYNC" (root / "wal" / id / "segment").toString
+      expectError mutation
+      expectError (Native.get db 42)
+    else
+      if mode == "control" then Std.Async.System.setEnvVar "ALVOKI_L0_CUT" "control"
+      mutation
+  if mode == "lost" then IO.Process.exit 74
+  IO.println "returned"
+
+private def appendRetry (executable library mode : String) (rotate : Bool) : IO Unit :=
+  IO.FS.withTempDir fun dir => do
+    let root ← IO.FS.realPath dir
+    initializeRoot root
+    Native.withOpen root fun db => do
+      Native.put db 42 11
+      if rotate then Native.put db 17 23
+    let proc ← IO.Process.output {
+      cmd := executable
+      args := #["append", root.toString, mode, if rotate then "rotate" else "active"]
+      env := #[("LD_PRELOAD", some library)]
+    }
+    let expectedExit := if mode == "control" then 73 else if mode == "lost" then 74 else 0
+    check (proc.exitCode == expectedExit) s!"append {mode}, rotation={rotate}: {proc.stderr}"
+    check (proc.stdout == (if mode == "error" then "returned\n" else ""))
+      "unexpected completion acknowledgement"
+    let expected := if mode == "lost" then (if rotate then none else some 99) else some 11
+    for _ in [0, 1] do
+      Native.withOpen root fun db => do
+        check ((← Native.get db 42) == expected) "reopen selected the wrong mutation"
+        check ((← Native.get db 17) == (if rotate then some 23 else none)) "reopen lost the prior prefix"
+
 private def nativeSchedule : IO Unit := IO.FS.withTempDir fun root => do
   initializeRoot root
   let active := root / "manifest" / "BLOB"
@@ -162,6 +200,7 @@ private def nativeSchedule : IO Unit := IO.FS.withTempDir fun root => do
 def main (args : List String) : IO Unit := do
   match args with
   | ["read-fault"] => oneShotTableRead
+  | ["append", root, mode, branch] => appendChild (FilePath.mk root) mode (branch == "rotate")
   | ["flush", root] =>
     Native.withOpen (FilePath.mk root) Native.flush
     IO.println "flushed"
@@ -174,6 +213,9 @@ def main (args : List String) : IO Unit := do
       env := #[("LD_PRELOAD", some library)]
     }
     check (proc.exitCode == 0) s!"one-shot table read fixture failed: {proc.stderr}"
+    for rotate in [false, true] do
+      for mode in ["lost", "error"] do appendRetry executable.toString library mode rotate
+    appendRetry executable.toString library "control" true
     interruption executable.toString library "table"
     interruption executable.toString library "rename"
   | _ => throw (IO.userError "expected the process-interruption fixture library")
