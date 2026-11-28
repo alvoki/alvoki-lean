@@ -1,5 +1,7 @@
 import Alvoki.Experiments.L0.NativeManifestPublish
 
+import Alvoki.Experiments.L0.NativeWrite
+
 namespace ExperimentalL0.NativeManifestPublish
 open System DurableBlob
 
@@ -158,5 +160,21 @@ theorem Cut.state (cut : Cut stop dir bytes origin t) (ops : Primitives dir byte
     obtain ⟨p,pc,rfl⟩ := schedule_visit visit
     cases p <;> exact
       ⟨(interrupted ops start reserved valid pc fault).1,(interrupted ops start reserved valid pc fault).2.admits⟩
+
+/-- Once rename returned, an error reported by directory fsync still leaves
+the new live manifest. Before rename the old selector was the only survivor. -/
+theorem rename_then_barrier_error (ops : Primitives dir (L0Manifest.encode proposal) start P image stop m)
+    (frame : P start) (reserved : m.Private dir start) (stable : (image start).Stable old)
+    (valid : proposal.Valid) (pc : Prefix dir (L0Manifest.encode proposal) start (.rename writer) w)
+    (renamed : IO.FS.rename (dir / "BLOB.next") (dir / "BLOB") w = .ok () u)
+    (opened : IO.FS.Handle.mk dir .read u = .ok fd z) (failed : DurableBlob.syncHandle fd z = .error e t) :
+    (image w).Admits old none ∧ Native.checked ((NativeManifest.backend dir).publish proposal) start = .error e t ∧
+    P t ∧ (image t).active = L0Manifest.encode proposal ∧ (image t).Admits old (some (L0Manifest.encode proposal)) := by
+  have directory := pc.next (q := .openDirectory writer) renamed rfl
+  have barrier := directory.next (q := .barrier writer fd) opened rfl
+  obtain ⟨run,post,window⟩ := barrier.onError ops frame reserved stable failed
+  have over := (pc.state ops frame reserved stable).2.2
+  refine ⟨over,?_,post,window⟩
+  simpa only [NativeManifest.backend,L0Manifest.backend,valid,↓reduceIte,NativeWrite.checked_lift] using run
 
 end ExperimentalL0.NativeManifestPublish

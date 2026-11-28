@@ -234,6 +234,17 @@ theorem interrupted (ops : Primitives dir bytes start P image stop m) (startFram
 theorem Before.admits (entry : Before p old proposed img) : img.Admits old (some proposed) := by
   cases p <;> first | exact widen entry | exact entry.2
 
+theorem Prefix.onError (pc : Prefix dir bytes start p w) (ops : Primitives dir bytes start P image stop m)
+    (startFrame : P start) (reserved : m.Private dir start) (valid : (image start).Stable old)
+    (reported : action dir bytes p w = .error e t) :
+    (native dir).publish bytes start = .error e t ∧ P t ∧ Window p old bytes (image t) := by
+  obtain ⟨pre,arg,entry⟩ := pc.state ops startFrame reserved valid
+  have receipt := ops.returned _ _ pc pre arg
+  rw [reported] at receipt
+  refine ⟨?_,receipt.1,stopped entry arg receipt.2⟩
+  rw [pc.continuation,remaining]
+  simp only [Bind.bind,instMonadEIO._aux_13,EST.bind,reported]
+
 theorem Prefix.report (pc : Prefix dir bytes start p w) (ops : Primitives dir bytes start P image stop m)
     (startFrame : P start) (reserved : m.Private dir start) (valid : (image start).Stable old) :
     match action dir bytes p w with
