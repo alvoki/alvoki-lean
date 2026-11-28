@@ -275,50 +275,45 @@ private theorem install (steps : OpenSteps dir p r R B) (recovery : WorkerSteps 
   intro _ _ _
   exact Sim.pure ⟨lock, reader, writer, markers, policy, rfl, rfl⟩
 
-/-- A terminal result may refer to the contents of a mutable cell in the
-world in which that result was actually returned. -/
-def SimAt (R : W → OpenImage → Prop) (a : F α) (b : OpenM β)
-    (rel : W → α → β → Prop) : Prop :=
-  ∀ w s, R w s →
-    match a.run w, b.run s with
-    | .ok (.ok x) t, .ok (.ok y) u => R t u ∧ rel t x y
-    | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => R t u
-    | _, _ => False
-
-private theorem Sim.toAt {a : F α} {b : OpenM β} (h : Sim R a b rel) :
-    SimAt R a b (fun _ => rel) := by
-  intro w s prior
-  specialize h w s prior
-  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at h ⊢
-  case ok.ok x t y u => cases x <;> cases y <;> exact h
-  case error.ok x t y u => cases y <;> exact h
-  all_goals exact h
-
-private theorem SimAt.bind {a : F α} {b : OpenM β} {f : α → F γ} {g : β → OpenM δ}
-    (first : SimAt R a b rel)
-    (next : ∀ w s x y, R w s → rel w x y →
-      match (f x).run w, (g y).run s with
-      | .ok (.ok x) t, .ok (.ok y) u => R t u ∧ out t x y
-      | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => R t u
-      | _, _ => False) : SimAt R (a >>= f) (b >>= g) out := by
-  intro w s prior
-  have h := first w s prior
-  rw [ExceptT.run_bind, ExceptT.run_bind]
-  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, EStateM.bind]
-  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at h ⊢
-  case ok.ok x t y u => cases x <;> cases y <;> first | contradiction | exact h | exact next _ _ _ _ h.1 h.2
-  case error.ok x t y u => cases y <;> first | contradiction | exact h
-  all_goals first | contradiction | exact h
-
-private def CatchRel (rel : α → β → Prop) : Except IO.Error α → Except String β → Prop
-  | .ok a, .ok b => rel a b
-  | .error _, .error _ => True
+/-- A pointwise primitive observation with separate continuations for
+returned values and errors. Each refers to both reached states. -/
+def At (a : F α) (b : OpenM β) (w : W) (s : OpenImage)
+    (ok : α → β → W → OpenImage → Prop) (fail : W → OpenImage → Prop) : Prop :=
+  match a.run w, b.run s with
+  | .ok (.ok x) t, .ok (.ok y) u => ok x y t u
+  | .error _ t, .ok (.error _) u | .ok (.error _) t, .ok (.error _) u => fail t u
   | _, _ => False
 
-private theorem catchCall {a : F α} {b : OpenM β} (together : SimAt R a b rel) :
-    SimAt R (liftM ((checked a).toBaseIO)) (SingleFile.attempt b) (fun w => CatchRel (rel w)) := by
-  intro w s pre
-  have same := together w s pre
+private theorem At.bind {a : F α} {b : OpenM β} {f : α → F γ} {g : β → OpenM δ}
+    (first : At a b w s mid fail)
+    (next : ∀ x y t u, mid x y t u → At (f x) (g y) t u ok fail) :
+    At (a >>= f) (b >>= g) w s ok fail := by
+  unfold At at *
+  rw [ExceptT.run_bind, ExceptT.run_bind]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, EStateM.bind]
+  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at first ⊢
+  case ok.ok x t y u => cases x <;> cases y <;> first | contradiction | exact first | exact next _ _ _ _ first
+  case error.ok x t y u => cases y <;> first | contradiction | exact first
+  all_goals exact first
+
+private theorem Sim.atPost {a : F α} {b : OpenM β} (h : Sim R a b rel)
+    (entry : R w s) : At a b w s (fun x y t u => R t u ∧ rel x y) R := by
+  have post := h w s entry
+  unfold At
+  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at post ⊢
+  case ok.ok x t y u => cases x <;> cases y <;> exact post
+  case error.ok x t y u => cases y <;> exact post
+  all_goals exact post
+
+private def CaughtPost (ok : α → β → W → OpenImage → Prop) (fail : W → OpenImage → Prop) :
+    Except IO.Error α → Except String β → W → OpenImage → Prop
+  | .ok x, .ok y, t, u => ok x y t u
+  | .error _, .error _, t, u => fail t u
+  | _, _, _, _ => False
+
+private theorem catchCall {a : F α} {b : OpenM β} (same : At a b w s ok fail) :
+    At (liftM ((checked a).toBaseIO)) (SingleFile.attempt b) w s (CaughtPost ok fail) unused := by
+  unfold At at *
   have caught : (liftM ((checked a).toBaseIO) : F _).run w =
       match a.run w with
       | .error e t => .ok (.ok (.error e)) t
@@ -337,11 +332,9 @@ private theorem catchCall {a : F α} {b : OpenM β} (together : SimAt R a b rel)
       | .error e t => .error e t := rfl
   rw [caught, attempted]
   cases na : a.run w <;> cases mb : b.run s <;> simp only [na, mb] at same
-  case ok.ok x t y u =>
-    cases x <;> cases y <;> first | contradiction | exact same | exact ⟨same, trivial⟩
-  case error.ok x t y u =>
-    cases y <;> first | contradiction | exact ⟨same, trivial⟩
-  all_goals contradiction
+  case ok.ok x t y u => cases x <;> cases y <;> exact same
+  case error.ok x t y u => cases y <;> exact same
+  all_goals exact same
 
 structure Runtime (R : W → OpenImage → Prop) where
   cell : W → Ref → Phase IO.FS.Handle (AppendFiles IO.FS.Handle) → Prop
@@ -360,55 +353,117 @@ def Owns (runtime : Runtime R) (B : IO.FS.Handle → OpenTarget → Prop)
   ∃ a : ActualOpened, OpenedTogether B p a ready ∧ ∃ ref mutex,
     h.Assembled a.policy ref mutex ∧ runtime.cell w ref a.phase ∧ runtime.mutex w mutex
 
-private theorem allocate (runtime : Runtime R) (pair : OpenedTogether B p a b) :
-    SimAt R (liftM (installReady a)) (pure b) (Owns runtime B p) := by
-  intro w s pre
-  obtain ⟨h, ran, assembled⟩ := installReady_run a w
-  have cell := runtime.newRef a.phase w s pre
-  obtain ⟨frame, saved, held⟩ := runtime.newMutex _ s _ _ cell.1 cell.2
-  have lifted : (liftM (installReady a) : F _).run w =
-      .ok (.ok h) (Std.BaseMutex.new ((IO.mkRef a.phase : BaseIO Ref) w).state).state := by
-    change (match installReady a w with
+/-- The exact lock description and world returned by the first issued primitive. -/
+def LockFileAt (dir : FilePath) (w : W) (h : IO.FS.Handle) (t : W) : Prop :=
+  (nativeOpen.openTarget dir .lock).run w = .ok (.ok h) t
+
+/-- A granted lock on this invocation's freshly opened description. -/
+def LockedAt (dir : FilePath) (w : W) (h : IO.FS.Handle) (t : W) : Prop :=
+  ∃ opened, LockFileAt dir w h opened ∧ (nativeOpen.tryLock h).run opened = .ok (.ok true) t
+
+private def installActual (dir : FilePath) (h : IO.FS.Handle) : F Handle :=
+  installWith nativeOpen recoverNative appendFiles dir h >>= fun a => liftM (installReady a)
+
+/-- Provenance of the owned description and the failed, unwinding install;
+only the unlock syscall remains before rethrow. -/
+def Unwinding (dir : FilePath) (w : W) (h : IO.FS.Handle) (t : W) : Prop :=
+  ∃ locked, LockedAt dir w h locked ∧ ∃ e, (checked (installActual dir h)).toBaseIO locked = ⟨.error e, t⟩
+
+/-- Outside-worker writebacks are charged to the primitives actually
+reached. The very first open consumes the initial image and its prefix.
+Only terminal leaf outcomes produce the suffix. -/
+structure Boundaries (dir : FilePath) (p : Policy) (r : OpenReports)
+    (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop) (rt : Runtime R)
+    (w : W) (initial : OpenImage) (physical : W → OpenImage → Prop) : Prop where
+  first : At (nativeOpen.openTarget dir .lock) ((openEffects p r).openTarget dir .lock)
+    w (settleImage r.beforeWorker initial)
+    (fun h role t u => role = .lock ∧ B h .lock ∧ R t u)
+    (fun t u => physical t (settleImage r.afterWorker u))
+  tryLock : ∀ h t u, LockFileAt dir w h t → B h .lock → R t u →
+    At (nativeOpen.tryLock h) ((openEffects p r).tryLock .lock) t u
+      (fun granted model t' u' => granted = model ∧
+        if granted then R t' u' else physical t' (settleImage r.afterWorker u'))
+      (fun t' u' => physical t' (settleImage r.afterWorker u'))
+  drop : ∀ h t u, Unwinding dir w h t → B h .lock → R t u →
+    At (nativeOpen.unlock h) ((openEffects p r).unlock .lock) t u
+      (fun _ _ t' u' => physical t' (settleImage r.afterWorker u'))
+      (fun t' u' => physical t' (settleImage r.afterWorker u'))
+  allocated : ∀ t u ref phase, R t u → rt.cell t ref phase →
+    physical (Std.BaseMutex.new t).state (settleImage r.afterWorker u)
+
+private theorem allocate (rt : Runtime R) (pair : OpenedTogether B p a b) (frame : R t u)
+    (boundary : Boundaries dir p r R B rt w initial phys) :
+    At (liftM (installReady a)) (pure b) t u
+      (fun h ready t' u' => phys t' (settleImage r.afterWorker u') ∧ Owns rt B p t' h ready) R := by
+  obtain ⟨h, ran, assembled⟩ := installReady_run a t
+  have cell := rt.newRef a.phase t u frame
+  obtain ⟨frame, saved, held⟩ := rt.newMutex _ u _ _ cell.1 cell.2
+  have lifted : (liftM (installReady a) : F _).run t =
+      .ok (.ok h) (Std.BaseMutex.new ((IO.mkRef a.phase : BaseIO Ref) t).state).state := by
+    change (match installReady a t with
       | .ok value t => EST.Out.ok (Except.ok value : Except String Handle) t
       | .error e t => EST.Out.error e t) = _
     rw [ran]
+  unfold At
   rw [lifted]
-  exact ⟨frame, a, pair, _, _, assembled, saved, held⟩
+  exact ⟨boundary.allocated _ u _ _ cell.1 cell.2, a, pair, _, _, assembled, saved, held⟩
 
+private theorem At.trace {a : F α} {b : OpenM β} (h : At a b w s ok fail) :
+    At a b w s (fun x y t u => ok x y t u ∧ a.run w = .ok (.ok x) t) fail := by
+  unfold At at *
+  cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at h ⊢
+  case ok.ok x t y u => cases x <;> cases y <;> first | exact h | exact ⟨h, rfl⟩
+  case error.ok x t y u => cases y <;> exact h
+  all_goals exact h
 
 private theorem openBody (steps : OpenSteps dir p r R B) (recovery : WorkerSteps R B r)
-    (runtime : Runtime R) :
-    SimAt R (openExistingWith nativeOpen (fun action => (checked action).toBaseIO)
+    (rt : Runtime R) (edge : Boundaries dir p r R B rt w initial phys) :
+    At (openExistingWith nativeOpen (fun action => (checked action).toBaseIO)
       (fun err => liftM (throw err : IO Handle)) recoverNative appendFiles
       (fun ready => installReady ready) dir)
       (openExistingWith (openEffects p r) SingleFile.attempt throw (workerEffect r) appendFiles pure dir)
-      (Owns runtime B p) := by
+      w (settleImage r.beforeWorker initial)
+      (fun h ready t u => phys t (settleImage r.afterWorker u) ∧ Owns rt B p t h ready)
+      (fun t u => phys t (settleImage r.afterWorker u)) := by
   unfold openExistingWith
-  apply SimAt.bind (acquire steps).toAt
-  intro w s lock role frame hr
-  obtain ⟨rfl, held⟩ := hr
-  have installed : SimAt R _ _ (Owns runtime B p) :=
-    SimAt.bind (f := fun a => liftM (installReady a)) (g := pure) (install steps recovery held).toAt
-      (fun w s _ _ h pair => allocate runtime pair w s h)
-  apply SimAt.bind (catchCall installed) _ w s frame
-  intro w s x y h pair
+  apply At.bind (mid := fun h role t u => role = .lock ∧ B h .lock ∧ R t u ∧ LockedAt dir w h t)
+  · unfold acquireWith
+    apply edge.first.trace.bind
+    rintro h _ opened u ⟨⟨rfl, held, frame⟩, fresh⟩
+    apply (edge.tryLock h opened u fresh held frame).trace.bind
+    rintro granted _ t u ⟨⟨rfl, frame⟩, issued⟩
+    cases granted
+    · exact frame
+    · exact ⟨rfl, held, frame, opened, fresh, issued⟩
+  rintro h _ locked u ⟨rfl, held, frame, lockRun⟩
+  have installed := ((install steps recovery held).atPost frame).bind
+    (f := fun a => liftM (installReady a)) (g := pure)
+    (fun _ _ _ _ info => allocate rt info.2 info.1 edge)
+  apply (catchCall installed).trace.bind
+  intro x y t u caught
+  obtain ⟨pair, trace⟩ := caught
   cases x <;> cases y
-  case ok.ok => exact ⟨h, pair⟩
-  case error.error =>
-    apply SimAt.bind (catchCall (steps.unlock _ held).toAt) _ w s h
-    intro w s _ _ frame _
-    exact frame
+  case ok.ok => exact pair
+  case error.error err _ =>
+    have unwinding : Unwinding dir w h t := by
+      refine ⟨locked, lockRun, err, ?_⟩
+      change (liftM ((checked (installActual dir h)).toBaseIO) : F _).run locked = _ at trace
+      change (BaseIO.toEIO (do return Except.ok (← (checked (installActual dir h)).toBaseIO)) : IO _) locked = _ at trace
+      cases call : (checked (installActual dir h)).toBaseIO locked with
+      | mk value after =>
+        simp [BaseIO.toEIO, Bind.bind, instMonadBaseIO._aux_13, ST.bind, call] at trace
+        change Except.ok value = Except.ok (Except.error err) ∧ after = t at trace
+        rw [Except.ok.inj trace.1, trace.2]
+    apply (catchCall (edge.drop _ _ _ unwinding held pair)).bind
+    intro a b t u result
+    cases a <;> cases b <;> first | exact result | exact False.elim result
   all_goals exact False.elim pair
 
-
-/-- Equal return channels and exact reached disk/ownership under the
-two outside-worker writeback lists and primitive schedule of this attempt. -/
-theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps dir p r R B) (recovery : WorkerSteps R B r)
-    (runtime : Runtime R) (w : W) (initial : OpenImage)
-    (entry : R w (settleImage r.beforeWorker initial))
-    (exitFrame : ∀ t u, R t u → physical t (settleImage r.afterWorker u)) :
+theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps dir p r R B)
+    (recovery : WorkerSteps R B r) (rt : Runtime R) (w : W) (initial : OpenImage)
+    (edge : Boundaries dir p r R B rt w initial physical) :
     match SingleFile.openExisting dir w, openExistingModel dir p r initial with
-    | .ok h t, .ok (.ok ready) u => physical t u ∧ Owns runtime B p t h ready
+    | .ok h t, .ok (.ok ready) u => physical t u ∧ Owns rt B p t h ready
     | .error _ t, .ok (.error _) u => physical t u
     | _, _ => False := by
   let a : F Handle := openExistingWith nativeOpen (fun action => (checked action).toBaseIO)
@@ -417,8 +472,8 @@ theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps di
   let b : OpenM ModelOpened := openExistingWith (openEffects p r) SingleFile.attempt throw
     (workerEffect r) appendFiles pure dir
   let s := settleImage r.beforeWorker initial
-  have same := openBody steps recovery runtime w s entry
-  change SimAt.match_1 (fun _ _ => Prop) (a.run w) (b.run s) (fun x t y u => R t u ∧ Owns runtime B p t x y) (fun _ t _ u => R t u) (fun _ t _ u => R t u) (fun _ _ => False) at same
+  have same : At a b w s _ _ := openBody steps recovery rt edge
+  unfold At at same
   have checkedRun : SingleFile.openExisting dir w = match a.run w with
     | .error e t => .error e t
     | .ok (.ok x) t => .ok x t
@@ -435,11 +490,9 @@ theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps di
       | .error e u => .error e {u with held := false}) := rfl
   rw [checkedRun, modelRun]
   cases ha : a.run w <;> cases hb : b.run s <;> simp only [ha, hb] at same
-  case ok.ok x t y u =>
-    cases x <;> cases y <;> first | contradiction | exact exitFrame _ _ same | exact ⟨exitFrame _ _ same.1, same.2⟩
-  case error.ok x t y u => cases y <;> first | contradiction | exact exitFrame _ _ same
-  all_goals contradiction
-
+  case ok.ok x t y u => cases x <;> cases y <;> exact same
+  case error.ok x t y u => cases y <;> exact same
+  all_goals exact same
 
 /-- Local laws for a read of a registered phase under the actual mutex.
 All three instructions carry the physical frame to their successor. -/
