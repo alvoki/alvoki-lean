@@ -12,10 +12,10 @@ def modelBuild (crc : Checksum) (layout : Layout) (rows : List Entry)
   let (count, file) ← (buildStream crc layout modelSink modelNext id options).run { rows }
   return (count, file.bytes)
 
-private def modelWriter (crc : Checksum) (layout : Layout) (options : BuildOptions) :
+def modelWriter (crc : Checksum) (layout : Layout) (options : BuildOptions) :
     Writer ModelM String := ⟨crc, layout, modelSink, id, options⟩
 
-private theorem bind_ok {a : ModelM α} {b : α → ModelM β}
+theorem bind_ok {a : ModelM α} {b : α → ModelM β}
     {file out : ModelFile} {result : β}
     (run : (a >>= b).run file = .ok (result, out)) :
     ∃ value mid, a.run file = .ok (value, mid) ∧ (b value).run mid = .ok (result, out) := by
@@ -27,7 +27,7 @@ private theorem bind_ok {a : ModelM α} {b : α → ModelM β}
     rw [step] at run
     exact ⟨value, mid, rfl, run⟩
 
-private theorem pure_ok {value result : α} {file out : ModelFile}
+theorem pure_ok {value result : α} {file out : ModelFile}
     (run : (pure value : ModelM α).run file = .ok (result, out)) :
     result = value ∧ out = file := by
   change Except.ok (value, file) = .ok (result, out) at run
@@ -66,23 +66,23 @@ private theorem writePacket_ok {layout : Layout} {crc : Checksum} {options : Bui
     change Except.error "SSTable packet exceeds size limit" = .ok (stop, out) at run
     cases run
 
-private structure Appended (file out : ModelFile) (offset : Nat) : Prop where
+structure Appended (file out : ModelFile) (offset : Nat) : Prop where
   remaining : out.rows = file.rows
   position : offset = out.bytes.size
   extended : ∃ suffix, out.bytes = file.bytes ++ suffix
   room : offset + footerPacketSize ≤ maxFileSize
 
-private theorem Appended.same (file : ModelFile) (room : file.bytes.size + footerPacketSize ≤ maxFileSize) :
+theorem Appended.same (file : ModelFile) (room : file.bytes.size + footerPacketSize ≤ maxFileSize) :
     Appended file file file.bytes.size := ⟨rfl, rfl, .intro .empty (by simp), room⟩
 
-private theorem Appended.trans (a : Appended file middle mid) (b : Appended middle out stop) :
+theorem Appended.trans (a : Appended file middle mid) (b : Appended middle out stop) :
     Appended file out stop := by
   refine ⟨b.remaining.trans a.remaining, b.position, ?_, b.room⟩
   obtain ⟨first, h₁⟩ := a.extended
   obtain ⟨second, h₂⟩ := b.extended
   exact ⟨first ++ second, by rw [h₂, h₁, ByteArray.append_assoc]⟩
 
-private theorem writePage_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
+theorem writePage_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
     {file out : ModelFile} {ref : Ref}
     (pageOK : PendingPage layout crc file.bytes rows previous childHeight first stop page)
     (previousWithin : previous ≤ file.bytes.size) (rowLimit : stop ≤ maxFileSize)
@@ -160,7 +160,7 @@ private theorem writePage_ok {layout : Layout} {crc : Checksum} {options : Build
         rw [eq]
         exact lastChild.fence
 
-private theorem push_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
+theorem push_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
     {file out : ModelFile} {ref : Ref}
     (pagesOK : PendingPages layout crc file.bytes rows previous h stop pages)
     (newChild : WrittenChild layout crc file.bytes rows file.bytes.size h ref)
@@ -302,7 +302,7 @@ private theorem finishPages_ok {layout : Layout} {crc : Checksum} {options : Bui
         exact ⟨put.trans (raised.trans finished), height, by simpa [nonzero] using result⟩
 
 
-private structure StateAt (layout : Layout) (crc : Checksum) (rows : List Entry)
+structure StateAt (layout : Layout) (crc : Checksum) (rows : List Entry)
     (file : ModelFile) (state : BuilderState) : Prop where
   offset : state.offset = file.bytes.size
   room : state.offset + footerPacketSize ≤ maxFileSize
@@ -318,13 +318,13 @@ private structure StateAt (layout : Layout) (crc : Checksum) (rows : List Entry)
   ranked : RankedPages 0 0 (state.count - state.data.size) state.pages
   empty : state.count = 0 → file.bytes = .empty
 
-private theorem StateAt.initial (layout : Layout) (crc : Checksum) (rows : List Entry) :
+theorem StateAt.initial (layout : Layout) (crc : Checksum) (rows : List Entry) :
     StateAt layout crc rows { rows } {} := by
   refine ⟨rfl, by decide, Nat.zero_le _, Nat.zero_le _, ?_, rfl, ⟨[], rfl⟩,
     by simp, by simp, .nil, .nil, by simp⟩
   simp [Ordered]
 
-private theorem StateAt.dataSize (inv : StateAt layout crc rows file state) :
+theorem StateAt.dataSize (inv : StateAt layout crc rows file state) :
     state.data.size ≤ state.count := by
   obtain ⟨earlier, cut⟩ := inv.data
   have lengths := congrArg List.length cut
@@ -349,7 +349,7 @@ private theorem StateAt.dataRow (inv : StateAt layout crc rows file state)
     state.count - state.data.size + i - earlier.length = i by omega]
   simp [Array.getElem?_eq_getElem inside]
 
-private theorem flushData_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
+theorem flushData_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
     {file out : ModelFile} {state next : BuilderState}
     (inv : StateAt layout crc rows file state) (target : options.indexTarget ≤ maxRowSize)
     (run : ((modelWriter crc layout options).flushData state).run file = .ok (next, out)) :
@@ -466,7 +466,7 @@ private theorem checkRow_facts {row : Entry} {layout : Layout} {lastKey : Option
           have all : lastKey.all (fun prev => decide (prev < row.key)) = true := by simpa using ordered
           simpa [Option.all_eq_true] using all
 
-private theorem accept_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
+theorem accept_ok {layout : Layout} {crc : Checksum} {options : BuildOptions}
     {file out : ModelFile} {state next : BuilderState} {row : Entry}
     (inv : StateAt layout crc rows file state)
     (taken : rows[state.count]? = some row) (room : state.count + 1 ≤ maxFileSize)
