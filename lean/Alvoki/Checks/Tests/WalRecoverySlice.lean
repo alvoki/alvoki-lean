@@ -1,4 +1,4 @@
-import Alvoki.Experiments.WAL.Recovery
+import Alvoki.Experiments.WAL.SingleFile
 
 namespace WalRecoverySlice
 
@@ -328,7 +328,31 @@ private def checkAdversarial (policy : Policy) : IO Unit := do
     require (!clientB.ack.allows decoded.batches) "oracle accepted an unsubmitted replacement"
   | .error e => throw <| IO.userError s!"coherent replacement unexpectedly failed: {e}"
 
+private def checkOpenCleanup : IO Unit := do
+  let io : SingleFile.OpenIO (EStateM String (List SingleFile.OpenTarget)) SingleFile.OpenTarget := {
+    openFile := fun role _ _ => pure role
+    unbuffered := fun _ => pure ()
+    readPolicy := fun _ _ => pure "v3 log"
+    tryLock := fun _ => pure true
+    sync := fun role => modify (· ++ [role])
+    unlock := fun role => do
+      modify (· ++ [role])
+      throw "unlock failed"
+  }
+  let opened := SingleFile.openExistingWith io
+    (fun action state => match action.run state with
+      | .ok value reached => .ok (.ok value) reached
+      | .error err reached => .ok (.error err) reached)
+    throw (fun _ _ _ _ => pure ⟨[], {}⟩)
+    (fun _ _ _ => ()) (fun _ => (throw "installation failed" : EStateM String _ Unit)) "."
+  match opened.run [] with
+  | .error "installation failed" reached =>
+    require (decide (reached = [.policy, .directory, .lock]))
+      "open cleanup did not attempt unlock on the acquired lock after both barriers"
+  | _ => throw <| IO.userError "open cleanup lost the primary installation error"
+
 def main : IO Unit := do
+  checkOpenCleanup
   checkWireFormat
   checkPolicy .logOnly
   checkPolicy .boundary
