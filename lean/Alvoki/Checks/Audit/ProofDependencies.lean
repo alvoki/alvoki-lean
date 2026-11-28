@@ -61,6 +61,7 @@ def main (args : List String) : IO Unit := do
       let producer ← declaration env moduleName producer
       let path := bodyPath env consumer.name producer.name
       pure [("consumer", toJson consumer.name.toString), ("producer", toJson producer.name.toString),
+        ("scope", toJson "available_declaration_bodies"),
         ("body_path", toJson (path.map (List.map Name.toString)))]
     | "--body-path" :: _ | [] => throw usage
     | names => do

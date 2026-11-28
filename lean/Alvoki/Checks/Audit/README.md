@@ -32,7 +32,8 @@ equality are skipped by this consumer. Other consumers can still rely
 on those fields.
 [SSTable writer-reader proof](../../Experiments/SSTable/Proofs/UnifiedNativeEndToEnd.lean)
 
-A null path means no chain was found in the available bodies. Definitions
+The path response labels its scope as `available_declaration_bodies`.
+A null path means no chain was found in those bodies. Definitions
 can be reduced during elaboration and some bodies may be unavailable.
 For example, `uncertainResult` has no body path to `buildFileWith_syncError`.
 The fixture proves its concrete outcome by reduction. Use the returned
