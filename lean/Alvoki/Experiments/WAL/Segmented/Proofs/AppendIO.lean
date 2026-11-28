@@ -93,6 +93,32 @@ theorem At.cleanup {a : IO α} {b : M σ β} {c : IO Unit} {d : M σ Unit}
       all_goals contradiction
   all_goals exact step
 
+/-- On the error-only successor cleanup the caller observes the primary
+error on either reported close result. The reached disk and custody remain
+observable; a process stop still has no returning IO counterpart. -/
+def Finally (a : IO Unit) (b : M σ Unit) (w : W) (s : σ) (post : W → σ → Prop) : Prop :=
+  match b.run s with
+  | .ok _ u => post (returnedWorld (a w)) u
+  | .error _ _ => False
+
+theorem At.masked {a : IO α} {b : M σ β} {c : IO Unit} {d : M σ Unit}
+    (step : At a b w s ok unwind)
+    (release : ∀ t u, unwind t u → Finally c d t u failed) :
+    At (cleanupOnError (error := IO.Error) a c) (cleanupOnError (error := String) b d) w s ok failed := by
+  unfold At at *
+  rw [io_cleanup_run, model_cleanup_run]
+  cases ar : a w <;> cases br : b.run s <;> rw [ar, br] at step
+  case ok.ok x t r u => cases r <;> first | contradiction | exact step
+  case error.ok e t r u =>
+    cases r with
+    | ok => exact step
+    | error =>
+      dsimp only
+      have closed := release t u step
+      unfold Finally at closed
+      cases out : d.run u <;> rw [out] at closed <;> exact closed
+  all_goals exact step
+
 theorem At.liftRoot {a : IO α} {b : Model.M β} (step : At a b w state ok fail)
     (phase : SingleFile.AppendPhase) :
     At a (Model.liftRootAction b) w (state, phase)
