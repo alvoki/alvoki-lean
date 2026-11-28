@@ -106,14 +106,15 @@ private theorem regular_frame (path : FilePath) (md : IO.FS.Metadata) : Keeps P 
   unfold regular
   split <;> exact fun _ h => h
 
-private theorem CollectionIO.inspect (io : CollectionIO root first P) (dir : FilePath)
-    (hw : P w) : IOReturns (inspectChild dir) w
-      (fun items t => P t ∧ ∀ item ∈ items, (dir / item.fileName).parent = some dir) P := by
+theorem inspectChild_io {P : W → Prop} (dir : FilePath) (valid : Array IO.FS.DirEntry → Prop)
+    (stat : ∀ path : FilePath, Keeps P path.symlinkMetadata)
+    (list : ∀ u, P u → IOReturns (entries dir) u (fun items t => P t ∧ valid items) P)
+    (hw : P w) : IOReturns (inspectChild dir) w (fun items t => P t ∧ valid items) P := by
   unfold inspectChild
-  apply IOReturns.bind (io.stat dir w hw)
+  apply IOReturns.bind (stat dir w hw)
   intro md t held
   split
-  · apply IOReturns.bind (io.list dir t held)
+  · apply IOReturns.bind (list t held)
     intro xs u checked
     obtain ⟨valid, names⟩ := checked
     apply IOReturns.bind (middle := fun _ u => P u)
@@ -121,13 +122,18 @@ private theorem CollectionIO.inspect (io : CollectionIO root first P) (dir : Fil
       apply Keeps.forIn _ _ _ _ u valid
       intro x _ b state entry
       split
-      · apply IOReturns.bind (io.stat _ state entry)
+      · apply IOReturns.bind (stat _ state entry)
         intro data v hv
         apply IOReturns.bind (regular_frame _ data v hv)
         exact fun _ _ keep => keep
       · exact entry
     · exact fun _ _ keep => ⟨keep, names⟩
   · exact held
+
+private theorem CollectionIO.inspect (io : CollectionIO root first P) (dir : FilePath)
+    (hw : P w) : IOReturns (inspectChild dir) w
+      (fun items t => P t ∧ ∀ item ∈ items, (dir / item.fileName).parent = some dir) P :=
+  inspectChild_io dir _ io.stat (io.list dir) hw
 
 private theorem CollectionIO.present (io : CollectionIO root first P) (dir : FilePath) :
     Keeps P (metadata? dir) := by
