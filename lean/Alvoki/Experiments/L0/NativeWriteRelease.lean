@@ -1,6 +1,6 @@
 import Alvoki.Experiments.L0.NativeWrite
 import Alvoki.Experiments.L0.NativeReadRelease
-import Alvoki.Experiments.WAL.Segmented.Proofs.AppendCustody
+import Alvoki.Experiments.WAL.Segmented.Proofs.AppendIngress
 
 namespace ExperimentalL0.NativeWriteRelease
 open System Lifecycle NativeScope
@@ -181,23 +181,47 @@ theorem outerOffline (wal : Wal) (rootIO : RootUnlock physical root lock ref ima
   rw [old, entry.phase]
   exact (rootIO.observed grant (entry.advance step).detached).weaken (fun _ => succeed) fail
 
+open WalRecoverySlice.Segmented.Native (ChildMemory)
+open WalRecoverySlice.Segmented.Native.AppendIO (ChildAuthority Active)
+
+/-- The two operations on the enclosing L0 reference preserve the current
+child's mutex and phase. Each frame is restricted to the actual issued read
+or publication on this success path. -/
+structure PublishFrames {disk : W → WalRecoverySlice.Segmented.Model.Disk} (mem : ChildMemory disk)
+    (ref : Ref) (wal : Wal) (reg : Registration) (w : W) (next : Session) : Prop where
+  read : ∀ t, (ref.get : IO (Phase Wal)) w = .ok (.updating wal) t →
+    ∀ (a : ChildAuthority mem (segmentPath reg.store.root reg.session.control.active)
+        reg.session.control.active reg.session.control.policy reg.child) phase,
+      a.Live w phase → a.Live t phase
+  swap : ∀ t u, (ref.get : IO (Phase Wal)) w = .ok (.updating wal) t →
+    (ref.swap (.online wal next) : IO (Phase Wal)) t = .ok (.updating wal) u →
+    ∀ (a : ChildAuthority mem (segmentPath reg.store.root reg.session.control.active)
+        reg.session.control.active reg.session.control.policy reg.child) phase,
+      a.Live t phase → a.Live u phase
+
 /-- Success publishes the new session and preserves the exact new
-registration, including a successor produced by rotation. -/
-theorem afterSuccess (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+registration and reusable append authority, including a rotation successor. -/
+theorem afterSuccess {mem : ChildMemory (fun t => (physical t).disk)}
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
     (cached : NativeRecoverAt.Cached heap physical root lock ref)
     (held : NativeRecoverAt.Held physical root lock ref image (.updating wal) w)
     (disk : WalRecoverySlice.Segmented.Recoverable image.view pending (physical w).disk)
-    (ready : heap.Registered wal reg w)
-    (owned : WalCustody heap wal reg.store (some (reg.session.control.active, reg.child)) w)
-    (next : Session) :
+    (active : Active mem heap wal reg w) (next : Session)
+    (frames : PublishFrames mem ref wal reg w next) :
     ∃ u, NativeWrite.afterWrite ref (.ok next w) = .ok () u ∧
-      Held pending physical root lock ref image (.online wal next) u ∧
-      heap.Registered wal reg u ∧ WalCustody heap wal reg.store (some (reg.session.control.active, reg.child)) u := by
-  obtain ⟨t,u,read,swapped,published,returned⟩ := NativeWrite.afterWrite_publish held phase next
+      Held pending physical root lock ref image (.online wal next) u ∧ Active mem heap wal reg u := by
+  obtain ⟨t,u,readAt,swapAt,read,swapped,published,returned⟩ := NativeWrite.afterWrite_publish held phase next
+  obtain ⟨rootBound, ready, a, childPhase, live, history, eq, layout, lc, dc, bound⟩ := active
   have pinned := (cached _ held.owned wal reg).mpr ready
   have final := (cached u published.owned wal reg).mp (swapped.child.trans (read.child.trans pinned))
-  exact ⟨u, returned, Held.ofRecover published (swapped.disk.recoverable (read.disk.recoverable disk)), final,
-    WalRecoverySlice.Segmented.Native.AppendIO.Custody.fromSlot final owned.1 owned.2.1⟩
+  have storage := read.disk.trans swapped.disk
+  have afterLayout := storage.readyLayout layout
+  refine ⟨u, returned, Held.ofRecover published (storage.recoverable disk), rootBound, final, a, childPhase,
+    frames.swap t u readAt swapAt a _ (frames.read t readAt a _ live), history, eq, afterLayout,
+    storage.live.trans lc, storage.durable.trans dc, ?_⟩
+  change childPhase = .active _ _ ((physical u).disk.cursor reg.session.control.active) _
+  rw [afterLayout.active.position, ← layout.active.position]
+  exact bound
 
 /-- With an attached WAL the outer release takes the registered slot
 before unlocking the L0 root. The first reported cleanup error wins. -/

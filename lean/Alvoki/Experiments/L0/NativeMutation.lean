@@ -7,6 +7,17 @@ open NativeScope (W)
 open WalRecoverySlice.Segmented.Native (PhaseMemory Registration)
 open WalRecoverySlice.Segmented.Native.AppendIO (Active LocalIO)
 
+/-- Append effects and L0 reference frames use the same child memory. On
+success the frame is indexed by the registration installed by this call. -/
+structure MutationIO {disk : W → WalRecoverySlice.Segmented.Model.Disk}
+    (mem : WalRecoverySlice.Segmented.Native.ChildMemory disk) (heap : PhaseMemory)
+    (Q : W → Prop) (ref : NativeScope.Ref) (wal : NativeScope.Wal) (reg : Registration)
+    (session : Session) (change : Change) (issued : W) where
+  worker : LocalIO mem heap Q wal reg (encode change) issued
+  publication : ∀ pos t, WalRecoverySlice.Segmented.Native.append wal (encode change) issued = .ok pos t →
+    ∀ next, heap.Registered wal next t →
+      NativeWriteRelease.PublishFrames mem ref wal next t {session with mem := insert session.mem change}
+
 /-- Primitive append operations for the very store, active child memory and
 registration obtained from the opener at the issued callback. -/
 def AppendPrimitives {physical : W → Footprint inode} {heap : PhaseMemory}
@@ -17,7 +28,7 @@ def AppendPrimitives {physical : W → Footprint inode} {heap : PhaseMemory}
     (physical issued).readyWal wal = some reg →
     let mem := ((runtime lock ref).wal.worker reg.store path).children.memory
     Active mem heap wal reg issued →
-    LocalIO mem heap (NativeRecoverAt.Held physical root lock ref image (.updating wal)) wal reg (encode change) issued
+    MutationIO mem heap (NativeRecoverAt.Held physical root lock ref image (.updating wal)) ref wal reg session change issued
 
 theorem withOpen {physical : W → Footprint inode}
     (entry : NativeReadScope.Entry physical path root image)
@@ -49,7 +60,8 @@ theorem withOpen {physical : W → Footprint inode}
     change image.view.tail + 1 < 18446744073709551616 at fits
     change image.view.tail < 18446744073709551615
     omega
-  have result := (io lock ref wal session history issued reg pathEq entered slot active).append active
+  let input := io lock ref wal session history issued reg pathEq entered slot active
+  have result := input.worker.append active
     ⟨entered.owned, entered.phase, entered.catalog, entered.manifest⟩ (encode_size change) room linux
   unfold Alvoki.NativePost.IOReturns at *
   cases actual : WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
@@ -64,7 +76,7 @@ theorem withOpen {physical : W → Footprint inode}
       cases step with
       | ack chosen => simpa [WalRecoverySlice.Segmented.Contract.Request.apply, room] using chosen.symm
     exact ⟨view ▸ posEq, ⟨held.owned, held.phaseEq, held.catalog, held.manifest⟩,
-      next, mem, nextActive, view ▸ observed⟩
+      next, mem, nextActive, view ▸ observed, input.publication pos t actual next nextActive.2.1⟩
 
 theorem mutationThenReadTwice {physical : W → Footprint inode}
     (entry : NativeReadScope.Entry physical path root image)

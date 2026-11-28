@@ -56,9 +56,12 @@ structure Written (physical : W → Footprint inode) (heap : PhaseMemory) (root 
     (events : List Event) (image : Selected) (change : Change) (w : W) : Prop where
   delivered : Retry physical root ((events ++ [.written change]) ++ [.stop]) (image.append (encode change)) none w
   lost : Retry physical root ((events ++ [.writeUncertain change]) ++ [.stop]) (image.append (encode change)) none w
-  storage : ∃ lock ref wal reg issued appended, ∃ mem : ChildMemory (fun t => (physical t).disk),
+  storage : ∃ lock ref wal reg issued appended published session handle entered, ∃ mem : ChildMemory (fun t => (physical t).disk),
     WalRecoverySlice.Segmented.Native.append wal (encode change) issued = .ok (image.view.tail + 1) appended ∧
     Active mem heap wal reg appended ∧ reg.session.view = image.view.append (encode change) ∧
+    Native.Handle.AtRoot handle root ref ∧ Native.mutation handle change entered = .ok () published ∧
+    NativeWrite.afterWrite ref (.ok session appended) = .ok () published ∧
+    (physical published).phase = .online wal session ∧ Active mem heap wal reg published ∧
     Closed physical root lock ref (image.append (encode change)) w
 
 inductive Failure (physical : W → Footprint inode) (heap : PhaseMemory) (root : System.FilePath)
@@ -93,31 +96,31 @@ private theorem failedBody {physical : W → Footprint inode}
 
 private theorem successfulBody {physical : W → Footprint inode}
     {mem : ChildMemory (fun t => (physical t).disk)} {reg : Registration}
-    (grant : Grant root lock ref)
+    (binding : Native.Handle.AtRoot handle root ref) (grant : Grant root lock ref)
     (phase : NativeRecoverAt.PhasePrimitives physical root lock ref (image.append (encode change)))
     (cached : NativeRecoverAt.Cached heap physical root lock ref)
     (laws : NativeWriteRelease.Laws heap none physical root lock ref (image.append (encode change)))
     (run : Execution.Run (before ++ [.reopened]) (some session) image)
     (held : NativeRecoverAt.Held physical root lock ref (image.append (encode change)) (.updating wal) appended)
     (active : Active mem heap wal reg appended) (view : reg.session.view = image.view.append (encode change))
+    (frames : NativeWriteRelease.PublishFrames mem ref wal reg appended {session with mem := insert session.mem change})
     (report : WalRecoverySlice.Segmented.Native.append wal (encode change) issued = .ok (image.view.tail + 1) appended)
     (ran : Native.mutation handle change entered =
       NativeWrite.afterWrite ref (.ok {session with mem := insert session.mem change} appended)) :
     NativeScope.Callback ref lock (Native.mutation handle change) entered
       (fun _ => Written physical heap root (before ++ [.reopened]) image change)
       (Failure physical heap root before image change) := by
-  have custody := active.custody
   have facts := active
   obtain ⟨_, ready, _, _, _, model⟩ := facts
   have disk := model.installed.offline (request := none) (.inl view)
-  obtain ⟨u, published, online, _, custody⟩ := NativeWriteRelease.afterSuccess phase cached held disk ready custody _
+  obtain ⟨u, published, online, reusable⟩ := NativeWriteRelease.afterSuccess phase cached held disk active _ frames
   unfold NativeScope.Callback NativeScope.Post
   rw [ran, published]
   have stopped t (closed : Closed physical root lock ref (image.append (encode change)) t) :
       Written physical heap root (before ++ [.reopened]) image change t := by
     obtain ⟨sent, lost⟩ := Retry.written run closed.files
-    exact ⟨sent, lost, lock, ref, wal, reg, issued, appended, mem, report, active, view, closed⟩
-  exact NativeWriteRelease.outerAttached laws grant phase online custody stopped (fun _ t c => .cleanup (stopped t c))
+    exact ⟨sent, lost, lock, ref, wal, reg, issued, appended, u, _, handle, entered, mem, report, active, view, binding, ran.trans published, published, online.phase, reusable, closed⟩
+  exact NativeWriteRelease.outerAttached laws grant phase online reusable.custody stopped (fun _ t c => .cleanup (stopped t c))
 
 open NativeRead (SessionAt Online)
 open WalRecoverySlice.Segmented.Native (Store)
@@ -145,7 +148,8 @@ theorem withOpen_of_append {physical : W → Footprint inode}
         (fun pos t => pos = image.view.tail + 1 ∧
           NativeRecoverAt.Held physical root lock ref (image.append (encode change)) (.updating wal) t ∧
           ∃ (reg : Registration) (mem : ChildMemory (fun w => (physical w).disk)),
-            Active mem heap wal reg t ∧ reg.session.view = image.view.append (encode change))
+            Active mem heap wal reg t ∧ reg.session.view = image.view.append (encode change) ∧
+            NativeWriteRelease.PublishFrames mem ref wal reg t {session with mem := insert session.mem change})
         (fun t => NativeWriteRelease.Held (some (.append (encode change))) physical root lock ref image (.updating wal) t ∧
           ∃ store slot, NativeWriteRelease.WalCustody heap wal store slot t)) :
     NativeScope.Post (Native.withOpen path (fun h => Native.mutation h change)) start
@@ -168,9 +172,9 @@ theorem withOpen_of_append {physical : W → Footprint inode}
     cases sent : WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
     | ok pos t =>
       rw [sent] at leaf ran
-      obtain ⟨rfl, held, reg, mem, active, view⟩ := leaf
+      obtain ⟨rfl, held, reg, mem, active, view, frames⟩ := leaf
       have pubPhase : NativeRecoverAt.PhasePrimitives physical root lock ref (image.append (encode change)) := ⟨ops.phase.read, ops.phase.swap⟩
-      exact successfulBody grant pubPhase ops.cleanup.cached (release _ _ _ _) trace held active view sent ran
+      exact successfulBody binding grant pubPhase ops.cleanup.cached (release _ _ _ _) trace held active view frames sent ran
     | error e t =>
       rw [sent] at leaf ran
       obtain ⟨held, store, slot, current⟩ := leaf

@@ -76,15 +76,17 @@ session before the public operation can report success. -/
 theorem afterWrite_publish {physical : W → Footprint inode}
     (held : NativeRecoverAt.Held physical root lock ref image (.updating wal) w)
     (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image) (next : Session) :
-    ∃ t u, NativeRead.Frame physical root wal image.tables w t ∧
+    ∃ t u, (ref.get : IO (Phase Wal)) w = .ok (.updating wal) t ∧
+      (ref.swap (.online wal next) : IO (Phase Wal)) t = .ok (.updating wal) u ∧
+      NativeRead.Frame physical root wal image.tables w t ∧
       NativeRead.FrameTo physical root wal image.tables t u (.online wal next) ∧
       NativeRecoverAt.Held physical root lock ref image (.online wal next) u ∧
       afterWrite ref (.ok next w) = .ok () u := by
   obtain ⟨t, read, keep⟩ := phase.refRead wal w held.owned (by rw [held.phaseEq]; rfl)
   have updated := held.frame keep
   obtain ⟨u, swap, reached⟩ := phase.swap t updated.owned wal (.online wal next)
-  refine ⟨t, u, keep, reached, reached.held updated, ?_⟩
   have observed : (ref.get : IO (Phase Wal)) w = .ok (.updating wal) t := held.phaseEq ▸ read
+  refine ⟨t, u, observed, updated.phaseEq ▸ swap, keep, reached, reached.held updated, ?_⟩
   unfold afterWrite
   simp [Cell.publish, Native.phaseCell, Bind.bind, instMonadEIO._aux_13, EST.bind,
     observed, Phase.publish, swap]
