@@ -31,16 +31,16 @@ theorem reopenWal {Wal : Type} (cell : Cell F Wal) (invalid : String)
 /-- The concrete L0 check reads no mutation callbacks. The selected manifest
 and returned WAL view determine the replay suffix. Failed checks preserve
 the reached recovery custody for the outer cleanup. -/
-theorem recover {manifestReady attached failed : W → Prop} (ops : Components F) (selected : Selected)
+theorem recover {manifestReady attached validated failed : W → Prop} (ops : Components F) (selected : Selected)
     (d : Durable selected history)
     (manifest : Returns ops.manifest.reopen start
       (fun version t => version = selected.version ∧ manifestReady t) failed)
     (wal : ∀ w, manifestReady w → Returns ops.reopenWal w
       (fun view t => view = selected.view ∧ attached t) failed)
     (tables : ∀ w, attached w → Returns (checkTables ops.tables selected.version.tables) w
-      (fun _ t => attached t) failed) :
+      (fun _ t => validated t) failed) :
     Returns (ExperimentalL0.recover ops) start
-      (fun session t => Installed session selected history ∧ attached t) failed := by
+      (fun session t => Installed session selected history ∧ validated t) failed := by
   unfold ExperimentalL0.recover
   apply manifest.bind
   intro version w ready

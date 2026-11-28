@@ -253,11 +253,51 @@ def OpenDiskPost (heap : WalRecoverySlice.Segmented.Native.PhaseMemory)
     (fun t => WalRecoverySlice.Segmented.Recoverable image.view none (physical t).disk ∧
       Held physical root lock ref image .opening t)
 
+/-- Both outer IO errors and typed errors stop before the continuation. -/
+def ReportedError (a : F α) (w t : W) : Prop :=
+  (∃ e, a.run w = .error e t) ∨ ∃ e, a.run w = .ok (.error e) t
+
+private theorem record {a : F α} (h : Returns a w ok fail) :
+    Returns a w (fun x t => ok x t ∧ a.run w = .ok (.ok x) t)
+      (fun t => fail t ∧ ReportedError a w t) := by
+  unfold Returns at *
+  cases ran : a.run w with
+  | error e t => rw [ran] at h; exact ⟨h, .inl ⟨e, ran⟩⟩
+  | ok r t =>
+    rw [ran] at h
+    cases r with
+    | error e => exact ⟨h, .inr ⟨e, ran⟩⟩
+    | ok x => exact ⟨h, rfl⟩
+
+private theorem ReportedError.not_ok {a : F α} (stop : ReportedError a w t)
+    (ok : a.run w = .ok (.ok x) u) : False := by
+  rcases stop with ⟨_, eq⟩ | ⟨_, eq⟩ <;> rw [eq] at ok <;> cases ok
+
+/-- The public recovery has consumed the selected manifest and WAL view.
+The durable bounds and replay proof make this the actual start of checkTables. -/
+def CheckEntry (root : FilePath) (ref : Ref) (image : Selected) (start entered : W) : Prop :=
+  let ops := Native.callbackComponents root ref
+  ∃ t, ops.manifest.reopen.run start = .ok (.ok image.version) t ∧
+    ops.reopenWal.run t = .ok (.ok image.view) entered
+
+def NoChecks (root : FilePath) (ref : Ref) (image : Selected) (start : W) :=
+  ¬ ∃ entered, CheckEntry root ref image start entered
+
+/-- Successful and failed checks both retain the actual check-list entry,
+its return world, and release of every descriptor acquired along its prefix. -/
+def CheckReceipt (root : FilePath) (ref : Ref) (image : Selected) (life : NativeRead.Lifetime)
+    (start finish : W) (passed : Bool) : Prop :=
+  let action := checkTables (Native.callbackComponents root ref).tables image.version.tables
+  ∃ entered, CheckEntry root ref image start entered ∧
+    (if passed then action.run entered = .ok (.ok ()) finish else ReportedError action entered finish) ∧
+    ∀ id w, NativeRead.CheckReached (root / "tables") image.version.tables entered id w →
+      (NativeRead.Call.mk (root / "tables") id .check w).Balanced life
+
 /-- Assemble the concrete native callbacks. The private WAL handle returned
 by open is installed before scan and carried through every table check.
 A failure before that swap keeps opening custody; a later failure records
 the very handle that cleanup must take. -/
-theorem recoverAt_of_open (d : Durable image history)
+theorem recoverAt_checks_of_open (d : Durable image history)
     (opening : Opening physical root lock ref image start)
     (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
     (manifestPrim : NativeManifest.Primitives (root / "manifest")
@@ -271,11 +311,14 @@ theorem recoverAt_of_open (d : Durable image history)
     (tablePrim : ∀ wal w, Attached physical root lock ref image wal w →
       NativeRead.Primitives (tableNamespace physical root) life (NativeRead.Frame physical root wal image.tables w)) :
     NativeScope.Post (Native.recoverAt root ref) start
-      (fun session t => Installed session image history ∧ ∃ wal, Attached physical root lock ref image wal t)
-      (fun _ t => Failed physical root lock ref image t) := by
-  apply checked
-  apply NativeRecovery.recover (Native.callbackComponents root ref) image d (manifest d opening bytes manifestPrim)
-  · intro w ready
+      (fun session t => (Installed session image history ∧ ∃ wal, Attached physical root lock ref image wal t) ∧
+        CheckReceipt root ref image life start t true)
+      (fun _ t => Failed physical root lock ref image t ∧
+        (NoChecks root ref image start ∨ CheckReceipt root ref image life start t false)) := by
+  let ops := Native.callbackComponents root ref
+  have walStep (w) (ready : ManifestReady physical root lock ref image w) :
+      Returns ops.reopenWal w (fun view t => view = image.view ∧ ∃ wal, Attached physical root lock ref image wal t)
+        (Failed physical root lock ref image) := by
     apply NativeRecovery.reopenWal (Native.componentCell ref) _ (Native.storageCallbacks root).openWal
       (Native.storageCallbacks root).scan (readOpening phase ready)
       (acquired := fun h t => Held physical root lock ref image .opening t ∧ Child physical image h t)
@@ -293,15 +336,68 @@ theorem recoverAt_of_open (d : Durable image history)
       · rintro v u ⟨view, after⟩
         exact ⟨view, wal, after⟩
       · exact fun _ impossible => False.elim impossible
-  · rintro w ⟨wal, attached⟩
-    apply (tables d attached (tablePrim wal w attached)).mapPost
-    · exact fun _ _ after => ⟨wal, after⟩
-    · exact fun _ after => .inr ⟨wal, after⟩
+  apply checked
+  apply Returns.mapPost (done := fun session t => (Installed session image history ∧
+      ∃ wal, Attached physical root lock ref image wal t) ∧ CheckReceipt root ref image life start t true)
+    (NativeRecovery.recover ops image d (manifestReady := fun t =>
+      ManifestReady physical root lock ref image t ∧ ops.manifest.reopen.run start = .ok (.ok image.version) t)
+      (attached := fun t => (∃ wal, Attached physical root lock ref image wal t) ∧ CheckEntry root ref image start t)
+      (validated := fun t => (∃ wal, Attached physical root lock ref image wal t) ∧
+        CheckReceipt root ref image life start t true) ?_ ?_ ?_)
+  · exact fun _ _ ⟨installed, attached, receipt⟩ => ⟨⟨installed, attached⟩, receipt⟩
+  · exact fun _ h => h
+  · apply (record (manifest d opening bytes manifestPrim)).mapPost
+    · rintro _ _ ⟨⟨rfl, ready⟩, ran⟩
+      exact ⟨rfl, ready, ran⟩
+    · rintro _ ⟨failed, stopped⟩
+      exact ⟨failed, .inl (fun ⟨_, _, ran, _⟩ => stopped.not_ok ran)⟩
+  · rintro t ⟨ready, manifestRan⟩
+    apply (record (walStep t ready)).mapPost
+    · rintro _ _ ⟨⟨rfl, attached⟩, ran⟩
+      exact ⟨rfl, attached, t, manifestRan, ran⟩
+    · rintro _ ⟨failed, stopped⟩
+      refine ⟨failed, .inl ?_⟩
+      rintro ⟨_, u, earlier, ok⟩
+      have same : u = t := (EST.Out.ok.inj (earlier.symm.trans manifestRan)).2
+      subst u
+      exact stopped.not_ok ok
+  · rintro w ⟨⟨wal, attached⟩, entry⟩
+    let prim := tablePrim wal w attached
+    have released (id u) (visit : NativeRead.CheckReached (root / "tables") image.version.tables w id u) :=
+      NativeRead.checkTables_balanced prim d (fun _ step => attached.1.catalog.frame step.tablesKept)
+        NativeRead.Frame.refl visit
+    apply (record (tables d attached prim)).mapPost
+    · rintro ⟨⟩ t ⟨after, ran⟩
+      exact ⟨⟨wal, after⟩, w, entry, ran, released⟩
+    · rintro t ⟨after, stopped⟩
+      exact ⟨.inr ⟨wal, after⟩, .inr ⟨w, entry, stopped, released⟩⟩
 
 /-- A native recovery started on the selected files produces the replayed
 session and the still-attached physical child that the outer phase publish
 uses. The WAL producer supplies its actual CONTROL read, root barrier,
 child access and retired-file collection under the acquired store. -/
+theorem recoverAt_checks (d : Durable image history)
+    (opening : Opening physical root lock ref image start)
+    (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
+    (manifestPrim : NativeManifest.Primitives (root / "manifest")
+      (ManifestFrame physical root image.tables start) (fun w => (physical w).manifest))
+    (heap : WalRecoverySlice.Segmented.Native.PhaseMemory) (cache : Cached heap physical root lock ref)
+    (walIO : WalRecoverySlice.Segmented.Native.OpenIO heap (root / "wal") (fun w => (physical w).disk)
+      image.view (Held physical root lock ref image .opening))
+    (phase : PhasePrimitives physical root lock ref image)
+    (scanPrim : ∀ wal w, Attached physical root lock ref image wal w →
+      ScanPrimitives physical root wal image.tables w)
+    (tablePrim : ∀ wal w, Attached physical root lock ref image wal w →
+      NativeRead.Primitives (tableNamespace physical root) life (NativeRead.Frame physical root wal image.tables w)) :
+    NativeScope.Post (Native.recoverAt root ref) start
+      (fun session t => (Installed session image history ∧ ∃ wal, Attached physical root lock ref image wal t) ∧
+        CheckReceipt root ref image life start t true)
+      (fun _ t => Failed physical root lock ref image t ∧
+        (NoChecks root ref image start ∨ CheckReceipt root ref image life start t false)) :=
+  recoverAt_checks_of_open d opening bytes manifestPrim heap cache
+    (fun _ ⟨held, disk⟩ => WalRecoverySlice.Segmented.Native.openExisting_diskPost walIO ⟨disk, held⟩)
+    phase scanPrim tablePrim
+
 theorem recoverAt (d : Durable image history)
     (opening : Opening physical root lock ref image start)
     (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
@@ -318,9 +414,8 @@ theorem recoverAt (d : Durable image history)
     NativeScope.Post (Native.recoverAt root ref) start
       (fun session t => Installed session image history ∧ ∃ wal, Attached physical root lock ref image wal t)
       (fun _ t => Failed physical root lock ref image t) :=
-  recoverAt_of_open d opening bytes manifestPrim heap cache
-    (fun _ ⟨held, disk⟩ => WalRecoverySlice.Segmented.Native.openExisting_diskPost walIO ⟨disk, held⟩)
-    phase scanPrim tablePrim
+  (recoverAt_checks d opening bytes manifestPrim heap cache walIO phase scanPrim tablePrim).weaken
+    (fun _ _ h => h.1) (fun _ _ h => h.1)
 
 /-- The first failed manifest stat is propagated with its exact error and
 world. Neither WAL acquisition nor any table check runs on this branch. -/
