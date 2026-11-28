@@ -182,8 +182,8 @@ private def expectReadFailure (action : EStateM String (List Nat) α) (offsets :
 
 /-- Exercise public operations on the native image with one failing positional
 read at a time. The trace is the exact callback state when the reader stops. -/
-private def checkReadFailures (bytes : ByteArray) (id : UInt64) (footer root leaf data : Nat)
-    (key : ByteArray) : IO Unit := do
+private def checkReadFailures (bytes : ByteArray) (id : UInt64) (footer root leaf data unused : Nat)
+    (entry : Entry) : IO Unit := do
   let source (badOffset : Nat) : Source (EStateM String (List Nat)) := {
     size := pure bytes.size
     readAt := fun offset count => do
@@ -191,6 +191,16 @@ private def checkReadFailures (bytes : ByteArray) (id : UInt64) (footer root lea
       if offset == badOffset then throw "injected SSTable read failure"
       return bytes.extract offset (offset + count)
   }
+  let key := entry.key
+  let lookup (badOffset : Nat) : EStateM String (List Nat) (Option ByteArray) := do
+    let table ← Unified.openTableChecked (source badOffset) Alvoki.CRC32C.crc32c id
+    table.lookup key
+  match lookup unused [] with
+  | .ok value reached =>
+    check (value == some entry.value) "lookup returned the wrong value"
+    check (reached == [data, leaf, root, footer]) "lookup read an unrelated packet"
+  | .error .. => throw (IO.userError "unrelated read fault prevented lookup")
+  expectReadFailure (lookup data) [data, leaf, root, footer]
   expectReadFailure (Unified.openTableChecked (source footer) Alvoki.CRC32C.crc32c id) [footer]
   expectReadFailure (Unified.openTableChecked (source root) Alvoki.CRC32C.crc32c id) [root, footer]
   for (offset, expected) in [(leaf, [leaf]), (data, [data, leaf])] do
@@ -230,7 +240,7 @@ private def checkCorruption (dir : System.FilePath) : IO Unit := do
     (original.extract footerStart original.size)
   let footer ← pureOK <| Unified.decodeFooterBody rootBody
   checkReadFailures original layout.tableId footerStart footer.rootOffset
-    firstLeaf.offset firstData.offset (row layout 0).key
+    firstLeaf.offset firstData.offset secondData.offset (row layout 0)
 
   for bytes in [corrupt original footerStart, corrupt original footer.rootOffset,
                 original.extract 0 (original.size - 1), original ++ ⟨#[0]⟩] do
