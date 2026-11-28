@@ -252,7 +252,7 @@ private def progressRules (out : Output ns) (P : W → Prop) (id : UInt64) (ref 
       rw [observed] at model
       obtain ⟨v,ran,atMid⟩ := first w file init reports.first y mid observed
       obtain ⟨t,done,last⟩ := next y v mid atMid (reports.next ran) x result model
-      exact ⟨t, by simpa only [Bind.bind,instMonadObserved,instMonadEIO._aux_13,EST.bind,ran] using done,last⟩
+      exact ⟨t, by simpa only [Bind.bind,instMonadObservedAt,instMonadEIO._aux_13,EST.bind,ran] using done,last⟩
   raise _ _ _ _ _ _ _ model := by cases model
   abort _ _ _ _ _ _ _ _ _ model := by cases model
 
@@ -270,7 +270,7 @@ private theorem fromSuccess (safe : Sim out P id ref fd inode p q a b)
 
 private theorem boundOk {a : Observed α} {f : α → Observed β}
     (first : a.run w = .ok x t) (next : (f x).run t = .ok y u) : (a >>= f).run w = .ok y u := by
-  simpa only [Bind.bind,instMonadObserved,instMonadEIO._aux_13,EST.bind,first] using next
+  simpa only [Bind.bind,instMonadObservedAt,instMonadEIO._aux_13,EST.bind,first] using next
 
 private theorem supplyReturns (ref : IO.Ref Rows) (w : W) (reports : Reports (supply ref) w) :
     ∃ x t, (supply ref).run w = .ok x t := by

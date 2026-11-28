@@ -41,19 +41,22 @@ def Leaf.action : (leaf : Leaf) → IO leaf.Result
   | .sync fd => syncFileHandle fd
   | .remove path => IO.FS.removeFile path
 
-structure Observed (α : Type) where
+/-- IO instrumented with the site and world of each issued primitive. -/
+structure ObservedAt (site α : Type) where
   run : IO α
-  visits : W → Leaf → W → Prop
+  visits : W → site → W → Prop
 
-instance : Monad Observed where
+instance : Monad (ObservedAt site) where
   pure x := ⟨pure x,fun _ _ _ => False⟩
   bind a f := ⟨a.run >>= fun x => (f x).run,fun w leaf t =>
     a.visits w leaf t ∨ ∃ x u, a.run w = .ok x u ∧ (f x).visits u leaf t⟩
 
-instance : MonadExceptOf IO.Error Observed where
+instance : MonadExceptOf IO.Error (ObservedAt site) where
   throw e := ⟨throw e,fun _ _ _ => False⟩
   tryCatch a f := ⟨tryCatchThe IO.Error a.run (fun e => (f e).run),fun w leaf t =>
     a.visits w leaf t ∨ ∃ e u, a.run w = .error e u ∧ (f e).visits u leaf t⟩
+
+abbrev Observed := ObservedAt Leaf
 
 def issue (leaf : Leaf) : Observed leaf.Result :=
   ⟨leaf.action,fun w l t => l = leaf ∧ t = w⟩
