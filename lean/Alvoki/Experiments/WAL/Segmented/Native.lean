@@ -468,10 +468,34 @@ structure PhaseMemory where
   unlock : ∀ {α : Type} {ref : IO.Ref α} {value w} (mutex : Std.BaseMutex),
     holds ref value w → holds ref value (mutex.unlock w).state
 
+/-- Concrete identities installed by the successful public open. -/
+structure Registration where
+  session : Session
+  store : Store
+  child : SingleFile.Handle
+
+def PhaseMemory.Registered (heap : PhaseMemory) (handle : Handle) (reg : Registration)
+    (w : Void IO.RealWorld) : Prop :=
+  heap.separate handle.state reg.store.active ∧ heap.holds handle.state (.ready reg.store reg.session) w ∧
+    heap.holds reg.store.active (some (reg.session.control.active, reg.child)) w
+
+/-- The exact store and inner handle returned by recovery, slot publication
+and allocation of the public WAL handle. The worlds are those of this open. -/
+def Origin (dir : FilePath) (handle : Handle) (reg : Registration) (start finish : Void IO.RealWorld) : Prop :=
+  ∃ acquired recovered, acquireStore dir start = .ok reg.store acquired ∧
+    reg.store.recoverChild acquired = .ok (reg.session, reg.child) recovered ∧
+    let attached := (reg.store.active.set (some (reg.session.control.active, reg.child)) : BaseIO Unit) recovered
+    let cell := (IO.mkRef (.ready reg.store reg.session : Phase Store) : BaseIO _) attached.state
+    let mutex := Std.BaseMutex.new cell.state
+    handle.state = cell.val ∧ handle.mutex = mutex.val ∧ finish = mutex.state
+
 def PhaseMemory.Ready (heap : PhaseMemory) (handle : Handle) (session : Session)
     (w : Void IO.RealWorld) : Prop :=
   ∃ store child, heap.separate handle.state store.active ∧ heap.holds handle.state (.ready store session) w ∧
     heap.holds store.active (some (session.control.active, child)) w
+
+theorem PhaseMemory.Registered.ready {heap : PhaseMemory} {reg : Registration} (h : heap.Registered handle reg w) : heap.Ready handle reg.session w :=
+  ⟨reg.store, reg.child, h⟩
 
 /-- The concrete recovery run that produced this session also returned the
 child stored under its active ID. The outer phase ref is allocated after
