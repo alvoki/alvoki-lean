@@ -1,4 +1,4 @@
-import Alvoki.Experiments.WAL.Segmented.Proofs.CutRuntime
+import Alvoki.Experiments.WAL.Segmented.Proofs.ChildCutCoverage
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutCoverage
 
 namespace WalRecoverySlice.Segmented.Native.AppendCut
@@ -24,7 +24,9 @@ inductive PublicStop (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (stor
 /-- Source-side observations of the nested operating-system calls. The
 proof below transforms them into the prefix evidence used by the disk model. -/
 def sourceSites (s : Store) (session : Session) (stop : Stop) : Sites s :=
-  { sites s session stop with publish := fun _ => (ControlCutIO.program s session.control stop).cuts }
+  { sites s session stop with
+    publish := fun _ => (ControlCutIO.program s session.control stop).cuts
+    write := ChildCutIO.source stop }
 
 private structure Covers (source certified : Observed α) : Prop where
   erase : source.run = certified.run
@@ -72,9 +74,26 @@ private theorem bodyCovered (s : Store) (session : Session) (batch : Bytes) (sto
       apply Covers.bind
       · exact ⟨rfl, fun hit => ControlCutIO.covered hit⟩
       intro _
-      exact Covers.refl _
+      apply Covers.bind
+      · exact ⟨rfl, fun hit => ChildCutIO.sourceCovered hit⟩
+      · exact fun _ => Covers.refl _
     · exact fun _ => Covers.refl _
-  · exact Covers.refl _
+  · apply Covers.bind (Covers.refl _)
+    intro slot
+    cases slot with
+    | none => exact Covers.refl _
+    | some pair =>
+      obtain ⟨id,h⟩ := pair
+      dsimp only
+      split
+      · apply Covers.bind
+        · exact ⟨rfl, fun hit => ChildCutIO.sourceCovered hit⟩
+        · exact fun _ => Covers.refl _
+      · apply Covers.bind (Covers.refl _)
+        intro _
+        apply Covers.bind
+        · exact ⟨rfl, fun hit => ChildCutIO.sourceCovered hit⟩
+        · exact fun _ => Covers.refl _
 
 /-- Instrument a primitive without requiring that it returned at the point
 of interruption. The ordinary interpreter still calls the original action. -/

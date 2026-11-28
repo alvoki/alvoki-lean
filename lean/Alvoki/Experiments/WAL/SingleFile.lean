@@ -39,7 +39,7 @@ structure RecoveryIO (m : Type → Type) (handle : Type) where
   truncateAt : handle → Nat → m Unit
   sync : handle → m Unit
 
-private def markerHandle [Monad m] [MonadExceptOf String m]
+def markerHandle [Monad m] [MonadExceptOf String m]
     (markers : Option (handle × handle)) (slot : Nat) : m handle := do
   let some (a, b) := markers | throw "marker unavailable"
   return if slot == 0 then a else b
@@ -98,15 +98,20 @@ structure AppendIO (m : Type → Type) (handle : Type) where
   readMarker _ := throw "read during append"
   truncate _ := throw "truncate during append"
 
-private def writeFlushed (h : IO.FS.Handle) (bytes : Bytes) : IO Unit := do
-  h.write (encodeBytes bytes)
-  h.flush
+@[inline] abbrev writeFlushedWith [Monad m] (write flush : m Unit) : m Unit := do
+  write
+  flush
+
+@[inline] abbrev writeFromStartWith [Monad m] (rewind writeFlushed : m Unit) : m Unit := do
+  rewind
+  writeFlushed
+
+private def writeFlushed (h : IO.FS.Handle) (bytes : Bytes) : IO Unit :=
+  writeFlushedWith (h.write (encodeBytes bytes)) h.flush
 
 def Internal.nativeAppend : AppendIO FileM IO.FS.Handle where
   appendFlushed h bytes := writeFlushed h bytes
-  writeFromStart h bytes := do
-    h.rewind
-    writeFlushed h bytes
+  writeFromStart h bytes := writeFromStartWith (liftM h.rewind) (liftM (writeFlushed h bytes))
   sync h := Internal.syncHandle h
 
 /-- Erase the typed append adapter at a reached writer or marker. These
@@ -116,7 +121,7 @@ theorem Internal.append_data_run (files : AppendFiles IO.FS.Handle) (b : Bytes) 
       (do files.writer.write ⟨b.toArray⟩; files.writer.flush; return .ok ()) := by
   funext w
   change ((fun x => (Except.ok x : Except String Unit)) <$> writeFlushed files.writer b : IO _) w = _
-  simp only [writeFlushed, Functor.map, instMonadEIO._aux_1, Bind.bind, instMonadEIO._aux_13, EST.bind]
+  simp only [writeFlushed,writeFlushedWith, Functor.map, instMonadEIO._aux_1, Bind.bind, instMonadEIO._aux_13, EST.bind]
   cases run : files.writer.write ⟨b.toArray⟩ w <;> simp only [encodeBytes,run]
   rename_i t
   cases files.writer.flush t <;> rfl
@@ -135,7 +140,7 @@ theorem Internal.append_marker_run (files : AppendFiles IO.FS.Handle) (hs : file
   have liftRun (act : IO Unit) : (liftM act : FileM Unit).run = (do return Except.ok (← act) : IO (Except String Unit)) := rfl
   simp only [liftRun]
   funext w
-  simp only [writeFlushed,encodeBytes,Bind.bind,instMonadEIO._aux_13,EST.bind,Pure.pure,instMonadEIO._aux_5,EST.pure]
+  simp only [writeFlushed,writeFlushedWith,encodeBytes,Bind.bind,instMonadEIO._aux_13,EST.bind,Pure.pure,instMonadEIO._aux_5,EST.pure]
   cases h.rewind w <;> simp only [EST.bind]
   rename_i t
   cases h.write ⟨bytes.toArray⟩ t <;> simp only
