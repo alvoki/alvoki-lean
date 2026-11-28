@@ -225,6 +225,32 @@ for a root listing that contains only the lock. An unsuccessful first
 initialization may leave artifacts. The public create contract gives no
 automatic retry guarantee.
 
+### Lifecycle ownership premises
+
+- Bootstrap uses the root binding returned by checked directory and lock
+  acquisition. Its child authority includes the actual successful
+  single-file create result and its held lock. The installed phase carries
+  that binding and slot.
+- Reopen passes the recovered child's actual open result and held fact,
+  together with the public root-held result and the recorded slot.
+- Append operates under the installed root acquisition. Rejection keeps
+  both incoming locks. In-place failure retains the incoming child lock
+  and changes its phase to poisoned. Reported rotation failure closes the
+  old child and any acquired successor on their reached images. The close
+  interpretation takes the root-held fact from its input and requires an
+  explicitly held child for a populated slot. A stopped process has no
+  subsequent close premise.
+- Close consumes the reached phase and slot via the native swaps. Its
+  result frames the disk even on a reported unlock error. Reopen starts
+  from that disk's recoverability, derives the selected history there,
+  and supplies fresh acquisition evidence.
+
+The local runtime boundary includes reference swaps, descriptor binding
+and lifetime, and lock release. It includes the documented Lean 4.36
+failed-`fdopen` limitation before handle construction succeeds.
+The ownership statements concern the resources represented by the acquired
+handles. [Filesystem assumptions](../../../../../docs/design/filesystem-assumptions.md)
+
 ### Public open contract for the append consumer
 
 For a recoverable disk and a root acquired under the primitive assumptions

@@ -351,7 +351,7 @@ theorem appendAfterNativeReopen (owned : RootBinding directory lock)
       after.2 = .active .lock (SingleFile.appendBindings session.control.policy)
         (Persistence.historyCursor next) next
     | .ok (.error _) after | .error _ after => after.2 = .poisoned .lock := by
-  obtain ⟨history, shape, entry, live, durable, _, idEq, phaseEq, batchesEq⟩ :=
+  obtain ⟨history, shape, entry, live, durable, _, idEq, phaseEq, batchesEq, _⟩ :=
     installScopedModel_appendPhase owned rootReports openReports closeError prior opened
   have fits : history.length < (session.control.active + 1) * session.control.capacity := by
     have length := segmentHistory_active_length entry.layout.upper
@@ -694,7 +694,9 @@ theorem prepareNativeChild_authority (root : System.FilePath) (removal : RootRep
     (linux : System.Platform.isWindows = false) {s t : State} {phase : SingleFile.AppendPhase}
     (ran : (prepareNativeChild root removal mkdir create policy id).run s = .ok (.ok phase) t) :
     t.disk.segment id = Persistence.freshImage ∧ t.disk.cursor id = {} ∧
-      phase = .active .lock (SingleFile.appendBindings policy) (Persistence.historyCursor []) [] := by
+      phase = .active .lock (SingleFile.appendBindings policy) (Persistence.historyCursor []) [] ∧
+      ∃ ready after, SingleFile.createModel (Native.segmentPath root id) policy create =
+        .ok (.ok ready) after ∧ SingleFile.storedPhase ready = phase ∧ after.held = true := by
   simp only [prepareNativeChild, Native.prepareChildWith, Bind.bind, ExceptT.bind,
     ExceptT.run, ExceptT.mk, EStateM.bind] at ran
   cases removed : (nativeReopenOps root removal (fun _ _ => {})).removeSegment id s with
@@ -722,8 +724,8 @@ theorem prepareNativeChild_authority (root : System.FilePath) (removal : RootRep
             | error => cases ran
             | ok ready =>
               cases ran
-              obtain ⟨image, _, _, binding⟩ := nativeCreatedChild _ _ _ linux opened
-              exact ⟨(Disk.setSegment_here ..).trans image, Disk.setCursor_here .., binding⟩
+              obtain ⟨image, _, childHeld, binding⟩ := nativeCreatedChild _ _ _ linux opened
+              exact ⟨(Disk.setSegment_here ..).trans image, Disk.setCursor_here .., binding, ready, after, rfl, rfl, childHeld⟩
 
 private theorem prepareFrame {session : Session} {d t : Disk}
     (installed : Installed session d) (id : Nat) (away : session.control.active < id)
@@ -1042,7 +1044,7 @@ theorem readyAfterPublishingSuccessor (root : System.FilePath) (held : Nat) (eff
   have preparedPost := prepareNativeChild_frames root removal (fun step => effects.prepare step (successor session).active) create (successor session).active session start initial
     (Nat.lt_succ_self _)
   rw [created] at preparedPost
-  have ⟨image, cursor, authority⟩ := prepareNativeChild_authority root removal (fun step => effects.prepare step (successor session).active) create _ _ linux created
+  have ⟨image, cursor, authority, _⟩ := prepareNativeChild_authority root removal (fun step => effects.prepare step (successor session).active) create _ _ linux created
   have barrier := settlePreparedChild root held effects session prepared preparedPost.1 preparedPost.2
   rw [synced] at barrier
   obtain ⟨⟨history, shape, layout, live, durable⟩, named, saved, files, cursors⟩ := barrier
@@ -1477,7 +1479,7 @@ theorem nativeAppendModel_rotation_refines (root : System.FilePath) (held : Nat)
         rw [ready] at frame
         exact ⟨prep.offline (.inl rfl), frame, rfl⟩
       | ok phase =>
-        have ⟨image, cursor, authority⟩ := prepareNativeChild_authority root removal
+        have ⟨image, cursor, authority, _⟩ := prepareNativeChild_authority root removal
           (fun step => effects.prepare step (successor session).active)
           create session.control.policy (successor session).active linux ready
         have continued := resumeSuccessor_refines root held effects session reports (atPrepare, phase)
@@ -1761,16 +1763,16 @@ while the process still owns the root. -/
 def AppendCloseState.ChildCustody (s : AppendCloseState) : Prop :=
   match s.state.activeEntry with
   | none => s.child = .closed ∧ s.childHeld = false
-  | some _ => s.child = .poisoned .lock ∨ ∃ files cursor history,
-      s.child = .active .lock files cursor history
+  | some _ => s.childHeld = true ∧ (s.child = .poisoned .lock ∨ ∃ files cursor history,
+      s.child = .active .lock files cursor history)
 
 theorem AppendReady.closeCustody {s : AppendCloseState} (ready : AppendReady session (s.state, s.child))
-    (registered : s.state.activeEntry = some session.control.active) :
+    (registered : s.state.activeEntry = some session.control.active) (held : s.childHeld = true) :
     s.ChildCustody := by
   obtain ⟨_, _, _, _, _, active⟩ := ready
   unfold AppendCloseState.ChildCustody
   rw [registered]
-  exact .inr ⟨_, _, _, active⟩
+  exact ⟨held, .inr ⟨_, _, _, active⟩⟩
 
 theorem reportedAppend_closeCustody (s : AppendCloseState)
     (phase : s.child = if s.state.activeEntry.isSome then .poisoned .lock else .closed)
@@ -1781,20 +1783,19 @@ theorem reportedAppend_closeCustody (s : AppendCloseState)
     rw [slot] at phase held
     exact ⟨phase, held⟩
   | some id =>
-    rw [slot] at phase
-    exact .inl phase
+    rw [slot] at phase held
+    exact ⟨held, .inl phase⟩
 
-/-- Interpret the close input from the reached append slot and phase.
-A reported failure retains the root. A child is held exactly when the
-slot retains it. The scoped rotation proof has already released any
-successor that did not move to that slot. -/
-def appendCloseState (after : State × SingleFile.AppendPhase) (phase : Native.Phase Nat) :
-    AppendCloseState := ⟨after.1, phase, after.2, after.1.activeEntry.isSome, true⟩
-
-theorem reportedAppend_closeState (after : State × SingleFile.AppendPhase) (held : Nat)
-    (phase : after.2 = if after.1.activeEntry.isSome then .poisoned .lock else .closed) :
-    (appendCloseState after (.poisoned held)).ChildCustody :=
-  reportedAppend_closeCustody _ phase rfl
+/-- Reported append outcomes preserve the root acquisition. An in-place
+failure retains the incoming child lock. Rotation releases the old child
+and any acquired successor before returning a reported error. -/
+def appendCloseState (before : AppendCloseState) (after : State × SingleFile.AppendPhase)
+    (phase : Native.Phase Nat) (rotated : Bool) : AppendCloseState :=
+  { before with
+    state := after.1
+    child := after.2
+    phase
+    childHeld := if rotated then false else before.childHeld }
 
 private def closeStoredChild (policy : Policy) (reports : SingleFile.OpenReports)
     (id : Nat) : EStateM String AppendCloseState Unit := fun s =>
@@ -1849,14 +1850,14 @@ private theorem appendRelease_releases (policy : Policy) (reports : SingleFile.O
   | some id =>
     rw [slot] at custody
     have closed := SingleFile.closeModel_owned policy reports
-      {image := s.state.disk.segment id, held := s.childHeld} custody
+      {image := s.state.disk.segment id, held := s.childHeld} custody.2
     simp only [Native.closeChildWith, Bind.bind, EStateM.run, EStateM.bind, slot, Option.map_some,
       closeStoredChild, closed]
     cases reports.unlockError <;> cases unlockError <;> rfl
 
 theorem publicAppendClose_releases (policy : Policy) (reports : SingleFile.OpenReports)
     (unlockError : Option String) (s : AppendCloseState)
-    (owned : s.phase ≠ .closed)
+    (owned : s.phase ≠ .closed) (_rootHeld : s.rootHeld = true)
     (custody : s.ChildCustody) :
     let after := {s with
       state := {s.state with activeEntry := none}
@@ -1881,33 +1882,82 @@ theorem publicAppendClose_releases (policy : Policy) (reports : SingleFile.OpenR
   exact appendRelease_releases policy reports unlockError {s with phase := .closed} custody
 
 theorem publicAppendClose_afterReported (policy : Policy) (reports : SingleFile.OpenReports)
-    (unlockError : Option String) (after : State × SingleFile.AppendPhase) (held : Nat)
+    (unlockError : Option String) (before : AppendCloseState)
+    (after : State × SingleFile.AppendPhase) (held : Nat) (rotated : Bool)
+    (root : before.rootHeld = true) (child : before.childHeld = true)
+    (slot : after.1.activeEntry.isSome = !rotated)
     (phase : after.2 = if after.1.activeEntry.isSome then .poisoned .lock else .closed) :
-    let reached := appendCloseState after (.poisoned held)
+    let reached := appendCloseState before after (.poisoned held) rotated
     let released : AppendCloseState :=
       ⟨{after.1 with activeEntry := none}, .closed, .closed, false, false⟩
     (publicAppendClose policy reports unlockError).run reached =
       if after.1.activeEntry.isSome && reports.unlockError then .error "primitive error" released
       else match unlockError with
         | none => .ok () released
-        | some err => .error err released :=
-  publicAppendClose_releases policy reports unlockError _ (by intro impossible; cases impossible)
-    (reportedAppend_closeState after held phase)
+        | some err => .error err released := by
+  let reached := appendCloseState before after (.poisoned held) rotated
+  have custody : reached.ChildCustody := by
+    apply reportedAppend_closeCustody reached phase
+    change (if rotated then false else before.childHeld) = after.1.activeEntry.isSome
+    rw [child, slot]
+    cases rotated <;> rfl
+  exact publicAppendClose_releases policy reports unlockError reached
+    (by intro impossible; cases impossible) root custody
+
+/-- Consume the reported outcome of the public reply schedule. Resource
+facts for the incoming ready handle come from its acquisition producer. -/
+theorem publicNativeAppend_reportedClose (root : System.FilePath) (held : Nat)
+    (removal : RootReports) (effects : Effects) (create : SingleFile.CreateReports)
+    (close : SingleFile.OpenReports) (unlockError : Option String) (session : Session)
+    (reports : ∀ policy cursor, SingleFile.AppendReports policy cursor batch)
+    (before : AppendCloseState) (rootHeld : before.rootHeld = true) (childHeld : before.childHeld = true)
+    (ready : AppendReady session (before.state, before.child))
+    (registered : before.state.activeEntry = some session.control.active)
+    (size : batch.length ≤ 32) (position : session.view.tail < Contract.maxPosition)
+    (linux : System.Platform.isWindows = false)
+    (returned :
+      let action := fun (_ : Nat) (current : Session) =>
+        nativeAppendModel root held removal effects create close current current.control.active
+          (reports current.control.policy)
+      (Native.appendPositionWith (publicAppendActiveModel action)).run
+        ((before.state, before.child), .ready held session) = .ok (.error err) (after, reachedPhase)) :
+    let reached := appendCloseState before after reachedPhase (decide (session.activeCount = session.control.capacity))
+    let released : AppendCloseState := ⟨{after.1 with activeEntry := none}, .closed, .closed, false, false⟩
+    Recoverable session.view (some (.append batch)) released.state.disk ∧
+    (publicAppendClose session.control.policy close unlockError).run reached =
+      if after.1.activeEntry.isSome && close.unlockError then .error "primitive error" released
+      else match unlockError with
+        | none => .ok () released
+        | some err => .error err released := by
+  have post := publicNativeAppend_position root held removal effects create close session
+    reports (before.state, before.child) ready registered size position linux
+  dsimp only at returned post
+  rw [returned] at post
+  obtain ⟨rfl, ⟨slot, phase⟩, disk⟩ := post
+  have presence : after.1.activeEntry.isSome = !(decide (session.activeCount = session.control.capacity)) := by
+    rw [slot, registered]
+    split <;> rename_i h <;> simp [h]
+  have childPhase : after.2 = if after.1.activeEntry.isSome then .poisoned .lock else .closed := by
+    rw [slot]
+    exact phase
+  exact ⟨disk, publicAppendClose_afterReported session.control.policy close unlockError before after held
+    _ rootHeld childHeld presence childPhase⟩
 
 theorem publicAppendClose_afterRejection (policy : Policy) (reports : SingleFile.OpenReports)
-    (unlockError : Option String) (before : State × SingleFile.AppendPhase) (held : Nat)
-    (ready : AppendReady session before)
-    (registered : before.1.activeEntry = some session.control.active) :
-    let reached := appendCloseState before (.poisoned held)
+    (unlockError : Option String) (before : AppendCloseState) (held : Nat)
+    (root : before.rootHeld = true) (child : before.childHeld = true)
+    (ready : AppendReady session (before.state, before.child))
+    (registered : before.state.activeEntry = some session.control.active) :
+    let reached := {before with phase := .poisoned held}
     let released : AppendCloseState :=
-      ⟨{before.1 with activeEntry := none}, .closed, .closed, false, false⟩
+      ⟨{before.state with activeEntry := none}, .closed, .closed, false, false⟩
     (publicAppendClose policy reports unlockError).run reached =
-      if before.1.activeEntry.isSome && reports.unlockError then .error "primitive error" released
+      if before.state.activeEntry.isSome && reports.unlockError then .error "primitive error" released
       else match unlockError with
         | none => .ok () released
         | some err => .error err released :=
-  publicAppendClose_releases policy reports unlockError _ (by intro impossible; cases impossible)
-    (AppendReady.closeCustody ready registered)
+  publicAppendClose_releases policy reports unlockError _ (by intro impossible; cases impossible) root
+    (AppendReady.closeCustody ready registered child)
 
 theorem publicAppendClose_repeated (policy : Policy) (reports : SingleFile.OpenReports)
     (unlockError : Option String) (s : AppendCloseState) (closed : s.phase = .closed) :
@@ -1977,7 +2027,12 @@ theorem reopensWithAppendAuthority (owned : RootBinding directory lock) (root : 
       .ok (.ok (.ready store session, ())) (after, true)) :
     store.activeId = session.control.active ∧
       after.activeEntry = some session.control.active ∧
-      AppendReady session (after, SingleFile.storedPhase store.activeChild) := by
+      AppendReady session (after, SingleFile.storedPhase store.activeChild) ∧
+      ∃ (before : State) (childAfter : SingleFile.OpenImage),
+        SingleFile.openExistingModel (Native.segmentPath owned.root store.activeId)
+          session.control.policy (reports before.step store.activeId)
+          {image := before.disk.segment store.activeId} = .ok (.ok store.activeChild) childAfter ∧
+        childAfter.held = true := by
   rw [publicOpenModel_run] at opened
   dsimp only at opened
   have success : (installScopedModel owned root reports childError).run start =
@@ -1989,11 +2044,11 @@ theorem reopensWithAppendAuthority (owned : RootBinding directory lock) (root : 
       cases response with
       | error => cases opened
       | ok phase => cases opened; rfl
-  obtain ⟨history, shape, layout, live, durable, _, index, phase, _⟩ :=
+  obtain ⟨history, shape, layout, live, durable, _, index, phase, _, child⟩ :=
     installScopedModel_appendPhase owned root reports childError prior success
   rw [index] at phase
   exact ⟨index, (installScopedModel_registered success).trans (congrArg some index),
-    ⟨history, shape, layout, live, durable, phase⟩⟩
+    ⟨history, shape, layout, live, durable, phase⟩, child⟩
 
 private theorem writeActive_healthy (policy : Policy) (id : Nat) (s : State × SingleFile.AppendPhase)
     (history : List Bytes) (bounded : ∀ b ∈ history, b.length ≤ 32) (room : history.length < 255)
@@ -2047,7 +2102,7 @@ theorem nativeAppendModel_healthy (root : System.FilePath) (held : Nat) (removal
         (cleared, .closed) = .ok (.ok (.acquired id)) (prepared, phase) := by
       simp only [acquireSuccessor, healthy, ExceptT.run] at created ⊢
       rw [created]
-    have own := (prepareNativeChild_authority root removal (fun _ => .after false none) {} session.control.policy id linux created).2.2
+    have own := (prepareNativeChild_authority root removal (fun _ => .after false none) {} session.control.policy id linux created).2.2.1
     let settled : State := {prepared.tick with disk := prepared.disk.syncRoot}
     have synced : ((nativeControlOps root held healthy).syncRoot).run prepared = .ok (.ok ()) settled := rfl
     have fits := successor_controlRepresentable
@@ -2176,7 +2231,10 @@ theorem nativeBootstrap_ready (root : System.FilePath) (held : Nat) (removal : R
     (capacity : Nat) (linux : System.Platform.isWindows = false)
     (returned : (nativeBootstrapModel root held removal effects create policy capacity).run
       ({}, .closed) = .ok (.ok session) after) :
-    AppendReady session after ∧ after.1.activeEntry = some session.control.active ∧ session.view.tail = 0 := by
+    AppendReady session after ∧ after.1.activeEntry = some session.control.active ∧ session.view.tail = 0 ∧
+      ∃ ready childAfter,
+        SingleFile.createModel (Native.segmentPath root 0) policy create = .ok (.ok ready) childAfter ∧
+        SingleFile.storedPhase ready = after.2 ∧ childAfter.held = true := by
   by_cases zero : capacity = 0
   · simp only [nativeBootstrapModel, Segmented.create, zero, decide_true, Bool.true_or, ↓reduceIte] at returned
     cases returned
@@ -2202,8 +2260,8 @@ theorem nativeBootstrap_ready (root : System.FilePath) (held : Nat) (removal : R
     | ok phase =>
       have ⟨persist, preparedDisk⟩ := prepareNativeChild_initial root removal (fun step => effects.prepare step 0)
         create policy 0 linux rfl exactMade
-      have authority := (prepareNativeChild_authority root removal (fun step => effects.prepare step 0)
-        create policy 0 linux exactMade).2.2
+      obtain ⟨_, _, authority, acquired⟩ := prepareNativeChild_authority root removal
+        (fun step => effects.prepare step 0) create policy 0 linux exactMade
       let registered := {prepared with activeEntry := some 0}
       simp only [ExceptT.bindCont, EStateM.bind, registerSuccessor, storeActiveEntry, ↓reduceIte, authority,
         liftRootAction, ExceptT.run] at returned
@@ -2248,7 +2306,7 @@ theorem nativeBootstrap_ready (root : System.FilePath) (held : Nat) (removal : R
               rw [healthyRun] at baseline
               obtain ⟨shape, live, durable, layout⟩ := baseline
               rw [← same] at live durable layout
-              refine ⟨⟨[], shape, layout, live, durable, ?_⟩, ?_, rfl⟩
+              refine ⟨⟨[], shape, layout, live, durable, ?_⟩, ?_, rfl, by simpa only [authority] using acquired⟩
               · have cursor : disk.disk.cursor 0 = Persistence.historyCursor [] := by
                   simpa only [initialControl, segmentHistory, List.drop_nil, List.take_nil] using layout.active.position
                 simp only [cursor, segmentHistory, List.drop_nil, List.take_nil]
@@ -2303,7 +2361,7 @@ private theorem bootstrapFailure_custody (root : System.FilePath) (held : Nat)
       rw [frame]
     | ok phase =>
       have live := (prepareNativeChild_authority root removal (fun step => effects.prepare step 0)
-        create policy 0 linux exactMade).2.2
+        create policy 0 linux exactMade).2.2.1
       let registered := {prepared with activeEntry := some 0}
       simp only [ExceptT.bindCont, EStateM.bind, registerSuccessor, storeActiveEntry, ↓reduceIte,
         live, liftRootAction, ExceptT.run] at ran
@@ -2356,7 +2414,7 @@ theorem nativeBootstrap_healthy (root : System.FilePath) (held : Nat) (removal :
       ({}, .closed) = .ok (.ok session) after := by
   obtain ⟨phase, prepared, made⟩ := prepareNativeChild_healthy root removal removes policy 0 {} linux
   have live := (prepareNativeChild_authority root removal (fun _ => .after false none)
-    {} policy 0 linux made).2.2
+    {} policy 0 linux made).2.2.1
   let registered := {prepared with activeEntry := some 0}
   let settled := {registered.tick with disk := registered.disk.syncRoot}
   let control := initialControl policy capacity
@@ -2415,9 +2473,12 @@ theorem publicBootstrap_installs (owned : RootBinding directory lock)
     (publicBootstrapModel (.ok owned) enumerate held removal effects create close unlockError policy capacity).run
       ⟨{}, .closed, .closed, false, false⟩ =
       .ok (.ok (.ready owned session, ())) ⟨after.1, .ready held session, after.2, true, true⟩ ∧
-    after.1.activeEntry = some session.control.active ∧ AppendReady session after := by
-  obtain ⟨ready, slot, _⟩ := nativeBootstrap_ready owned.root held removal effects create policy capacity linux ran
-  refine ⟨?_, slot, ready⟩
+    after.1.activeEntry = some session.control.active ∧ AppendReady session after ∧
+    ∃ ready childAfter,
+      SingleFile.createModel (Native.segmentPath owned.root 0) policy create = .ok (.ok ready) childAfter ∧
+      SingleFile.storedPhase ready = after.2 ∧ childAfter.held = true := by
+  obtain ⟨ready, slot, _, acquired⟩ := nativeBootstrap_ready owned.root held removal effects create policy capacity linux ran
+  refine ⟨?_, slot, ready, acquired⟩
   unfold publicBootstrapModel Native.openWithStore Native.installPhaseWith Native.createPhaseWith Native.cleanupOnError
   simp only [ExceptT.run, Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind, ExceptT.bindCont,
     tryCatchThe, MonadExceptOf.tryCatch, ExceptT.tryCatch, EStateM.run, listed, empty,
@@ -2441,7 +2502,7 @@ theorem publicBootstrap_healthy (owned : RootBinding directory lock)
       after.state.activeEntry = some session.control.active ∧
       AppendReady session (after.state, after.child) := by
   obtain ⟨session, after, ran⟩ := nativeBootstrap_healthy owned.root held removal removes policy capacity positive fits linux
-  obtain ⟨installed, slot, ready⟩ := publicBootstrap_installs owned enumerate listed empty held removal
+  obtain ⟨installed, slot, ready, _⟩ := publicBootstrap_installs owned enumerate listed empty held removal
     healthy {} {} none policy capacity linux ran
   exact ⟨session, _, installed, rfl, rfl, rfl, slot, ready⟩
 
@@ -2554,12 +2615,12 @@ theorem publicBootstrap_failed_releases (owned : RootBinding directory lock)
   have phase := bootstrapFailure_custody owned.root held removal effects create policy capacity linux failed
   have custody : match reached.state.activeEntry with
       | none => reached.child = .closed ∧ reached.childHeld = false
-      | some _ => reached.child = .poisoned .lock ∨ ∃ files cursor history,
-          reached.child = .active .lock files cursor history := by
+      | some _ => reached.childHeld = true ∧ (reached.child = .poisoned .lock ∨ ∃ files cursor history,
+          reached.child = .active .lock files cursor history) := by
     dsimp [reached]
     cases entry : after.1.activeEntry with
     | none => rw [entry] at phase; exact ⟨phase, rfl⟩
-    | some id => rw [entry] at phase; exact .inr phase
+    | some id => rw [entry] at phase; exact ⟨rfl, .inr phase⟩
   have released := appendRelease_releases policy close unlockError reached custody
   simp only [reached] at released
   rw [released]

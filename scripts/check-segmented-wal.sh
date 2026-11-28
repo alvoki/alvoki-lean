@@ -167,6 +167,7 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.appendFailure_childClose
 #check_axioms Model.publicAppendClose_releases
 #check_axioms Model.publicAppendClose_afterReported
+#check_axioms Model.publicNativeAppend_reportedClose
 #check_axioms Model.publicAppendClose_afterRejection
 #check_axioms Model.publicAppendClose_repeated
 #check_axioms Model.publicNativeAppend_rejected

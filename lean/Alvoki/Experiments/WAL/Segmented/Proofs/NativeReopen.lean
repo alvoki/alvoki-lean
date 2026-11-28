@@ -1568,7 +1568,12 @@ theorem installScopedModel_appendPhase (owned : RootBinding directory lock) (r :
       SingleFile.storedPhase store.activeChild =
         .active .lock (SingleFile.appendBindings session.control.policy)
           (t.disk.cursor store.activeId) (segmentHistory session.control.capacity store.activeId history) ∧
-      store.activeChild.recovered.batches = segmentHistory session.control.capacity store.activeId history := by
+      store.activeChild.recovered.batches = segmentHistory session.control.capacity store.activeId history ∧
+      ∃ (before : State) (childAfter : SingleFile.OpenImage),
+        SingleFile.openExistingModel (Native.segmentPath owned.root store.activeId)
+          session.control.policy (openReports before.step store.activeId)
+          {image := before.disk.segment store.activeId} = .ok (.ok store.activeChild) childAfter ∧
+        childAfter.held = true := by
   rw [installScopedModel_run] at installed
   cases ran : (reopenScopedModel owned.root r openReports closeError).run s with
   | error => rw [ran] at installed; cases installed
@@ -1587,7 +1592,7 @@ theorem installScopedModel_appendPhase (owned : RootBinding directory lock) (r :
         {image := before.disk.segment session.control.active} rfl childPrior.dirty childPrior.markers
       rw [opened] at child
       have phase := SingleFile.openedAppendPhase child
-      obtain ⟨_, _, _, _, _, _, _, _, permitted, _, childReady, _, _⟩ := child.2.2
+      obtain ⟨_, _, _, _, _, held, _, _, permitted, _, childReady, _, _⟩ := child.2.2
       have bounds : ∀ b ∈ ready.recovered.batches, b.length ≤ 32 := by
         intro b mem
         apply childPrior.dirty.bounded b
@@ -1621,7 +1626,7 @@ theorem installScopedModel_appendPhase (owned : RootBinding directory lock) (r :
       have same : ready.recovered.batches = suffix := by
         injection other with result
         exact congrArg Decoded.batches (Except.ok.inj result)
-      refine ⟨history, shape, layout, live, durable, rfl, rfl, ?_, same⟩
+      refine ⟨history, shape, layout, live, durable, rfl, rfl, ?_, same, before, childAfter, opened, held⟩
       simp only [phase, same, layout.active.position, suffix]
 
 /-- The append consumer uses the active reference installed by the same
