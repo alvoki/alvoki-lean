@@ -174,7 +174,7 @@ structure ChildAttempt (s : Store) (disk : W → Disk) (Q : W → Prop) (mem : C
     (id : Nat) (p : Policy) (w : W) where
   reports : OpenReports
   state : W → OpenImage → Prop
-  steps : OpenSteps (segmentPath s.root id) p reports state (mem.bound id)
+  steps : OpenSteps (segmentPath s.root id) p reports state (mem.bound id) w
   recovery : WorkerSteps state (mem.bound id) reports
   runtime : Runtime state
   cell : ∀ t ref phase, runtime.cell t ref phase → mem.cell t ref phase
@@ -189,7 +189,7 @@ theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q me
   let initial : OpenImage := {image := (disk w).segment id}
   let dir := segmentPath s.root id
   let reports := attempt.reports
-  have run := SingleFile.ConcreteRecovery.openExisting attempt.steps attempt.recovery attempt.runtime w initial
+  have run := SingleFile.ConcreteRecovery.openExisting attempt.steps attempt.recovery attempt.runtime initial
     attempt.boundaries
   change (match SingleFile.openExisting dir w, SingleFile.openExistingModel dir p reports initial with
     | .ok h t, .ok (.ok ready) u => ChildAt disk Q id (disk w) t u ∧
