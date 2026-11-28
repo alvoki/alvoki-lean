@@ -9,12 +9,15 @@ prefix=$(lean --print-prefix)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 export LEAN_PATH="$scratch${LEAN_PATH:+:$LEAN_PATH}"
+blob=Alvoki/Experiments/DurableBlob
 wal=Alvoki/Experiments/WAL
 seg="$wal/Segmented"
-mkdir -p "$scratch/$wal/Proofs" "$scratch/$seg/Proofs" "$scratch/Alvoki/Checks/Audit"
+mkdir -p "$scratch/$blob" "$scratch/$wal/Proofs" "$scratch/$seg/Proofs" "$scratch/Alvoki/Checks/Audit"
 lean -o "$scratch/$wal/Recovery.olean" -c "$scratch/recovery.c" "$wal/Recovery.lean"
 lean -o "$scratch/$wal/SingleFile.olean" -c "$scratch/single.c" "$wal/SingleFile.lean"
 lean -o "$scratch/$seg/Contract.olean" -c "$scratch/contract.c" "$seg/Contract.lean"
+lean -o "$scratch/$blob/Contract.olean" -c "$scratch/blob_contract.c" "$blob/Contract.lean"
+lean -o "$scratch/$blob/Protocol.olean" -c "$scratch/blob_protocol.c" "$blob/Protocol.lean"
 lean -o "$scratch/$seg/Protocol.olean" -c "$scratch/protocol.c" "$seg/Protocol.lean"
 lean -o "$scratch/$seg/ControlCodec.olean" -c "$scratch/control_codec.c" "$seg/ControlCodec.lean"
 lean -o "$scratch/$seg/Native.olean" -c "$scratch/native.c" "$seg/Native.lean"
@@ -25,6 +28,7 @@ leanchecker Alvoki.Experiments.WAL.Segmented.Native
 lean --run "$seg/Tests.lean"
 lean -c "$scratch/native_tests.c" "$seg/NativeTests.lean"
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" \
+  "$scratch/blob_contract.c" "$scratch/blob_protocol.c" \
   "$scratch/contract.c" "$scratch/protocol.c" "$scratch/control_codec.c" "$scratch/native.c" "$scratch/native_tests.c" \
   native/fsync.c native/read_dir_checked.c -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/native_tests"

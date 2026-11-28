@@ -128,14 +128,12 @@ descriptions. Native rotation and CONTROL
 publication remain segmented responsibilities.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
-For CONTROL, consider reusing DurableBlob's write, sync, rename and
-directory-barrier semantics with the existing control codec and the
-original writer used by PR #5. Check that the CONTROL projection of
-the WAL disk model admits DurableBlob's publication outcomes and that
-the root barrier also settles the successor's directory entry.
-Keep segment creation, prefix release and collection under the
-existing WAL invariants. Coordinate the adapter change with the L0
-branch when taking up that work.
+CONTROL uses the shared DurableBlob publication schedule to pass the
+original staged writer directly to fsync. The remaining producer proof
+must relate each native cut to the WAL disk model, including private stage
+failures and the root barrier that settles both CONTROL and child names.
+Reuse the existing WAL segment creation, prefix release and collection
+invariants. Coordinate changes to the adapter with the L0 consumer.
 
 [Native reopen proofs](Proofs/NativeReopen.lean) compose the single-file
 producer with the shared root operations. The root directory descriptor
