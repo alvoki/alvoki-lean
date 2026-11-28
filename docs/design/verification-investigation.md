@@ -13,7 +13,7 @@ Dit is een onderzoek naar een geserialiseerde, al geïnitialiseerde L0-store met
 | main | `39740bb014fd95f4e56dcf6e2e11313d8e7ecad1` | dezelfde revisie |
 | PR 5, L0 | `d0ff59fb220442c6d20655f669d30f24268a289d` | `5b2e9d30c55dcbffd8a773ff694a8dbf541e6b53` |
 | PR 26, segmented WAL | `a055139e99a37ea52a516c225de39c435dd39eb0` | `fb2572c16227673365b9bc4b5e49510f3e285f3a` |
-| Experiment op PR 5 | branch `investigation/read-boundary` | code `394be560709cb469b452883c043fa70679779315` |
+| Experiment op PR 5 | branch `investigation/read-boundary` | code `61592af59f27248d189c9934f07318b61f907547` |
 
 Het experiment gebruikt de nieuwe PR-5-stelling `nativeTableAt_reached`. PR 26 is apart onderzocht en gecontroleerd. Geen van beide componentbranches is aangepast. Het beknopte main-handoff beschrijft een oudere WAL-mijlpaal. Op de beoordeelde PR-26-revisie bestaan ook publieke append-, close- en bootstrapstellingen over de uitvoer van het geïnstalleerde model. Een gezamenlijke L0/WAL-kandidaat vergt nog een eigen integratiecontrole. [Main](https://github.com/alvoki/alvoki-lean/tree/39740bb014fd95f4e56dcf6e2e11313d8e7ecad1) · [L0](https://github.com/alvoki/alvoki-lean/tree/5b2e9d30c55dcbffd8a773ff694a8dbf541e6b53) · [WAL](https://github.com/alvoki/alvoki-lean/tree/fb2572c16227673365b9bc4b5e49510f3e285f3a)
 
@@ -35,17 +35,19 @@ De eigen architectuur veroorzaakt vooral werk waar men een al uitgevoerde callba
 `PublicReadInvestigation.onlineGet` kwantificeert over sleutel, geschiedenis, sessie, fasecel, WAL-handle, inode-type en fysieke projectie. Uit een door withOpen geassembleerde handle, een online fase, gehouden rootlock, `Installed`, een gerepresenteerde catalogus en primitivecontracten volgt voor **de expressie** `Native.get handle key start` de volgende postconditie. Hier is `I(t)` de conjunctie van dezelfde online fase met dezelfde WAL en sessie, een gehouden lock, `Installed session (physical t).selected history` en de catalogusrepresentatie op t.
 
 ```text
-.ok value t   ⇒ value = denote history key ∧ I(t)
-.error err t  ⇒ I(t)
+.ok value t   ⇒ value = denote history key ∧ physical t = physical start ∧ I(t)
+.error err t  ⇒ physical t = physical start ∧ I(t)
 ```
 
 De concrete wereld mag bij iedere syscall veranderen. De helper `publicGet` is geparametriseerd door het beschermde predicaat. `onlineGet` instantieert het met gelijkheid van de relevante projecties aan de ingang. De projectie bevat ook de logische selectie. Die is ghost state. Een fysieke interpretatie moet haar verbinden met de beheerde WAL-, manifest- en tabelresources. Gelijkheid op zo'n projectie is geschikt voor een exclusieve read-epoch. Ze is te sterk voor een toekomstige compactor die gelijktijdig niet-gepinde namen wijzigt. [Publiek bewijs en primitivevelden](../../lean/Alvoki/Experiments/L0/PublicReadInvestigation.lean)
 
 1. De private constructor `assembled` bindt root, callbacks en ref op één plaats. `get_atRoot` ontvouwt de daadwerkelijke dispatch en elimineert de onbereikbare append-, manifest- en create-velden. De read-only record met dummywaarden bestaat uitsluitend in het bewijs.
-2. `lower_bind`, `lower_tables` en `lower_get` bewijzen dat de projectie van dit echte `ExceptT String IO`-programma naar `EStateM String W` dezelfde continuaties en bereikte werelden gebruikt. Dit rechtvaardigt hergebruik van het bestaande algoritmische bewijs. Foutclassificatie mag in de waardeprojectie vervallen. De publieke adapter behoudt de oorspronkelijke twee foutkanalen.
+2. `lower_bind`, `lower_tables` en `lower_get` bewijzen dat de projectie van dit echte `ExceptT String IO`-programma naar `EStateM String W` dezelfde continuaties en bereikte werelden gebruikt. Dit rechtvaardigt hergebruik van het bestaande algoritmische bewijs. Foutclassificatie mag in de waardeprojectie vervallen. De publieke adapter geeft een buitenste IO.Error door en zet een interne string om in IO.userError. De caller krijgt één IO.Error-kanaal.
 3. `nativeTableAt_reached` onderscheidt stat-fout, afgewezen metadata, open-fout en uitgevoerde actie. `table` verkrijgt de binding op de toestand na stat en gebruikt uitsluitend de descriptor die in deze uitvoering terugkwam. Heeft open geen handle opgeleverd, dan loopt de typed action nooit.
 4. De bestaande SSTable-simulatie kreeg één extra parameter, een predicaat op de bereikte wereld. `ReadPost` vereist op een fout het frame en op succes het frame plus de waarde-eigenschap. De bindregel geeft het frame door aan alleen de uitgevoerde continuatie. Open, footer, root, leaf, data, zoeklus en codec gebruiken dezelfde simulatie. De oorspronkelijke publieke success-only stellingen blijven beschikbaar door het frame met True te instantiëren. [SSTable-simulatie](../../lean/Alvoki/Experiments/SSTable/Proofs/UnifiedReadSafety.lean) · [L0-typed lookup](../../lean/Alvoki/Experiments/L0/TableProofs.lean)
 5. `firstSizeError` toetst iets wat de algemene veiligheidspostconditie alleen niet kan uitsluiten. Als de memtable mist, de eerste tabel regulier is en succesvol opent, en size op die descriptor met e faalt in wereld t, dan is het **exacte** publieke resultaat `.error (IO.userError e) t`, voor elke resterende tabelrij. Een implementatie die de fout opvangt en verder zoekt naar een oude waarde voldoet daar niet aan.
+
+De onafhankelijke review vond dat een eerste versie de bereikte footprintgelijkheid alleen intern gebruikte. De geëxporteerde postconditie bevat nu die gelijkheid op beide uitkomsten. In `onlineGetTwice` vangt de caller beide gerapporteerde resultaten op. De tweede echte get begint op de wereld die de eerste heeft achtergelaten, ook bij een eerste fout. Zij consumeert dezelfde primitivecontracten en de bereikte catalogus zonder een nieuwe aanname over de tussenstand.
 
 ### Audit van de ondergrens
 
