@@ -373,4 +373,99 @@ theorem checkedTypedLookup_success (safety : ReadSafety source image)
   rw [ran] at post
   exact post.2
 
+private theorem leaf_sim (same : SameHandle a b source image)
+    (h : ScopedRead P source image) (parent : Ref) :
+    Sim (P := P) (a.readLeaf parent) (b.readLeaf parent) Eq := by
+  obtain ⟨_, layout, _, crc, left, right⟩ := same
+  unfold Handle.readLeaf
+  rw [left, right, crc, layout]
+  apply Sim.bind (packet_sim h)
+  intro raw expected equal
+  subst expected
+  apply Sim.bind (Sim.decode _)
+  intro refs expected equal
+  subst expected
+  apply Sim.bind (Sim.decode _)
+  intro _ _ _
+  split
+  · exact Sim.pure rfl
+  · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
+
+private theorem data_sim (same : SameHandle a b source image)
+    (h : ScopedRead P source image) (ref : Ref) :
+    Sim (P := P) (a.readData ref) (b.readData ref) Eq := by
+  obtain ⟨_, layout, _, crc, left, right⟩ := same
+  unfold Handle.readData
+  rw [left, right, crc, layout]
+  apply Sim.bind (packet_sim h)
+  intro raw expected equal
+  subst expected
+  apply Sim.bind (Sim.decode _)
+  intro data expected equal
+  subst expected
+  apply Sim.bind (Sim.decode _)
+  intro row expected equal
+  subst expected
+  split
+  · exact Sim.pure rfl
+  · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
+
+private theorem next_sim (same : SameHandle a b source image)
+    (h : ScopedRead P source image) (index : Nat) :
+    Sim (P := P) (a.next index) (b.next index) Eq := by
+  unfold Handle.next
+  rw [same.1, same.2.2.1]
+  split
+  · exact Sim.pure rfl
+  · dsimp only
+    split
+    · apply Sim.bind (leaf_sim same h _)
+      intro refs expected equal
+      subst expected
+      split
+      · apply Sim.bind (data_sim same h _)
+        intro data expected equal
+        subst expected
+        apply Sim.bind (Sim.decode _)
+        intro row expected equal
+        subst expected
+        exact Sim.pure rfl
+      · exact Sim.throw
+    · exact Sim.throw
+
+/-- The table returned by the actual checked open has a fallible indexed
+cursor. A successful call returns the exact row or logical EOF. All returned
+outcomes preserve the caller's chosen frame, including a failed packet
+read or decode. The caller may strengthen the frame during later use. -/
+theorem Image.checkedOpenTable_next_scoped
+    (built : Image crc layout rows image) (opening : ScopedRead P source image) :
+    ReadPost P (fun table : Table Native =>
+      ∀ Q, ScopedRead Q source image →
+        ∀ index, ReadPost Q (· = Contents.next rows index) (table.next index))
+      (openTableChecked source crc layout.tableId) := by
+  have served : (ReadSafety.reference image).Serves image := ⟨rfl, fun _ _ _ _ => rfl⟩
+  obtain ⟨reference, opened, observed⟩ := built.open_observed served
+  intro start frame
+  have handoff := open_sim (crc := crc) (tableId := layout.tableId) opening start frame
+  cases ran : openChecked source crc layout.tableId start with
+  | error error reached =>
+    simpa [openTableChecked, Bind.bind, instMonadEIO._aux_13, EST.bind, ran] using handoff
+  | ok handle reached =>
+    rw [ran] at handoff
+    obtain ⟨kept, other, openedOther, same⟩ := handoff
+    rw [opened] at openedOther
+    cases openedOther
+    simp only [openTableChecked, Bind.bind, instMonadEIO._aux_13, EST.bind, ran]
+    refine ⟨kept, ?_⟩
+    intro Q reads index before valid
+    have cursor := next_sim same reads index before valid
+    simp only [Handle.table]
+    rw [reference.next_observed observed] at cursor
+    cases pulled : handle.next index before with
+    | error error after => simpa only [pulled] using cursor
+    | ok result after =>
+      rw [pulled] at cursor
+      obtain ⟨held, value, exactResult, rfl⟩ := cursor
+      exact ⟨held, (EStateM.Result.ok.inj exactResult).1.symm⟩
+
 end ImmutableSSTable.Unified
