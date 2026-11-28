@@ -127,34 +127,36 @@ theorem table_descriptor_acquired (report : stat initial = .ok metadata checked)
 
 end Scope
 
-/-- After acquiring the actual descriptor, the table check succeeds once
-its source supplies the exact healthy builder image. -/
-theorem native_table_action_check (handle : IO.FS.Handle) {id : UInt64} {rows : Rows}
-    (built : ImmutableSSTable.Unified.Image Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) bytes)
-    (serves : ImmutableSSTable.nativeReadPrimitives.ReadsExactly handle bytes) :
-    nativeTableAction handle id (fun _ => pure ()) = pure () := by
-  unfold nativeTableAction
-  rw [native_table_check handle built serves]
-  rfl
+/-- The scope executes the continuation on the handle returned by open.
+The runtime drops the last reference when the continuation returns. The
+equation covers both continuation outcomes and keeps the reached world. -/
+theorem nativeTableAt_afterStat {dir : System.FilePath} {id : UInt64}
+    {use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α}
+    {start checked : Void IO.RealWorld}
+    (stat : (nativeTableStat (tablePath dir id)).run start = .ok (.ok metadata) checked)
+    (regular : isTableFile metadata = true) :
+    (nativeTableAt dir id use).run start =
+      match IO.FS.Handle.mk (tablePath dir id) .read checked with
+      | .ok handle entered => (nativeTableAction handle id use).run entered
+      | .error error reached => .error error reached := by
+  let resume (md : IO.FS.Metadata) : ExceptT String IO α :=
+    if isTableFile md then nativeTableReadScope (tablePath dir id)
+      (fun held => nativeTableAction held id use)
+    else throw "expected a singly linked regular SSTable"
+  change ((nativeTableStat (tablePath dir id) >>= resume).run) start = _
+  rw [ExceptT.run_bind]
+  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat]
+  simp [resume, regular, nativeTableReadScope, IO.FS.withFile, ExceptT.mk, ExceptT.run,
+    Bind.bind, instMonadEIO._aux_13, EST.bind]
+  cases opened : IO.FS.Handle.mk (tablePath dir id) .read checked <;> simp [opened]
 
-
-theorem native_table_descriptor_checked {id : UInt64} {rows : Rows}
-    {stat : ExceptT String IO IO.FS.Metadata}
-    {withRead : (IO.FS.Handle → ExceptT String IO Unit) → ExceptT String IO Unit}
-    (report : stat = pure metadata) (valid : isTableFile metadata = true)
-    (scope : withRead (fun handle => nativeTableAction handle id (fun _ => pure ())) =
-      nativeTableAction acquired id (fun _ => pure ()))
-    (built : ImmutableSSTable.Unified.Image Alvoki.CRC32C.extend (tableLayout id)
-      (rows.map (ImmutableSSTable.Entry.encode keyCodec mutationCodec)) bytes)
-    (serves : ImmutableSSTable.nativeReadPrimitives.ReadsExactly acquired bytes) :
-    withTableDescriptor stat withRead (fun handle => nativeTableAction handle id (fun _ => pure ())) =
-      pure () := by
-  unfold withTableDescriptor
-  rw [report]
-  change (if isTableFile metadata then
-    withRead (fun handle => nativeTableAction handle id (fun _ => pure ()))
-    else throw "expected a singly linked regular SSTable") = pure ()
-  simp only [valid, ite_eq_left, scope, native_table_action_check acquired built serves]
+theorem nativeTableAt_acquired {dir : System.FilePath} {id : UInt64}
+    {use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α}
+    {start checked entered : Void IO.RealWorld}
+    (stat : (nativeTableStat (tablePath dir id)).run start = .ok (.ok metadata) checked)
+    (regular : isTableFile metadata = true)
+    (acquired : IO.FS.Handle.mk (tablePath dir id) .read checked = .ok handle entered) :
+    (nativeTableAt dir id use).run start = (nativeTableAction handle id use).run entered := by
+  rw [nativeTableAt_afterStat stat regular, acquired]
 
 end ExperimentalL0

@@ -79,38 +79,45 @@ theorem TableNamespace.lookup {id : UInt64} {ns : TableNamespace σ}
   obtain ⟨inode, bytes, name, content, image⟩ := bound
   exact native_table_lookup handle image (readEffects inode bytes (selected.trans name) content) key
 
-/-- The selected descriptor serves the immutable image. Use the stat
-and scoped action reports at the worlds actually reached, including the
-world returned after the descriptor scope exits. -/
-theorem TableNamespace.scopedLookup {id : UInt64} {ns : TableNamespace σ}
-    (bound : ns.Bound s id rows) (handle : IO.FS.Handle) (key : UInt64)
-    {start checked entered acted done : Void IO.RealWorld}
+/-- The healthy check uses the same catalog binding and scoped acquire
+as lookup. Its typed continuation returns no descriptor. -/
+theorem TableNamespace.scopedCheck {id : UInt64} {ns : TableNamespace σ}
+    (bound : ns.Bound s id rows) (handle : IO.FS.Handle)
+    {start checked entered : Void IO.RealWorld}
     (stat : (nativeTableStat (tablePath ns.directory id)).run start = .ok (.ok metadata) checked)
     (regular : isTableFile metadata = true)
-    (action : (nativeTableAction handle id (·.lookup key)).run entered = .ok (.ok value) acted)
-    (scope : (nativeTableReadScope (tablePath ns.directory id)
-        (fun held => nativeTableAction held id (·.lookup key))).run checked = .ok (.ok value) done)
+    (acquired : IO.FS.Handle.mk (tablePath ns.directory id) .read checked = .ok handle entered)
+    (inodeAt : IO.FS.Handle → Option ns.inode)
+    (picked : inodeAt handle = ns.names s (tablePath ns.directory id))
+    (reads : ∀ identity bytes, inodeAt handle = some identity → ns.contents s identity = some bytes →
+      nativeReadPrimitives.ReadsExactly handle bytes) :
+    (nativeTableAt ns.directory id (fun _ => pure ())).run start = .ok (.ok ()) entered := by
+  rw [nativeTableAt_acquired stat regular acquired]
+  obtain ⟨inode, bytes, name, content, image⟩ := bound
+  have checked := native_table_check handle image (reads inode bytes (picked.trans name) content)
+  unfold nativeTableAction
+  rw [checked]
+  rfl
+
+/-- Stat and acquire select the durable name. The executable scope passes
+the acquired handle to the checked SSTable reader, which produces the
+lookup result for this inode. -/
+theorem TableNamespace.scopedLookup {id : UInt64} {ns : TableNamespace σ}
+    (bound : ns.Bound s id rows) (handle : IO.FS.Handle) (key : UInt64)
+    {start checked entered : Void IO.RealWorld}
+    (stat : (nativeTableStat (tablePath ns.directory id)).run start = .ok (.ok metadata) checked)
+    (regular : isTableFile metadata = true)
+    (acquired : IO.FS.Handle.mk (tablePath ns.directory id) .read checked = .ok handle entered)
     (inodeAt : IO.FS.Handle → Option ns.inode)
     (picked : inodeAt handle = ns.names s (tablePath ns.directory id))
     (reads : ∀ identity bytes, inodeAt handle = some identity → ns.contents s identity = some bytes →
       nativeReadPrimitives.ReadsExactly handle bytes) :
     (nativeTableAt ns.directory id (·.lookup key)).run start =
-      .ok (.ok (lookupRows rows key)) done := by
+      .ok (.ok (lookupRows rows key)) entered := by
+  rw [nativeTableAt_acquired stat regular acquired]
   have read := ns.lookup bound handle inodeAt picked reads key
-  have actual : nativeTableAction handle id (·.lookup key) = pure (lookupRows rows key) := by
-    unfold nativeTableAction
-    rw [read]
-    rfl
-  rw [actual] at action
-  change EST.Out.ok (Except.ok (lookupRows rows key)) entered = _ at action
-  have same := Except.ok.inj (EST.Out.ok.inj action).1
-  let resume (md : IO.FS.Metadata) : ExceptT String IO (Option Mutation) :=
-    if isTableFile md then nativeTableReadScope (tablePath ns.directory id)
-      (fun held => nativeTableAction held id (·.lookup key))
-    else throw "expected a singly linked regular SSTable"
-  change ((nativeTableStat (tablePath ns.directory id) >>= resume).run) start = _
-  rw [ExceptT.run_bind]
-  simp only [Bind.bind, instMonadEIO._aux_13, EST.bind, stat]
-  simpa [resume, regular, same] using scope
+  unfold nativeTableAction
+  rw [read]
+  rfl
 
 end ExperimentalL0

@@ -143,19 +143,14 @@ frames. The caller supplies the invariant at the reached entry state. Recovery a
 handoff with `buildFileWith_open_represents`. Checked open validates metadata.
 Row validation occurs on demand.
 
-Native check and lookup call the shared `nativeTableAt` adapter. The
-lookup proof consumes the reached-world stat and scoped action reports, and reads
-on the selected inode to derive this exact operation's result. The callback
-interpretation still supplies the link from its reported result to that
-native operation.
-
-The native boundary still supplies correspondence from IO to the shared
-writer and reader schedules, including allocation, cursor effects, the
-reached file and directory barriers, path-to-inode selection and immutability
-during the read scope. `fstat` and `pread` report effects on that description.
-The scope holds the descriptor until the reader returns, and closes it on
-success or error. WAL and manifest namespace frames stay separate from
-the table directory.
+Native check and lookup call the shared `nativeTableAt` adapter.
+`nativeTableAt_afterStat` unfolds the executable scope. It propagates
+the reached open error, or passes the exact handle from `Handle.mk`
+to `nativeTableAction` and forwards its result. No separate action or
+scope result is needed. The SSTable producer supplies the typed result
+from the immutable image on that inode. The runtime closes the
+descriptor when its last reference drops. Check and lookup return only
+unit or a mutation observation.
 
 The lifecycle proof keeps the namespace on the storage carrier. Changing
 phase for publication or cleanup leaves the catalog projection unchanged.
@@ -236,13 +231,18 @@ The filesystem supplies the survivor and the effects of failed barriers.
 The client or runtime supplies reply delivery and process interruption
 observations.
 
-The interpretation needs the active image projection, installation of the
-reached image and frames for the WAL and table namespaces. The reports
-describe reached primitive outcomes, including whether a failed sync took
-effect. Relating the actual Linux IO and filesystem state to those reports
-and namespace frames remains the runtime boundary. The remaining native handoffs include the correspondence between the
-Linux callbacks and the reached primitive reports, segmented append and
-CONTROL effects, and the SSTable scoped-reader continuation.
+## Remaining premises
+
+| Premise | Owner and producer | Consumer |
+| --- | --- | --- |
+| Stat, acquisition of the inode selected by the protected name, exact positional reads during its immutable lifetime | Filesystem and runtime effects at `nativeTableStat`, `Handle.mk` and the SSTable read primitives | `TableNamespace.scopedLookup` and `scopedCheck` |
+| Descriptor drop and outer lock release | Runtime last-reference behavior and unlock effects. L0 must prove the outer cleanup calls release on the reached ownership state | `Lifecycle.recovery_offline` and the outer native scope |
+| Reached callback result corresponds to the executed native lookup | L0 native callback interpreter must connect the reached IO report to the logical carrier | `CallbackEvidence.lookupFromCatalog` |
+| Durable catalog insertion and preservation of unrelated physical bindings | Filesystem create, file sync and directory sync effects. L0 must represent the reached writer and prove local table, manifest and WAL namespace frames | `TableCreationEvidence.catalogInserted`, `catalogAfter` and the lifecycle postconditions |
+| Healthy manifest and table checks in the reached integrated state | L0 must connect the manifest and SSTable producers to the callback interpretation. `scopedCheck` now supplies a healthy native table result under the primitive reports | `Lifecycle.recovery_progress` |
+| Restart selection, reply delivery and loss | Filesystem survivor choice and runtime/client observations. L0 must connect the resulting image and observations to the interpreter | `recoverReachedFlush` and `Execution.Run.flushObserved` |
+| Repeated public operation steps on actual native states | L0 must compose the lifecycle theorems with the concrete operation dispatch and effect interpretation | `Execution.Run.refines` |
+| Ready view, recoverability after restart and segmented append | WAL producers for append, rotation, CONTROL and uncertainty selection | `WalRecovery.Interpretation` and the append law |
 
 ## Process interruption checks
 

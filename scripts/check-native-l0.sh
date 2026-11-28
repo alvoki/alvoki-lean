@@ -112,7 +112,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.get_online
 #check_axioms Lifecycle.get_online_error
 #check_axioms native_table_check
-#check_axioms native_table_descriptor_checked
+#check_axioms nativeTableAt_afterStat
+#check_axioms nativeTableAt_acquired
 #check_axioms table_descriptor_acquired
 #check_axioms table_descriptor_stat_error
 #check_axioms table_descriptor_rejected
@@ -138,6 +139,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.reopenAfterRestart
 #check_axioms TableNamespace.lookup
 #check_axioms TableNamespace.scopedLookup
+#check_axioms TableNamespace.scopedCheck
 #check_axioms CallbackEvidence.lookupFromCatalog
 #check_axioms TableNamespace.Represents.frame
 #check_axioms recoverKeepsCatalog

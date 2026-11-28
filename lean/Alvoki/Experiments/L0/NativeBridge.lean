@@ -224,13 +224,11 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (∀ identity bytes, inodeAt handle = some identity →
             namespaceState.contents s identity = some bytes →
             nativeReadPrimitives.ReadsExactly handle bytes) ∧
-          ∃ (start checked entered acted done : Void IO.RealWorld) (metadata : IO.FS.Metadata) (value : Option Mutation),
+          ∃ (start checked entered done : Void IO.RealWorld) (metadata : IO.FS.Metadata),
             (nativeTableStat (tablePath namespaceState.directory id)).run start =
               .ok (.ok metadata) checked ∧ isTableFile metadata = true ∧
-            (nativeTableAction handle id (·.lookup key)).run entered = .ok (.ok value) acted ∧
-            (nativeTableReadScope (tablePath namespaceState.directory id)
-              (fun held => nativeTableAction held id (·.lookup key))).run checked =
-                .ok (.ok value) done ∧
+            IO.FS.Handle.mk (tablePath namespaceState.directory id) .read checked =
+              .ok handle entered ∧
             (nativeTableAt namespaceState.directory id (·.lookup key)).run start =
               .ok (.ok result) done
     | .error _ after => selected after = selected s ∧ namespaceState.Keeps s after (selected s).tables
@@ -252,9 +250,9 @@ theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
     | ok value after =>
       rw [ran] at read
       obtain ⟨frame, keeps, handle, inodeAt, picked, primitives,
-        start, checked, entered, acted, done, metadata, value, stat, regular, action, scope, returned⟩ := read
+        start, checked, entered, done, metadata, stat, regular, acquired, returned⟩ := read
       have expected := TableNamespace.scopedLookup (catalog tableId rows bound) handle key
-        stat regular action scope inodeAt picked primitives
+        stat regular acquired inodeAt picked primitives
       have same := Except.ok.inj (EST.Out.ok.inj (returned.symm.trans expected)).1
       exact ⟨same, frame, frame.symm ▸ catalog.frame keeps⟩
     | error error after =>
