@@ -90,18 +90,21 @@ structure WalRoot (dir : FilePath) (w : W) where
   openLock : IO.FS.Handle.mk (canonical / "lock") .append statWorld = .ok lock lockWorld
   held : lock.tryLock true lockWorld = .ok true heldWorld
 
-open WalRecoverySlice.Segmented.Native (ChildMemory)
+open WalRecoverySlice.Segmented.Native (ChildMemory Registration Origin LocksFrom)
 abbrev storeEntry (p : WalRoot dir w) := (IO.mkRef (none : Option (Nat × WalRecoverySlice.SingleFile.Handle)) p.heldWorld).state
 
 theorem WalRoot.open (p : WalRoot dir w) (heap : PhaseMemory)
     (worker : ∀ s, WalRecoverySlice.Segmented.Native.acquireStore dir w = .ok s (storeEntry p) →
       s.root = p.canonical → s.directory = p.directory → s.lock = p.lock →
       WalRecoverySlice.Segmented.Native.HealthyEmpty.Worker s disk Q mem (storeEntry p)) :
-    ∃ wal t, WalRecoverySlice.Segmented.Native.openExisting dir w = .ok wal t ∧
-      heap.Ready wal WalRecoverySlice.Segmented.Native.HealthyEmpty.session t := by
+    ∃ wal t reg, WalRecoverySlice.Segmented.Native.openExisting dir w = .ok wal t ∧
+      reg.session = WalRecoverySlice.Segmented.Native.HealthyEmpty.session ∧
+      Origin dir wal reg w t ∧ heap.Registered wal reg t ∧ LocksFrom reg := by
   obtain ⟨s, grant, root, directory, lock, _⟩ :=
     HealthyRootAcquisition.walStore dir p.canonical p.resolve p.openDir p.stat p.valid p.openLock p.held
-  exact (worker s grant root directory lock).openExisting heap grant
+  apply (worker s grant root directory lock).openExisting heap grant
+  rw [root, lock]
+  exact ⟨p.statWorld, p.lockWorld, p.heldWorld, p.openLock, p.held⟩
 
 /-- Positive reports for root validation and the exclusive L0 lock. -/
 structure Entry (path root : FilePath) (w : W) where
@@ -145,13 +148,13 @@ theorem Entry.reached (p : Entry path root w) (use : Native.Handle → IO α) :
   simpa only [r, p.openLock, p.exclusive, Entry.fresh] using grant
 
 abbrev specSession := WalRecoverySlice.Segmented.Native.HealthyEmpty.session
-abbrev ready (heap : PhaseMemory) (wal : Wal) := heap.Ready wal specSession
+abbrev registered (heap : PhaseMemory) (wal : Wal) := heap.Registered wal
 
 /-- Frame a ready child through this specific read of a distinct L0 ref. -/
-theorem readFrame (heap : PhaseMemory) (ref : Ref) (p : ready heap wal w) :
-    ready heap wal ((ref.get : BaseIO _) w).state := by
-  obtain ⟨s, c, distinct, parent, slot⟩ := p
-  exact ⟨s, c, distinct, heap.readFrame ref parent, heap.readFrame ref slot⟩
+theorem readFrame (heap : PhaseMemory) (ref : Ref) (p : registered heap wal reg w) :
+    registered heap wal reg ((ref.get : BaseIO _) w).state := by
+  obtain ⟨distinct, parent, slot⟩ := p
+  exact ⟨distinct, heap.readFrame ref parent, heap.readFrame ref slot⟩
 
 def attached (ref : Ref) (wal : Wal) (w : W) := ((ref.swap (.recovering wal) : BaseIO _) w).state
 def scanned (ref : Ref) (wal : Wal) (w : W) := WalRecoverySlice.Segmented.Native.scanWorld wal (attached ref wal w)
@@ -165,21 +168,23 @@ def offline (ref : Ref) (wal : Wal) (w : W) :=
 
 /-- All reports apply to this L0 cell at the reached read/swap, starting
 from the concrete successful WAL installation. -/
-structure RefOps (heap : PhaseMemory) (ref : Ref) (wal : Wal) (w : W) : Prop where
-  attachKeeps : ready heap wal w → ready heap wal (attached ref wal w)
+structure RefOps (heap : PhaseMemory) (ref : Ref) (wal : Wal) (reg : Registration) (w : W) : Prop where
+  attachKeeps : registered heap wal reg w → registered heap wal reg (attached ref wal w)
   publishRead : (phaseRead ref (scanned ref wal w)).val = .recovering wal
-  publishKeeps : ready heap wal (phaseRead ref (scanned ref wal w)).state → ready heap wal (online ref wal w)
+  publishKeeps : registered heap wal reg (phaseRead ref (scanned ref wal w)).state → registered heap wal reg (online ref wal w)
   first : (firstRead ref wal w).val = .online wal empty
   second : (secondRead ref wal w).val = .online wal empty
   closeSwap : (offline ref wal w).val = .online wal empty
-  closeKeeps : ready heap wal (secondRead ref wal w).state → ready heap wal (offline ref wal w).state
+  closeKeeps : registered heap wal reg (secondRead ref wal w).state → registered heap wal reg (offline ref wal w).state
 
-theorem RefOps.readyToClose (ops : RefOps heap ref wal w) (installed : ready heap wal w) :
-    ready heap wal (offline ref wal w).state := by
-  have atScan := (WalRecoverySlice.Segmented.Native.scan_ready_world heap (ops.attachKeeps installed)).2
+theorem RefOps.readyToClose (ops : RefOps heap ref wal reg w) (installed : registered heap wal reg w) :
+    registered heap wal reg (offline ref wal w).state := by
+  obtain ⟨distinct, phase, slot⟩ := ops.attachKeeps installed
+  have atScan : registered heap wal reg (scanned ref wal w) :=
+    ⟨distinct, heap.unlock _ (heap.readFrame _ (heap.lock _ phase)), heap.unlock _ (heap.readFrame _ (heap.lock _ slot))⟩
   exact ops.closeKeeps (readFrame heap ref (readFrame heap ref (ops.publishKeeps (readFrame heap ref atScan))))
 
-theorem RefOps.use (p : RefOps heap ref wal w) (binding : Native.Handle.AtRoot h root ref) (first second : UInt64) :
+theorem RefOps.use (p : RefOps heap ref wal reg w) (binding : Native.Handle.AtRoot h root ref) (first second : UInt64) :
     (readMany h [first, second] : IO (List Reply)) (online ref wal w) =
       .ok [.ok none, .ok none] (secondRead ref wal w).state := by
   have a := NativeScope.read_io ref (online ref wal w)
@@ -194,7 +199,7 @@ theorem RefOps.use (p : RefOps heap ref wal w) (binding : Native.Handle.AtRoot h
   rfl
 
 
-private theorem scopeRun {lock : IO.FS.Handle} (p : RefOps heap ref wal w) (binding : Native.Handle.AtRoot h root ref)
+private theorem scopeRun {lock : IO.FS.Handle} (p : RefOps heap ref wal reg w) (binding : Native.Handle.AtRoot h root ref)
     (recovered : Native.recoverAt root ref start = .ok empty (scanned ref wal w))
     (closed : WalRecoverySlice.Segmented.Native.close wal (offline ref wal w).state = .ok () after)
     (unlocked : lock.unlock after = .ok () stop) (first second : UInt64) :
@@ -249,11 +254,11 @@ theorem withOpen {physical : W → Footprint inode} {Q : W → Prop}
     (worker : ∀ s, WalRecoverySlice.Segmented.Native.acquireStore (root / "wal") u = .ok s (storeEntry grant) →
       s.root = grant.canonical → s.directory = grant.directory → s.lock = grant.lock →
       WalRecoverySlice.Segmented.Native.HealthyEmpty.Worker s (fun w => (physical w).disk) Q mem (storeEntry grant))
-    (refs : ∀ wal v, WalRecoverySlice.Segmented.Native.openExisting (root / "wal") u = .ok wal v →
-      ready heap wal v → RefOps heap p.fresh.val wal v)
-    (cleanup : ∀ wal v, WalRecoverySlice.Segmented.Native.openExisting (root / "wal") u = .ok wal v →
-      ready heap wal (offline p.fresh.val wal v).state →
-      HealthyRootAcquisition.Unlocks heap wal specSession (offline p.fresh.val wal v).state)
+    (refs : ∀ wal v reg, Origin (root / "wal") wal reg u v → LocksFrom reg →
+      registered heap wal reg v → RefOps heap p.fresh.val wal reg v)
+    (cleanup : ∀ wal v reg, Origin (root / "wal") wal reg u v → LocksFrom reg →
+      registered heap wal reg (offline p.fresh.val wal v).state →
+      HealthyRootAcquisition.Unlocks wal reg (offline p.fresh.val wal v).state)
     (unlock : ∀ wal v endWal, WalRecoverySlice.Segmented.Native.openExisting (root / "wal") u = .ok wal v →
       WalRecoverySlice.Segmented.Native.close wal (offline p.fresh.val wal v).state = .ok () endWal →
       ∃ stop, p.lock.unlock endWal = .ok () stop)
@@ -263,11 +268,11 @@ theorem withOpen {physical : W → Footprint inode} {Q : W → Prop}
       WithOpenReads.Finished physical root image life events [first, second] [.ok none, .ok none] stop := by
   let use := fun h => (readMany h [first, second] : IO (List Reply))
   obtain ⟨h, binding, outer⟩ := p.reached use
-  obtain ⟨wal, v, opened, held⟩ := grant.open heap worker
-  let ops := refs wal v opened held
-  have recovered := recover manifest p.fresh.val heap opening opened (ops.attachKeeps held)
+  obtain ⟨wal, v, reg, opened, sessionEq, origin, held, locks⟩ := grant.open heap worker
+  let ops := refs wal v reg origin locks held
+  have recovered := recover manifest p.fresh.val heap opening opened (sessionEq ▸ (ops.attachKeeps held).ready)
   have kept := ops.readyToClose held
-  obtain ⟨endWal, ended⟩ := HealthyRootAcquisition.walClose kept (cleanup wal v opened kept)
+  obtain ⟨endWal, ended⟩ := HealthyRootAcquisition.walClose kept (cleanup wal v reg origin locks kept)
   obtain ⟨stop, unlocked⟩ := unlock wal v endWal opened ended
   have completed := outer.trans (scopeRun ops binding recovered ended unlocked first second)
   refine ⟨stop, completed, ?_⟩

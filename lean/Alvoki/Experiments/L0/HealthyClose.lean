@@ -7,11 +7,11 @@ open NativeScope WalRecoverySlice
 /-- Healthy reports for the actual input of close. The registered child's
 phase read under its mutex returns a live or poisoned description. Each
 descriptor unlock that is actually issued reports success. -/
-structure Unlocks (heap : Segmented.Native.PhaseMemory) (wal : Segmented.Native.Handle)
-    (session : Segmented.Session) (w : W) : Prop where
-  live : ∀ h u, Segmented.Native.CloseChildAt heap wal session w h u →
-    ∀ ref mutex, h.Binds ref mutex → ((ref.get : BaseIO _) (mutex.lock u).state).val ≠ .closed
-  unlock : ∀ fd t, Segmented.Native.CloseSites NativeCleanup.ChildIssued heap wal session w fd t →
+structure Unlocks (wal : Segmented.Native.Handle)
+    (reg : Segmented.Native.Registration) (w : W) : Prop where
+  live : ∀ ref mutex, reg.child.Binds ref mutex →
+    ((ref.get : BaseIO _) (mutex.lock (Segmented.Native.detachedWorld wal reg w)).state).val ≠ .closed
+  unlock : ∀ fd t, Segmented.Native.CloseSites NativeCleanup.ChildIssued wal reg w fd t →
     ∃ end_, fd.unlock t = .ok () end_
 
 private theorem childClose (h : SingleFile.Handle)
@@ -36,27 +36,21 @@ private theorem childClose (h : SingleFile.Handle)
     simp only [ran]
     exact ⟨_, rfl⟩
 
-private theorem finishClose (healthy : Unlocks heap wal session w) {mutex : Std.BaseMutex}
-    (entered : Segmented.Native.CloseChildAt heap wal session w child start)
-    (childSite : ∀ fd t, NativeCleanup.ChildIssued child start fd t →
-      Segmented.Native.CloseSites NativeCleanup.ChildIssued heap wal session w fd t)
-    (storeSite : Segmented.Native.CloseSites NativeCleanup.ChildIssued heap wal session w
-      rootLock ((SingleFile.close child).toBaseIO start).state) :
-    ∃ t, Segmented.Native.closeResult child rootLock mutex start = .ok () t := by
-  obtain ⟨after, closed⟩ := childClose child (healthy.live child start entered)
-    (fun fd t site => healthy.unlock fd t (childSite fd t site))
-  obtain ⟨end_, reset⟩ := healthy.unlock _ _ (by simpa only [EIO.toBaseIO, closed] using storeSite)
-  exact ⟨(mutex.unlock end_).state, by simp only [Segmented.Native.closeResult, closed, reset]⟩
-
-/-- A healthy close follows the registered slot down to its concrete
-single-file descriptor before releasing the segmented directory lock. -/
-theorem walClose (ready : heap.Ready wal session w) (healthy : Unlocks heap wal session w) :
+/-- A healthy close uses precisely the registration installed by the WAL
+open, from taking its active child through the store lock unlock. -/
+theorem walClose {heap : Segmented.Native.PhaseMemory} {reg : Segmented.Native.Registration}
+    (held : heap.Registered wal reg w) (healthy : Unlocks wal reg w) :
     ∃ t, Segmented.Native.close wal w = .ok () t := by
-  obtain ⟨store, child, phase, slot, _, _, ran⟩ := Segmented.Native.close_ready_releases heap ready
+  obtain ⟨_, _, ran⟩ := Segmented.Native.close_registered heap held
   rw [ran]
-  apply finishClose healthy
-  · exact ⟨store, phase, slot, rfl⟩
-  · exact fun fd t site => ⟨store, child, phase, slot, .inl site⟩
-  · exact ⟨store, child, phase, slot, .inr ⟨rfl, rfl⟩⟩
+  obtain ⟨after, closed⟩ := childClose reg.child
+    healthy.live
+    (fun fd t site => healthy.unlock fd t (.inl site))
+  have storeSite := healthy.unlock reg.store.lock _ (.inr ⟨rfl, rfl⟩)
+  simp only [EIO.toBaseIO, closed] at storeSite
+  obtain ⟨end_, reset⟩ := storeSite
+  dsimp only [Segmented.Native.detachedWorld] at closed reset
+  simp only [Segmented.Native.closeResult, closed, reset]
+  exact ⟨_, rfl⟩
 
 end ExperimentalL0.HealthyRootAcquisition

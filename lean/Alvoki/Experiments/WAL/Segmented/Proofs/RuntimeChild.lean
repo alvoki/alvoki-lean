@@ -168,11 +168,11 @@ def ChildMemory.Owns (mem : ChildMemory disk) (root : FilePath) (id : Nat) (h : 
     OpenedTogether (mem.bound id) p a ready ∧ h.Assembled a.policy ref mutex ∧
     mem.cell t ref a.phase ∧ mem.mutex t mutex ∧ ChildLockAt (segmentPath root id) h a.lock
 
-private theorem ChildLockAt.issued (origin : ChildLockAt dir h fd) (bound : h.Assembled p ref m) : IssuedPair ref m := by
+theorem ChildLockAt.issued (origin : ChildLockAt dir h fd) (bound : h.Assembled p ref m) : IssuedPair ref m := by
   obtain ⟨u, v, opened, _⟩ := origin
   exact ⟨h, p, dir, u, v, opened, bound⟩
 
-private theorem ChildMemory.Owns.source {disk : W → Disk} {mem : ChildMemory disk} {id : Nat} (held : mem.Owns root id h bs t) :
+theorem ChildMemory.Owns.source {disk : W → Disk} {mem : ChildMemory disk} {id : Nat} (held : mem.Owns root id h bs t) :
     ∃ fd, ChildLockAt (segmentPath root id) h fd := by
   obtain ⟨_, _, a, _, _, _, _, _, _, _, lock⟩ := held
   exact ⟨a.lock, lock⟩

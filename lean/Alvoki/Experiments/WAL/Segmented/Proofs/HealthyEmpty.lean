@@ -11,7 +11,7 @@ descriptor operations, ref allocation and mutex construction. -/
 theorem childOpen {id : Nat} (a : ChildAttempt store disk Q mem id policy w)
     (healthy : a.reports = {}) (prior : Child.Recoverable policy bs none ((disk w).segment id)) :
     ∃ h t, SingleFile.openExisting (segmentPath store.root id) w = .ok h t ∧
-      mem.Owns h bs t ∧ Q t := by
+      mem.Owns store.root id h bs t ∧ Q t := by
   let dir := segmentPath store.root id
   obtain ⟨ready, after, model⟩ := SingleFile.openExisting_healthy dir policy _ prior.dirty
   have observed := SingleFile.ConcreteRecovery.openExisting a.steps a.recovery a.runtime
@@ -25,9 +25,10 @@ theorem childOpen {id : Nat} (a : ChildAttempt store disk Q mem id policy w)
     rw [IOReturns, run] at safety
     exact ⟨h, t, rfl, safety.2.2.1, safety.1⟩
 
-theorem childScan (io : ChildUseIO mem Q) (owned : mem.Owns h bs w) (entry : Q w) :
+theorem childScan {id : Nat} (io : ChildUseIO mem Q) (owned : mem.Owns root id h bs w) (entry : Q w) :
     ∃ t, SingleFile.scan h w = .ok bs t ∧ Q t := by
-  obtain ⟨id, p, ready, a, ref, m, rfl, pair, bound, cell, mutex, issued⟩ := owned
+  obtain ⟨p, ready, a, ref, m, rfl, pair, bound, cell, mutex, origin⟩ := owned
+  have issued := ChildLockAt.issued origin bound
   obtain ⟨q0, _, m0, r0⟩ := io.lock _ _ _ _ issued entry mutex cell
   obtain ⟨got, q1, _, m1, r1⟩ := io.read _ _ _ _ issued q0 m0 r0
   have run := SingleFile.scan_active_run bound w (got.trans pair.phase)
@@ -228,24 +229,29 @@ structure Worker (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMe
     ∃ items v z, entries s.root u = .ok items v ∧ listedIds (·.fileName) items = .ok [0] ∧
       syncHandle s.directory v = .ok () z
 
-theorem Worker.run (p : Worker s disk P mem w) : ∃ h u, s.recoverChild w = .ok (session, h) u := by
+theorem Worker.run (p : Worker s disk P mem w) : ∃ h u, s.recoverChild w = .ok (session, h) u ∧
+      ∃ fd, ChildLockAt (segmentPath s.root 0) h fd := by
   have controlRun := readControl s p.stat p.regular p.bounded p.bytes.run
   have names := inspect _ p.names.stat p.names.directory p.names.list p.names.members
   obtain ⟨h, t, openChild, owned, frame⟩ := childOpen p.child p.healthy p.prior
   have acquired := acquireChecked s names p.names.includes p.sizeStat p.size p.stamp.string openChild
   obtain ⟨u, scanned, _⟩ := childScan p.useChild owned frame
   obtain ⟨_, _, z, list, ids, sync⟩ := p.collect h t u openChild scanned
-  exact ⟨h, z, recoverChild s controlRun p.sync acquired scanned list ids sync⟩
+  exact ⟨h, z, recoverChild s controlRun p.sync acquired scanned list ids sync, owned.source⟩
 
 /-- Install the actual recovered child and allocate the phase reference and
 mutex. The resulting public handle is ready for its very first operation. -/
 theorem Worker.openExisting (p : Worker s disk P mem w) (heap : PhaseMemory)
-    (grant : acquireStore dir start = .ok s w) :
-    ∃ h t, Native.openExisting dir start = .ok h t ∧ heap.Ready h session t := by
-  obtain ⟨child, recovered, ran⟩ := p.run
+    (grant : acquireStore dir start = .ok s w) (root : RootLockAt s.root s.lock) :
+    ∃ h t reg, Native.openExisting dir start = .ok h t ∧ reg.session = session ∧
+      Origin dir h reg start t ∧ heap.Registered h reg t ∧ LocksFrom reg := by
+  obtain ⟨child, recovered, ran, fd, childLock⟩ := p.run
   simp only [Native.openExisting_run, grant, ran]
-  exact ⟨_, _, rfl, s, child, heap.fresh _ (heap.set _ _ _), heap.newMutex (heap.allocate _ _),
-    heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
+  let reg : Registration := ⟨session, s, child⟩
+  refine ⟨_, _, reg, rfl, rfl, ?_, ?_, root, fd, childLock⟩
+  · exact ⟨w, recovered, grant, ran, rfl, rfl, rfl⟩
+  · exact ⟨heap.fresh _ (heap.set _ _ _), heap.newMutex (heap.allocate _ _),
+      heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
 
 end HealthyEmpty
 end WalRecoverySlice.Segmented.Native
