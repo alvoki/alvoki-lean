@@ -1511,6 +1511,64 @@ theorem publicNativeAppend_refines (root : System.FilePath) (held : Nat)
         (reports session.control.policy) state ready registered size position linux ran
       exact ⟨rfl, nextReady, nextEntry, ack, absolute, bounded⟩
 
+/-- The native reply schedule returns the position of the exact ready session. -/
+theorem publicNativeAppend_position (root : System.FilePath) (held : Nat)
+    (removal : RootReports) (effects : Effects) (create : SingleFile.CreateReports)
+    (close : SingleFile.OpenReports) (session : Session)
+    (reports : ∀ policy cursor, SingleFile.AppendReports policy cursor batch)
+    (state : State × SingleFile.AppendPhase) (ready : AppendReady session state)
+    (registered : state.1.activeEntry = some session.control.active)
+    (size : batch.length ≤ 32) (position : session.view.tail < Contract.maxPosition)
+    (linux : System.Platform.isWindows = false) :
+    let action := fun (_ : Nat) (current : Session) =>
+      nativeAppendModel root held removal effects create close current current.control.active
+        (reports current.control.policy)
+    match (Native.appendPositionWith (publicAppendActiveModel action)).run
+        (state, .ready held session) with
+    | .ok (.ok reply) (after, phase) =>
+      ∃ next, phase = .ready held next ∧ AppendReady next after ∧
+        after.1.activeEntry = some next.control.active ∧
+        Contract.Step (.online session.view) (.ack (.append batch)) (.online next.view) ∧
+        reply = next.tailPosition ∧ reply = session.view.tail + 1 ∧ next.view.tail ≤ Contract.maxPosition
+    | .ok (.error _) (after, phase) | .error _ (after, phase) =>
+      phase = .poisoned held ∧ Recoverable session.view (some (.append batch)) after.1.disk := by
+  let action := fun (_ : Nat) (current : Session) =>
+    nativeAppendModel root held removal effects create close current current.control.active
+      (reports current.control.policy)
+  have post := publicNativeAppend_refines root held removal effects create close session
+    reports state ready registered size position linux
+  dsimp only at post ⊢
+  have run : (Native.appendPositionWith (publicAppendActiveModel action)).run
+        (state, .ready held session) =
+      match (publicAppendActiveModel action).run (state, .ready held session) with
+      | .ok (.ok next) after => .ok (.ok next.tailPosition) after
+      | .ok (.error err) after => .ok (.error err) after
+      | .error token after => .error token after := by
+    unfold Native.appendPositionWith
+    change (EStateM.bind (publicAppendActiveModel action).run
+      (ExceptT.bindCont fun (next : Session) => (pure next.tailPosition : PublicAppendM Nat)))
+      (state, .ready held session) = _
+    cases result : (publicAppendActiveModel action).run (state, .ready held session) with
+    | error => simp only [EStateM.bind, result]
+    | ok response after =>
+      simp only [EStateM.bind, result]
+      cases response <;> rfl
+  dsimp [action] at run
+  rw [run]
+  cases ran : (publicAppendActiveModel action).run (state, .ready held session) with
+  | error token after =>
+    dsimp [action] at ran
+    rw [ran] at post
+    exact post
+  | ok response after =>
+    dsimp [action] at ran
+    rw [ran] at post
+    cases response with
+    | error => exact post
+    | ok next =>
+      exact ⟨next, post.1, post.2.1, post.2.2.1, post.2.2.2.1, rfl,
+        post.2.2.2.2.1, post.2.2.2.2.2⟩
+
 /-- Reject an invalid request before releasing, preparing, or writing a
 child. The old disk and child remain unchanged even if the public root
 phase is conservatively poisoned. -/

@@ -318,12 +318,19 @@ private def acquireStore (dir : FilePath) : IO Store :=
   let owned ← storeActive (some (session.control.active, child))
   return .ready owned session
 
+/-- Check the acquired root before touching its initial child or CONTROL. -/
+@[inline] def createPhaseWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error) (entries : FilePath → m (Array IO.FS.DirEntry))
+    (root : FilePath) (owned : store) (create : m Session) : m (Phase store) := do
+  unless (← entries root).all (fun e => e.fileName == "lock") do
+    throw (invalid "segmented WAL directory is not empty")
+  return .ready owned (← create)
+
 private def install (dir : FilePath) (fresh : Option (Policy × Nat)) : IO Handle := do
   let load (store : Store) := match fresh with
-    | some (policy, cap) => do
-      unless (← entries store.root).all (fun e => e.fileName == "lock") do
-        throw <| IO.userError "segmented WAL directory is not empty"
-      pure (.ready store (← checked (Segmented.create store.callbacks policy cap)))
+    | some (policy, cap) =>
+      createPhaseWith IO.userError entries store.root store
+        (checked (Segmented.create store.callbacks policy cap))
     | none =>
       let recovery := checked <| Segmented.reopenWith store.callbacks
         (fun policy id resume => liftM <| withActiveChild (error := IO.Error)
@@ -392,14 +399,18 @@ before preparation. The successor goes into the store only on success. -/
     write child batch
     pure ⟨current, session.activeCount + 1, session.view.append batch⟩
 
+/-- Return the absolute position from the session committed by the same update. -/
+@[inline] def appendPositionWith [Monad m] (update : m Session) : m Nat := do
+  let next ← update
+  return next.tailPosition
+
 /-- Return the absolute, one-based position only after the append schedule succeeds. -/
-def append (h : Handle) (batch : Bytes) : IO Nat := do
-  let next ← update h fun store session =>
+def append (h : Handle) (batch : Bytes) : IO Nat :=
+  appendPositionWith <| update h fun store session =>
     liftM <| appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
       IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
       (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
       SingleFile.append store.active.set
-  return next.tailPosition
 
 def discardThrough (h : Handle) (k : Nat) : IO Unit := do
   let _ ← update h (fun store s => Segmented.discardThrough store.callbacks s k)

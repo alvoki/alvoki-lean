@@ -186,7 +186,9 @@ Append takes its writer authority from that stored child. Root unlock follows ch
 both append paths. Bootstrap and public reopen supply `AppendReady`.
 On success, the root phase contains the acknowledged session, the
 absolute position advances by one, and the reached active child
-supplies the next `AppendReady`. On failure or process stop, the
+supplies the next `AppendReady`. The position theorem follows the same
+reply schedule as `Native.append` and relates its returned `Nat` to the
+installed session. On failure or process stop, the
 reached disk accepts the single pending request. Guard rejection
 leaves the disk and child phase unchanged. The outer phase can be
 poisoned while those resources still need cleanup.
@@ -201,6 +203,20 @@ bound is established at bootstrap, preserved by acknowledged appends
 and the admissible recovery choices, and bounds the decoded CONTROL
 fields. Linux descriptor and name bindings and primitive outcomes,
 including interruption, remain the external interpretation boundary.
+
+Append authority currently distinguishes segment IDs and canonical child
+phases. It still needs an identity for the acquired child instance and
+custody carried through reported failures to close. A temporary adapter
+mutation closed the successful successor and installed a newly opened
+handle for the same path and ID. The append proofs still compiled.
+Process interruption has no post-stop cleanup schedule.
+
+Public create validates the acquired root before running bootstrap. The
+internal bootstrap theorem certifies its returned session. Its composition
+with public acquisition, installation, failure cleanup and healthy
+progress remains open. An unsuccessful first initialization may leave
+artifacts. The public create contract gives no automatic retry guarantee.
+
 
 ### Public open contract for the append consumer
 
