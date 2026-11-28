@@ -53,11 +53,6 @@ lean_lib CRC32C where
 lean_exe crc32cCheck where
   root := `Alvoki.Checks.Tests.CRC32C
 
-lean_lib Alvoki.Checks.Tests.SSTableProducer
-
-lean_exe immutableSSTableCheck where
-  root := `Alvoki.Experiments.SSTable.UnifiedFixtures
-
 target storageBenchMetricsO pkg : FilePath := do
   let source ← inputTextFile (pkg.dir / "native" / "storage_bench_metrics.c")
   let includeDir ← getLeanIncludeDir
@@ -70,3 +65,8 @@ lean_lib StorageBenchSupport where
 
 lean_exe storageBench where
   root := `Alvoki.Bench.Storage.Components
+
+lean_lib Alvoki.Checks.Tests.SSTableProducer
+
+lean_exe immutableSSTableCheck where
+  root := `Alvoki.Experiments.SSTable.UnifiedFixtures
