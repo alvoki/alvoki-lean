@@ -323,13 +323,15 @@ private theorem buildStream_sim (crc : Checksum) (layout : Layout) (options : Bu
 
 /-- Cleanup cannot turn a failed write or sync into success. It starts from
 the reached state and keeps the primary error even if removal also fails. -/
-private def failedOutput (ops : OutputOps (NativeWriteM handle inode) handle)
+def failedOutput (ops : OutputOps (NativeWriteM handle inode) handle)
     (path : System.FilePath) (error : String) (reached : NativeWriteState handle inode) :
     EStateM.Result String (NativeWriteState handle inode) Nat :=
   match (ops.remove path).run reached with
   | .ok _ after | .error _ after => .error error after
 
-private theorem freshOutput_result (ops : OutputOps (NativeWriteM handle inode) handle)
+/-- The exclusive-create, write, sync and cleanup schedule of the actual
+wrapper, including the state reached by any failing operation. -/
+theorem freshOutput_result (ops : OutputOps (NativeWriteM handle inode) handle)
     (path : System.FilePath) (writeImage : handle → NativeWriteM handle inode Nat)
     (before : NativeWriteState handle inode) :
     (withFreshOutputWith (ε := String) ops path writeImage).run before =
