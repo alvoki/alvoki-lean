@@ -1,0 +1,344 @@
+{
+  "source_head": "79d5db67b2b23314cd7e4d46b8e0f583f50702ea",
+  "source_status": "",
+  "harness_head": "79d5db67b2b23314cd7e4d46b8e0f583f50702ea",
+  "harness_status": "",
+  "binary": "/workspace/work/alvoki-storage-baseline/lean/.lake/build/bin/storageBench",
+  "binary_sha256": "cad45d80832e53dc71f34c4ba5b9215f6ce911ec09220ed994b1cb3e34a40085",
+  "command": "benchmarks/storage/run.py --data-dir /dev/shm --output /workspace/work/baseline-tmpfs-final --strace --sync-timing",
+  "kernel": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "cpu": 0,
+  "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "governor": null,
+  "affinity_available": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "virtualization": "container-other",
+  "mount": "shm tmpfs ro,nosuid,nodev,relatime",
+  "block_devices": "NAME  ROTA TRAN   MODEL\nvda      1 virtio \npmem0    0",
+  "lean": "Lean (version 4.36.0, x86_64-unknown-linux-gnu, commit 611c117bfaf7b7ae1cfcf246ce6fba31e8f509e9, Release)",
+  "lake": "Lake version 5.0.0-src+611c117 (Lean version 4.36.0)",
+  "cc": "cc (Debian 14.2.0-19) 14.2.0",
+  "cxx": "c++ (Debian 14.2.0-19) 14.2.0",
+  "cases": [
+    {
+      "name": "wal-log-in-place",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        128,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-rotate",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        8,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-short-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        128,
+        64,
+        1
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-long-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "log",
+        128,
+        64,
+        2049
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-log-reopen-0-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        128,
+        0,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-log-reopen-128-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        128,
+        128,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-log-reopen-2048-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        128,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-log-reopen-2048-cap16",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        16,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-log-reopen-8192-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "log",
+        128,
+        8192,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-in-place",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        128,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-rotate",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        8,
+        128,
+        0
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-short-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        128,
+        64,
+        1
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-long-history",
+      "args": [
+        "wal",
+        "append",
+        "{path}",
+        "boundary",
+        128,
+        64,
+        2049
+      ],
+      "fixture": false,
+      "latency": true
+    },
+    {
+      "name": "wal-boundary-reopen-0-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        128,
+        0,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-reopen-128-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        128,
+        128,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-reopen-2048-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        128,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-reopen-2048-cap16",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        16,
+        2048,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-boundary-reopen-8192-cap128",
+      "args": [
+        "wal",
+        "reopen",
+        "{path}",
+        "boundary",
+        128,
+        8192,
+        0
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "wal-decode-cpu",
+      "args": [
+        "codec",
+        1024
+      ],
+      "fixture": false,
+      "latency": false
+    },
+    {
+      "name": "sst-lookup",
+      "args": [
+        "sst",
+        "lookup",
+        "{path}",
+        65537,
+        4096
+      ],
+      "fixture": true,
+      "latency": true
+    },
+    {
+      "name": "sst-scan",
+      "args": [
+        "sst",
+        "scan",
+        "{path}",
+        65537,
+        4096
+      ],
+      "fixture": true,
+      "latency": false
+    },
+    {
+      "name": "sst-build",
+      "args": [
+        "sst",
+        "build",
+        "{path}",
+        65537,
+        4096
+      ],
+      "fixture": false,
+      "latency": false
+    },
+    {
+      "name": "sst-build-sync",
+      "args": [
+        "sst",
+        "build-sync",
+        "{path}",
+        65537,
+        4096
+      ],
+      "fixture": false,
+      "latency": false
+    }
+  ],
+  "cache": "warm",
+  "seed": 20261128,
+  "warmups": 1,
+  "repeats": 7,
+  "strace": "strace -- version 6.13\nCopyright (c) 1991-2025 The strace developers <https://strace.io>.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\nOptional features enabled: stack-trace=libunwind stack-demangle m32-mpers mx32-mpers",
+  "sync_timing": true
+}

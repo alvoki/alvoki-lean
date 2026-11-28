@@ -12,3 +12,7 @@ Do not compare a new component against measurements from the old engine unless t
 - For Lean byte-processing loops, borrow immutable input where possible and avoid materializing per-row objects when the consumer can fold a stream. Validate extents at the boundary, carry the proved bound through the loop, and keep machine-sized offsets within that bound. These are hypotheses to measure on the real consumer.
 - `ByteArray` capacity hints and private fields do not prove unique ownership. Copy-on-write checks, bounds checks, generic calls, and byte-at-a-time emission can remain in generated code. Inspect generated C and target assembly for the measured release build; simple loops may vectorize while manual unrolling may not.
 - Prefer a bulk copy or pre-sized output only when the full workload benefits. Allocation, zero-initialization, an exact-size prepass, branching, and write amplification can outweigh fewer calls. Keep a simpler control and at least one workload with a different key/order distribution.
+
+The [native storage baseline](../../benchmarks/storage/README.md) gives the
+Linux runner, timed boundaries and first raw cohorts for the current
+segmented WAL, ALVSST05 and a pinned native L0 candidate.
