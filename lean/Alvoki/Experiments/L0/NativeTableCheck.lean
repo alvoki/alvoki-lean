@@ -133,7 +133,7 @@ structure HealthyChecks {ns : TableNamespace W} {life : Lifetime} {P : W → Pro
     count.toNat ≤ maxRowSize → offset.toNat + count.toNat ≤ bytes.size →
     ∃ slice t, nativeReadPrimitives.pread h offset count w = .ok slice t
 
-private theorem HealthyChecks.available {ns : TableNamespace W} {life : Lifetime} {P : W → Prop}
+theorem HealthyChecks.available {ns : TableNamespace W} {life : Lifetime} {P : W → Prop}
     {prim : Primitives ns life P} {bytes : ByteArray} (ok : HealthyChecks prim ids)
     (extent : bytes.size ≤ maxFileSize) (h inode) :
     AvailableRead (fun w => P w ∧ life.privateBorrow h w ∧ prim.inodeOf h w = some inode ∧

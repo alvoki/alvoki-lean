@@ -1,4 +1,4 @@
-import Alvoki.Experiments.SSTable.Proofs.UnifiedOpen
+import Alvoki.Experiments.SSTable.Proofs.UnifiedReaderRelation
 
 namespace ImmutableSSTable.Unified
 
@@ -75,75 +75,19 @@ private theorem exact_sim {a : Native α} (h : ReadPost P (· = v) a) :
     rw [ran] at step
     exact ⟨step.1, v, rfl, step.2⟩
 
-private theorem packet_sim (h : ScopedRead P source image) :
-    Sim (P := P) (readPacket source crc tableId kind offset size endAt)
-      (readPacket (ReadSafety.reference image) crc tableId kind offset size endAt) Eq := by
-  unfold readPacket
-  split
-  · apply Sim.bind
-    · exact exact_sim (h.read _ _)
-    · intro x y equal
-      subst y
-      split
-      · apply Sim.decode
-      · exact Sim.throw
-  · exact Sim.throw
+private def rules (P : ReadWorld → Prop) : ReaderRelation.Rules where
+  Rel a b r := Sim (P := P) a b r
+  bind := Sim.bind
+  pure := Sim.pure
+  throw := Sim.throw
 
-private theorem footer_sim (h : ScopedRead P source image) :
-    Sim (P := P) (readFooter source crc) (readFooter (ReadSafety.reference image) crc) Eq := by
-  unfold readFooter
-  apply Sim.bind
-  · exact exact_sim h.size
-  · intro size expected equal
-    subst expected
-    dsimp only
-    split
-    · apply Sim.bind
-      · exact exact_sim (h.read _ _)
-      · intro bytes expected equal
-        subst expected
-        split
-        · apply Sim.bind (Sim.decode _)
-          intro body expected equal
-          subst expected
-          apply Sim.bind (Sim.decode _)
-          intro footer expected equal
-          subst expected
-          exact Sim.pure rfl
-        · first | exact Sim.throw | exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ h => False.elim h)
-    · first | exact Sim.throw | exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ h => False.elim h)
+private theorem ScopedRead.steps (h : ScopedRead P source image) :
+    ReaderRelation.SourceSteps (rules P) source (ReadSafety.reference image) :=
+  ⟨exact_sim h.size, fun o n => exact_sim (h.read o n)⟩
 
-private def SameHandle (a : Handle (Native)) (b : Handle (Reference))
-    (source : Source (Native)) (image : ByteArray) : Prop :=
-  a.rowCount = b.rowCount ∧ a.layout = b.layout ∧ a.root = b.root ∧ a.crc = b.crc ∧
-    a.source = source ∧ b.source = ReadSafety.reference image
-
-private theorem open_sim (h : ScopedRead P source image) :
-    Sim (P := P) (openChecked source crc tableId) (openChecked (ReadSafety.reference image) crc tableId)
-      (fun a b => SameHandle a b source image) := by
-  unfold openChecked
-  apply Sim.bind (footer_sim h)
-  intro info expected equal
-  subst expected
-  obtain ⟨footer, endAt⟩ := info
-  dsimp only
-  split
-  · split
-    · split
-      · exact Sim.pure ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
-      · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
-    · split
-      · apply Sim.bind (packet_sim h)
-        intro bytes expected equal
-        subst expected
-        apply Sim.bind (Sim.decode _)
-        intro root expected equal
-        subst expected
-        apply Sim.bind (Sim.decode _)
-        intro _ _ _
-        exact Sim.pure ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
-      · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
-  · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
+private abbrev open_sim {P : ReadWorld → Prop} {source : Source Native} {image : ByteArray}
+    {crc : Checksum} {tableId : UInt64} (h : ScopedRead P source image) :=
+  ReaderRelation.open_sim (crc := crc) (tableId := tableId) (rules P) h.steps
 
 /-- The metadata checks for an immutable table preserve the read footprint,
 including when an extent read or a metadata check reports an error. -/
@@ -211,87 +155,6 @@ theorem Image.checkedOpen_healthy {source : Source Native} (built : Image crc la
       EST.pure]
     exact ⟨_, t, ⟨rfl, rfl⟩, held⟩
 
-private theorem seek_sim (data : Data) (key : ByteArray) (lo hi : Nat) :
-    Sim (P := P) (seekBetween (fun i => liftDecode (data.readRow i)) key lo hi : Native Nat)
-      (seekBetween (fun i => liftDecode (data.readRow i)) key lo hi : Reference Nat) Eq := by
-  rw [seekBetween, seekBetween]
-  split
-  · rename_i range
-    apply Sim.bind (Sim.decode _)
-    intro row expected same
-    subst expected
-    split <;> apply seek_sim
-  · exact Sim.pure rfl
-termination_by hi - lo
-decreasing_by all_goals omega
-
-private theorem locate_sim {a : Handle (Native)} {b : Handle (Reference)}
-    (same : SameHandle a b source image) (h : ScopedRead P source image) (key : ByteArray) :
-    Sim (P := P) (a.locate key) (b.locate key) Eq := by
-  obtain ⟨_, layout, root, crc, left, right⟩ := same
-  unfold Handle.locate
-  rw [root]
-  dsimp only
-  split
-  · rename_i parent _
-    unfold Handle.readLeaf
-    rw [left, right, crc, layout]
-    apply Sim.bind
-    · apply Sim.bind (packet_sim h)
-      intro raw expected equal
-      subst expected
-      apply Sim.bind (Sim.decode _)
-      intro refs expected equal
-      subst expected
-      apply Sim.bind (Sim.decode _)
-      intro _ _ _
-      split
-      · exact Sim.pure rfl
-      · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
-    · intro refs expected equal
-      subst expected
-      split
-      · rename_i ref _
-        unfold Handle.readData
-        rw [left, right, crc, layout]
-        apply Sim.bind
-        · apply Sim.bind (packet_sim h)
-          intro raw expected equal
-          subst expected
-          apply Sim.bind (Sim.decode _)
-          intro data expected equal
-          subst expected
-          apply Sim.bind (Sim.decode _)
-          intro row expected equal
-          subst expected
-          split
-          · exact Sim.pure rfl
-          · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
-        · intro data expected equal
-          subst expected
-          apply Sim.bind (seek_sim data key 0 ref.count)
-          intro index expected equal
-          subst expected
-          split
-          · exact Sim.pure rfl
-          · exact Sim.bind (rel := fun _ _ => False) Sim.throw (fun _ _ impossible => False.elim impossible)
-      · exact Sim.throw
-  · exact Sim.pure rfl
-
-private theorem lookup_sim {a : Handle (Native)} {b : Handle (Reference)}
-    (same : SameHandle a b source image) (h : ScopedRead P source image) (key : ByteArray) :
-    Sim (P := P) (a.lookup key) (b.lookup key) Eq := by
-  unfold Handle.lookup
-  apply Sim.bind (locate_sim same h key)
-  intro found expected equal
-  subst expected
-  rcases found with _ | ⟨ref, data, index⟩
-  · exact Sim.pure rfl
-  · apply Sim.bind (Sim.decode _)
-    intro row expected equal
-    subst expected
-    exact Sim.pure rfl
-
 private theorem ReadSafety.unscoped (h : ReadSafety source image) : ScopedRead (fun _ => True) source image where
   size s _ := by cases ran : source.size s with
                  | error => trivial
@@ -310,7 +173,7 @@ theorem checkedLookup_success (safety : ReadSafety source image)
       let table ← openChecked (ReadSafety.reference image) crc tableId
       table.lookup key) () = .ok value () := by
   have sim := Sim.bind (open_sim (crc := crc) (tableId := tableId) safety.unscoped)
-    (fun _ _ same => lookup_sim same safety.unscoped key)
+    (fun _ _ same => ReaderRelation.lookup_sim (rules _) same safety.unscoped.steps key)
   have result := sim start trivial
   rw [ran] at result
   obtain ⟨_, expected, done, rfl⟩ := result
@@ -339,23 +202,8 @@ theorem checkedTypedLookup_scoped (safety : ScopedRead P source image)
       (TypedTable.mk handle.table keys values).lookup key) () = .ok value ()) (do
       let handle ← openChecked source crc tableId
       (TypedTable.mk handle.table keys values).lookup key) := by
-  have step : ∀ a b, SameHandle a b source image →
-      Sim (P := P) ((TypedTable.mk a.table keys values).lookup key)
-        ((TypedTable.mk b.table keys values).lookup key) Eq := by
-    intro a b same
-    unfold TypedTable.lookup
-    apply Sim.bind (lookup_sim same safety (keys.encode key))
-    intro result expected equal
-    subst expected
-    cases result with
-    | none => exact Sim.pure rfl
-    | some bytes =>
-      apply Sim.bind (Sim.decode (values.decode bytes))
-      intro value expected equal
-      subst expected
-      exact Sim.pure rfl
   intro s valid
-  have sim := Sim.bind (open_sim (crc := crc) (tableId := tableId) safety) step s valid
+  have sim := ReaderRelation.typedLookup (crc := crc) (tableId := tableId) (rules _) safety.steps keys values key s valid
   split <;> rename_i ran <;> rw [ran] at sim
   · exact sim
   · obtain ⟨frame, y, done, rfl⟩ := sim

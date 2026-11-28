@@ -48,7 +48,7 @@ theorem table_open_published_inode [DecidableEq inode]
   rw [input] at represents
   exact ⟨⟨table, keyCodec, mutationCodec⟩, checked, typed_table_from_bytes represents⟩
 
-private theorem lawfulEIO : LawfulMonad (EIO String) := .mk'
+theorem lawfulEIO : LawfulMonad (EIO String) := .mk'
   (id_map := fun x => funext fun state => by
     change EST.bind x (fun value => EST.pure (id value)) state = x state
     cases h : x state <;> simp [EST.bind, EST.pure, h])
