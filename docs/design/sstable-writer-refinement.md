@@ -58,9 +58,15 @@ run. The separate height proof establishes a minimum of two to the power of
 the rank rows per regularly promoted reference. Finalization may carry one
 short rightmost reference and keeps the higher pending pages regular. The
 whole-builder proof follows supplier reads, data flushes and finalization
-to exclude height exhaustion. Physical packet and file-extent progress
-under an input capacity bound remains a separate obligation.
+to exclude height exhaustion.
 [Promotion and finalization height](../../lean/Alvoki/Experiments/SSTable/Recursive/WriterHeight.lean)
+
+The progress lemmas construct successful packet writes, data flushes,
+recursive pushes and single-root finalization in the exact append model
+with explicit reserve bounds. A complete theorem for arbitrary admitted
+input still needs a file-reserve invariant through the whole stream and
+multi-level finalization, plus healthy native I/O premises.
+[Physical progress under explicit byte reserves](../../lean/Alvoki/Experiments/SSTable/Recursive/WriterProgress.lean)
 
 The recursive index writer
 and reader retain their existing runtime and wire behavior. The ALVSST05

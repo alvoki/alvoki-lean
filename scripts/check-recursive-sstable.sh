@@ -8,7 +8,7 @@ if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
 fi
 
 root=Alvoki.Experiments.SSTable.Recursive
-modules=("$root".{Invariants,Image,WriterHeight,WriterProofs,NativeReadProofs,NativeWriteProofs}
+modules=("$root".{Invariants,Image,WriterHeight,WriterProgress,WriterProofs,NativeReadProofs,NativeWriteProofs}
   Alvoki.Checks.Tests.RecursiveSSTableProducer)
 lake build "${modules[@]}" Alvoki.Checks.Audit.AxiomPolicy
 for module in "${modules[@]}"; do
@@ -19,6 +19,7 @@ lake env lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Checks.Tests.RecursiveSSTableProducer
 import Alvoki.Experiments.SSTable.Recursive.Invariants
+import Alvoki.Experiments.SSTable.Recursive.WriterProgress
 import Alvoki.Experiments.SSTable.Recursive.NativeWriteProofs
 open ImmutableSSTable.Recursive
 #check_axioms checkedChild_bounds
@@ -35,6 +36,10 @@ open ImmutableSSTable.Recursive
 #check_axioms checkedNativeLookup
 #check_axioms Writer.push_ranked
 #check_axioms Writer.finishPages_height
+#check_axioms Writer.writePage_progress
+#check_axioms Writer.push_progress
+#check_axioms Writer.flushData_progress
+#check_axioms Writer.finishRoot_progress
 #check_axioms modelBuild_ok
 #check_axioms modelBuild_ne_heightError
 #check_axioms buildFileWith_exact
