@@ -214,4 +214,32 @@ theorem cover (hit : Prefix dir rows start leaf last) : Visits dir rows start le
   rw [trace_shape] at hit
   exact firstCover (.start : Visited dir start 0 start) hit rfl
 
+/-- Volatile worlds at an executable primitive boundary or at final return.
+A pure branch issues no primitive and keeps its input world. -/
+inductive Boundary (dir : FilePath) (rows : Rows) (start : W) : W → Prop where
+  | before : Prefix dir rows start leaf last → Boundary dir rows start last
+  | afterCall : Prefix dir rows start leaf last → Boundary dir rows start (leaf.action.toBaseIO last).state
+  | returned : Boundary dir rows start ((project (trace dir rows)).run.toBaseIO start).state
+
+private theorem checked_state (a : ExceptT String IO α) (w : W) :
+    ((Native.checked a).toBaseIO w).state = (a.run.toBaseIO w).state := by
+  unfold Native.checked
+  simp only [EIO.toBaseIO, Bind.bind, instMonadEIO._aux_13, EST.bind]
+  cases ran : a.run w with
+  | error e t => rfl
+  | ok x t => cases x <;> rfl
+
+theorem Boundary.frame {ns : TableNamespace W} {media : Media ns}
+    (produced : Produced media old P rows start) (boundary : Boundary ns.directory rows start last) : P last := by
+  cases boundary with
+  | before hit => exact produced.visited (cover hit)
+  | afterCall hit => exact produced.afterVisit (cover hit)
+  | returned =>
+    rw [erase, ← checked_state]
+    have result := produced.returned
+    unfold NativeScope.Post at result
+    cases ran : Native.checked (Native.createTable ns.directory rows) start with
+    | ok id t => rw [ran] at result; simpa [EIO.toBaseIO, ran] using result.1
+    | error e t => rw [ran] at result; simpa [EIO.toBaseIO, ran] using result
+
 end ExperimentalL0.NativeTableCreate.Schedule
