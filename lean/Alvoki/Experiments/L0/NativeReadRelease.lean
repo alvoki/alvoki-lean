@@ -180,18 +180,42 @@ theorem failed (laws : Laws heap physical root lock ref image) (grant : Grant ro
     Release ref lock w (Closed physical root lock ref image) (fun _ => Closed physical root lock ref image) :=
   failedTo laws grant failure (fun _ h => h) (fun _ _ h => h)
 
-/-- The public read callback returns a list of closed data/error values. The
-root descriptor appears only in tryLock and in the cleanup continuation.
-Record the actual withFile return independently of lock release status. -/
+/-- Both public callbacks return closed data. Each receives only the
+assembled L0 handle, while the root descriptor is retained by withOpen. -/
+inductive RootOperation where
+  | reads (keys : List UInt64)
+  | mutation (change : Change)
+
+abbrev RootOperation.Result : RootOperation → Type
+  | .reads _ => List Reply
+  | .mutation _ => Unit
+
+abbrev RootOperation.use : (op : RootOperation) → Native.Handle → IO op.Result
+  | .reads keys, h => (readMany h keys : IO (List Reply))
+  | .mutation change, h => Native.mutation h change
+
+structure RootScope where
+  path : FilePath
+  operation : RootOperation
+  start : NativeScope.W
+
+def RootScope.run (c : RootScope) : IO c.operation.Result :=
+  Native.withOpen c.path c.operation.use
+
 structure RootCall where
   path : FilePath
   keys : List UInt64
   start : NativeScope.W
 
-def RootCall.run (c : RootCall) : IO (List Reply) :=
-  Native.withOpen c.path (fun h => (readMany h c.keys : IO (List Reply)))
+def RootCall.scope (c : RootCall) : RootScope := ⟨c.path, .reads c.keys, c.start⟩
+instance : Coe RootCall RootScope := ⟨RootCall.scope⟩
 
-structure RootExit (c : RootCall) where
+def RootCall.run (c : RootCall) : IO (List Reply) := c.scope.run
+
+def mutationCall (path : FilePath) (change : Change) (start : NativeScope.W) : RootScope :=
+  ⟨path, .mutation change, start⟩
+
+structure RootExit (c : RootScope) where
   root : FilePath
   checked : NativeScope.W
   lock : IO.FS.Handle
@@ -208,18 +232,23 @@ structure RootExit (c : RootCall) where
         let fresh := IO.mkRef (.opening : Phase NativeScope.Wal) t
         ∃ h, h.AtRoot root fresh.val ∧ c.run c.start =
           (Native.phaseCell fresh.val).withSession (IO.userError "L0 cannot publish a session")
-            (Native.recoverAt root fresh.val) (readMany h c.keys : IO (List Reply))
+            (Native.recoverAt root fresh.val) (c.operation.use h)
             WalRecoverySlice.Segmented.Native.close lock.unlock fresh.state
 
-def RootCall.exit (c : RootCall)
+def RootScope.exit (c : RootScope)
     (resolved : Native.validatedRoot c.path c.start = .ok root checked)
     (opened : IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock entered) : RootExit c :=
   ⟨root, checked, lock, entered, resolved, opened, by
-    have reached := Native.withOpen_reached c.path (fun h => (readMany h c.keys : IO (List Reply))) c.start
+    have reached := Native.withOpen_reached c.path c.operation.use c.start
     cases taken : lock.tryLock true entered with
-    | error e t => simpa only [resolved, opened, taken, RootCall.run] using reached
+    | error e t => simpa only [resolved, opened, taken, RootScope.run] using reached
     | ok yes t =>
-      cases yes <;> simpa only [resolved, opened, taken, RootCall.run] using reached⟩
+      cases yes <;> simpa only [resolved, opened, taken, RootScope.run] using reached⟩
+
+abbrev RootCall.exit (c : RootCall)
+    (resolved : Native.validatedRoot c.path c.start = .ok root checked)
+    (opened : IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock entered) : RootExit c :=
+  c.scope.exit resolved opened
 
 /-- The runtime gives a private descriptor on a successful lock-file open.
 At return from its labelled withFile scope, destruction of its last Lean
@@ -228,13 +257,13 @@ contract excludes aliases retained by FFI. Failure during fdopen on Lean
 4.36 precedes creation of the labelled exit and lies outside this law. -/
 structure RootLifetime where
   privateBorrow : IO.FS.Handle → NativeScope.W → Prop
-  liveAtReturn : {c : RootCall} → RootExit c → IO.FS.Handle → Prop
+  liveAtReturn : {c : RootScope} → RootExit c → IO.FS.Handle → Prop
   acquire : ∀ (root : FilePath) w h t, IO.FS.Handle.mk (root / "l0.lock") .append w = .ok h t →
     privateBorrow h t
-  lastDrop : ∀ {c : RootCall} (exit : RootExit c), privateBorrow exit.lock exit.entered →
+  lastDrop : ∀ {c : RootScope} (exit : RootExit c), privateBorrow exit.lock exit.entered →
     ¬ liveAtReturn exit exit.lock
 
-theorem root_released (c : RootCall) (life : RootLifetime)
+theorem RootScope.releasedAt (c : RootScope) (life : RootLifetime)
     (resolved : Native.validatedRoot c.path c.start = .ok root checked)
     (opened : IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock entered) :
     ¬ life.liveAtReturn (c.exit resolved opened) lock :=
@@ -243,7 +272,7 @@ theorem root_released (c : RootCall) (life : RootLifetime)
 /-- Disposal for the actual public invocation. Before a Lean handle exists
 there is no labelled root exit. Every successful constructor identifies the
 exact descriptor and scope, irrespective of subsequent primitive reports. -/
-def RootCall.Released (c : RootCall) (life : RootLifetime) : Prop :=
+def RootScope.Released (c : RootScope) (life : RootLifetime) : Prop :=
   match resolved : Native.validatedRoot c.path c.start with
   | .error _ _ => True
   | .ok root checked =>
@@ -251,12 +280,27 @@ def RootCall.Released (c : RootCall) (life : RootLifetime) : Prop :=
     | .error _ _ => True
     | .ok lock _entered => ¬ life.liveAtReturn (c.exit resolved opened) lock
 
-theorem RootCall.released (c : RootCall) (life : RootLifetime) : c.Released life := by
-  unfold RootCall.Released
+theorem RootScope.released (c : RootScope) (life : RootLifetime) : c.Released life := by
+  unfold RootScope.Released
   split
   · trivial
   · split
     · trivial
-    · exact root_released c life _ _
+    · exact c.releasedAt life _ _
+
+abbrev RootCall.Released (c : RootCall) (life : RootLifetime) := c.scope.Released life
+
+theorem RootCall.released (c : RootCall) (life : RootLifetime) : c.Released life :=
+  c.scope.released life
+
+theorem root_released (c : RootCall) (life : RootLifetime)
+    (resolved : Native.validatedRoot c.path c.start = .ok root checked)
+    (opened : IO.FS.Handle.mk (root / "l0.lock") .append checked = .ok lock entered) :
+    ¬ life.liveAtReturn (c.exit resolved opened) lock :=
+  c.scope.releasedAt life resolved opened
+
+theorem mutation_released (path : FilePath) (change : Change) (start : NativeScope.W) (life : RootLifetime) :
+    (mutationCall path change start).Released life :=
+  (mutationCall path change start).released life
 
 end ExperimentalL0.NativeReadRelease
