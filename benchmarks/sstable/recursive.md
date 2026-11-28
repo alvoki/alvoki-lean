@@ -41,3 +41,5 @@ throughput and peak RSS columns show the median of three fresh processes.
 | ---: | ---: | ---: | ---: |
 | 1,000,000 | 4.46 | 4.37 | 10,892 / 10,936 |
 | 8,000,000 | 4.26 | 4.37 | 12,864 / 10,936 |
+
+The [index target experiment](index-targets.md) measures larger upper-level targets at several table sizes.
