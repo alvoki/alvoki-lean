@@ -70,6 +70,26 @@ def afterWrite (ref : Ref) (written : EST.Out IO.Error IO.RealWorld Session) :
     | .ok () u => .ok () u
     | .error e u => failed e u
 
+/-- A successful WAL append leaves the L0 reference in its reserved
+updating phase. Publication reads that reference and installs the new
+session before the public operation can report success. -/
+theorem afterWrite_publish {physical : W → Footprint inode}
+    (held : NativeRecoverAt.Held physical root lock ref image (.updating wal) w)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image) (next : Session) :
+    ∃ t u, NativeRead.Frame physical root wal image.tables w t ∧
+      NativeRead.FrameTo physical root wal image.tables t u (.online wal next) ∧
+      NativeRecoverAt.Held physical root lock ref image (.online wal next) u ∧
+      afterWrite ref (.ok next w) = .ok () u := by
+  obtain ⟨t, read, keep⟩ := phase.refRead wal w held.owned (by rw [held.phaseEq]; rfl)
+  have updated := held.frame keep
+  obtain ⟨u, swap, reached⟩ := phase.swap t updated.owned wal (.online wal next)
+  refine ⟨t, u, keep, reached, reached.held updated, ?_⟩
+  have observed : (ref.get : IO (Phase Wal)) w = .ok (.updating wal) t := held.phaseEq ▸ read
+  unfold afterWrite
+  simp [Cell.publish, Native.phaseCell, Bind.bind, instMonadEIO._aux_13, EST.bind,
+    observed, Phase.publish, swap]
+  rfl
+
 private theorem mutation_started (binding : Native.Handle.AtRoot handle root ref) (change : Change)
     (read : (ref.get : IO (Phase Wal)) start = .ok (.online wal s) entered)
     (swapped : (ref.swap (.updating wal) : IO (Phase Wal)) entered = .ok previous hidden) :
