@@ -240,7 +240,7 @@ def recoverNative (policy : Policy) (reader _writer : IO.FS.Handle)
   let state ← newRef ready.phase
   return (state, ← newMutex)
 
-def installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
+def Internal.installReady (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)) : IO Handle := do
   let (state, mutex) ← storeReadyWith (m := BaseIO) IO.mkRef Std.BaseMutex.new ready
   return ⟨ready.policy, state, mutex⟩
 
@@ -255,21 +255,21 @@ theorem installReady_run (ready : Opened IO.FS.Handle (AppendFiles IO.FS.Handle)
     (w : Void IO.RealWorld) :
     let allocated := (IO.mkRef ready.phase : BaseIO _) w
     let guard := Std.BaseMutex.new allocated.state
-    ∃ handle, installReady ready w = .ok handle guard.state ∧
+    ∃ handle, Internal.installReady ready w = .ok handle guard.state ∧
       Handle.Assembled handle ready.policy allocated.val guard.val :=
   ⟨_, rfl, rfl⟩
 
 private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith nativeOpen dir)
 
 private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
-  checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= installReady
+  checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= Internal.installReady
 
 /-- Open a previously initialized directory, holding a nonblocking exclusive file
 lock through recovery and until close. Failure releases the lock. -/
 def openExisting (dir : FilePath) : IO Handle :=
   checked <| openExistingWith nativeOpen
     (fun action => (checked action).toBaseIO)
-    (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => installReady ready) dir
+    (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => Internal.installReady ready) dir
 
 /-- Initialize the durable contents before the single-file installation
 schedule acquires its reader, writer and marker descriptions. -/

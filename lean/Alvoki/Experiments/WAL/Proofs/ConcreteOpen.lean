@@ -41,7 +41,7 @@ theorem SimResult.bind {a : F α} {b : OpenM β} {f : α → F γ} {g : β → O
 acquisition. A relation B ties each acquired description to an OpenTarget. -/
 structure OpenSteps (dir : FilePath) (policy : Policy) (r : OpenReports)
     (R : W → OpenImage → Prop) (B : IO.FS.Handle → OpenTarget → Prop) : Prop where
-  openFile : ∀ target, Sim R (nativeOpen.openTarget dir target)
+  openFile : ∀ target, target ≠ .lock → Sim R (nativeOpen.openTarget dir target)
     ((openEffects policy r).openTarget dir target) (fun h model => model = target ∧ B h target)
   unbuffered : ∀ h target w s, Fresh dir policy r R target h w s → B h target → R w s →
     SimResult R (nativeOpen.unbuffered h) ((openEffects policy r).unbuffered target) Eq w s
@@ -49,12 +49,9 @@ structure OpenSteps (dir : FilePath) (policy : Policy) (r : OpenReports)
     SimResult R (nativeOpen.readPolicy (dir / "policy") h)
       ((openEffects policy r).readPolicy (dir / "policy") .policy)
       (fun x y => x = y ∧ y = stampText policy) w s
-  lock : ∀ h w s, Fresh dir policy r R .lock h w s → B h .lock → R w s →
-    SimResult R (nativeOpen.tryLock h) ((openEffects policy r).tryLock .lock) Eq w s
-  unlock : ∀ h, B h .lock → Sim R (nativeOpen.unlock h) ((openEffects policy r).unlock .lock) Eq
   sync : ∀ h target, target = .policy ∨ target = .directory → B h target → Sim R (nativeOpen.sync h) ((openEffects policy r).sync target) Eq
 
-theorem OpenSteps.bindFreshOpen (steps : OpenSteps dir p r R B) (target : OpenTarget)
+theorem OpenSteps.bindFreshOpen (steps : OpenSteps dir p r R B) (target : OpenTarget) (ordinary : target ≠ .lock)
     {f : IO.FS.Handle → F α} {g : OpenTarget → OpenM β}
     (next : ∀ h t u, Fresh dir p r R target h t u → B h target → R t u →
       SimResult R (f h) (g target) out t u) :
@@ -62,7 +59,7 @@ theorem OpenSteps.bindFreshOpen (steps : OpenSteps dir p r R B) (target : OpenTa
   intro w s frame
   change SimResult R _ _ out w s
   apply SimResult.bind (a := nativeOpen.openTarget dir target) (b := (openEffects p r).openTarget dir target)
-    (rel := fun h model => model = target ∧ B h target) (steps.openFile target w s frame)
+    (rel := fun h model => model = target ∧ B h target) (steps.openFile target ordinary w s frame)
   rintro h _ t u actual model post ⟨rfl, bound⟩
   exact next _ _ _ ⟨w, s, frame, actual, model⟩ bound post
 
@@ -105,23 +102,10 @@ structure Files (B : IO.FS.Handle → OpenTarget → Prop) (p : Policy)
   markers : Markers B p a.markers
   model : b = ⟨.policy, p, .reader, .writer, markersFor p⟩
 
-private theorem acquire (steps : OpenSteps dir p r R B) :
-    Sim R (acquireWith nativeOpen dir) (acquireWith (openEffects p r) dir)
-      (fun h target => target = .lock ∧ B h .lock) := by
-  unfold acquireWith
-  apply steps.bindFreshOpen .lock
-  intro h w s fresh held frame
-  apply (steps.lock h w s fresh held frame).thenSim
-  intro a b same
-  subst b
-  split
-  · exact Sim.pure ⟨rfl, held⟩
-  · exact Sim.throw
-
 private theorem files (steps : OpenSteps dir p r R B) :
     Sim R (openFilesWith nativeOpen dir) (openFilesWith (openEffects p r) dir) (Files B p) := by
   unfold openFilesWith
-  apply steps.bindFreshOpen .policy
+  apply steps.bindFreshOpen .policy (by decide)
   intro stamp w s fresh st frame
   apply (steps.policyRead stamp w s fresh st frame).thenSim
   intro text expected eq
@@ -129,21 +113,21 @@ private theorem files (steps : OpenSteps dir p r R B) :
   subst text
   cases p <;> dsimp only [stampText]
   all_goals
-    apply steps.bindFreshOpen .reader
+    apply steps.bindFreshOpen .reader (by decide)
     intro reader w s fresh hr frame
     apply (steps.unbuffered reader _ w s fresh hr frame).thenSim
     intro _ _ _
-    apply steps.bindFreshOpen .writer
+    apply steps.bindFreshOpen .writer (by decide)
     intro writer w s fresh hw frame
     apply (steps.unbuffered writer _ w s fresh hw frame).thenSim
     intro _ _ _
   case logOnly => exact Sim.pure ⟨st, rfl, hr, hw, trivial, rfl⟩
   case boundary =>
-    apply steps.bindFreshOpen .marker0
+    apply steps.bindFreshOpen .marker0 (by decide)
     intro zero w s fresh hz frame
     apply (steps.unbuffered zero _ w s fresh hz frame).thenSim
     intro _ _ _
-    apply steps.bindFreshOpen .marker1
+    apply steps.bindFreshOpen .marker1 (by decide)
     intro one w s fresh ho frame
     apply (steps.unbuffered one _ w s fresh ho frame).thenSim
     intro _ _ _
@@ -267,7 +251,7 @@ private theorem install (steps : OpenSteps dir p r R B) (recovery : WorkerSteps 
     unfold settleWith
     apply (steps.sync _ _ (.inl rfl) stamp).bind
     intro _ _ _
-    apply (steps.openFile .directory).bind
+    apply (steps.openFile .directory (by decide)).bind
     intro directory role hr
     obtain ⟨rfl, held⟩ := hr
     exact steps.sync _ _ (.inr rfl) held
@@ -362,7 +346,7 @@ def LockedAt (dir : FilePath) (w : W) (h : IO.FS.Handle) (t : W) : Prop :=
   ∃ opened, LockFileAt dir w h opened ∧ (nativeOpen.tryLock h).run opened = .ok (.ok true) t
 
 private def installActual (dir : FilePath) (h : IO.FS.Handle) : F Handle :=
-  installWith nativeOpen recoverNative appendFiles dir h >>= fun a => liftM (installReady a)
+  installWith nativeOpen recoverNative appendFiles dir h >>= fun a => liftM (Internal.installReady a)
 
 /-- Provenance of the owned description and the failed, unwinding install;
 only the unlock syscall remains before rethrow. -/
@@ -384,6 +368,8 @@ structure Boundaries (dir : FilePath) (p : Policy) (r : OpenReports)
       (fun granted model t' u' => granted = model ∧
         if granted then R t' u' else physical t' (settleImage r.afterWorker u'))
       (fun t' u' => physical t' (settleImage r.afterWorker u'))
+  /-- On return from this failed installation, the last local lock
+  description goes out of scope, including when unlock reports an error. -/
   drop : ∀ h t u, Unwinding dir w h t → B h .lock → R t u →
     At (nativeOpen.unlock h) ((openEffects p r).unlock .lock) t u
       (fun _ _ t' u' => physical t' (settleImage r.afterWorker u'))
@@ -393,14 +379,14 @@ structure Boundaries (dir : FilePath) (p : Policy) (r : OpenReports)
 
 private theorem allocate (rt : Runtime R) (pair : OpenedTogether B p a b) (frame : R t u)
     (boundary : Boundaries dir p r R B rt w initial phys) :
-    At (liftM (installReady a)) (pure b) t u
+    At (liftM (Internal.installReady a)) (pure b) t u
       (fun h ready t' u' => phys t' (settleImage r.afterWorker u') ∧ Owns rt B p t' h ready) R := by
   obtain ⟨h, ran, assembled⟩ := installReady_run a t
   have cell := rt.newRef a.phase t u frame
   obtain ⟨frame, saved, held⟩ := rt.newMutex _ u _ _ cell.1 cell.2
-  have lifted : (liftM (installReady a) : F _).run t =
+  have lifted : (liftM (Internal.installReady a) : F _).run t =
       .ok (.ok h) (Std.BaseMutex.new ((IO.mkRef a.phase : BaseIO Ref) t).state).state := by
-    change (match installReady a t with
+    change (match Internal.installReady a t with
       | .ok value t => EST.Out.ok (Except.ok value : Except String Handle) t
       | .error e t => EST.Out.error e t) = _
     rw [ran]
@@ -420,7 +406,7 @@ private theorem openBody (steps : OpenSteps dir p r R B) (recovery : WorkerSteps
     (rt : Runtime R) (edge : Boundaries dir p r R B rt w initial phys) :
     At (openExistingWith nativeOpen (fun action => (checked action).toBaseIO)
       (fun err => liftM (throw err : IO Handle)) recoverNative appendFiles
-      (fun ready => installReady ready) dir)
+      (fun ready => Internal.installReady ready) dir)
       (openExistingWith (openEffects p r) SingleFile.attempt throw (workerEffect r) appendFiles pure dir)
       w (settleImage r.beforeWorker initial)
       (fun h ready t u => phys t (settleImage r.afterWorker u) ∧ Owns rt B p t h ready)
@@ -437,7 +423,7 @@ private theorem openBody (steps : OpenSteps dir p r R B) (recovery : WorkerSteps
     · exact ⟨rfl, held, frame, opened, fresh, issued⟩
   rintro h _ locked u ⟨rfl, held, frame, lockRun⟩
   have installed := ((install steps recovery held).atPost frame).bind
-    (f := fun a => liftM (installReady a)) (g := pure)
+    (f := fun a => liftM (Internal.installReady a)) (g := pure)
     (fun _ _ _ _ info => allocate rt info.2 info.1 edge)
   apply (catchCall installed).trace.bind
   intro x y t u caught
@@ -468,7 +454,7 @@ theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps di
     | _, _ => False := by
   let a : F Handle := openExistingWith nativeOpen (fun action => (checked action).toBaseIO)
     (fun err => liftM (throw err : IO Handle)) recoverNative appendFiles
-    (fun ready => installReady ready) dir
+    (fun ready => Internal.installReady ready) dir
   let b : OpenM ModelOpened := openExistingWith (openEffects p r) SingleFile.attempt throw
     (workerEffect r) appendFiles pure dir
   let s := settleImage r.beforeWorker initial
