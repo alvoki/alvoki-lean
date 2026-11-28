@@ -307,6 +307,10 @@ return branches.
 | Repeated public operation steps on actual native states | A durably initialized empty root may be a caller premise. L0 still must derive the callback trace from one integrated reached-state interpretation and compose it with the outer scope | `Execution.Run.refines` |
 | Ready view, recoverability after restart and segmented append | WAL producers for append, rotation, CONTROL and uncertainty selection | `WalRecovery.Interpretation` and the append law |
 
+### Independent architecture experiment
+
+The investigation branch connects the public get on an assembled online handle to framed stat, acquisition, size and positional reads. Two successive gets reuse the reached footprint, including after a caught error. Concrete recovery still owes the online entry witness. The [investigation and premise audit](../../../../docs/design/verification-investigation.md) also checks a reported rename error and two manifest reopens.
+
 ## Process interruption checks
 
 The Linux native fixture cuts the child process after the table directory
