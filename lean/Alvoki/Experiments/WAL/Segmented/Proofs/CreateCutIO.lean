@@ -11,14 +11,14 @@ inductive Leaf where
   | list (dir : FilePath)
   | unbuffer (h : IO.FS.Handle) | write (h : IO.FS.Handle) (bytes : ByteArray)
   | flush (h : IO.FS.Handle) | fsync (h : IO.FS.Handle) | rewind (h : IO.FS.Handle)
-  | readEOF (h : IO.FS.Handle) | truncate (h : IO.FS.Handle) (size : Nat)
+  | readEOF (h : IO.FS.Handle) | readChunk (h : IO.FS.Handle) | truncate (h : IO.FS.Handle) (size : Nat)
   | ref (ready : Ready) | mutex
 
 def Leaf.Result : Leaf → Type
   | .openFile .. => IO.FS.Handle
   | .tryLock _ => Bool
   | .list _ => Array IO.FS.DirEntry
-  | .readEOF _ => ByteArray
+  | .readEOF _ | .readChunk _ => ByteArray
   | .truncate .. => Except String Unit
   | .ref _ => SingleFile.ConcreteRecovery.Ref
   | .mutex => Std.BaseMutex
@@ -34,7 +34,8 @@ def Leaf.action : (op : Leaf) → IO op.Result
   | .flush h => h.flush
   | .fsync h => SingleFile.Internal.syncHandle h
   | .rewind h => h.rewind
-  | .readEOF h => h.readBinToEnd
+  | .readEOF h => SingleFile.Internal.readChunks h .empty
+  | .readChunk h => h.read 1024
   | .truncate h size => (SingleFile.nativeRecovery.truncateAt h size).run
   | .ref ready => IO.mkRef ready.phase
   | .mutex => Std.BaseMutex.new
@@ -115,13 +116,42 @@ private def call (l : Leaf) : Trace l.Result where
   visits w op t := op = l ∧ t = w
   fold _ w start step := ⟨step l w ⟨rfl,rfl⟩ start, fun _ _ h => h.2 ▸ start⟩
 
+/-- A prefix of the executable chunk loop. An empty chunk or an IO
+exception terminates the loop and cannot authorize a subsequent read. -/
+inductive ChunkPrefix (h : IO.FS.Handle) (origin : W) : ByteArray → W → Prop where
+  | first : ChunkPrefix h origin .empty origin
+  | next : ChunkPrefix h origin acc w → h.read 1024 w = .ok bytes t →
+      bytes.isEmpty = false → ChunkPrefix h origin (acc ++ bytes) t
+
+theorem ChunkPrefix.remaining (path : ChunkPrefix h origin acc w) :
+    SingleFile.Internal.readChunks h .empty origin = SingleFile.Internal.readChunks h acc w := by
+  induction path with
+  | first => rfl
+  | next _ ran more ih =>
+    rw [ih, SingleFile.Internal.readChunks.eq_1]
+    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran, more]
+
+private def readEOF (h : IO.FS.Handle) : Trace ByteArray where
+  run := SingleFile.Internal.readChunks h .empty
+  visits origin op t := (op = .readEOF h ∧ t = origin) ∨
+    (op = .readChunk h ∧ ∃ acc, ChunkPrefix h origin acc t)
+  fold P origin start step := by
+    refine ⟨step (.readEOF h) origin (.inl ⟨rfl,rfl⟩) start, ?_⟩
+    rintro op t (⟨_,rfl⟩ | ⟨_, acc, path⟩)
+    · exact start
+    · induction path with
+      | first => exact start
+      | next path ran _ ih =>
+        have next := step (.readChunk h) _ (.inr ⟨rfl,_,path⟩) ih
+        simpa only [Leaf.action, ran, world] using next
+
 private abbrev F := ExceptT String Trace
 
 private def opening : SingleFile.OpenIO F IO.FS.Handle where
   openFile _ path mode := liftM <| call (.openFile path mode)
   unbuffered h := liftM <| call (.unbuffer h)
   readPolicy path h := do
-    let bytes ← liftM (call (.readEOF h))
+    let bytes ← liftM (readEOF h)
     match String.fromUTF8? bytes with
     | some text => return text
     | none => throw s!"Tried to read file '{path}' containing non UTF-8 data."
@@ -132,7 +162,7 @@ private def opening : SingleFile.OpenIO F IO.FS.Handle where
 private def recovery : SingleFile.RecoveryIO F IO.FS.Handle where
   readFromStart h := liftM (do
     let _ ← call (.rewind h)
-    return (← call (.readEOF h)).data.toList : Trace _)
+    return (← readEOF h).data.toList : Trace _)
   truncateAt h n := ExceptT.mk (call (.truncate h n))
   sync h := liftM <| call (.fsync h)
 
