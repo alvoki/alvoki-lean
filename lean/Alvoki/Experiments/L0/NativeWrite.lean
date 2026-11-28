@@ -6,7 +6,7 @@ open WalRecoverySlice.Segmented (Contract.View)
 
 private abbrev F := ExceptT String IO
 
-private theorem checked_bind (a : F α) (f : α → F β) :
+theorem checked_bind (a : F α) (f : α → F β) :
     Native.checked (a >>= f) = (Native.checked a >>= fun x => Native.checked (f x)) := by
   funext w
   unfold Native.checked
@@ -16,21 +16,21 @@ private theorem checked_bind (a : F α) (f : α → F β) :
   | ok v t => cases v <;> simp [Bind.bind, instMonadEIO._aux_13, EST.bind, ran,
       Pure.pure, instMonadEIO._aux_5, EST.pure] <;> rfl
 
-private theorem checked_lift (a : IO α) : Native.checked (liftM a : F α) = a := by
+theorem checked_lift (a : IO α) : Native.checked (liftM a : F α) = a := by
   funext w
   have lifted : (liftM a : F α).run = (do return (Except.ok (← a) : Except String α) : IO _) := rfl
   cases ran : a w <;> simp [Native.checked, lifted, Bind.bind, instMonadEIO._aux_13, EST.bind, ran,
     Pure.pure, instMonadEIO._aux_5, EST.pure]
 
-private theorem checked_pure (x : α) : Native.checked (pure x : F α) = pure x := rfl
-private theorem checked_throw (e : String) :
+theorem checked_pure (x : α) : Native.checked (pure x : F α) = pure x := rfl
+theorem checked_throw (e : String) :
     Native.checked (throw e : F α) = throw (IO.userError e) := rfl
 
-private abbrev borrow (ref : Ref) (f : Wal → IO α) : IO α := do
+abbrev borrow (ref : Ref) (f : Wal → IO α) : IO α := do
   let some wal := (← (ref.get : IO (Phase Wal))).wal | throw (IO.userError "L0 cannot use the WAL in this phase")
   f wal
 
-private theorem checked_borrow (ref : Ref) (f : Wal → IO α) :
+theorem checked_borrow (ref : Ref) (f : Wal → IO α) :
     Native.checked ((Native.componentCell ref).borrowWal "L0 cannot use the WAL in this phase"
       (fun h => liftM (f h))) = borrow ref f := by
   unfold Cell.borrowWal Native.componentCell borrow
@@ -92,14 +92,13 @@ theorem afterWrite_publish {physical : W → Footprint inode}
     observed, Phase.publish, swap]
   rfl
 
-private theorem mutation_started (binding : Native.Handle.AtRoot handle root ref) (change : Change)
+theorem update_started (ref : Ref) (operation : Session → IO Session)
     (read : (ref.get : IO (Phase Wal)) start = .ok (.online wal s) entered)
     (swapped : (ref.swap (.updating wal) : IO (Phase Wal)) entered = .ok previous hidden) :
-    Native.mutation handle change start =
-      afterWrite ref (Native.checked (write (Native.callbackComponents root ref) s change) hidden) := by
-  rw [Native.mutation_atRoot binding,
-    Cell.update_online_io (Native.phaseCell ref) _ _ _ read swapped]
-  let op := Native.checked (write (Native.callbackComponents root ref) s change)
+    (Native.phaseCell ref).update (IO.userError "L0 requires reopen") operation
+      WalRecoverySlice.Segmented.Native.close start = afterWrite ref (operation s hidden) := by
+  rw [Cell.update_online_io (Native.phaseCell ref) _ _ _ read swapped]
+  let op := operation s
   cases ran : op hidden with
   | error e t =>
     simp [op] at ran
@@ -109,7 +108,7 @@ private theorem mutation_started (binding : Native.Handle.AtRoot handle root ref
       simp [op] at ran <;>
       simp [afterWrite, Bind.bind, instMonadEIO._aux_13, EST.bind, EIO.toBaseIO, ran, pub]
 
-private theorem borrow_run (f : Wal → IO α)
+theorem borrow_run (f : Wal → IO α)
     (read : (ref.get : IO (Phase Wal)) w = .ok (.updating wal) t) :
     borrow ref f w = f wal t := by
   simp [borrow, Bind.bind, instMonadEIO._aux_13, EST.bind, read, Phase.wal]
@@ -155,7 +154,8 @@ theorem dispatchAt {physical : W → Footprint inode}
   obtain ⟨entered, read, online'⟩ := readAt online rfl
   obtain ⟨hidden, swapped, step⟩ := phase.swap entered online'.owned wal (.updating wal)
   have updating := online'.advance step
-  have run := mutation_started binding change read swapped
+  have run := update_started ref (fun session => Native.checked (write (Native.callbackComponents root ref) session change)) read swapped
+  rw [← Native.mutation_atRoot binding change] at run
   rw [write_atRoot] at run
   obtain ⟨scanStart, borrowScan, scanning⟩ := readAt updating rfl
   obtain ⟨reg, slot, _, _, view⟩ := scanning.child

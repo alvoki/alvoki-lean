@@ -11,7 +11,7 @@ private abbrev Wal := WalRecoverySlice.Segmented.Native.Handle
 private abbrev FileM := ExceptT String IO
 
 @[extern "alvoki_fsync"]
-private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
+opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 
 def pathExists (path : FilePath) : IO Bool :=
   MonadExceptOf.tryCatch (ε := IO.Error) (path.symlinkMetadata >>= fun _ => pure true)
@@ -19,12 +19,12 @@ def pathExists (path : FilePath) : IO Bool :=
       | .noFileOrDirectory .. => pure false
       | other => throw other)
 
-private def buildSynced (path : FilePath) (id : UInt64) (rows : Rows) : IO Unit := do
+def buildSynced (path : FilePath) (id : UInt64) (rows : Rows) : IO Unit := do
   let remaining ← IO.mkRef rows
   let _ ← ImmutableSSTable.Unified.buildFileSynced path (tableLayout id)
     (nextTableRow remaining.get remaining.set)
 
-private def createTable (dir : FilePath) (rows : Rows) : FileM UInt64 :=
+def createTable (dir : FilePath) (rows : Rows) : FileM UInt64 :=
   createTableUnder dir (fun path => liftM (pathExists path))
     (fun path id entries => liftM (buildSynced path id entries))
     (fun parent => liftM (IO.FS.withFile parent .read syncHandle)) rows
@@ -176,6 +176,13 @@ theorem mutation_atRoot (binding : Handle.AtRoot handle root ref) (change : Chan
 
 def flush (handle : Handle) : IO Unit :=
   update handle (ExperimentalL0.flush handle.ops)
+
+theorem flush_atRoot (binding : Handle.AtRoot handle root ref) :
+    flush handle = (phaseCell ref).update (IO.userError "L0 requires reopen")
+      (fun s => checked (ExperimentalL0.flush (callbackComponents root ref) s))
+      WalRecoverySlice.Segmented.Native.close := by
+  cases binding
+  rfl
 
 def get (handle : Handle) (key : UInt64) : IO (Option UInt64) :=
   checked ((componentCell handle.phase).get "L0 requires reopen" handle.ops key)
