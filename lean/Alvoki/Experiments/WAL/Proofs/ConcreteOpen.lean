@@ -270,7 +270,7 @@ structure OpenedTogether (B : IO.FS.Handle → OpenTarget → Prop) (p : Policy)
 private theorem install (steps : OpenSteps dir p r R B origin) (recovery : WorkerSteps dir R B r origin)
     (lock : B h .lock) (locked : LockedAt dir origin h start) (initial : R start model) :
     SimResult R (installWith nativeOpen recoverNative appendFiles dir h)
-      (installWith (openEffects p r) (workerEffect r) appendFiles dir .lock) (OpenedTogether B p) start model := by
+      (installWith (openEffects p r) (workerEffect r) appendFiles dir .lock) (fun a b => OpenedTogether B p a b ∧ a.lock = h) start model := by
   unfold installWith
   apply (files steps locked initial).bind
   intro a b began base opened _ frame pair
@@ -290,7 +290,7 @@ private theorem install (steps : OpenSteps dir p r R B origin) (recovery : Worke
     exact steps.syncDirectory directory w s fresh held frame
   apply set.bind
   rintro _ _ _ _ _ _ frame rfl
-  exact ⟨frame, lock, reader, writer, markers, policy, rfl, rfl⟩
+  exact ⟨frame, ⟨lock, reader, writer, markers, policy, rfl, rfl⟩, rfl⟩
 
 private theorem SimResult.atPost {a : F α} {b : OpenM β} (h : SimResult R a b rel w s) : At a b w s (fun x y t u => R t u ∧ rel x y) R := by
   have post := h
@@ -345,9 +345,10 @@ structure Runtime (R : W → OpenImage → Prop) where
 /-- Identifies the allocated ref and mutex in the actual returned handle
 and the phase constructed from the same primitive recovery execution. -/
 def Owns (runtime : Runtime R) (B : IO.FS.Handle → OpenTarget → Prop)
-    (p : Policy) (w : W) (h : Handle) (ready : ModelOpened) : Prop :=
-  ∃ a : ActualOpened, OpenedTogether B p a ready ∧ ∃ ref mutex,
-    h.Assembled a.policy ref mutex ∧ runtime.cell w ref a.phase ∧ runtime.mutex w mutex
+    (p : Policy) (dir : FilePath) (origin w : W) (h : Handle) (ready : ModelOpened) : Prop :=
+  ∃ a : ActualOpened, OpenedTogether B p a ready ∧ ∃ ref mutex locked,
+    h.Assembled a.policy ref mutex ∧ runtime.cell w ref a.phase ∧ runtime.mutex w mutex ∧
+      LockedAt dir origin a.lock locked
 
 private def installActual (dir : FilePath) (h : IO.FS.Handle) : F Handle :=
   installWith nativeOpen recoverNative appendFiles dir h >>= fun a => liftM (Internal.installReady a)
@@ -381,10 +382,11 @@ structure Boundaries (dir : FilePath) (p : Policy) (r : OpenReports)
   allocated : ∀ t u ref phase, R t u → rt.cell t ref phase →
     physical (Std.BaseMutex.new t).state (settleImage r.afterWorker u)
 
-private theorem allocate (rt : Runtime R) (pair : OpenedTogether B p a b) (frame : R t u)
+private theorem allocate (rt : Runtime R) (pair : OpenedTogether B p a b)
+    (granted : LockedAt dir w a.lock locked) (frame : R t u)
     (boundary : Boundaries dir p r R B rt w initial phys) :
     At (liftM (Internal.installReady a)) (pure b) t u
-      (fun h ready t' u' => phys t' (settleImage r.afterWorker u') ∧ Owns rt B p t' h ready) R := by
+      (fun h ready t' u' => phys t' (settleImage r.afterWorker u') ∧ Owns rt B p dir w t' h ready) R := by
   obtain ⟨h, ran, assembled⟩ := installReady_run a t
   have cell := rt.newRef a.phase t u frame
   obtain ⟨frame, saved, held⟩ := rt.newMutex _ u _ _ cell.1 cell.2
@@ -396,7 +398,7 @@ private theorem allocate (rt : Runtime R) (pair : OpenedTogether B p a b) (frame
     rw [ran]
   unfold At
   rw [lifted]
-  exact ⟨boundary.allocated _ u _ _ cell.1 cell.2, a, pair, _, _, assembled, saved, held⟩
+  exact ⟨boundary.allocated _ u _ _ cell.1 cell.2, a, pair, _, _, locked, assembled, saved, held, granted⟩
 
 private theorem At.trace {a : F α} {b : OpenM β} (h : At a b w s ok fail) :
     At a b w s (fun x y t u => ok x y t u ∧ a.run w = .ok (.ok x) t) fail := by
@@ -413,7 +415,7 @@ private theorem openBody (steps : OpenSteps dir p r R B w) (recovery : WorkerSte
       (fun ready => Internal.installReady ready) dir)
       (openExistingWith (openEffects p r) SingleFile.attempt throw (workerEffect r) appendFiles pure dir)
       w (settleImage r.beforeWorker initial)
-      (fun h ready t u => phys t (settleImage r.afterWorker u) ∧ Owns rt B p t h ready)
+      (fun h ready t u => phys t (settleImage r.afterWorker u) ∧ Owns rt B p dir w t h ready)
       (fun t u => phys t (settleImage r.afterWorker u)) := by
   unfold openExistingWith
   apply At.bind (mid := fun h role t u => role = .lock ∧ B h .lock ∧ R t u ∧ LockedAt dir w h t)
@@ -428,7 +430,7 @@ private theorem openBody (steps : OpenSteps dir p r R B w) (recovery : WorkerSte
   rintro h _ locked u ⟨rfl, held, frame, lockRun⟩
   have installed := ((install steps recovery held lockRun frame).atPost).bind
     (f := fun a => liftM (Internal.installReady a)) (g := pure)
-    (fun _ _ _ _ info => allocate rt info.2 info.1 edge)
+    (fun _ _ _ _ info => allocate rt info.2.1 (info.2.2.symm ▸ lockRun) info.1 edge)
   apply (catchCall installed).trace.bind
   intro x y t u caught
   obtain ⟨pair, trace⟩ := caught
@@ -453,7 +455,7 @@ theorem openExisting {physical : W → OpenImage → Prop} (steps : OpenSteps di
     (recovery : WorkerSteps dir R B r w) (rt : Runtime R) (initial : OpenImage)
     (edge : Boundaries dir p r R B rt w initial physical) :
     match SingleFile.openExisting dir w, openExistingModel dir p r initial with
-    | .ok h t, .ok (.ok ready) u => physical t u ∧ Owns rt B p t h ready
+    | .ok h t, .ok (.ok ready) u => physical t u ∧ Owns rt B p dir w t h ready
     | .error _ t, .ok (.error _) u => physical t u
     | _, _ => False := by
   let a : F Handle := openExistingWith nativeOpen (fun action => (checked action).toBaseIO)
@@ -497,14 +499,14 @@ structure ScanSteps (R : W → OpenImage → Prop) (rt : Runtime R) : Prop where
     let reached := (mutex.unlock t).state
     R reached u ∧ rt.mutex reached mutex ∧ rt.cell reached cell phase
 
-theorem scan (steps : ScanSteps R rt) (owned : Owns rt B p w h ready) (image : R w u) :
+theorem scan (steps : ScanSteps R rt) (owned : Owns rt B p dir origin w h ready) (image : R w u) :
     ∃ t, SingleFile.scan h w = .ok ready.recovered.batches t ∧
-      R t u ∧ Owns rt B p t h ready := by
-  obtain ⟨a, pair, cell, mutex, bound, ref, held⟩ := owned
+      R t u ∧ Owns rt B p dir origin t h ready := by
+  obtain ⟨a, pair, cell, mutex, locked, bound, ref, held, granted⟩ := owned
   obtain ⟨frame, held, ref⟩ := steps.lock _ _ _ _ _ image held ref
   obtain ⟨got, frame, held, ref⟩ := steps.read _ _ _ _ _ frame held ref
   have eq := scan_active_run bound w (got.trans pair.phase)
   obtain ⟨frame, held, ref⟩ := steps.unlock _ _ _ _ _ frame held ref
-  exact ⟨_, pair.batches ▸ eq, frame, a, pair, cell, mutex, bound, ref, held⟩
+  exact ⟨_, pair.batches ▸ eq, frame, a, pair, cell, mutex, locked, bound, ref, held, granted⟩
 
 end WalRecoverySlice.SingleFile.ConcreteRecovery
