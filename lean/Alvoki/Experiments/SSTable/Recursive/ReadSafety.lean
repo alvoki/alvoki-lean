@@ -1,4 +1,4 @@
-import Alvoki.Experiments.SSTable.Recursive.Reader
+import Alvoki.Experiments.SSTable.Recursive.FilteredReader
 
 namespace ImmutableSSTable.Recursive
 
@@ -174,10 +174,16 @@ private theorem footer_sim (h : ImageReads frame source image) (crc : Checksum) 
     exact Sim.pure rfl
   · exact Sim.reject _ _ _
 
-private def SameHandle (a : Handle (ReadM world)) (b : Handle (ReadM Unit))
-    (source : Source (ReadM world)) (image : ByteArray) : Prop :=
-  a.source = source ∧ b.source = exactSource image ∧ a.layout = b.layout ∧ a.crc = b.crc ∧
-    a.rootOffset = b.rootOffset ∧ a.height = b.height ∧ a.root = b.root ∧ a.rowCount = b.rowCount
+private structure SameHandle (a : Handle (ReadM world)) (b : Handle (ReadM Unit))
+    (source : Source (ReadM world)) (image : ByteArray) : Prop where
+  source_eq : a.source = source
+  reference_eq : b.source = exactSource image
+  layout : a.layout = b.layout
+  crc : a.crc = b.crc
+  rootOffset : a.rootOffset = b.rootOffset
+  height : a.height = b.height
+  root : a.root = b.root
+  filtered : a.filtered = b.filtered
 
 private theorem open_sim (h : ImageReads frame source image) (crc : Checksum) (id : UInt64) :
     Sim frame (openChecked source crc id) (openChecked (exactSource image) crc id)
@@ -204,10 +210,10 @@ private theorem open_sim (h : ImageReads frame source image) (crc : Checksum) (i
       · exact Sim.reject _ _ _
   · exact Sim.reject _ _ _
 
-private theorem data_packet_sim (h : ImageReads frame source image)
-    (crc : Checksum) (id : UInt64) (ref : Ref) (parent : Nat) :
-    Sim frame (Unified.readPacket source crc id dataKind ref.offset ref.size parent)
-      (Unified.readPacket (exactSource image) crc id dataKind ref.offset ref.size parent) Eq := by
+private theorem packet_sim (h : ImageReads frame source image)
+    (crc : Checksum) (id kind : UInt64) (offset size parent : Nat) :
+    Sim frame (Unified.readPacket source crc id kind offset size parent)
+      (Unified.readPacket (exactSource image) crc id kind offset size parent) Eq := by
   unfold Unified.readPacket
   split
   · apply Sim.bind (read_sim h _ _)
@@ -224,7 +230,7 @@ private theorem data_sim (h : ImageReads frame source image)
   obtain ⟨src, reference, layout, crc, _, _, _, _⟩ := same
   unfold Handle.readData
   rw [src, reference, layout, crc]
-  apply Sim.bind (data_packet_sim h _ _ _ _)
+  apply Sim.bind (packet_sim h _ _ _ _ _ _)
   intro actualRaw expectedRaw equal
   subst expectedRaw
   apply Sim.bind (Sim.decode _)
@@ -269,7 +275,7 @@ private theorem locate_sim (h : ImageReads frame source image)
     (same : SameHandle actual expected source image) (key : ByteArray) :
     Sim frame (actual.locate key) (expected.locate key) Eq := by
   unfold Handle.locate
-  rw [same.2.2.2.2.2.2.1]
+  rw [same.root]
   dsimp only
   split
   · apply Sim.bind (select_sim h same _ _)
@@ -299,6 +305,67 @@ private theorem lookup_sim (h : ImageReads frame source image)
     exact Sim.pure rfl
   · exact Sim.pure rfl
 
+private theorem filter_read_sim (h : ImageReads frame source image) (crc : Checksum)
+    (tableId : UInt64) (ref : Ref) :
+    Sim frame (readFilter source crc tableId ref) (readFilter (exactSource image) crc tableId ref) Eq := by
+  unfold readFilter
+  dsimp only
+  split
+  · exact packet_sim h _ _ _ _ _ _
+  · exact Sim.reject _ _ _
+
+private theorem filter_check_sim (h : ImageReads frame source image)
+    (same : SameHandle actual expected source image) (ref : Ref) (key : ByteArray) :
+    Sim frame (actual.checkFilter ref key) (expected.checkFilter ref key) Eq := by
+  unfold Handle.checkFilter
+  rw [same.source_eq, same.reference_eq, same.layout, same.crc]
+  split
+  · apply Sim.bind (filter_read_sim h _ _ _)
+    intro mask baseline eq
+    subst baseline
+    exact Sim.pure rfl
+  · exact Sim.pure rfl
+
+private theorem data_lookup_sim (h : ImageReads frame source image)
+    (same : SameHandle actual expected source image) (ref : Ref) (parent : Nat) (key : ByteArray) :
+    Sim frame (actual.lookupInData ref parent key) (expected.lookupInData ref parent key) Eq := by
+  unfold Handle.lookupInData
+  apply Sim.bind (data_sim h same _ _)
+  intro data reference equal
+  subst reference
+  apply Sim.bind (seek_sim _ _ _ _)
+  intro index reference equal
+  subst reference
+  split
+  · apply Sim.bind (Sim.decode _)
+    intro row reference equal
+    subst reference
+    exact Sim.pure rfl
+  · exact Sim.reject _ _ _
+
+private theorem filtered_lookup_sim (h : ImageReads frame source image)
+    (same : SameHandle actual expected source image) (key : ByteArray) :
+    Sim frame (actual.filteredLookup key) (expected.filteredLookup key) Eq := by
+  unfold Handle.filteredLookup
+  rw [same.filtered, same.root, same.source_eq, same.reference_eq, same.crc, same.layout,
+    same.rootOffset, same.height]
+  split
+  · exact lookup_sim h same key
+  · dsimp only
+    split
+    · apply Sim.bind (descend_sim h _ _ _ _ _ _)
+      intro region reference equal
+      subst reference
+      obtain ⟨ref, parent⟩ := region
+      dsimp only
+      apply Sim.bind (filter_check_sim h same _ _)
+      intro bit reference equal
+      subst reference
+      split
+      · exact data_lookup_sim h same _ _ _
+      · exact Sim.pure rfl
+    · exact Sim.pure rfl
+
 private theorem Sim.result {action : ReadM world α} {reference : ReadM Unit α}
     (simulation : Sim frame action reference Eq) :
     ReadPost frame action (fun value => reference () = .ok value ()) := by
@@ -319,5 +386,11 @@ theorem checkedLookup_framed (h : ImageReads frame source image)
     ReadPost frame (openChecked source crc id >>= (·.lookup key)) (fun value =>
       (openChecked (exactSource image) crc id >>= (·.lookup key)) () = .ok value ()) :=
   (Sim.bind (open_sim h crc id) (fun _ _ same => lookup_sim h same key)).result
+
+theorem checkedFilteredLookup_framed (h : ImageReads frame source image)
+    (crc : Checksum) (id : UInt64) (key : ByteArray) :
+    ReadPost frame (openChecked source crc id >>= (·.filteredLookup key)) (fun value =>
+      (openChecked (exactSource image) crc id >>= (·.filteredLookup key)) () = .ok value ()) :=
+  (Sim.bind (open_sim h crc id) (fun _ _ same => filtered_lookup_sim h same key)).result
 
 end ImmutableSSTable.Recursive

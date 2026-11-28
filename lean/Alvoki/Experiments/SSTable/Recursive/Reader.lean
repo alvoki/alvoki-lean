@@ -13,6 +13,7 @@ structure Handle (m : Type → Type) where private mk ::
   rootOffset : Nat
   height : Nat
   root : Array Ref
+  filtered : Bool
 
 def readExact [Monad m] [MonadExceptOf String m] (source : Source m)
     (offset size : Nat) : m ByteArray := do
@@ -61,12 +62,12 @@ def openChecked [Monad m] [MonadExceptOf String m] (source : Source m)
   unless base.layout.tableId = expectedId do throw "SSTable table ID mismatch"
   if base.count = 0 then
     unless endAt = 0 do throw "invalid empty SSTable extent"
-    return ⟨0, source, crc, base.layout, 0, 0, #[]⟩
+    return ⟨0, source, crc, base.layout, 0, 0, #[], footer.filtered⟩
   unless base.rootOffset + base.rootSize = endAt do throw "invalid SSTable root extent"
   let ref := footer.rootRef
   let raw ← readIndexPacket source crc expectedId footer.height ref endAt
   let root ← liftDecode (pageChildren raw ref false)
-  return ⟨base.count, source, crc, base.layout, ref.offset, footer.height, root⟩
+  return ⟨base.count, source, crc, base.layout, ref.offset, footer.height, root, footer.filtered⟩
 
 /-- Follow the selected reference at each level. A successful result retains
 the offset of the parent so the data edge can use the same extent check. -/

@@ -1,5 +1,5 @@
 import Alvoki.Experiments.SSTable.UnifiedNative
-import Alvoki.Experiments.SSTable.Recursive.Native
+import Alvoki.Experiments.SSTable.Recursive.FilteredReader
 
 open ImmutableSSTable
 
@@ -356,17 +356,23 @@ private structure BenchmarkCase where
   blocks : Nat := 0
   fileBytes : Nat := 0
   depth : Option Nat := none
+  reportFilter : Bool := false
 
 private structure ReadStats where
   indexCalls : Nat := 0
   indexBytes : Nat := 0
   dataCalls : Nat := 0
   dataBytes : Nat := 0
+  filterCalls : Nat := 0
+  filterBytes : Nat := 0
+  falsePositives : Nat := 0
 
 private def report (configuration : BenchmarkCase) (operation : String)
     (items trial elapsed : Nat) (sample : ReadStats := {}) : IO Unit :=
   let depth := configuration.depth.elim "" (fun n => s!",{n}")
-  IO.println s!"{configuration.label},{configuration.layoutName},{configuration.dataTarget},{configuration.leafTarget},{configuration.leaves},{configuration.blocks},{configuration.fileBytes},{operation},{items},{trial},{elapsed},{sample.indexCalls},{sample.indexBytes},{sample.dataCalls},{sample.dataBytes}{depth}"
+  let filter := if configuration.reportFilter then
+    s!",{sample.filterCalls},{sample.filterBytes},{sample.falsePositives}" else ""
+  IO.println s!"{configuration.label},{configuration.layoutName},{configuration.dataTarget},{configuration.leafTarget},{configuration.leaves},{configuration.blocks},{configuration.fileBytes},{operation},{items},{trial},{elapsed},{sample.indexCalls},{sample.indexBytes},{sample.dataCalls},{sample.dataBytes}{depth}{filter}"
 
 private def measure (configuration : BenchmarkCase) (operation : String) (items : Nat)
     (action traced : EIO String UInt64) (expected : UInt64) (stats : IO.Ref ReadStats) : IO Unit := do
@@ -381,9 +387,21 @@ private def measure (configuration : BenchmarkCase) (operation : String) (items 
     check (checksum == expected) "benchmark timed checksum"
     report configuration operation items trial elapsed sample
 
+private def traceMisses (lookup : ByteArray → EIO String (Option ByteArray))
+    (queries : Array ByteArray) (stats : IO.Ref ReadStats) : EIO String UInt64 := do
+  for key in queries do
+    let before ← stats.get
+    unless (← lookup key).isNone do throw "benchmark filter miss returned a value"
+    stats.modify fun after =>
+      if before.filterCalls < after.filterCalls && before.dataCalls < after.dataCalls then
+        { after with falsePositives := after.falsePositives + 1 }
+      else after
+  return 0
+
 private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCase)
     (layout : Unified.Layout) (rows : Nat) (isIndex : Nat → Bool) (scanSum : UInt64)
-    (recursive : Bool := false) : IO Unit := do
+    (recursive : Bool := false) (withFilter : Bool := false)
+    (isFilter : Nat → Bool := fun _ => false) : IO Unit := do
   let file ← IO.FS.Handle.mk path .read
   let source := handleSource file
   let stats ← IO.mkRef ({} : ReadStats)
@@ -393,13 +411,16 @@ private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCas
       stats.modify fun sample =>
         if isIndex offset then
           { sample with indexCalls := sample.indexCalls + 1, indexBytes := sample.indexBytes + count }
+        else if isFilter offset then
+          { sample with filterCalls := sample.filterCalls + 1, filterBytes := sample.filterBytes + count }
         else
           { sample with dataCalls := sample.dataCalls + 1, dataBytes := sample.dataBytes + count }
       source.readAt offset count
   }
   let openFor := fun input => do
     let table ← if recursive then
-        (·.table) <$> Recursive.openChecked input Alvoki.CRC32C.extend layout.tableId
+        (fun handle => if withFilter then handle.filteredTable else handle.table) <$>
+          Recursive.openChecked input Alvoki.CRC32C.extend layout.tableId
       else Unified.openTableChecked input Alvoki.CRC32C.extend layout.tableId
     return (table.lookup, table.next)
   for trial in [:3] do
@@ -410,30 +431,32 @@ private def benchmarkCase (path : System.FilePath) (configuration : BenchmarkCas
   let (traceLookup, traceNext) ← ok (openFor traced)
   let (mixed, hits, misses, mixedSum, hitSum) := benchQueries layout rows 4096
   for (label, queries, expected) in [("mixed", mixed, mixedSum), ("hit", hits, hitSum), ("miss", misses, 0)] do
-    measure configuration label queries.size (lookups lookup queries) (lookups traceLookup queries) expected stats
+    let traced := if configuration.reportFilter && label == "miss" then traceMisses traceLookup queries stats
+      else lookups traceLookup queries
+    measure configuration label queries.size (lookups lookup queries) traced expected stats
   measure configuration "scan-next" rows (scan next rows) (scan traceNext rows) scanSum stats
 
 private def recursiveInventory (crc : Unified.Checksum) (id : UInt64)
     (source : Source (EIO String)) (refs : Array Unified.Ref) :
-    Nat → EIO String (Array Nat × Nat)
-  | 0 => pure (#[], refs.size)
+    Nat → EIO String (Array Nat × Array Unified.Ref)
+  | 0 => pure (#[], refs)
   | height + 1 => do
     let mut indexOffsets := #[]
-    let mut blocks := 0
+    let mut blocks := #[]
     for ref in refs do
       let raw ← Recursive.readIndexPacket source crc id (height + 1) ref maxFileSize
       let children ← liftDecode (Recursive.pageChildren raw ref true)
-      let (below, count) ← recursiveInventory crc id source children height
+      let (below, childBlocks) ← recursiveInventory crc id source children height
       indexOffsets := (indexOffsets.push ref.offset) ++ below
-      blocks := blocks + count
+      blocks := blocks ++ childBlocks
     return (indexOffsets, blocks)
 
 private def benchmarkBuild (path : System.FilePath) (layout : Unified.Layout)
-    (rows dataTarget indexTarget : Nat) (recursive : Bool) : IO Nat := do
+    (rows dataTarget indexTarget : Nat) (recursive : Bool) (withFilter : Bool := false) : IO Nat := do
   let provider ← benchRows layout rows
   if recursive then
     Recursive.buildFileWith (nativeOutputOps (fun _ => pure ())) Alvoki.CRC32C.extend
-      path layout provider IO.userError ⟨dataTarget, indexTarget⟩
+      path layout provider IO.userError { dataTarget, indexTarget, membershipFilter := withFilter }
   else Unified.buildFile path layout provider ⟨dataTarget, indexTarget⟩
 
 def benchmarkBuildOnly (recursive : Bool) (rows : Nat) : IO Unit := IO.FS.withTempDir fun dir => do
@@ -445,20 +468,25 @@ def benchmarkBuildOnly (recursive : Bool) (rows : Nat) : IO Unit := IO.FS.withTe
   check (count == rows) "RSS benchmark row count"
   IO.println s!"{if recursive then "ALVSST06" else "ALVSST05"},{count},{elapsed}"
 
-def benchmark (paired : Bool := false) : IO Unit := IO.FS.withTempDir fun dir => do
+def benchmark (paired : Bool := false) (filterComparison : Bool := false) : IO Unit := IO.FS.withTempDir fun dir => do
   let rows := 65537
   let scanSum := (List.range rows).foldl (fun hash index => mix hash (index + 1).toUInt64) 0
-  let depthColumn := if paired then ",index_depth" else ""
-  IO.println s!"format,layout,data_target,leaf_target,leaf_blocks,data_blocks,file_bytes,operation,items,trial,elapsed_ns,index_reads,index_bytes,data_reads,data_bytes{depthColumn}"
+  let depthColumn := if paired || filterComparison then ",index_depth" else ""
+  let filterColumns := if filterComparison then ",filter_reads,filter_bytes,false_positives" else ""
+  IO.println s!"format,layout,data_target,leaf_target,leaf_blocks,data_blocks,file_bytes,operation,items,trial,elapsed_ns,index_reads,index_bytes,data_reads,data_bytes{depthColumn}{filterColumns}"
   for (name, keyWidth, valueWidth) in [
       ("fixed-fixed", some 8, some 8), ("fixed-variable", some 8, none),
       ("variable-fixed", none, some 8), ("variable-variable", none, none)] do
     let layout : Unified.Layout := ⟨keyWidth, valueWidth, 84⟩
-    for (dataTarget, indexTarget) in [(1024, 1024), (4096, 1024), (16384, 1024), (4096, 4096)] do
-      for recursive in (if paired then [false, true] else [false]) do
+    let targets := if filterComparison then [(4096, 1024)]
+      else [(1024, 1024), (4096, 1024), (16384, 1024), (4096, 4096)]
+    let formats := if filterComparison then [(true, false), (true, true)]
+      else if paired then [(false, false), (true, false)] else [(false, false)]
+    for (dataTarget, indexTarget) in targets do
+      for (recursive, withFilter) in formats do
         let path := dir / s!"{name}-{dataTarget}-{indexTarget}"
         let start ← IO.monoNanosNow
-        let count ← benchmarkBuild path layout rows dataTarget indexTarget recursive
+        let count ← benchmarkBuild path layout rows dataTarget indexTarget recursive withFilter
         let buildTime := (← IO.monoNanosNow) - start
         check (count == rows) "benchmark build count"
         let image ← IO.FS.readBinFile path
@@ -472,14 +500,23 @@ def benchmark (paired : Bool := false) : IO Unit := IO.FS.withTempDir fun dir =>
           pure (offsets, blocks, handle.height)
         else do
           let (leaves, blocks) ← readIndexes image
-          pure (leaves.map (·.offset), blocks.size, 2)
+          pure (leaves.map (·.offset), blocks, 2)
+        let label := if withFilter then "ALVSST06-bloom" else if recursive then "ALVSST06" else "ALVSST05"
         let configuration : BenchmarkCase :=
-          ⟨if recursive then "ALVSST06" else "ALVSST05", name, dataTarget, indexTarget,
-            indexOffsets.size, blocks, image.size, if paired then some depth else none⟩
+          ⟨label, name, dataTarget, indexTarget, indexOffsets.size, blocks.size, image.size,
+            if paired || filterComparison then some depth else none, filterComparison⟩
         report configuration "build" rows 0 buildTime
         let offsets : Std.HashSet Nat := Std.HashSet.ofArray indexOffsets
+        let filterOffsets : Std.HashSet Nat := if withFilter then
+          Id.run do
+            let mut present := {}
+            for ref in blocks do
+              if Recursive.useFilter ref.count then
+                present := present.insert (ref.offset - Recursive.filterPacketSize ref.count)
+            return present
+          else {}
         benchmarkCase path configuration layout rows (fun offset => offsets.contains offset)
-          scanSum recursive
+          scanSum recursive withFilter (fun offset => filterOffsets.contains offset)
         IO.FS.removeFile path
 
 end ImmutableSSTable.UnifiedFixtures
@@ -489,8 +526,9 @@ def main (args : List String) : IO Unit :=
   | [] => ImmutableSSTable.UnifiedFixtures.run
   | ["--bench"] => ImmutableSSTable.UnifiedFixtures.benchmark
   | ["--bench-paired"] => ImmutableSSTable.UnifiedFixtures.benchmark true
+  | ["--bench-filter"] => ImmutableSSTable.UnifiedFixtures.benchmark (filterComparison := true)
   | ["--bench-build", format, count] => do
     unless format == "05" || format == "06" do throw (IO.userError "expected format 05 or 06")
     let some rows := count.toNat? | throw (IO.userError "expected row count")
     ImmutableSSTable.UnifiedFixtures.benchmarkBuildOnly (format == "06") rows
-  | _ => throw (IO.userError "usage: immutableSSTableCheck [--bench | --bench-paired | --bench-build FORMAT ROWS]")
+  | _ => throw (IO.userError "usage: immutableSSTableCheck [--bench | --bench-paired | --bench-filter | --bench-build FORMAT ROWS]")

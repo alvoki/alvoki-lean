@@ -1,5 +1,5 @@
 import Alvoki.Experiments.SSTable.Recursive.Native
-import Alvoki.Experiments.SSTable.Recursive.Image
+import Alvoki.Experiments.SSTable.Recursive.FilterImageProofs
 import Alvoki.Experiments.SSTable.Recursive.ReadSafety
 
 namespace ImmutableSSTable.Recursive
@@ -42,9 +42,42 @@ private theorem source_reads (effects : ReadEffects ops path frame pinned image)
     rw [rejected]
     exact atDescriptor
 
-/-- The public lookup schedule uses the acquired descriptor. On a returned
-error only the frame is required. A successful lookup has the public
-exact-match value, including a successful miss. -/
+private theorem ReadEffects.withSource (effects : ReadEffects ops path frame pinned image)
+    (onSource : Source (ReadM world) → ReadM world α) (result : α → Prop)
+    (safe : ∀ held, ImageReads (fun s => frame s ∧ pinned held s) (ops.source held) image →
+      ReadPost (fun s => frame s ∧ pinned held s) (onSource (ops.source held)) result) :
+    ReadPost frame (ops.openFile path .read >>= fun held => onSource (ops.source held)) result := by
+  intro start before
+  have openedFrame := effects.openRead start before
+  cases acquired : ops.openFile path .read start with
+  | error error after =>
+    have kept : frame after := by simpa [acquired] using openedFrame
+    simpa [Bind.bind, EStateM.bind, acquired] using kept
+  | ok held after =>
+    have kept : frame after := by simpa [acquired] using openedFrame
+    have sameInode := effects.bindRead start held after before acquired
+    have read := safe held (source_reads effects held) after ⟨kept, sameInode⟩
+    simp only [Bind.bind, EStateM.bind, acquired]
+    cases ran : onSource (ops.source held) after with
+    | error error reached =>
+      rw [ran] at read
+      exact read.1
+    | ok value reached =>
+      rw [ran] at read
+      exact ⟨read.1.1, read.2⟩
+
+private theorem ReadPost.weaken (safe : ReadPost frame (world := world) action pre)
+    (implies : ∀ value, pre value → post value) : ReadPost frame action post := by
+  intro start initial
+  have observed := safe start initial
+  cases ran : action start with
+  | error _ _ => simpa [ran] using observed
+  | ok value _ =>
+    rw [ran] at observed
+    exact ⟨observed.1, implies value observed.2⟩
+
+/-- The checked schedule uses the acquired descriptor. On a returned
+error the frame is preserved. A successful lookup has the exact public value. -/
 theorem checkedNativeLookup (effects : ReadEffects ops path frame pinned image)
     (produced : Image layout crc image rows) (key : ByteArray) :
     ReadPost frame
@@ -52,36 +85,32 @@ theorem checkedNativeLookup (effects : ReadEffects ops path frame pinned image)
       (· = Contents.lookup rows key) := by
   unfold openCheckedWith
   rw [bind_assoc]
-  intro start before
-  have openedFrame := effects.openRead start before
-  cases acquired : ops.openFile path .read start with
-  | error error after =>
-    have kept : frame after := by simpa [acquired] using openedFrame
-    simpa [openCheckedWith, Bind.bind, EStateM.bind, acquired] using kept
-  | ok held after =>
-    have kept : frame after := by simpa [acquired] using openedFrame
-    have sameInode := effects.bindRead start held after before acquired
-    have read := checkedLookup_framed (source_reads effects held) crc layout.tableId key after
-      ⟨kept, sameInode⟩
-    have exact : (exactSource image).Serves image := Source.memory_serves image
-    obtain ⟨table, opened, semantics⟩ := produced.open_represents exact
-    have expected :
-        (openChecked (exactSource image) crc layout.tableId >>= (·.lookup key)) () =
-          .ok (Contents.lookup rows key) () := by
-      change (openChecked (exactSource image) crc layout.tableId >>= fun h => h.table.lookup key) () = _
-      rw [opened, pure_bind, semantics.lookup]
-      rfl
-    simp only [Bind.bind, EStateM.bind, acquired, Handle.table]
-    cases ran : (openChecked (ops.source held) crc layout.tableId >>= (·.lookup key)) after with
-    | error error reached =>
-      rw [ran] at read
-      simp only [Bind.bind, EStateM.bind] at ran
-      rw [ran]
-      exact read.1
-    | ok result reached =>
-      rw [ran] at read
-      simp only [Bind.bind, EStateM.bind] at ran
-      rw [ran]
-      exact ⟨read.1.1, (EStateM.Result.ok.inj (read.2.symm.trans expected)).1⟩
+  apply effects.withSource (fun source => openChecked source crc layout.tableId >>= (·.lookup key))
+  intro held sourceSafe
+  have exact : (exactSource image).Serves image := Source.memory_serves image
+  obtain ⟨table, opened, semantics⟩ := produced.open_represents exact
+  apply (checkedLookup_framed sourceSafe crc layout.tableId key).weaken
+  intro value agreed
+  change (openChecked (exactSource image) crc layout.tableId >>= fun h => h.table.lookup key) () = _ at agreed
+  rw [opened, pure_bind, semantics.lookup] at agreed
+  exact (EStateM.Result.ok.inj agreed).1.symm
+
+theorem checkedNativeFilteredLookup (effects : ReadEffects ops path frame pinned image)
+    (produced : Image layout crc image rows) (key : ByteArray) :
+    ReadPost frame
+      (openCheckedWith ops crc path layout.tableId >>= fun handle => handle.filteredTable.lookup key)
+      (· = Contents.lookup rows key) := by
+  unfold openCheckedWith
+  rw [bind_assoc]
+  apply effects.withSource (fun source => openChecked source crc layout.tableId >>= (·.filteredLookup key))
+  intro held sourceSafe
+  have exact : (exactSource image).Serves image := Source.memory_serves image
+  obtain ⟨table, opened, semantics⟩ := produced.open_filtered_represents exact
+  apply (checkedFilteredLookup_framed sourceSafe crc layout.tableId key).weaken
+  intro value agreed
+  change (openChecked (exactSource image) crc layout.tableId >>= fun h => h.filteredTable.lookup key)
+    () = _ at agreed
+  rw [opened, pure_bind, semantics.lookup] at agreed
+  exact (EStateM.Result.ok.inj agreed).1.symm
 
 end ImmutableSSTable.Recursive

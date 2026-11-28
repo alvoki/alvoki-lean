@@ -9,6 +9,7 @@ open Unified (Layout Ref Checksum checksumSize dataSize entrySize indexEntrySize
 structure BuildOptions where
   dataTarget : Nat := 16 * 1024
   indexTarget : Nat := 16 * 1024
+  membershipFilter : Bool := false
 
 structure Page where
   refs : Array Ref := #[]
@@ -69,11 +70,18 @@ def Writer.push [Monad m] [MonadExceptOf ε m] (writer : Writer m ε)
       else
         return (offset, page.add ref :: upper)
 
+def Writer.writeFilter [Monad m] [MonadExceptOf ε m] (writer : Writer m ε)
+    (offset : Nat) (rows : Array Entry) : m Nat :=
+  if writer.options.membershipFilter && useFilter rows.size then
+    writer.writePacket filterKind maxRowSize offset (Bloom.build rows)
+  else pure offset
+
 def Writer.flushData [Monad m] [MonadExceptOf ε m] (writer : Writer m ε)
     (state : BuilderState) : m BuilderState := do
   let some last := state.data.back? | return state
-  let next ← writer.writePacket dataKind maxRowSize state.offset (encodeData writer.layout state.data)
-  let ref : Ref := ⟨last.key, state.offset, next - state.offset,
+  let offset ← writer.writeFilter state.offset state.data
+  let next ← writer.writePacket dataKind maxRowSize offset (encodeData writer.layout state.data)
+  let ref : Ref := ⟨last.key, offset, next - offset,
     state.count - state.data.size, state.data.size⟩
   let (offset, pages) ← writer.push 1 next ref state.pages maxHeight
   return { state with offset, pages, data := #[], payloadBytes := 0 }
@@ -130,7 +138,7 @@ def Writer.finishPages [Monad m] [MonadExceptOf ε m] (writer : Writer m ε)
   let state ← writer.streamRows nextRow {} maxFileSize
   let state ← writer.flushData state
   let (height, offset, size) ← writer.finishPages 1 state.offset state.pages maxHeight
-  let footer : Footer := ⟨⟨layout, state.count, offset, size⟩, height⟩
+  let footer : Footer := ⟨⟨layout, state.count, offset, size⟩, height, options.membershipFilter⟩
   writer.sink.write (encodePacket crc 0 footerKind 0 (encodeFooter footer))
   writer.sink.flush
   return state.count

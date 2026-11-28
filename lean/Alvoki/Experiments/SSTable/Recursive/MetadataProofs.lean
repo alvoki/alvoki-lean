@@ -98,23 +98,35 @@ theorem decodeFooter_encode (footer : Footer) (valid : footer.Valid) :
     rw [Alvoki.ByteWords.pushWordFast_append]
     rw [ByteArray.append_assoc, ByteArray.extract_append_eq_left width.symm]
   have newTail : (encodeFooter footer).extract 8 Unified.footerBodySize = tail := by
-    change (Alvoki.pushWordFast (magic ++ tail) footer.height.toUInt64).extract
+    change (Alvoki.pushWordFast (magic ++ tail) footer.indexWord.toUInt64).extract
       8 Unified.footerBodySize = tail
     rw [Alvoki.ByteWords.pushWordFast_append]
     have trim := ByteArray.extract_append_size_left (a := magic ++ tail)
-      (b := Alvoki.pushWordFast ByteArray.empty footer.height.toUInt64) (i := 8)
+      (b := Alvoki.pushWordFast ByteArray.empty footer.indexWord.toUInt64) (i := 8)
     rw [fullSize] at trim
     rw [trim]
     exact ByteArray.extract_append_eq_right width.symm (by rw [width, tailSize]; decide)
-  have depthWord : (Alvoki.word (encodeFooter footer) Unified.footerBodySize).toNat = footer.height := by
-    change (Alvoki.word (Alvoki.pushWordFast (magic ++ tail) footer.height.toUInt64)
-      Unified.footerBodySize).toNat = footer.height
+  have depthBound : footer.height < 128 := Nat.lt_of_le_of_lt valid.height (by decide)
+  have wordFits : footer.indexWord < 256 := by
+    unfold Footer.indexWord
+    cases footer.filtered <;> simp only [Bool.false_eq_true, ite_false, ite_true, Nat.add_zero] <;> omega
+  have canonicalHeight : footer.indexWord % 128 = footer.height := by
+    unfold Footer.indexWord
+    cases footer.filtered <;> simp [Nat.mod_eq_of_lt depthBound]
+  have canonicalFlag : decide (128 ≤ footer.indexWord) = footer.filtered := by
+    unfold Footer.indexWord
+    cases footer.filtered
+    · simp [Nat.not_le_of_lt depthBound]
+    · simp
+  have depthWord : (Alvoki.word (encodeFooter footer) Unified.footerBodySize).toNat = footer.indexWord := by
+    change (Alvoki.word (Alvoki.pushWordFast (magic ++ tail) footer.indexWord.toUInt64)
+      Unified.footerBodySize).toNat = footer.indexWord
     rw [← fullSize, Alvoki.pushWordFast_roundtrip]
-    exact UInt64.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt valid.height (by decide))
+    exact UInt64.toNat_ofNat_of_lt' (Nat.lt_trans wordFits (by decide))
   have header : (decide ((encodeFooter footer).size = footerBodySize) &&
       (encodeFooter footer).extract 0 8 == magic) = true := by simp [newMagic]
   simp only [decodeFooter, header, ↓reduceIte, newTail, inner, Bind.bind, Except.bind,
-    Unified.decodeFooterBody_encodeFooterBody _ valid.base, depthWord, valid.height, valid.empty,
-    and_self, pure, Except.pure]
+    Unified.decodeFooterBody_encodeFooterBody _ valid.base, depthWord, wordFits, canonicalHeight,
+    canonicalFlag, valid.height, valid.empty, and_self, pure, Except.pure]
 
 end ImmutableSSTable.Recursive

@@ -167,3 +167,42 @@ inode. The native fixture exercises that handoff on concrete inputs.
 
 The paired measurements are recorded separately.
 [Reproduction and raw measurements](../../benchmarks/sstable/recursive.md)
+
+## Filter candidate
+
+The separate filter branch reserves bit seven of the ALVSST06 trailer's
+height word as the opt-in flag. Depth stays in the low six bits. Older
+ALVSST06 readers reject a trailer with the flag set. The extended reader
+accepts unfiltered ALVSST06 files. ALVSST05 files require rebuilding.
+
+Each flagged data reference with at least eight rows and a representable
+mask extent has one CRC32C Bloom packet immediately before the data packet.
+Its byte length is derived from the checked data reference's row count.
+The builder creates the mask from the same buffered row array it passes
+to the data encoder. The extent cap is 16 MiB including the checksum.
+The packed mask uses ten bits per key rounded to a byte with a minimum of
+eight bytes, and seven double-hashed positions per key. Ordinary lookup
+is used for an unflagged table or a region below the threshold or above
+the extent cap.
+
+A missing or short required mask, a positional read error and a CRC
+failure are lookup errors. Seek and next continue to use the same data
+path. The native fixture checks a tombstone, a corrupted mask, a short
+mask, a failed mask read, and a successful read of the unfiltered fringe
+after the error. Correctness is relative to the exact immutable writer
+image. CRC32C detects accidental corruption and supplies no authenticity
+guarantee for arbitrary bytes with a recomputed checksum.
+
+`Bloom.build_covers` proves coverage of every row passed to the producer.
+`Writer.writeFilter_packetAt` derives the exact serialized witness from
+the actual append and its cursor. `FilterAt.accepts` consumes that witness
+through the checked packet decoder. The recursive image attaches the
+filter witness at the same data node as the matching row array.
+`checkedNativeFilteredLookup` composes that image with checked open,
+recursive routing, decoded filter and positive or negative lookup,
+preserving the protected frame on both returned outcomes. The whole
+writer proof still needs to carry the local append witnesses through the
+remaining writes and successful sync to establish this image for every
+build.
+
+[Filter benchmark and raw samples](../../benchmarks/sstable/bloom.md)

@@ -6,8 +6,14 @@ namespace ImmutableSSTable.Recursive
 open Unified (Layout Checksum Ref Data RefCovers encodeData encodeIndex encodePacket
   checksumSize)
 
+structure FilterAt (layout : Layout) (crc : Checksum) (image : ByteArray)
+    (ref : Ref) (rows : Array Entry) : Prop where
+  within : filterPacketSize ref.count ≤ ref.offset
+  packet : Unified.PacketAt crc layout.tableId filterKind image
+    (ref.offset - filterPacketSize ref.count) (filterPacketSize ref.count) (Bloom.build rows)
+
 structure DataAt (layout : Layout) (crc : Checksum) (image : ByteArray)
-    (rows : List Entry) (ref : Ref) (endAt : Nat) : Prop where
+    (rows : List Entry) (ref : Ref) (endAt : Nat) (filtered : Bool) : Prop where
   within : ref.offset + ref.size ≤ endAt
   count : 0 < ref.count
   rowExtent : ref.firstRow + ref.count ≤ rows.length
@@ -15,7 +21,8 @@ structure DataAt (layout : Layout) (crc : Checksum) (image : ByteArray)
   body : ∃ block : Array Entry, block.size = ref.count ∧ ref.count ≤ maxFileSize ∧
     (∀ i (bound : i < block.size), block[i] = rowAt rows (ref.firstRow + i)) ∧
     (∀ i (bound : i < block.size), Unified.rowFits layout block[i] = true) ∧
-    Unified.PacketAt crc layout.tableId dataKind image ref.offset ref.size (encodeData layout block)
+    Unified.PacketAt crc layout.tableId dataKind image ref.offset ref.size (encodeData layout block) ∧
+    (filtered = true → useFilter ref.count = true → FilterAt layout crc image ref block)
 
 structure IndexAt (layout : Layout) (crc : Checksum) (image : ByteArray)
     (rows : List Entry) (height : Nat) (ref : Ref) (endAt : Nat) (fence : Bool)
@@ -28,11 +35,11 @@ structure IndexAt (layout : Layout) (crc : Checksum) (image : ByteArray)
 /-- The same exact byte and row partition invariant at every index height.
 Height zero describes one data block. The root has no parent fence. -/
 def TreeInImage (layout : Layout) (crc : Checksum) (image : ByteArray)
-    (rows : List Entry) (ref : Ref) (endAt : Nat) (fence : Bool) : Nat → Prop
-  | 0 => DataAt layout crc image rows ref endAt
+    (rows : List Entry) (ref : Ref) (endAt : Nat) (fence filtered : Bool) : Nat → Prop
+  | 0 => DataAt layout crc image rows ref endAt filtered
   | height + 1 =>
     ∃ children, IndexAt layout crc image rows (height + 1) ref endAt fence children ∧
-      ∀ child ∈ children.toList, TreeInImage layout crc image rows child ref.offset true height
+      ∀ child ∈ children.toList, TreeInImage layout crc image rows child ref.offset true filtered height
 
 structure Image (layout : Layout) (crc : Checksum) (image : ByteArray)
     (rows : List Entry) : Prop where
@@ -46,7 +53,7 @@ structure Image (layout : Layout) (crc : Checksum) (image : ByteArray)
     if rows.isEmpty then image.size = footerPacketSize else
       footer.base.rootOffset + footer.base.rootSize = image.size - footerPacketSize ∧
       TreeInImage layout crc image rows footer.rootRef (image.size - footerPacketSize)
-        false footer.height
+        false footer.filtered footer.height
 
 theorem IndexAt.checked (node : IndexAt layout crc image rows height ref endAt fence children) :
     pageChildren (encodeIndex children) ref fence = .ok children := by
@@ -57,11 +64,11 @@ theorem IndexAt.checked (node : IndexAt layout crc image rows height ref endAt f
       node.lastKey rfl, Bind.bind, Except.bind, pure, Except.pure]
 
 theorem DataAt.read [Monad m] [LawfulMonad m] [MonadExceptOf String m]
-    {handle : Handle m} (data : DataAt handle.layout handle.crc image rows ref endAt)
+    {handle : Handle m} (data : DataAt handle.layout handle.crc image rows ref endAt filtered)
     (served : handle.source.Serves image) (valid : handle.layout.Valid) :
     ∃ block, handle.readData ref endAt = pure block ∧
       ∀ i, i < ref.count → block.readRow i = .ok (rowAt rows (ref.firstRow + i)) := by
-  obtain ⟨contents, count, countLimit, rowMatches, widths, packet⟩ := data.body
+  obtain ⟨contents, count, countLimit, rowMatches, widths, packet, _⟩ := data.body
   have refCount := data.count
   have positive : 0 < contents.size := by omega
   have bounded : contents.size ≤ maxFileSize := by omega
@@ -107,10 +114,10 @@ theorem Routes.key {key : ByteArray} (lower : LowerBound (fun i => (rowAt rows i
 
 theorem TreeInImage.descend [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {source : Source m} (served : source.Serves image)
-    (route : Routes rows index before) (tree : TreeInImage layout crc image rows ref endAt true height)
+    (route : Routes rows index before) (tree : TreeInImage layout crc image rows ref endAt true filtered height)
     (lo : ref.firstRow ≤ index) (hi : index < ref.firstRow + ref.count) :
     ∃ data parent, descend source crc layout.tableId before ref endAt height = pure (data, parent) ∧
-      DataAt layout crc image rows data parent ∧
+      DataAt layout crc image rows data parent filtered ∧
       data.firstRow ≤ index ∧ index < data.firstRow + data.count := by
   induction height generalizing ref endAt with
   | zero => exact ⟨ref, endAt, rfl, tree, lo, hi⟩
@@ -131,7 +138,21 @@ structure Handle.Observes [Monad m] (handle : Handle m)
   count : handle.rowCount = rows.length
   root : RefCovers rows 0 rows.length handle.root
   children : ∀ child ∈ handle.root.toList,
-    TreeInImage handle.layout handle.crc image rows child handle.rootOffset true (handle.height - 1)
+    TreeInImage handle.layout handle.crc image rows child handle.rootOffset true handle.filtered (handle.height - 1)
+
+theorem Handle.Observes.route [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+    {handle : Handle m} (observed : handle.Observes image rows)
+    (route : Routes rows index before) (inside : index < rows.length) :
+    ∃ rootChild ref parent,
+      Unified.findRef handle.root before = some rootChild ∧
+      descend handle.source handle.crc handle.layout.tableId before rootChild
+        handle.rootOffset (handle.height - 1) = pure (ref, parent) ∧
+      DataAt handle.layout handle.crc image rows ref parent handle.filtered ∧
+      ref.firstRow ≤ index ∧ index < ref.firstRow + ref.count := by
+  obtain ⟨rootChild, member, picked, lo, hi⟩ := route observed.root (Nat.zero_le _) (by simpa)
+  obtain ⟨ref, parent, ran, data, lo, hi⟩ :=
+    (observed.children rootChild member).descend observed.serves route lo hi
+  exact ⟨rootChild, ref, parent, picked, ran, data, lo, hi⟩
 
 private theorem Handle.Observes.select [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {handle : Handle m} (observed : handle.Observes image rows)
@@ -142,9 +163,8 @@ private theorem Handle.Observes.select [Monad m] [LawfulMonad m] [MonadExceptOf 
       ref.firstRow ≤ index ∧ index < ref.firstRow + ref.count ∧
       ref.firstRow + ref.count ≤ rows.length ∧
       ∀ i, i < ref.count → data.readRow i = .ok (rowAt rows (ref.firstRow + i)) := by
-  obtain ⟨rootChild, member, picked, lo, hi⟩ := route observed.root (Nat.zero_le _) (by simpa)
-  obtain ⟨ref, parent, routeRead, exactData, start, stop⟩ :=
-    (observed.children rootChild member).descend observed.serves route lo hi
+  obtain ⟨rootChild, ref, parent, picked, routeRead, exactData, start, stop⟩ :=
+    observed.route route inside
   obtain ⟨data, read, fits⟩ := exactData.read observed.serves observed.valid (handle := handle)
   exact ⟨rootChild, ref, data, picked, by simp [Handle.select, routeRead, read],
     start, stop, exactData.rowExtent, fits⟩
@@ -198,9 +218,9 @@ theorem Handle.Observes.represents [Monad m] [LawfulMonad m] [MonadExceptOf Stri
         picked, read, row, liftDecode]
     · simp [Handle.next, Contents.next, observed.count, inside, Nat.le_of_not_gt inside]
 
-theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+theorem Image.open_observes [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     {source : Source m} (exact : Image layout crc image rows) (served : source.Serves image) :
-    ∃ handle, openChecked source crc layout.tableId = pure handle ∧ handle.table.Represents rows := by
+    ∃ handle, openChecked source crc layout.tableId = pure handle ∧ handle.Observes image rows := by
   obtain ⟨footer, valid, layoutEq, count, packetFits, footerBytes, root⟩ := exact.root
   let endAt := image.size - footerPacketSize
   have enough : endAt + footerPacketSize = image.size := Nat.sub_add_cancel packetFits
@@ -224,7 +244,7 @@ theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
         ↓reduceIte]
       exact ⟨_, rfl, rfl, rfl, rfl, rfl⟩
     obtain ⟨handle, ran, src, lay, size, refs⟩ := opened
-    refine ⟨handle, ran, Handle.Observes.represents (image := image) ?_ exact.ordered⟩
+    refine ⟨handle, ran, ?_⟩
     refine ⟨src ▸ served, lay ▸ layoutValid, size, ?_, ?_⟩
     · rw [refs]
       exact ⟨by simp, by simp, by simp, by omega⟩
@@ -246,17 +266,24 @@ theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
     have opened : ∃ handle, openChecked source crc layout.tableId = pure handle ∧
         handle.source = source ∧ handle.layout = footer.base.layout ∧ handle.crc = crc ∧
         handle.rowCount = footer.base.count ∧ handle.root = children ∧
-        handle.rootOffset = footer.rootRef.offset ∧ handle.height = footer.height := by
+        handle.rootOffset = footer.rootRef.offset ∧ handle.height = footer.height ∧
+        handle.filtered = footer.filtered := by
       simp only [openChecked, footerRead, pure_bind, tableId, eq_self, nonempty, rootEnd, endAt,
         ↓reduceIte, bytes, node.checked, liftDecode]
-      exact ⟨_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
-    obtain ⟨handle, ran, src, lay, checksum, size, refs, offset, depth⟩ := opened
-    refine ⟨handle, ran, Handle.Observes.represents (image := image) ?_ exact.ordered⟩
+      exact ⟨_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    obtain ⟨handle, ran, src, lay, checksum, size, refs, offset, depth, filter⟩ := opened
+    refine ⟨handle, ran, ?_⟩
     refine ⟨src ▸ served, lay ▸ layoutValid, size.trans count, ?_, ?_⟩
     · rw [refs]
       simpa only [Footer.rootRef, count] using node.coverage
     · intro child member
-      rw [offset, depth, h, Nat.succ_sub_one, lay, checksum, layoutEq]
+      rw [offset, depth, h, Nat.succ_sub_one, lay, checksum, layoutEq, filter]
       exact below child (refs ▸ member)
+
+theorem Image.open_represents [Monad m] [LawfulMonad m] [MonadExceptOf String m]
+    {source : Source m} (exact : Image layout crc image rows) (served : source.Serves image) :
+    ∃ handle, openChecked source crc layout.tableId = pure handle ∧ handle.table.Represents rows := by
+  obtain ⟨handle, opened, observed⟩ := exact.open_observes served
+  exact ⟨handle, opened, observed.represents exact.ordered⟩
 
 end ImmutableSSTable.Recursive
