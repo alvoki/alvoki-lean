@@ -131,6 +131,22 @@ def finish [Monad m] [MonadExceptOf ε m] (action : m α) (cleanup : m Unit) : m
   | .error error, _ | .ok _, .error error => throw error
   | .ok value, .ok () => pure value
 
+/-- Native cleanup starts at the world left by the body even on error.
+If both operations fail, keep the earlier error at the later world. -/
+theorem finish_io (action : IO α) (cleanup : IO Unit) (start : Void IO.RealWorld) :
+    finish (ε := IO.Error) action cleanup start =
+      let body := action.toBaseIO start
+      let released := cleanup.toBaseIO body.state
+      match body.val, released.val with
+      | .error e, _ | .ok _, .error e => .error e released.state
+      | .ok x, .ok _ => .ok x released.state := by
+  cases ran : action start with
+  | ok x t | error e t =>
+    cases released : cleanup t <;>
+      simp [finish, attempt, Bind.bind, instMonadEIO._aux_13, EST.bind, EIO.toBaseIO,
+        MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch,
+        Pure.pure, instMonadEIO._aux_5, EST.pure, ran, released] <;> rfl
+
 /-- Kernel-checked by the interpretation below. The native wrapper runs
 this schedule inside the already-acquired root-lock scope. -/
 def Cell.withSession [Monad m] [MonadExceptOf ε m] (cell : Cell m W) (invalid : ε)

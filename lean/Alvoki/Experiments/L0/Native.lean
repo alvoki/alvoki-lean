@@ -13,13 +13,11 @@ private abbrev FileM := ExceptT String IO
 @[extern "alvoki_fsync"]
 private opaque syncHandle (handle : @& IO.FS.Handle) : IO Unit
 
-private def pathExists (path : FilePath) : IO Bool := do
-  try
-    let _ ← path.symlinkMetadata
-    return true
-  catch
-    | .noFileOrDirectory .. => return false
-    | err => throw err
+def pathExists (path : FilePath) : IO Bool :=
+  MonadExceptOf.tryCatch (ε := IO.Error) (path.symlinkMetadata >>= fun _ => pure true)
+    (fun e => match e with
+      | .noFileOrDirectory .. => pure false
+      | other => throw other)
 
 private def buildSynced (path : FilePath) (id : UInt64) (rows : Rows) : IO Unit := do
   let remaining ← IO.mkRef rows
@@ -31,7 +29,7 @@ private def createTable (dir : FilePath) (rows : Rows) : FileM UInt64 :=
     (fun path id entries => liftM (buildSynced path id entries))
     (fun parent => liftM (IO.FS.withFile parent .read syncHandle)) rows
 
-private def checked (operation : FileM α) : IO α := do
+def checked (operation : FileM α) : IO α := do
   match ← operation.run with
   | .ok result => return result
   | .error error => throw (IO.userError error)
@@ -41,15 +39,15 @@ private def tables (dir : FilePath) : Tables FileM where
   check id := nativeTableAt dir id (fun _ => pure ())
   lookup id key := nativeTableAt dir id (·.lookup key)
 
-private def phaseCell (phase : IO.Ref (Phase Wal)) : Cell IO Wal where
+def phaseCell (phase : IO.Ref (Phase Wal)) : Cell IO Wal where
   read := phase.get
   swap := phase.swap
 
-private def componentCell (phase : IO.Ref (Phase Wal)) : Cell FileM Wal where
+def componentCell (phase : IO.Ref (Phase Wal)) : Cell FileM Wal where
   read := liftM (phase.get : IO (Phase Wal))
   swap := fun next => liftM (phase.swap next : IO (Phase Wal))
 
-private def storageCallbacks (root : FilePath) : Callbacks FileM Wal :=
+def storageCallbacks (root : FilePath) : Callbacks FileM Wal :=
   let blob := DurableBlob.native (root / "manifest")
   {
     append handle batch := liftM do
@@ -63,7 +61,7 @@ private def storageCallbacks (root : FilePath) : Callbacks FileM Wal :=
     tables := tables (root / "tables")
   }
 
-private def callbackComponents (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
+def callbackComponents (root : FilePath) (phase : IO.Ref (Phase Wal)) : Components FileM :=
   (componentCell phase).components "L0 cannot use the WAL in this phase" (storageCallbacks root)
 
 structure Handle where private mk ::
@@ -77,20 +75,36 @@ private def assembled (root : FilePath) (phase : IO.Ref (Phase Wal)) : Handle :=
 def Handle.AtRoot (handle : Handle) (root : FilePath) (phase : IO.Ref (Phase Wal)) : Prop :=
   handle = assembled root phase
 
+/-- The recovery action run by the native scope on its fresh phase cell. -/
+def recoverAt (root : FilePath) (phase : IO.Ref (Phase Wal)) : IO Session :=
+  checked (recover (callbackComponents root phase))
+
+def checkComponentDirectory (root : FilePath) (name : String) : IO Unit := do
+  unless (← (root / name).symlinkMetadata).type == .dir do
+    throw (IO.userError s!"expected directory {name}")
+
+def checkLockName (path : FilePath) : IO Unit := do
+  if ← pathExists path then
+    let md ← path.symlinkMetadata
+    unless md.type == .file && md.numLinks == 1 do
+      throw (IO.userError "expected a singly linked regular L0 lock file")
+
+/-- Resolve and validate the namespace before acquiring its root lock. -/
+def validatedRoot (path : FilePath) : IO FilePath := do
+  let root ← IO.FS.realPath path
+  checkComponentDirectory root "wal"
+  checkComponentDirectory root "manifest"
+  checkComponentDirectory root "tables"
+  checkLockName (root / "l0.lock")
+  return root
+
 /-- Exclusive root ownership is held for the entire callback. The caller
 supplies an initialized root containing distinct, durably named wal,
 manifest, and tables directories. All operations must be sequential.
 An escaped handle is offline after the callback ends. -/
 def withOpen (path : FilePath) (use : Handle → IO α) : IO α := do
-  let root ← IO.FS.realPath path
-  for name in ["wal", "manifest", "tables"] do
-    unless (← (root / name).symlinkMetadata).type == .dir do
-      throw (IO.userError s!"expected directory {name}")
+  let root ← validatedRoot path
   let lockPath := root / "l0.lock"
-  if ← pathExists lockPath then
-    let md ← lockPath.symlinkMetadata
-    unless md.type == .file && md.numLinks == 1 do
-      throw (IO.userError "expected a singly linked regular L0 lock file")
   IO.FS.withFile lockPath .append fun lock => do
     unless ← lock.tryLock do throw (IO.userError "L0 already open")
     let phase ← IO.mkRef (.opening : Phase Wal)
@@ -98,6 +112,44 @@ def withOpen (path : FilePath) (use : Handle → IO α) : IO α := do
     (phaseCell phase).withSession (IO.userError "L0 cannot publish a session")
       (checked (recover handle.ops)) (use handle)
       WalRecoverySlice.Segmented.Native.close lock.unlock
+
+/-- Acquisition failures precede recovery and the callback. Success exposes
+the exact root lock and freshly allocated cell supplied to the shared scope.
+The assembled handle stays private except for its propositional identity. -/
+theorem withOpen_reached (path : FilePath) (use : Handle → IO α) (start : Void IO.RealWorld) :
+    match validatedRoot path start with
+    | .error e t => withOpen path use start = .error e t
+    | .ok root t =>
+      match IO.FS.Handle.mk (root / "l0.lock") .append t with
+      | .error e u => withOpen path use start = .error e u
+      | .ok lock u =>
+        match lock.tryLock true u with
+        | .error e v => withOpen path use start = .error e v
+        | .ok false v => withOpen path use start = .error (IO.userError "L0 already open") v
+        | .ok true v =>
+          let fresh := IO.mkRef (.opening : Phase Wal) v
+          ∃ handle, handle.AtRoot root fresh.val ∧
+            withOpen path use start =
+              (phaseCell fresh.val).withSession (IO.userError "L0 cannot publish a session")
+                (recoverAt root fresh.val) (use handle)
+                WalRecoverySlice.Segmented.Native.close lock.unlock fresh.state := by
+  cases resolved : validatedRoot path start with
+  | error => simp [withOpen, Bind.bind, instMonadEIO._aux_13, EST.bind, resolved]
+  | ok root t =>
+    cases opened : IO.FS.Handle.mk (root / "l0.lock") .append t with
+    | error => simp [withOpen, IO.FS.withFile, Bind.bind, instMonadEIO._aux_13, EST.bind, resolved, opened]
+    | ok lock u =>
+      cases acquired : lock.tryLock true u with
+      | error =>
+        simp [withOpen, IO.FS.withFile, Bind.bind, instMonadEIO._aux_13, EST.bind, resolved, opened, acquired]
+      | ok yes v =>
+        cases yes
+        · simp [withOpen, IO.FS.withFile, Bind.bind, instMonadEIO._aux_13, EST.bind, resolved, opened, acquired]
+          rfl
+        · simp only [opened, acquired]
+          refine ⟨_, rfl, ?_⟩
+          simp [withOpen, IO.FS.withFile, Bind.bind, instMonadEIO._aux_13, EST.bind, resolved, opened, acquired]
+          rfl
 
 private def update (handle : Handle) (operation : Session → FileM Session) : IO Unit := do
   (phaseCell handle.phase).update (IO.userError "L0 requires reopen")
