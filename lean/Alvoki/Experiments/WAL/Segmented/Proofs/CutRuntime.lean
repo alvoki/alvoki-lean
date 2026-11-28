@@ -32,7 +32,7 @@ def sites (store : Store) (session : Session) (stop : Stop) : Sites store where
   sync w d := stop (syncHandle store.directory) w d
   publish _ w d := ∃ (p : ControlCutIO.Point) (t : W) (α : Type) (a : IO α) (k : ControlCutIO.OpKind), ControlCutIO.Prefix store session.control w p t ∧
     ControlCutIO.Issued store session.control p a k ∧ stop a t d
-  write := ChildStop stop
+  write h b w d := Nonempty (ChildCutIO.Operand h w) → ChildStop stop h b w d
   slotSet slot w d := stop (store.active.set slot : IO _) w d
 
 /-- A rotation operation is reached by the same concrete store and
@@ -92,7 +92,7 @@ private theorem write {disk : W → Disk} {c : Context disk} {r : Reports batch}
       (segmentHistory head.capacity head.active hist))
     (view : c.session.view = historyView head hist)
     (spare : hist.length < (head.active+1)*head.capacity) (room : c.session.view.tail < Contract.maxPosition)
-    (size : batch.length ≤ 32) (cut : ChildStop stop h batch w d) :
+    (size : batch.length ≤ 32) (cut : Nonempty (ChildCutIO.Operand h w) → ChildStop stop h batch w d) :
     Recoverable c.session.view (some (.append batch)) d := by
   obtain ⟨base,⟨a,held⟩,_⟩ := entry
   have reached := steps.steps a _ _ held (sameP ▸ phase) rfl
@@ -101,6 +101,9 @@ private theorem write {disk : W → Disk} {c : Context disk} {r : Reports batch}
   rw [view]
   have prior : Recoverable (historyView head hist) (some (.append batch)) (disk w) :=
     (show Installed (sessionOf head hist) (disk w) from ⟨hist,rfl,valid,l,r'⟩).offline (.inl rfl)
+  have atChild := reached.read
+  rw [layout.active.position] at atChild
+  have cut := cut ⟨⟨_,_,_,_,_,_,a.assembled,atChild⟩⟩
   cases cut with
   | entry site stopped => exact (prim.volatile.childEntry site stopped).recoverable prior
   | before operand site stopped =>

@@ -34,7 +34,9 @@ strictly preceding the stopped instruction are traversed. -/
 private theorem frameChild {disk : W → Model.Disk} {c : Context disk} {r : Reports batch}
     (frames : FrameRuntime disk c.store c.session P) {head : Control} (same : head.policy = c.session.control.policy)
     (steps : AppendIO.WriteSteps c slot head.active h r w st) (held : c.ReadyFile slot head.active h w st)
-    (pw : P w) (cut : ChildStop (tagAt stop last) h batch w d) : P last := by
+    (canonical : ∃ bs, st.2 = .active .lock (SingleFile.appendBindings head.policy)
+      (Persistence.historyCursor bs) bs)
+    (pw : P w) (cut : Nonempty (ChildCutIO.Operand h w) → ChildStop (tagAt stop last) h batch w d) : P last := by
   have before (a : ChildCutIO.Operand h w) : P (poisonAt a.cell a.fd a.mutex w) :=
     VolatileFrame.set frames.volatile a.cell _ (VolatileFrame.get frames.volatile a.cell (VolatileFrame.lock frames.volatile a.mutex pw))
   have owns (operand : ChildCutIO.Operand h w) : OwnedOperand disk c.store head operand := by
@@ -43,6 +45,12 @@ private theorem frameChild {disk : W → Model.Disk} {c : Context disk} {r : Rep
     have active : auth.Live w (.active .lock (SingleFile.appendBindings head.policy) pos bs) :=
       by rw [same, ← phase]; exact live
     exact (owner (c := c) head same operand auth active reached.read).1
+  obtain ⟨old,state⟩ := canonical
+  obtain ⟨_,⟨key,live⟩,pos,bs,phase,cursor⟩ := held
+  rw [same] at state
+  obtain ⟨_,_,rfl,rfl⟩ := SingleFile.Phase.active.inj (phase.symm.trans state)
+  have issued := (steps.steps key _ _ live phase cursor).read
+  have cut := cut ⟨⟨_,_,_,_,_,_,key.assembled,issued⟩⟩
   cases cut with
   | entry site stopped => exact stopped.1 ▸ VolatileFrame.entry frames.volatile site pw
   | before a site stopped =>
@@ -77,7 +85,9 @@ theorem frameBody {disk : W → Model.Disk} {mem : ChildMemory disk}
     · intro d stopped
       exact stopped.1 ▸ fromQ _ held.1.1
     · rintro child t st ⟨rfl,rfl,rfl⟩ d stopped
-      exact frameChild (c := c) frames (head := reg.session.control) rfl io.write io.readFrame
+      obtain ⟨hist,_,layout,_,_,form⟩ := ready
+      rw [layout.active.position] at form
+      exact frameChild (c := c) frames (head := reg.session.control) rfl io.write io.readFrame ⟨_,form⟩
         (fromQ _ io.readFrame.1.1) stopped
   · intro full
     let io := op.rotate phase full held
@@ -99,8 +109,9 @@ theorem frameBody {disk : W → Model.Disk} {mem : ChildMemory disk}
     · rintro child t st ⟨earlier,entry,_,_⟩ d ⟨_,_,_,_,_,path,_,tag,_⟩
       exact tag ▸ CutLeafFrames.control (frames.control t (visit earlier)) path (fromQ _ entry.1.1)
     · rintro child t st ⟨earlier,entry,file,named⟩ d stopped
+      obtain ⟨_,_,_,_,_,_,_,form⟩ := earlier.layout ready size room full linux
       exact frameChild (c := c) frames (head := Model.successor reg.session) rfl
-        (io.write child t st earlier entry file named) entry (fromQ _ entry.1.1) stopped
+        (io.write child t st earlier entry file named) entry ⟨[],form⟩ (fromQ _ entry.1.1) stopped
     · rintro child t st ⟨_,candidate,_⟩ d stopped
       exact stopped.1 ▸ fromQ _ candidate.1.1
     · rintro child t st ⟨_,candidate⟩ d ⟨_,_,_,site,stopped⟩

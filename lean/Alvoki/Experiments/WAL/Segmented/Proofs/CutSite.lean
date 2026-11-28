@@ -53,6 +53,13 @@ private theorem ChildStop.located (cut : ChildStop stop h batch w d) :
   | inside r => exact ⟨r.atCall, .inside {r with stopped := ⟨rfl, r.stopped⟩}⟩
   | after r => exact ⟨r.atCall, .after {r with cut := ⟨rfl, r.cut⟩}⟩
 
+private theorem guardedChild {stop : Stop} (cut : Nonempty (ChildCutIO.Operand h w) → ChildStop stop h batch w d) :
+    ∃ t, Nonempty (ChildCutIO.Operand h w) → ChildStop (tagAt stop t) h batch w d := by
+  by_cases owned : Nonempty (ChildCutIO.Operand h w)
+  · obtain ⟨t,hit⟩ := (cut owned).located
+    exact ⟨t, fun _ => hit⟩
+  · exact ⟨w, fun h => False.elim (owned h)⟩
+
 private theorem bodyLocated (s : Store) (session : Session) (batch : Bytes) (stop : Stop) :
     Located ((sites s session stop).appendSession session batch)
       (fun t => (sites s session (tagAt stop t)).appendSession session batch) := by
@@ -80,7 +87,7 @@ private theorem bodyLocated (s : Store) (session : Session) (batch : Bytes) (sto
       · rintro w d ⟨pt,t,α,a,k,seen,issued,cut⟩
         exact ⟨t,pt,t,α,a,k,seen,issued,rfl,cut⟩
       intro _
-      apply Located.bind (Located.leaf fun _ _ cut => ChildStop.located cut)
+      apply Located.bind (Located.leaf fun _ _ cut => guardedChild cut)
       intro _
       apply Located.bind (Located.leaf fun w _ cut => ⟨w,rfl,cut⟩)
       exact fun _ => Located.pure _
@@ -96,11 +103,11 @@ private theorem bodyLocated (s : Store) (session : Session) (batch : Bytes) (sto
     · exact Located.throw _
     · dsimp only
       split
-      · apply Located.bind (Located.leaf fun _ _ cut => ChildStop.located cut)
+      · apply Located.bind (Located.leaf fun _ _ cut => guardedChild cut)
         exact fun _ => Located.pure _
       · apply Located.bind (Located.throw _)
         intro _
-        apply Located.bind (Located.leaf fun _ _ cut => ChildStop.located cut)
+        apply Located.bind (Located.leaf fun _ _ cut => guardedChild cut)
         exact fun _ => Located.pure _
 
 /-- Recording the actual issuing world does not discard any admitted cut. -/

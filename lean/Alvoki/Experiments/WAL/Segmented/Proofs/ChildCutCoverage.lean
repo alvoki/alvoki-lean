@@ -108,32 +108,103 @@ theorem terminalCovered (actual : WalRecoverySlice.Ops SingleFile.ConcreteRecove
       | error fault => exact ⟨_,_,⟨prior⟩,.fault ran⟩
       | ok value => exact ih value (prior.next ran)
 
-/-- Early stops need only handle bindings. A reached active phase supplies
-its exact private operands for the worker and its actual return for cleanup. -/
-def source (stop : Stop) (h : SingleFile.Handle) (batch : Bytes) (start : W) (d : Disk) : Prop :=
-  (∃ (α : Type) (op : IO α) (w : W), AppendCut.ChildEntry h start op w ∧ stop op w d) ∨
-  ∃ a : Operand h start,
-    let body := appendBatch programOps a.policy (Persistence.historyCursor a.known) batch
-    let began := poisonAt a.cell a.fd a.mutex start
-    (∃ (α : Type) (op : IO α) (w : W), Before a op w ∧ stop op w d) ∨ visits a.files stop body began d ∨
+private theorem finished {stop : Stop} (a : Operand h w) (batch : Bytes)
+    (ended : let body := appendBatch programOps a.policy (Persistence.historyCursor a.known) batch
+      let began := poisonAt a.cell a.fd a.mutex w
       match (body.eval (nativeOps a.files)).run began with
-      | .error e t => ∃ (α : Type) (op : IO α) (w : W), After a batch t (.error e) op w ∧ stop op w d
-      | .ok reply t => ∃ (α : Type) (op : IO α) (w : W), After a batch t (.ok reply) op w ∧ stop op w d
+      | .error e t => ∃ (α : Type) (op : IO α) (v : W), After a batch t (.error e) op v ∧ stop op v d
+      | .ok reply t => ∃ (α : Type) (op : IO α) (v : W), After a batch t (.ok reply) op v ∧ stop op v d) :
+    ChildStop stop h batch w d := by
+  let actual := nativeOps a.files
+  let body := appendBatch programOps a.policy (Persistence.historyCursor a.known) batch
+  let began := poisonAt a.cell a.fd a.mutex w
+  obtain ⟨rest,t,⟨path⟩,done⟩ := terminalCovered actual body (origin := began) .start
+  change (match (body.eval actual).run began with | .error e t => _ | .ok reply t => _) at ended
+  cases ran : (body.eval actual).run began <;> rw [ran] at ended done <;>
+    obtain ⟨α,op,v,site,hit⟩ := ended <;>
+    exact .after ⟨a,rest,t,path,_,_,done,α,op,v,site,hit⟩
 
-theorem sourceCovered (cut : source stop h batch w d) : ChildStop stop h batch w d := by
-  rcases cut with ⟨_,_,_,site,hit⟩ | ⟨a,early | inner | ended⟩
-  · exact .entry site hit
-  · obtain ⟨_,_,_,site,hit⟩ := early
-    exact .before a site hit
-  · exact workerCovered a _ .start inner
-  · let actual := nativeOps a.files
-    let body := appendBatch programOps a.policy (Persistence.historyCursor a.known) batch
-    let began := poisonAt a.cell a.fd a.mutex w
-    have terminal := terminalCovered actual body (origin := began) .start
-    change (match (body.eval actual).run began with | .error e t => _ | .ok reply t => _) at ended
-    obtain ⟨rest,t,⟨path⟩,done⟩ := terminal
-    cases ran : (body.eval actual).run began <;> rw [ran] at ended done <;>
-      obtain ⟨α,op,v,site,hit⟩ := ended <;>
-      exact .after ⟨a,rest,t,path,_,_,done,α,op,v,site,hit⟩
+private noncomputable def fileWorker (policy : Policy) (batch : Bytes) (stop : Stop) (files : AppendFiles IO.FS.Handle)
+    (pos : Cursor) : Observed Cursor :=
+  let code := appendBatch programOps policy pos batch
+  ⟨checked (code.eval (nativeOps files)), visits files stop code⟩
+
+private noncomputable def phaseBody (policy : Policy) (cell : SingleFile.ConcreteAppend.PhaseRef) (batch : Bytes)
+    (stop : Stop) : Observed Unit := do
+  SingleFile.appendWith (← Observed.leaf stop (cell.get : IO _))
+    (fun ph => Observed.leaf stop (cell.set ph : IO Unit)) (fileWorker policy batch stop) batch
+
+/-- Only the private identity of the public child is part of this
+observation. Its phase read, every guard, and whether the finalizer follows
+an error are determined by the same executable appendWith. -/
+def source (stop : Stop) (h : SingleFile.Handle) (batch : Bytes) (w : W) (d : Disk) : Prop :=
+  ∃ p r m, h.Assembled p r m ∧
+    (Observed.leaf stop (liftM m.lock : IO Unit) >>= fun _ =>
+      Observed.finallyUnlock (phaseBody p r batch stop) m stop).cuts w d
+
+private theorem checkedOut (a : ExceptT String IO α) (w : W) :
+    checked a w = match a.run w with
+      | .error e t => .error e t
+      | .ok (.error msg) t => .error (IO.userError msg) t
+      | .ok (.ok x) t => .ok x t := by
+  unfold checked
+  cases ran : a.run w with
+  | error => simp [Bind.bind,instMonadEIO._aux_13,EST.bind,ran]
+  | ok answer => cases answer <;> simp [Bind.bind,instMonadEIO._aux_13,EST.bind,ran] <;> rfl
+
+theorem sourceCovered (rawCut : source stop h batch w d) (owned : Nonempty (Operand h w)) :
+    ChildStop stop h batch w d := by
+  obtain ⟨p,r,m,bound,hit⟩ := rawCut
+  obtain ⟨a⟩ := owned
+  obtain ⟨rfl,rfl,rfl⟩ := a.assembled.unique bound
+  let r := a.cell
+  let m := a.mutex
+  let p := a.policy
+  have binds : h.Binds r m := by
+    unfold SingleFile.Handle.Assembled at bound
+    unfold SingleFile.Handle.Binds
+    constructor <;> apply congrArg _ bound
+  rw [Observed.bindCuts] at hit
+  rcases hit with lock | portion
+  · exact .entry (.mutex binds) lock
+  let got := SingleFile.ConcreteAppend.readAt r m w
+  let code := appendBatch programOps p (Persistence.historyCursor a.known) batch
+  let began := poisonAt r a.fd m w
+  have read : (Observed.leaf stop (r.get : IO _)).run (m.lock w).state =
+      .ok (.active a.fd a.files (Persistence.historyCursor a.known) a.known) got.state := by
+    rw [← a.active]
+    rfl
+  change (phaseBody p r batch stop).cuts _ d ∨ stop _ (returnedWorld ((phaseBody p r batch stop).run _)) d at portion
+  dsimp only [r,m,p] at read portion
+  simp only [phaseBody,Observed.bindCuts,Observed.bindRun,read,SingleFile.appendWith] at portion
+  have poison : (Observed.leaf stop (a.cell.set (.poisoned a.fd) : IO Unit)).run got.state =
+      .ok () began := rfl
+  have atFile : (fileWorker a.policy batch stop a.files (Persistence.historyCursor a.known)).run began =
+      checked (code.eval (nativeOps a.files)) began := rfl
+  simp only [poison,atFile,checkedOut] at portion
+  rcases portion with (early | storage) | leaving
+  · exact .entry (.read binds) early
+  · rcases storage with poisoning | inner
+    · exact .before a .poison poisoning
+    · rcases inner with inside | installed
+      · exact workerCovered a code .start inside
+      · apply finished a batch
+        change (match (code.eval (nativeOps a.files)).run began with | .error e t => _ | .ok reply t => _)
+        cases ran : (code.eval (nativeOps a.files)).run began with
+        | error => rw [ran] at installed; contradiction
+        | ok answer u =>
+          rw [ran] at installed
+          cases answer with
+          | error => contradiction
+          | ok => exact ⟨_,_,_,.install,installed⟩
+  · apply finished a batch
+    change (match (code.eval (nativeOps a.files)).run began with | .error e t => _ | .ok reply t => _)
+    cases ran : (code.eval (nativeOps a.files)).run began with
+    | error e t => rw [ran] at leaving; exact ⟨_,_,_,.failed,leaving⟩
+    | ok answer t =>
+      rw [ran] at leaving
+      cases answer with
+      | error msg => exact ⟨_,_,_,.rejected,leaving⟩
+      | ok next => exact ⟨_,_,_,.leave,leaving⟩
 
 end WalRecoverySlice.Segmented.Native.ChildCutIO
