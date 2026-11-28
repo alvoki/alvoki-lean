@@ -4,7 +4,7 @@ import Alvoki.Experiments.WAL.Proofs.NativeAppend
 namespace WalRecoverySlice.SingleFile.ConcreteAppend
 open Persistence ConcreteRecovery
 
-private theorem eval_append [Monad m] [MonadExceptOf String m]
+theorem eval_append [Monad m] [MonadExceptOf String m]
     (ops : Ops m) (p : Policy) (cursor : Cursor) (batch : Bytes)
     (throwBind : ∀ {α β : Type} (e : String) (f : α → m β), (throw e >>= f) = throw e) :
     (appendBatch programOps p cursor batch).eval ops = appendBatch ops p cursor batch := by

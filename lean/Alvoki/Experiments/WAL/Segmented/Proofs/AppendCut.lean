@@ -40,6 +40,15 @@ structure ActiveFiles (c : Control) (before after : Disk) : Prop where
     (i ∈ before.durableNames → i ∈ after.durableNames)
   sealed : ∀ i, c.selects i → i < c.active → after.segment i = before.segment i
 
+theorem ActiveFiles.refl (c : Control) (d : Disk) : ActiveFiles c d d :=
+  ⟨rfl, rfl, fun _ _ => ⟨id,id⟩, fun _ _ _ => rfl⟩
+
+theorem ActiveFiles.trans (a : ActiveFiles c before middle) (b : ActiveFiles c middle after) :
+    ActiveFiles c before after :=
+  ⟨b.live.trans a.live, b.durable.trans a.durable,
+   fun i sel => ⟨(b.names i sel).1 ∘ (a.names i sel).1, (b.names i sel).2 ∘ (a.names i sel).2⟩,
+   fun i sel lt => (b.sealed i sel lt).trans (a.sealed i sel lt)⟩
+
 theorem ActiveFiles.recoverable (files : ActiveFiles c before after) (entry : ReadyLayout c history before)
     (live : before.liveControl = some c) (durable : before.durableControl = some c)
     (room : history.length < (c.active + 1) * c.capacity)
