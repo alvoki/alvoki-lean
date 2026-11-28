@@ -101,6 +101,48 @@ def Internal.nativeAppend : AppendIO FileM IO.FS.Handle where
     writeFlushed h bytes
   sync h := Internal.syncHandle h
 
+/-- Erase the typed append adapter at a reached writer or marker. These
+equations expose the actual rewind, write, flush, and fsync calls. -/
+theorem Internal.append_data_run (files : AppendFiles IO.FS.Handle) (b : Bytes) :
+    ((appendOps nativeAppend files).append b).run =
+      (do files.writer.write ⟨b.toArray⟩; files.writer.flush; return .ok ()) := by
+  funext w
+  change ((fun x => (Except.ok x : Except String Unit)) <$> writeFlushed files.writer b : IO _) w = _
+  simp only [writeFlushed, Functor.map, instMonadEIO._aux_1, Bind.bind, instMonadEIO._aux_13, EST.bind]
+  cases run : files.writer.write ⟨b.toArray⟩ w <;> simp only [encodeBytes,run]
+  rename_i t
+  cases files.writer.flush t <;> rfl
+
+theorem Internal.append_marker_run (files : AppendFiles IO.FS.Handle) (hs : files.markers = some (a,b))
+    (slot : Nat) (bytes : Bytes) :
+    let h := if slot == 0 then a else b
+    ((appendOps nativeAppend files).writeMarker slot bytes).run =
+      (do h.rewind; h.write ⟨bytes.toArray⟩; h.flush; return .ok ()) := by
+  intro h
+  have picked : markerHandle files.markers slot = (pure h : FileM _) := by simp [markerHandle,hs,h]
+  change ((markerHandle files.markers slot >>= fun file => do
+    file.rewind; writeFlushed file bytes) : FileM Unit).run = _
+  have bindPure {α β} (v : α) (k : α → FileM β) : (pure v >>= k) = k v := rfl
+  rw [picked,bindPure,ExceptT.run_bind]
+  have liftRun (act : IO Unit) : (liftM act : FileM Unit).run = (do return Except.ok (← act) : IO (Except String Unit)) := rfl
+  simp only [liftRun]
+  funext w
+  simp only [writeFlushed,encodeBytes,Bind.bind,instMonadEIO._aux_13,EST.bind,Pure.pure,instMonadEIO._aux_5,EST.pure]
+  cases h.rewind w <;> simp only [EST.bind]
+  rename_i t
+  cases h.write ⟨bytes.toArray⟩ t <;> simp only
+  rename_i u
+  cases h.flush u <;> rfl
+
+theorem Internal.append_sync_marker_run (files : AppendFiles IO.FS.Handle) (hs : files.markers = some (a,b))
+    (slot : Nat) :
+    ((appendOps nativeAppend files).syncMarker slot).run =
+      (do syncHandle (if slot == 0 then a else b); return .ok ()) := by
+  simp only [appendOps,nativeAppend,markerHandle,hs,ExceptT.run_bind]
+  funext w
+  change ((fun x => (Except.ok x : Except String Unit)) <$> syncHandle _ : IO _) w = _
+  cases syncHandle (if slot == 0 then a else b) w <;> rfl
+
 def checked (action : FileM α) : IO α := do
   match ← action.run with
   | .ok value => return value

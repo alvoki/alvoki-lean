@@ -21,6 +21,36 @@ inductive Site (files : AppendFiles IO.FS.Handle) : Op → W → IO Unit → W �
   | markerSync : files.markers = some (a,b) → h = (if slot == 0 then a else b) →
       Site files (.syncMarker slot) w (Internal.syncHandle h) w
 
+/-- Every raw stop point begins the residual native instruction at its
+reached world. For a flush or marker write, the preceding syscalls on the
+bound descriptor have already returned at the recorded worlds. -/
+theorem Site.resumes (site : Site files op start action current) :
+    ∃ next : Unit → IO (Except String op.Result),
+      (op.eval (nativeOps files)).run start = (action >>= next) current := by
+  cases site with
+  | data => exact ⟨_, congrFun (Internal.append_data_run ..) _⟩
+  | dataFlush done =>
+    rw [show (Op.eval (nativeOps files) (.append _)).run = _ from Internal.append_data_run ..]
+    exact ⟨fun _ => pure (.ok ()), by simp only [Bind.bind,instMonadEIO._aux_13,EST.bind,done]; rfl⟩
+  | dataSync =>
+    refine ⟨fun _ => pure (.ok ()), ?_⟩
+    change (do return (Except.ok (← Internal.syncHandle files.writer) : Except String Unit) : IO _) _ = _
+    cases Internal.syncHandle files.writer start <;> rfl
+  | rewind picked eq =>
+    subst_vars
+    exact ⟨_, congrFun (Internal.append_marker_run files picked ..) _⟩
+  | @marker a b h slot bytes _ _ picked eq rewind =>
+    subst h
+    rw [show (Op.eval (nativeOps files) (.writeMarker _ _)).run = _ from Internal.append_marker_run files picked ..]
+    exact ⟨fun _ => do (if slot == 0 then a else b).flush; return .ok (), by simp only [Bind.bind,instMonadEIO._aux_13,EST.bind,rewind]; rfl⟩
+  | markerFlush picked eq rewind wrote =>
+    subst_vars
+    rw [show (Op.eval (nativeOps files) (.writeMarker _ _)).run = _ from Internal.append_marker_run files picked ..]
+    exact ⟨fun _ => pure (.ok ()), by simp only [Bind.bind,instMonadEIO._aux_13,EST.bind,rewind,wrote]; rfl⟩
+  | markerSync picked eq =>
+    subst_vars
+    exact ⟨_, congrFun (Internal.append_sync_marker_run files picked ..) _⟩
+
 /-- The source alone determines the prefix. There is no persistence report
 in the witness and the interrupted instruction has no return-value premise. -/
 inductive Issued (actual : Ops F) (entry : Program α) (start : W) : Program α → W → Type where
