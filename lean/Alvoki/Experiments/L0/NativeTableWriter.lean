@@ -6,7 +6,7 @@ open System ImmutableSSTable Unified
 open NativeScope (W Post)
 
 private def Safe (a : Observed α) (w : W) (ok : α → W → Prop) (bad : IO.Error → W → Prop)
-    (P : W → Prop) : Prop := Post a.run w ok bad ∧ ∀ l t, a.visits w l t → P t
+    (P : W → Prop) : Prop := Post a.run w ok bad ∧ ∀ l t, a.visits w l t → P t ∧ P (l.action.toBaseIO t).state
 
 private theorem Safe.bind (first : Safe a w mid bad P)
     (rest : ∀ x t, mid x t → Safe (next x) t ok bad P) : Safe (a >>= next) w ok bad P := by
@@ -36,8 +36,15 @@ private theorem Safe.caught (first : Safe a w ok mid P)
 private theorem Safe.pure (h : ok x w) : Safe (pure x) w ok bad P := ⟨h,fun _ _ => False.elim⟩
 private theorem Safe.fail (h : bad e w) : Safe (throw e) w ok bad P := ⟨h,fun _ _ => False.elim⟩
 
-private theorem Safe.leaf (leaf : Leaf) {ok : leaf.Result → W → Prop} (entry : P w) (h : Post leaf.action w ok bad) : Safe (issue leaf) w ok bad P :=
-  ⟨h,fun _ _ v => v.2 ▸ entry⟩
+private theorem Safe.leaf (leaf : Leaf) {ok : leaf.Result → W → Prop} (entry : P w)
+    (h : Post leaf.action w ok bad) (success : ∀ x u, ok x u → P u) (failure : ∀ e u, bad e u → P u) :
+    Safe (issue leaf) w ok bad P := by
+  refine ⟨h,?_⟩
+  rintro l t ⟨rfl,rfl⟩
+  refine ⟨entry,?_⟩
+  have kept := h.weaken success failure
+  unfold Post at kept
+  cases ran : l.action t <;> simpa only [ran,EIO.toBaseIO] using kept
 
 private theorem Safe.weaken (h : Safe a w ok bad P)
     (onOk : ∀ x t, ok x t → ok' x t) (onError : ∀ e t, bad e t → bad' e t) : Safe a w ok' bad' P :=
@@ -135,13 +142,13 @@ private theorem rows_sim (io : Primitives ns durable P id rows start) (ref : IO.
     Sim io.out P id ref fd inode false false (supply ref) modelNext := by
   intro w file ⟨rs,eq,held⟩
   unfold supply nextTableRow
-  apply (Safe.leaf _ held.1 (io.read ref fd inode rs file.bytes w acquired held)).bind
+  apply (Safe.leaf _ held.1 (io.read ref fd inode rs file.bytes w acquired held) (fun _ _ h => h.2.1) (fun _ _ h => h.1)).bind
   rintro obtained t ⟨rfl, read⟩
   cases obtained with
   | nil =>
     exact .pure ⟨file, by simp [StateT.run,modelNext,eq], [],eq,read⟩
   | cons row tail =>
-    apply (Safe.leaf _ read.1 (io.advance ref fd inode row tail file.bytes t acquired read)).bind
+    apply (Safe.leaf _ read.1 (io.advance ref fd inode row tail file.bytes t acquired read) (fun _ _ h => h.1) (fun _ _ h => h.1)).bind
     intro _ _ current
     exact .pure ⟨{file with rows := tail.map (Entry.encode keyCodec mutationCodec)},by simp [StateT.run,modelNext,eq],tail,rfl,current⟩
 
@@ -150,11 +157,11 @@ private theorem sinkAgreement (io : Primitives ns durable P id rows start) (ref 
     BuilderRelation.SinkAgreement (rules io.out P id ref fd inode) (ops.sink fd) modelSink := by
   constructor
   · rintro bytes w file ⟨rs,eq,held⟩
-    apply (Safe.leaf (.write fd bytes) held.1 (io.write ref fd inode rs file.bytes w acquired held bytes)).weaken
+    apply (Safe.leaf (.write fd bytes) held.1 (io.write ref fd inode rs file.bytes w acquired held bytes) (fun _ _ h => h.1) (fun _ _ h => h.1)).weaken
     · intro _ _ current; exact ⟨_,rfl,rs,eq,current⟩
     · exact fun _ _ => _root_.id
   · rintro w file ⟨rs,eq,held⟩
-    apply (Safe.leaf (.flush fd) held.1 (io.flush ref fd inode rs file.bytes w acquired held)).weaken
+    apply (Safe.leaf (.flush fd) held.1 (io.flush ref fd inode rs file.bytes w acquired held) (fun _ _ h => h.1) (fun _ _ h => h.1)).weaken
     · intro _ _ current; exact ⟨file,rfl,rs,eq,current⟩
     · exact fun _ _ => _root_.id
 
@@ -184,34 +191,48 @@ private theorem writer (io : Primitives ns durable P id rows start) (ref : IO.Re
     rw [ran]
     rfl
   obtain ⟨count,image⟩ := modelBuild_ok model
-  apply (Safe.leaf (.sync fd) flushed.1 (io.sync ref fd inode rs file.bytes t acquired flushed)).bind
+  apply (Safe.leaf (.sync fd) flushed.1 (io.sync ref fd inode rs file.bytes t acquired flushed) (fun _ _ h => h.1) (fun _ _ h => h.1)).bind
   rintro _ u ⟨final,bound,live,durable⟩
   exact .pure ⟨by simpa [input] using count,final,inode,file.bytes,bound.1,live,durable,image⟩
 
 /-- Exclusive creation, bounded row iteration, output flush, and inode fsync.
 Success returns a physically prepared image; every returned failure or
 actually reached primitive site retains the caller's protected resources. -/
-theorem build (io : Primitives ns durable P id rows start) (entry : P start) :
+private theorem buildBoth (io : Primitives ns durable P id rows start) (entry : P start) :
     Post (Native.buildSynced (tablePath ns.directory id) id rows) start
       (fun _ t => P t ∧ Prepared ns durable id rows t) (fun _ => P) ∧
-    ∀ leaf t, Visits (tablePath ns.directory id) id rows start leaf t → P t := by
+    ∀ leaf t, Visits (tablePath ns.directory id) id rows start leaf t → P t ∧ P (leaf.action.toBaseIO t).state := by
   rw [← erase]
   change Safe (schedule (tablePath ns.directory id) id rows) start _ _ P
   unfold schedule
-  apply (Safe.leaf _ entry (returnedAt (io.allocate entry))).bind
+  apply (Safe.leaf _ entry (returnedAt (io.allocate entry)) (fun _ _ h => h.2.1) (fun _ _ => _root_.id)).bind
   rintro ref w ⟨issued,before,cursor⟩
   apply Safe.bind (mid := fun _ t => P t ∧ Prepared ns durable id rows t) _ (fun _ _ h => .pure h)
   unfold buildFileWith withFreshOutputWith
-  apply (Safe.leaf (.openFile _ .writeNew) before (returnedAt (io.openFile ref w issued before cursor))).bind
+  apply (Safe.leaf (.openFile _ .writeNew) before (returnedAt (io.openFile ref w issued before cursor))
+    (fun _ _ h => h.2.elim (fun _ held => held.1)) (fun _ _ => _root_.id)).bind
   rintro fd u ⟨created,inode,held⟩
   have acquired : io.out.Acquired id rows start ref fd inode := ⟨w,u,issued,created,held.2.1⟩
   apply Safe.caught
   · exact (writer io ref fd inode acquired held).weaken (fun _ _ h => h.2) (fun _ _ => _root_.id)
   · intro e t failed
     apply Safe.bind (mid := fun _ t => P t) _ (fun _ _ h => .fail h)
-    apply Safe.caught (Safe.leaf (.remove _) failed.1 (io.remove ref fd inode t acquired failed))
+    apply Safe.caught (Safe.leaf (.remove _) failed.1 (io.remove ref fd inode t acquired failed) (fun _ _ => _root_.id) (fun _ _ => _root_.id))
     exact fun _ _ h => .pure h
 
+
+theorem build (io : Primitives ns durable P id rows start) (entry : P start) :
+    Post (Native.buildSynced (tablePath ns.directory id) id rows) start
+      (fun _ t => P t ∧ Prepared ns durable id rows t) (fun _ => P) ∧
+    ∀ leaf t, Visits (tablePath ns.directory id) id rows start leaf t → P t := by
+  have both := buildBoth io entry
+  exact ⟨both.1,fun leaf t seen => (both.2 leaf t seen).1⟩
+
+/-- Just after a returned primitive, its own success or error world also
+retains the frame, before any following cursor step, unlink or barrier. -/
+theorem buildAfter (io : Primitives ns durable P id rows start) (entry : P start)
+    (leaf : Leaf) (t : W) (seen : Visits (tablePath ns.directory id) id rows start leaf t) :
+    P (leaf.action.toBaseIO t).state := ((buildBoth io entry).2 leaf t seen).2
 
 /-- Successful local reports from the primitives this invocation actually
 visits. No return condition is placed on a whole build or on a future site. -/
