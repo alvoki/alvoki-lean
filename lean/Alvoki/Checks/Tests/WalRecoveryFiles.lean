@@ -17,6 +17,9 @@ private opaque loseMarkerSyncReply (path : @& String) : IO Unit
 @[extern "alvoki_test_fail_directory_listing"]
 private opaque failDirectoryListing (afterEntry : Bool) : IO Unit
 
+@[extern "alvoki_test_short_segment_read"]
+private opaque shortSegmentRead (path : @& String) (errorAtEOF : Bool) : IO Unit
+
 private def encodeBytes (xs : Bytes) : ByteArray :=
   ⟨xs.toArray⟩
 
@@ -113,6 +116,38 @@ private def truncateToZero (dir : FilePath) (policy : Policy) : IO Unit := do
     unless (← SingleFile.scan reopened) == [[7]] do
       throw <| IO.userError "repeated reopen changed the repaired history"
     SingleFile.close reopened
+
+/-- The segment crosses a 1024-byte chunk boundary. The incomplete last
+frame would normally be repaired, making any premature truncation visible. -/
+private def failedChunk (dir : FilePath) (policy : Policy) : IO Unit := do
+  let h ← SingleFile.create dir policy
+  let batches := (List.range 21).map fun i => List.replicate 32 i.toUInt8
+  for batch in batches do SingleFile.append h batch
+  SingleFile.close h
+  let segment := dir / "segment"
+  let confirmed ← IO.FS.readBinFile segment
+  let pending := confirmed ++ encodeBytes ((frame 22 [9]).take 3)
+  IO.FS.writeBinFile segment pending
+  let files : List FilePath := if policy == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
+  let snapshot := files.mapM fun name => IO.FS.readBinFile (dir / name)
+  let before ← snapshot
+  for errorAtEOF in [true, false] do
+    shortSegmentRead segment.toString errorAtEOF
+    match ← (SingleFile.openExisting dir).toBaseIO with
+    | .error (.hardwareFault 5 _) => pure ()
+    | .error err => throw err
+    | .ok unexpected =>
+      SingleFile.close unexpected
+      throw <| IO.userError "reopen accepted an incomplete WAL read"
+    unless (← snapshot) == before do
+      throw <| IO.userError "failed WAL read changed files before retry"
+  for _ in [:2] do
+    let retry ← SingleFile.openExisting dir
+    try
+      unless (← SingleFile.scan retry) == batches && (← IO.FS.readBinFile segment) == confirmed do
+        throw <| IO.userError "retry did not recover every acknowledged frame"
+    finally
+      SingleFile.close retry
 
 private def lateOpenFailure (dir : FilePath) (policy : Policy) : IO Unit := do
   let h ← SingleFile.create dir policy
@@ -244,6 +279,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.fixture dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.handleRegressions dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.failedChunk dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.lateOpenFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
   IO.FS.withTempDir WalRecoveryFiles.lostMarkerReply

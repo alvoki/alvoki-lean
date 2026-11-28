@@ -92,7 +92,7 @@ lean -c "$scratch/files.c" Alvoki/Checks/Tests/WalRecoveryFiles.lean
 # PIC keeps Lean's initialized runtime globals shared with libleanshared.
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" "$scratch/files.c" \
   native/fsync.c native/read_dir_checked.c native/wal_recovery_fixture.c \
-  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir \
+  -Wl,--wrap=alvoki_fsync -Wl,--wrap=readdir -Wl,--wrap=fread -Wl,--wrap=ferror \
   -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/files"
 "$scratch/files"
