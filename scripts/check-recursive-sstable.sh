@@ -8,7 +8,7 @@ if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
 fi
 
 root=Alvoki.Experiments.SSTable.Recursive
-modules=("$root".{Invariants,Image,NativeReadProofs}
+modules=("$root".{Invariants,Image,WriterProofs,NativeReadProofs,NativeWriteProofs}
   Alvoki.Checks.Tests.RecursiveSSTableProducer)
 lake build "${modules[@]}" Alvoki.Checks.Audit.AxiomPolicy
 for module in "${modules[@]}"; do
@@ -19,7 +19,7 @@ lake env lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Checks.Tests.RecursiveSSTableProducer
 import Alvoki.Experiments.SSTable.Recursive.Invariants
-import Alvoki.Experiments.SSTable.Recursive.NativeReadProofs
+import Alvoki.Experiments.SSTable.Recursive.NativeWriteProofs
 open ImmutableSSTable.Recursive
 #check_axioms checkedChild_bounds
 #check_axioms checkedChild_chunks
@@ -33,6 +33,14 @@ open ImmutableSSTable.Recursive
 #check_axioms Image.open_represents
 #check_axioms descend_framed
 #check_axioms checkedNativeLookup
+#check_axioms modelBuild_ok
+#check_axioms buildFileWith_exact
+#check_axioms buildFileWith_refines
+#check_axioms buildFileWith_syncError
+#check_axioms buildFileWith_open_represents
+#check_axioms buildFileWith_open_typed_represents
+#check_axioms buildFileWith_lookup_framed
+#check_axioms buildFileWith_lookup_footerError
 #check_axioms Vertical.durableMultiLevelOpens
 #check_axioms Vertical.durableMultiLevelLookup
 LEAN

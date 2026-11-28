@@ -170,9 +170,10 @@ It proves a healthy open and the public table contract, and derives the
 framed lookup under local read primitive contracts for that inode.
 The experiment uses a constant checksum to keep kernel reduction small.
 The native fixture uses CRC32C and exercises the same executable schedules.
-A universal producer theorem establishing the recursive image for arbitrary
-successful builds remains open.
-[Vertical Lean experiment](../../lean/Alvoki/Checks/Tests/RecursiveSSTableProducer.lean)
+The general producer now establishes the recursive image from a successful
+streaming write and carries it through sync to the reader.
+[Writer refinement and review boundaries](sstable-writer-refinement.md)
+· [Vertical Lean experiment](../../lean/Alvoki/Checks/Tests/RecursiveSSTableProducer.lean)
 
 The paired measurements are recorded separately.
 [Reproduction and raw measurements](../../benchmarks/sstable/recursive.md)
