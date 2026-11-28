@@ -117,11 +117,11 @@ private theorem Step.consume (edge : Step s c p w q t) : remaining s c p w = rem
   cases edge with
   | regular observed valid =>
     simp only [ControlIO.Regular] at valid
-    simp [remaining, removeRegular, Native.regular, metadata?, tryCatchThe, MonadExceptOf.tryCatch,
+    simp [remaining, removeRegular, removeRegularWith, Native.regular, metadata?, tryCatchThe, MonadExceptOf.tryCatch,
       instMonadExceptOfEIO._aux_3, EST.tryCatch, Functor.map, instMonadEIO._aux_1, EST.bind,
       Bind.bind, instMonadEIO._aux_13, observed, valid, Pure.pure, instMonadEIO._aux_5, EST.pure]
   | missing observed =>
-    simp [remaining, removeRegular, metadata?, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+    simp [remaining, removeRegular, removeRegularWith, metadata?, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
       EST.tryCatch, Functor.map, instMonadEIO._aux_1, EST.bind, Bind.bind, instMonadEIO._aux_13,
       observed, Pure.pure, instMonadEIO._aux_5, EST.pure]
   | _ =>
@@ -177,13 +177,13 @@ private theorem returned {a : IO α} {b : M β} (p : AppendIO.At a b w s ok bad)
 
 private theorem clearMissing {path : FilePath} (stat : path.symlinkMetadata w = .error (.noFileOrDirectory x y z) t) :
     removeRegular path w = .ok () t := by
-  simp [removeRegular, metadata?, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+  simp [removeRegular, removeRegularWith, metadata?, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
     EST.tryCatch, Functor.map, instMonadEIO._aux_1, EST.bind, Bind.bind, instMonadEIO._aux_13,
     stat, Pure.pure, instMonadEIO._aux_5, EST.pure]
 
 private theorem clearUnlinked {path : FilePath} (stat : path.symlinkMetadata w = .ok md t) (valid : ControlIO.Regular md)
     (unlinked : IO.FS.removeFile path t = .ok () v) : removeRegular path w = .ok () v := by
-  simp [removeRegular, metadata?, Native.regular, ControlIO.Regular, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
+  simp [removeRegular, removeRegularWith, metadata?, Native.regular, ControlIO.Regular, tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3,
     EST.tryCatch, Functor.map, instMonadEIO._aux_1, EST.bind, Bind.bind, instMonadEIO._aux_13,
     stat, valid, unlinked, Pure.pure, instMonadEIO._aux_5, EST.pure] at *
 

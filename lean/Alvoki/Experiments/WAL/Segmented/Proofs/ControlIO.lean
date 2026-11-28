@@ -148,7 +148,7 @@ private theorem cleared (p : Primitives store c reports w s R disk) :
   let path := store.root / "CONTROL.next"
   have observed := p.stat
   change IOReturns (removeRegular path) w _ _
-  unfold removeRegular metadata? IOReturns
+  unfold removeRegular removeRegularWith metadata? IOReturns
   cases stat : path.symlinkMetadata w with
   | error e t =>
     change (store.root / "CONTROL.next").symlinkMetadata w = _ at stat
