@@ -343,4 +343,25 @@ theorem healthy (io : Primitives ns durable P id rows start) (entry : P start)
     rw [Post,actual] at safe
     exact ⟨_,actual,safe⟩
 
+private def returnedCount : Except String (Nat × ByteArray) → Nat
+  | .ok (n, _) => n
+  | .error _ => 0
+
+/-- A concrete non-empty table accepted by the bounded format on the first
+available table ID. Kernel reduction computes only its returned count. -/
+theorem onePut : ∃ bytes, modelBuild Alvoki.CRC32C.extend (tableLayout 0)
+    (([(0,.put 7)] : Rows).map (Entry.encode keyCodec mutationCodec)) {} = .ok (1,bytes) := by
+  let result := modelBuild Alvoki.CRC32C.extend (tableLayout 0)
+    (([(0,.put 7)] : Rows).map (Entry.encode keyCodec mutationCodec)) {}
+  have success : returnedCount result = 1 := by
+    dsimp only [result]
+    decide +kernel
+  change ∃ bytes, result = .ok (1,bytes)
+  cases ran : result with
+  | error => simp [ran,returnedCount] at success
+  | ok pair =>
+    obtain ⟨n,b⟩ := pair
+    rw [ran] at success
+    exact ⟨b,by rw [show n = 1 from success]⟩
+
 end ExperimentalL0.NativeTableWriter
