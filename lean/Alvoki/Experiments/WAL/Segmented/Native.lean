@@ -126,13 +126,15 @@ private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
   let child ← SingleFile.create dir p
   s.active.set (some (id, child))
 
+def requiredChildNames (p : Policy) : List String :=
+  if p == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
+
 @[inline] def validateChildWith [Monad m] [MonadExceptOf String m]
     (inspect : FilePath → m (Array String)) (policySize : FilePath → m Nat)
     (readPolicy : FilePath → m String) (dir : FilePath) (p : Policy) (id : Nat) :
     m Unit := do
   let names ← inspect dir
-  let required := if p == .boundary then ["policy", "segment", "commit.0", "commit.1"] else ["policy", "segment"]
-  unless required.all names.contains do throw s!"incomplete segment {id}"
+  unless (requiredChildNames p).all names.contains do throw s!"incomplete segment {id}"
   let expected := policyStamp p
   unless (← policySize (dir / "policy")) == expected.utf8ByteSize &&
       (← readPolicy (dir / "policy")) == expected do
@@ -146,11 +148,17 @@ private def Store.acquireChild (s : Store) (p : Policy) (id : Nat) : IO SingleFi
     (fun path => IO.FS.readFile path) dir p id
   SingleFile.openExisting dir
 
-private def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) := do
-  let child ← s.acquireChild p id
-  let batches ← cleanupOnError (error := IO.Error) (SingleFile.scan child) (SingleFile.close child)
-  SingleFile.close child
+/-- A sealed child is closed locally. A failed scan stays primary. -/
+@[inline] def readSealedChildWith [Monad m] [MonadExceptOf error m]
+    (acquire : m child) (scan : child → m (List Bytes)) (close : child → m Unit) :
+    m (List Bytes) := do
+  let child ← acquire
+  let batches ← cleanupOnError (error := error) (scan child) (close child)
+  close child
   return batches
+
+private def Store.readSealedChild (s : Store) (p : Policy) (id : Nat) : IO (List Bytes) :=
+  readSealedChildWith (error := IO.Error) (s.acquireChild p id) SingleFile.scan SingleFile.close
 
 /-- Transfer the child to the caller on success. Release it on a reported
 failure anywhere in the continuation, including scan or collection. -/

@@ -209,12 +209,25 @@ ready resource result. Reported cleanup errors preserve the primary error.
 Process interruption drops process-owned resources under the runtime
 premises.
 
-The model interprets successful outer child inspection and cached scan by
-their admitted values. A complete Linux adapter refinement must still
-connect the outer validation, sealed close and scan primitive outcomes to
-this interpretation. Rotation still prepares a successor in the store;
-its refinement should transfer the new child explicitly through
-publication and installation.
+Child validation consumes the checked listing of the selected segment
+directory and the metadata and text of its policy file. The shared
+validator rejects missing required names, wrong policies and reported
+inspection errors before opening the child. The listing primitive must
+reflect the protected namespace, including the native no-follow type and
+single-link checks. Healthy listings may use any enumeration order.
+
+The active scan uses the actual opened single-file phase. The sealed path
+uses that same scan guarantee and runs the shared close schedule on the
+opened child. A reported sealed close failure leaves the exact reached disk
+and carries no child authority. An active scope that acquired a child but
+fails later closes that child on the reached image. Single-file close
+supplies the ownership drop even when unlock reports an error. Before
+the ready phase is installed, the outer store has no active child, so
+failure cleanup only needs to release the root. A successful open
+transfers the sole active child into the store.
+
+Rotation still prepares a successor in the store. Its refinement should
+transfer the new child explicitly through publication and installation.
 
 The DurableBlob publication schedule can carry the staged CONTROL writer
 through its fsync, rename, and root barrier. Its directory effect must be

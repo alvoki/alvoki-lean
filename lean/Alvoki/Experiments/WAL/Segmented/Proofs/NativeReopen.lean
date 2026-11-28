@@ -524,10 +524,178 @@ theorem nativeRemoveSegment (root : FilePath) (id : Nat)
     · intro persist; exact .inr ⟨persist, by rw [frame]⟩
     · intro persist; exact ⟨persist, by rw [frame]⟩
 
+/-- Observations by the protected child listing and the two policy reads. -/
+structure ChildValidationReports where
+  names : Except String (Array String)
+  policySize : Except String Nat
+  policyText : Except String String
+
+def ChildValidationReports.canonical (p : Policy) : ChildValidationReports :=
+  ⟨.ok #["policy", "segment", "commit.0", "commit.1"],
+    .ok (Native.policyStamp p).utf8ByteSize, .ok (Native.policyStamp p)⟩
+
+private def validateChildModel (root : FilePath) (p : Policy) (index : Nat)
+    (r : ChildValidationReports) : Except String Unit :=
+  let dir := Native.segmentPath root index
+  Native.validateChildWith
+    (fun path => if path = dir then r.names else .error "unexpected child listing path")
+    (fun path => if path = dir / "policy" then r.policySize else .error "unexpected policy metadata path")
+    (fun path => if path = dir / "policy" then r.policyText else .error "unexpected policy read path")
+    dir p index
+
+/-- Enumeration order and extra recognized files do not affect a healthy
+validation. Both policy reads are of the selected child's policy file. -/
+def ChildValidationReports.Healthy (p : Policy) (r : ChildValidationReports) : Prop :=
+  (∃ names, r.names = .ok names ∧ (Native.requiredChildNames p).all names.contains = true) ∧
+  r.policySize = .ok (Native.policyStamp p).utf8ByteSize ∧ r.policyText = .ok (Native.policyStamp p)
+
+private theorem validateChildModel_healthy (root : FilePath) (p : Policy) (index : Nat)
+    (r : ChildValidationReports) (healthy : r.Healthy p) :
+    validateChildModel root p index r = .ok () := by
+  obtain ⟨⟨names, listed, complete⟩, size, text⟩ := healthy
+  simp only [validateChildModel, Native.validateChildWith, listed, size, text, complete,
+    ↓reduceIte, Bind.bind, Except.bind, Pure.pure, Except.pure,
+    beq_self_eq_true, Bool.and_self]
+
+private def validatedChild {α : Type} (guard : State → Except String Unit) (action : M α) : M α :=
+  fun s => match guard s with
+    | .ok () => action.run s
+    | .error err => .ok (.error err) s
+
+private theorem validatedChildEffects
+    (guard : Policy → Nat → State → Except String Unit) {call : Policy → Nat → M (List Bytes)}
+    {healthy : Prop} (effects : OpenChildEffects call healthy) :
+    OpenChildEffects (fun policy index => validatedChild (guard policy index) (call policy index))
+      (healthy ∧ ∀ p i s, guard p i s = .ok ()) where
+  frame p i s named := by
+    cases cut : guard p i s with
+    | ok value => cases value; simpa only [validatedChild, ExceptT.run, cut] using effects.frame p i s named
+    | error =>
+      refine ⟨s.disk.segment i, s.disk.cursor i, ?_⟩
+      simp only [validatedChild, ExceptT.run, cut]
+      have same : s.disk.setSegment i (s.disk.segment i) (s.disk.cursor i) = s.disk := by
+        cases s.disk
+        simp [Disk.setSegment]
+        constructor <;> funext j <;> by_cases equal : j = i <;> simp_all
+      exact same.symm
+  settled {policy index s history} named entry bounded fits := by
+    cases cut : guard policy index s with
+    | ok value =>
+      cases value
+      simpa only [validatedChild, ExceptT.run, cut] using effects.settled named entry bounded fits
+    | error =>
+      simp only [validatedChild, ExceptT.run, cut]
+      exact ⟨rfl, fun _ impossible => by cases impossible⟩
+  dirty {policy index s known pending} named entry := by
+    cases cut : guard policy index s with
+    | ok value => cases value; simpa only [validatedChild, ExceptT.run, cut] using effects.dirty named entry
+    | error =>
+      simp only [validatedChild, ExceptT.run, cut]
+      exact ⟨entry, fun _ impossible => by cases impossible⟩
+  selected {policy index s batches known pending} named entry selected observed ack := by
+    cases cut : guard policy index s with
+    | ok value =>
+      cases value
+      exact effects.selected named entry selected observed (by simpa only [validatedChild, ExceptT.run, cut] using ack)
+    | error =>
+      simp only [validatedChild, ExceptT.run, cut] at ack
+      cases ack
+  healthy {policy index s known pending} named entry h := by
+    simpa only [validatedChild, ExceptT.run, h.2 policy index s] using effects.healthy named entry h.1
+
+/-- The sealed callback's two observations come from the handle that was
+actually opened. Even a reported close error clears its held description
+and leaves its reached bytes alone. -/
+theorem sealedChildReport (dir : FilePath) (policy : Policy)
+    (openReports : SingleFile.OpenReports) (start : SingleFile.OpenImage)
+    (free : start.held = false)
+    (opened : SingleFile.openExistingModel dir policy openReports start = .ok (.ok ready) after)
+    (unlockError : Bool) :
+    (Native.readSealedChildWith (m := SingleFile.OpenM) (error := String) (pure ready)
+      (fun child => SingleFile.scanWith (SingleFile.storedPhase child))
+      (fun child => ExceptT.mk (SingleFile.closeModel child.policy {unlockError}
+        (SingleFile.storedPhase child)))).run after =
+      .ok (if unlockError then .error "primitive error" else .ok ready.recovered.batches)
+        {after with closed := true, held := false} := by
+  have ⟨lock, phase⟩ := SingleFile.openExisting_scanPhase dir policy openReports start free opened
+  have scan := SingleFile.scan_opened ready after phase
+  have close := SingleFile.close_opened_report ready {unlockError} after lock phase
+  simp only [Native.readSealedChildWith, Native.cleanupOnError, Bind.bind, ExceptT.bind,
+    ExceptT.run, ExceptT.mk, EStateM.bind, ExceptT.bindCont, Pure.pure, ExceptT.pure,
+    EStateM.pure, tryCatchThe, MonadExceptOf.tryCatch, ExceptT.tryCatch]
+  simp only [ExceptT.run] at scan
+  rw [scan]
+  simp only [EStateM.pure, EStateM.bind]
+  rw [close]
+  cases unlockError <;> rfl
+
+/-- A returned close error suppresses the scan result but carries the same
+reached state. The single-file close changes only resource ownership. -/
+private def sealedCloseResult (fault : State → Bool) (action : M (List Bytes)) : M (List Bytes) := fun s =>
+  match action.run s with
+  | .ok (.ok batches) t =>
+    (Native.readSealedChildWith (m := M) (error := String) (pure batches) pure
+      (fun _ state => .ok (if fault s then .error "primitive error" else .ok ()) state)).run t
+  | .ok (.error err) t => .ok (.error err) t
+  | .error token t => .error token t
+
+private theorem sealedCloseResult_frame (fault : State → Bool) (action : M (List Bytes)) (s : State) :
+    reached ((sealedCloseResult fault action).run s) = reached (action.run s) := by
+  simp only [sealedCloseResult, ExceptT.run]
+  cases action s with
+  | error => rfl
+  | ok response _ => cases response with
+    | error => rfl
+    | ok _ => cases fault s <;> rfl
+
+private theorem sealedCloseResult_returned (fault : State → Bool) (action : M (List Bytes)) (s : State) :
+    returned ((sealedCloseResult fault action).run s) =
+      if fault s then none else returned (action.run s) := by
+  simp only [sealedCloseResult, ExceptT.run]
+  cases action s with
+  | error => cases fault s <;> rfl
+  | ok response _ => cases response <;> cases fault s <;> rfl
+
+private theorem sealedCloseEffects
+    (fault : Nat → State → Bool) {call : Policy → Nat → M (List Bytes)}
+    {healthy : Prop} (effects : OpenChildEffects call healthy) :
+    OpenChildEffects (fun p i => sealedCloseResult (fault i) (call p i))
+      (healthy ∧ ∀ i s, fault i s = false) where
+  frame p i s named := by
+    rw [sealedCloseResult_frame]
+    exact effects.frame p i s named
+  settled {policy id s history} named entry bounded fits := by
+    dsimp only
+    rw [sealedCloseResult_frame, sealedCloseResult_returned]
+    have facts := effects.settled named entry bounded fits
+    refine ⟨facts.1, ?_⟩
+    cases fault id s <;> intro _ received
+    · exact facts.2 _ received
+    · cases received
+  dirty {policy id s known pending} named entry := by
+    dsimp only
+    rw [sealedCloseResult_frame, sealedCloseResult_returned]
+    have facts := effects.dirty named entry
+    refine ⟨facts.1, ?_⟩
+    cases fault id s <;> intro _ received
+    · exact facts.2 _ received
+    · cases received
+  selected {policy id s batches known pending} named entry selected observed ack := by
+    rw [sealedCloseResult_returned] at ack
+    cases cut : fault id s <;> simp only [cut, Bool.false_eq_true, ↓reduceIte] at ack
+    · exact effects.selected named entry selected observed ack
+    · cases ack
+  healthy {policy id s known pending} named entry h := by
+    simpa only [sealedCloseResult_returned, h.2 id s, Bool.false_eq_true, ↓reduceIte]
+      using effects.healthy named entry h.1
+
 /-- Reached Linux effects for the root operations. Child file unlinks are
 projected out after retirement. Directory fsync and rmdir retain their
 effects even when an error is reported. -/
 structure RootReports where
+  sealedUnlockError : Nat → Nat → Bool := fun _ _ => false
+  childValidation : Nat → Nat → Policy → ChildValidationReports :=
+    fun _ _ policy => .canonical policy
   controlRead : Nat → Option Abort := fun _ => none
   listFault : Nat → Option Abort := fun _ => none
   sync : Nat → Primitive := fun _ => .after none
@@ -578,6 +746,73 @@ private def rootSync (root : FilePath) (r : RootReports) : M Unit := fun s =>
     (fun path t => if path = root then barrier (r.sync s.step) Disk.syncRoot t
       else .ok (.error "wrong directory description") t) root).run s
 
+private def childValidation (root : FilePath) (r : RootReports)
+    (policy : Policy) (index : Nat) (s : State) : Except String Unit :=
+  validateChildModel root policy index (r.childValidation s.step index policy)
+
+private def sealedSelection (index : Nat) (s : State) : Bool :=
+  match s.disk.liveControl with
+  | some c => index < c.active
+  | none => false
+
+private def sealedFault (r : RootReports) (index : Nat) (s : State) : Bool :=
+  sealedSelection index s && r.sealedUnlockError s.step index
+
+/-- Read the actual sealed child's cache and close its phase. The consumed
+reference has no representation in the root projection after the call. -/
+private def nativeChildRead (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (policy : Policy) (index : Nat) : M (List Bytes) :=
+  fun s =>
+    let result := (validatedChild (childValidation root r policy index)
+      (nativeOpenChild root reports policy index)).run s
+    match result with
+    | .ok (.ok _) reached =>
+      if sealedSelection index s then
+        match SingleFile.openExistingModel (Native.segmentPath root index) policy (reports s.step index)
+            {image := s.disk.segment index} with
+        | .ok (.ok ready) after =>
+          match (Native.readSealedChildWith (m := SingleFile.OpenM) (error := String) (pure ready)
+            (fun child => SingleFile.scanWith (SingleFile.storedPhase child))
+            (fun child => ExceptT.mk (SingleFile.closeModel child.policy
+              {unlockError := r.sealedUnlockError s.step index} (SingleFile.storedPhase child)))).run after with
+          | .ok response _ => .ok response reached
+          | .error token _ => .error token reached
+        | _ => result
+      else result
+    | _ => result
+
+private theorem nativeChildRead_eq (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (policy : Policy) (index : Nat) :
+    nativeChildRead root r reports policy index =
+      sealedCloseResult (sealedFault r index)
+        (validatedChild (childValidation root r policy index) (nativeOpenChild root reports policy index)) := by
+  funext s
+  simp only [nativeChildRead, sealedCloseResult, validatedChild, ExceptT.run]
+  cases checked : childValidation root r policy index s with
+  | error => rfl
+  | ok result =>
+    cases result
+    simp only [nativeOpenChild]
+    by_cases named : index ∈ s.disk.liveNames
+    · simp only [child, named, ↓reduceIte, nativeChildWorker, ExceptT.run]
+      cases opened : SingleFile.openExistingModel (Native.segmentPath root index) policy (reports s.step index)
+          {image := s.disk.segment index} with
+      | error => rfl
+      | ok response after =>
+        cases response with
+        | error => rfl
+        | ok ready =>
+          dsimp only
+          cases selected : sealedSelection index s with
+          | false => simp [sealedFault, selected]; rfl
+          | true =>
+            simp only [selected, sealedFault, Bool.true_and, ↓reduceIte]
+            have effect := sealedChildReport _ _ _ _ rfl opened (r.sealedUnlockError s.step index)
+            simp only [ExceptT.run] at effect
+            rw [effect]
+            cases r.sealedUnlockError s.step index <;> rfl
+    · simp only [child, named, ↓reduceIte]
+
 /-- The unused write callbacks retain their model implementations. Reopen
 uses only the filesystem schedules in these five fields. -/
 def nativeReopenOps (root : FilePath) (r : RootReports)
@@ -587,11 +822,13 @@ def nativeReopenOps (root : FilePath) (r : RootReports)
     syncRoot := rootSync root r
     listSegments := fun s => read (r.listFault s.step) (rootListing s.disk.liveNames) s
     removeSegment := rootRemove root r
-    openSegment := nativeOpenChild root childReports }
+    openSegment := nativeChildRead root r childReports }
 
 /-- A fault-free root does not require an empty retired directory. The
 checked listing may contain any number of members. -/
 structure HealthyRoot (r : RootReports) : Prop where
+  sealedUnlock : ∀ step index, r.sealedUnlockError step index = false
+  child : ∀ step index policy, (r.childValidation step index policy).Healthy policy
   read : ∀ step, r.controlRead step = none
   listing : ∀ step, r.listFault step = none
   barrier : ∀ step, r.sync step = .after none
@@ -706,12 +943,27 @@ theorem nativeRootEffects (root : FilePath) (r : RootReports) (reports : Nat →
   syncHealthy s healthy := ⟨_, rootSync_healthy root r healthy s⟩
   collectHealthy c s healthy := collectNative_healthy root r reports healthy c s
 
+private theorem nativeValidatedChildEffects (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) :
+    OpenChildEffects (nativeReopenOps root r reports).openSegment
+      ((HealthyChildren reports ∧ ∀ p i s, childValidation root r p i s = .ok ()) ∧
+        ∀ index s, sealedFault r index s = false) :=
+  by
+    have eq : (nativeReopenOps root r reports).openSegment =
+        fun policy index => sealedCloseResult (sealedFault r index)
+          (validatedChild (childValidation root r policy index) (nativeOpenChild root reports policy index)) := by
+      funext policy index
+      exact nativeChildRead_eq root r reports policy index
+    rw [eq]
+    exact sealedCloseEffects (sealedFault r)
+      (validatedChildEffects (childValidation root r) (nativeOpenChild_effects root reports))
+
 theorem reopen_nativeRoot {known request} (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (s : State) (prior : Recoverable known request s.disk) :
     DiskPost (fun session after => Installed session after ∧ PermittedView known request session.view)
       (Recoverable known request) ((Segmented.reopen (nativeReopenOps root r reports)).run s) := by
   exact reopenWithEffects_refines (nativeRootEffects root r reports)
-    (nativeOpenChild_effects root reports) s prior
+    (nativeValidatedChildEffects root r reports) s prior
 
 /-- Progress assumes the actual primitive reports are healthy and the
 protected CONTROL binding is representable in its on-disk codec. -/
@@ -723,7 +975,9 @@ theorem reopen_nativeHealthy (root : FilePath) (r : RootReports)
       c.capacity ≤ 255 ∧ c.active ≤ ControlCodec.wordMax ∧ c.discarded ≤ ControlCodec.wordMax) :
     ∃ next after, (Segmented.reopen (nativeReopenOps root r reports)).run s = .ok (.ok next) after := by
   apply reopenWithEffects_healthy (nativeRootEffects root r reports)
-    (nativeOpenChild_effects root reports) s prior rootOK childrenOK
+    (nativeValidatedChildEffects root r reports) s prior rootOK
+      ⟨⟨childrenOK, fun p i t => validateChildModel_healthy root p i _ (rootOK.child t.step i p)⟩,
+        fun i t => by simp [sealedFault, rootOK.sealedUnlock]⟩
   obtain ⟨c, found, _⟩ := prior.live
   refine ⟨c, ?_⟩
   change returned (read (r.controlRead s.step) (rootControl root s.disk) s) = _
@@ -768,8 +1022,9 @@ private abbrev ReadyChild :=
 
 /-- Carry the single-file producer's returned phase across the active
 continuation, alongside the exact child image reached by that producer. -/
-private def acquireActiveModel (root : FilePath) (reports : Nat → Nat → SingleFile.OpenReports)
-    (policy : Policy) (id : Nat) : M ReadyChild := fun s =>
+private def acquireActiveModel (root : FilePath) (r : RootReports) (reports : Nat → Nat → SingleFile.OpenReports)
+    (policy : Policy) (id : Nat) : M ReadyChild :=
+  validatedChild (childValidation root r policy id) fun s =>
   child s id (fun image =>
     match SingleFile.openExistingModel (Native.segmentPath root id) policy (reports s.step id) {image} with
     | .ok (.ok ready) after => .ok (.ok ready) after.image
@@ -777,22 +1032,69 @@ private def acquireActiveModel (root : FilePath) (reports : Nat → Nat → Sing
     | .error token after => .error token after.image)
     (fun ready => ready.recovered.cursor) _root_.id
 
-private theorem acquireActiveModel_project (root : FilePath)
+private theorem acquireActiveModel_project (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (policy : Policy) (index : Nat) :
-    (acquireActiveModel root reports policy index >>= fun ready => pure ready.recovered.batches) =
-      nativeOpenChild root reports policy index := by
+    (acquireActiveModel root r reports policy index >>= fun ready => pure ready.recovered.batches) =
+      validatedChild (childValidation root r policy index) (nativeOpenChild root reports policy index) := by
   funext s
-  simp only [acquireActiveModel, nativeOpenChild, Bind.bind, ExceptT.bind,
-    ExceptT.bindCont, ExceptT.mk, EStateM.bind]
-  by_cases named : index ∈ s.disk.liveNames
-  · simp only [child, named, ↓reduceIte]
-    simp only [nativeChildWorker, ExceptT.run]
-    cases issued : SingleFile.openExistingModel (Native.segmentPath root index) policy
-        (reports s.step index) {image := s.disk.segment index} with
-    | error => rfl
-    | ok response _ => cases response <;> rfl
-  · simp only [child, named, ↓reduceIte]
-    rfl
+  simp only [acquireActiveModel, validatedChild, ExceptT.run, Bind.bind,
+    ExceptT.bind, ExceptT.bindCont, ExceptT.mk, EStateM.bind]
+  cases validation : childValidation root r policy index s with
+  | error => rfl
+  | ok value =>
+    cases value
+    simp only [nativeOpenChild]
+    by_cases named : index ∈ s.disk.liveNames
+    · simp only [child, named, ↓reduceIte, nativeChildWorker, ExceptT.run]
+      cases issued : SingleFile.openExistingModel (Native.segmentPath root index) policy
+          (reports s.step index) {image := s.disk.segment index} with
+      | error => rfl
+      | ok response _ => cases response <;> rfl
+    · simp only [child, named, ↓reduceIte]
+      rfl
+
+private def scanActiveModel (ready : ReadyChild) : M (List Bytes) := fun s =>
+  match (SingleFile.scanWith (SingleFile.storedPhase ready) : SingleFile.OpenM _).run
+      {image := Persistence.freshImage} with
+  | .ok response _ => .ok response s
+  | .error token _ => .error token s
+
+private theorem scanActiveModel_eq (ready : ReadyChild)
+    (phase : ready.phase = .active ready.lock (SingleFile.appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches) :
+    scanActiveModel ready = pure ready.recovered.batches := by
+  funext s
+  unfold scanActiveModel
+  rw [SingleFile.scan_opened ready _ phase]
+  rfl
+
+private theorem acquireActive_scanPhase (root : FilePath) (r : RootReports)
+    (reports : Nat → Nat → SingleFile.OpenReports) (policy : Policy) (index : Nat)
+    (s : State) (opened : acquireActiveModel root r reports policy index s = .ok (.ok ready) after) :
+    ready.lock = .lock ∧
+    ready.phase = .active ready.lock (SingleFile.appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches := by
+  unfold acquireActiveModel validatedChild at opened
+  cases validation : childValidation root r policy index s with
+  | error => rw [validation] at opened; cases opened
+  | ok value =>
+    cases value
+    rw [validation] at opened
+    simp only [ExceptT.run] at opened
+    unfold child at opened
+    split at opened
+    · simp only [ExceptT.run] at opened
+      cases ran : SingleFile.openExistingModel (Native.segmentPath root index) policy (reports s.step index)
+          {image := s.disk.segment index} with
+      | error => rw [ran] at opened; cases opened
+      | ok response _ =>
+        rw [ran] at opened
+        cases response with
+        | error => cases opened
+        | ok child =>
+          cases opened
+          exact SingleFile.openExisting_scanPhase _ _ _ _ rfl ran
+    · cases opened
 
 /-- The disk projection of releasing a single-file handle keeps its reached
 image. The report records a returned close error, if any. -/
@@ -813,74 +1115,124 @@ private theorem projectedChildClose_frame (index : Nat) (err : Option String)
   rw [close]
   exact ⟨response, rfl⟩
 
+/-- For an acquired child, the projected close has no residual lock or
+file effect, including when unlock reports an error. -/
+private theorem projectedChildClose_acquired (index : Nat) (err : Option String)
+    (ready : ReadyChild) (s : State) (lock : ready.lock = .lock)
+    (phase : ready.phase = .active ready.lock (SingleFile.appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches) :
+    let closed := SingleFile.closeModel ready.policy {unlockError := err.isSome}
+      (SingleFile.storedPhase ready) {image := s.disk.segment index, held := true}
+    (SingleFile.postState closed).held = false ∧ (SingleFile.postState closed).closed = true ∧
+      ∃ response, projectedChildClose index err ready s = .ok response s := by
+  have closed := SingleFile.close_opened ready.policy {unlockError := err.isSome} ready lock
+    {image := s.disk.segment index, held := true} phase
+  exact ⟨closed.2.1, closed.1, projectedChildClose_frame index err ready s⟩
+
 private def reopenScopedModel (root : FilePath) (r : RootReports)
     (reports : Nat → Nat → SingleFile.OpenReports) (closeError : Option String) :
     M (Session × ReadyChild) :=
   Segmented.reopenWith (nativeReopenOps root r reports)
     (fun policy index resume =>
-      Native.withActiveChild (error := String) (acquireActiveModel root reports policy index)
-        (projectedChildClose index closeError) fun ready => resume ready ready.recovered.batches)
+      Native.withActiveChild (error := String) (acquireActiveModel root r reports policy index)
+        (projectedChildClose index closeError) fun ready => do resume ready (← scanActiveModel ready))
     (fun session ready => pure (session, ready))
 
 /-- Erasing the returned child gives exactly the original disk run. A
 reported close failure retains both the reached disk and the primary error. -/
 private theorem reopenScopedModel_project (root : FilePath) (r : RootReports)
-    (reports : Nat → Nat → SingleFile.OpenReports) (closeError : Option String) :
-    (reopenScopedModel root r reports closeError >>= fun value => pure value.1) =
-      Segmented.reopen (nativeReopenOps root r reports) := by
-  simp only [reopenScopedModel, Segmented.reopenWith, Segmented.reopen, bind_assoc]
-  apply congrArg (fun resume => Segmented.reopenPrefix (nativeReopenOps root r reports) >>= resume)
-  funext selection
-  obtain ⟨c, sealed⟩ := selection
-  let acquire := acquireActiveModel root reports c.policy c.active
-  have project := acquireActiveModel_project root reports c.policy c.active
-  simp only [bind_pure]
-  rw [show (nativeReopenOps root r reports).openSegment c.policy c.active = _ from project.symm]
-  change (Native.withActiveChild (error := String) acquire (projectedChildClose c.active closeError)
-    (fun ready => Segmented.finishReopen (nativeReopenOps root r reports) c sealed
-      ready.recovered.batches >>= fun session => pure (session, ready)) >>= fun value => pure value.1) =
-      (acquire >>= fun ready => pure ready.recovered.batches) >>=
-        Segmented.finishReopen (nativeReopenOps root r reports) c sealed
-  funext s
-  let finish := Segmented.finishReopen (nativeReopenOps root r reports) c sealed
-  let resume (ready : ReadyChild) : M (Session × ReadyChild) :=
-    finish ready.recovered.batches >>= fun session => pure (session, ready)
-  change ((Native.withActiveChild (error := String) acquire (projectedChildClose c.active closeError) resume >>=
-    fun value => pure value.1).run s) = ((acquire >>= fun ready => pure ready.recovered.batches) >>= finish).run s
-  have scopeResult := Native.withActiveChild_reached acquire.run (projectedChildClose c.active closeError) resume s
-  simp only [Bind.bind, ExceptT.run, ExceptT.bind, ExceptT.mk, EStateM.bind] at scopeResult ⊢
-  rw [scopeResult]
-  cases opened : acquire s with
-  | error => rfl
-  | ok response afterOpen =>
-    cases response with
+    (reports : Nat → Nat → SingleFile.OpenReports) (closeError : Option String)
+    (start : State) (prior : Recoverable known request start.disk) :
+    ((reopenScopedModel root r reports closeError >>= fun value => pure value.1).run start) =
+      (Segmented.reopen (nativeReopenOps root r reports)).run start := by
+  let ops := nativeReopenOps root r reports
+  have afterPrefix (c : Control) (sealed : Array Bytes) (s : State)
+      (live : s.disk.liveControl = some c) :
+      ((Native.withActiveChild (error := String) (acquireActiveModel root r reports c.policy c.active)
+        (projectedChildClose c.active closeError) (fun ready => do
+          let batches ← scanActiveModel ready
+          let session ← Segmented.finishReopen ops c sealed batches
+          pure (session, ready)) >>= fun value => pure value.1).run s) =
+        ((ops.openSegment c.policy c.active >>= Segmented.finishReopen ops c sealed).run s) := by
+    let acquire := acquireActiveModel root r reports c.policy c.active
+    have project := acquireActiveModel_project root r reports c.policy c.active
+    have same :
+        ((ops.openSegment c.policy c.active >>= Segmented.finishReopen ops c sealed).run s) =
+          (((acquire >>= fun ready => pure ready.recovered.batches) >>=
+            Segmented.finishReopen ops c sealed).run s) := by
+      simp only [Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind]
+      have openEq : ops.openSegment c.policy c.active s =
+          (acquire >>= fun ready => pure ready.recovered.batches) s := by
+        rw [project]
+        simp only [ops, nativeReopenOps, nativeChildRead_eq, sealedCloseResult, sealedFault, sealedSelection, live, Nat.lt_irrefl,
+          ExceptT.run]
+        cases validatedChild (childValidation root r c.policy c.active)
+            (nativeOpenChild root reports c.policy c.active) s with
+        | error => rfl
+        | ok response _ => cases response <;> rfl
+      rw [openEq]; rfl
+    rw [same]
+    let finish := Segmented.finishReopen (nativeReopenOps root r reports) c sealed
+    let resume (ready : ReadyChild) : M (Session × ReadyChild) := do
+      let batches ← scanActiveModel ready
+      let session ← finish batches
+      pure (session, ready)
+    change ((Native.withActiveChild (error := String) acquire (projectedChildClose c.active closeError) resume >>=
+      fun value => pure value.1).run s) = ((acquire >>= fun ready => pure ready.recovered.batches) >>= finish).run s
+    have scopeResult := Native.withActiveChild_reached acquire.run (projectedChildClose c.active closeError) resume s
+    simp only [Bind.bind, ExceptT.run, ExceptT.bind, ExceptT.mk, EStateM.bind] at scopeResult ⊢
+    rw [scopeResult]
+    cases opened : acquire s with
     | error => rfl
-    | ok ready =>
-      have resumed :
-          resume ready afterOpen =
-            match finish ready.recovered.batches afterOpen with
-            | .ok (.ok session) t => .ok (.ok (session, ready)) t
-            | .ok (.error err) t => .ok (.error err) t
-            | .error token t => .error token t := by
-        simp only [resume, Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind]
+    | ok response afterOpen =>
+      cases response with
+      | error => rfl
+      | ok ready =>
+        have resumed :
+            resume ready afterOpen =
+              match finish ready.recovered.batches afterOpen with
+              | .ok (.ok session) t => .ok (.ok (session, ready)) t
+              | .ok (.error err) t => .ok (.error err) t
+              | .error token t => .error token t := by
+          have phase := (acquireActive_scanPhase root r reports c.policy c.active s opened).2
+          simp only [resume, scanActiveModel_eq ready phase, pure_bind]
+          simp only [Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind]
+          cases finish ready.recovered.batches afterOpen with
+          | error => rfl
+          | ok result _ => cases result <;> rfl
+        dsimp only
+        rw [resumed]
+        simp only [ExceptT.bindCont, Pure.pure, ExceptT.pure, ExceptT.mk, EStateM.pure]
         cases finish ready.recovered.batches afterOpen with
         | error => rfl
-        | ok result _ => cases result <;> rfl
-      dsimp only
-      rw [resumed]
-      simp only [ExceptT.bindCont, Pure.pure, ExceptT.pure, ExceptT.mk, EStateM.pure]
-      cases finish ready.recovered.batches afterOpen with
-      | error => rfl
-      | ok result reached =>
-        cases result with
-        | ok => rfl
-        | error =>
-          obtain ⟨response, closed⟩ := projectedChildClose_frame c.active closeError ready reached
-          dsimp only
-          rw [closed]
-          cases response with
-          | error => rfl
-          | ok value => cases value; rfl
+        | ok result reached =>
+          cases result with
+          | ok => rfl
+          | error =>
+            have readyPhase := acquireActive_scanPhase root r reports c.policy c.active s opened
+            have released := projectedChildClose_acquired c.active closeError ready reached readyPhase.1 readyPhase.2
+            obtain ⟨response, closed⟩ := released.2.2
+            dsimp only
+            rw [closed]
+            cases response with
+            | error => rfl
+            | ok value => cases value; rfl
+
+  simp only [reopenScopedModel, Segmented.reopenWith, Segmented.reopen, bind_assoc, bind_pure]
+  simp only [Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind]
+  cases selected : Segmented.reopenPrefix ops start with
+  | error => rfl
+  | ok selection before =>
+    cases selection with
+    | error => rfl
+    | ok pair =>
+      obtain ⟨c, sealed⟩ := pair
+      have prefixResult : (Segmented.reopenPrefix ops).run start = .ok (.ok (c, sealed)) before := selected
+      have live := (reopenPrefix_active (nativeRootEffects root r reports)
+        (nativeValidatedChildEffects root r reports) prior prefixResult).1
+      have eq := afterPrefix c sealed before live
+      simp only [Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind] at eq
+      exact eq
 
 /-- Disk correctness of the complete schedule with the retained child.
 The postcondition uses the state of that run, including its cleanup branch. -/
@@ -890,7 +1242,7 @@ theorem reopenScopedModel_refines (root : FilePath) (r : RootReports)
     DiskPost (fun result disk => Installed result.1 disk ∧ PermittedView known request result.1.view)
       (Recoverable known request) ((reopenScopedModel root r reports closeError).run s) := by
   have facts := reopen_nativeRoot root r reports s prior
-  rw [← reopenScopedModel_project root r reports closeError] at facts
+  rw [← reopenScopedModel_project root r reports closeError s prior] at facts
   simp only [Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind] at facts
   cases ran : (reopenScopedModel root r reports closeError).run s with
   | error =>
@@ -911,7 +1263,7 @@ theorem reopenScopedModel_healthy (root : FilePath) (r : RootReports)
     ∃ session ready after, (reopenScopedModel root r reports closeError).run s =
       .ok (.ok (session, ready)) after := by
   obtain ⟨next, after, result⟩ := reopen_nativeHealthy root r reports s prior rootOK childrenOK representable
-  rw [← reopenScopedModel_project root r reports closeError] at result
+  rw [← reopenScopedModel_project root r reports closeError s prior] at result
   simp only [Bind.bind, ExceptT.bind, ExceptT.run, ExceptT.mk, EStateM.bind] at result
   cases ran : (reopenScopedModel root r reports closeError).run s with
   | error => simp only [ExceptT.run] at ran; rw [ran] at result; cases result
@@ -971,50 +1323,59 @@ private theorem reopenScopedModel_delivered (root : FilePath) (r : RootReports)
     | error => cases ran
     | ok selection =>
       obtain ⟨c, sealed⟩ := selection
-      let acquire := acquireActiveModel root reports c.policy c.active
-      let resume (handle : ReadyChild) : M (Session × ReadyChild) :=
-        Segmented.finishReopen callbacks c sealed handle.recovered.batches >>= fun session =>
-          pure (session, handle)
+      let acquire := acquireActiveModel root r reports c.policy c.active
+      let resume (handle : ReadyChild) : M (Session × ReadyChild) := do
+        let batches ← scanActiveModel handle
+        let session ← Segmented.finishReopen callbacks c sealed batches
+        pure (session, handle)
       change (Native.withActiveChild (error := String) (ExceptT.mk acquire.run) (projectedChildClose c.active closeError) resume).run before =
         .ok (.ok (session, ready)) t at ran
       have scopedResult := Native.withActiveChild_reached acquire.run (projectedChildClose c.active closeError) resume before
       rw [scopedResult] at ran
       simp only [ExceptT.run] at ran
-      by_cases named : c.active ∈ before.disk.liveNames
-      · simp only [acquire, acquireActiveModel, child, named, ↓reduceIte, ExceptT.run] at ran
-        cases single : SingleFile.openExistingModel (Native.segmentPath root c.active) c.policy
-            (reports before.step c.active) {image := before.disk.segment c.active} with
-        | error => rw [single] at ran; cases ran
-        | ok response childAfter =>
-          rw [single] at ran
-          cases response with
-          | error => cases ran
-          | ok handle =>
-            let opened : State := {before.tick with
-              disk := before.disk.setSegment c.active childAfter.image handle.recovered.cursor}
-            dsimp only at ran
-            simp only [resume, Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind, id_eq] at ran
-            cases finished : (Segmented.finishReopen callbacks c sealed handle.recovered.batches) opened with
-            | error => simp only [opened] at finished; rw [finished] at ran; cases ran
-            | ok response reached =>
-              simp only [opened] at finished
-              rw [finished] at ran
-              cases response with
-              | error =>
-                obtain ⟨response, closed⟩ := projectedChildClose_frame c.active closeError handle reached
-                simp only [ExceptT.bindCont, Pure.pure, EStateM.pure] at ran
-                rw [closed] at ran
+      cases validation : childValidation root r c.policy c.active before with
+      | error => simp [acquire, acquireActiveModel, validatedChild, validation] at ran
+      | ok value =>
+        cases value
+        by_cases named : c.active ∈ before.disk.liveNames
+        · simp only [acquire, acquireActiveModel, validatedChild, validation, child, named, ↓reduceIte, ExceptT.run] at ran
+          cases single : SingleFile.openExistingModel (Native.segmentPath root c.active) c.policy
+              (reports before.step c.active) {image := before.disk.segment c.active} with
+          | error => rw [single] at ran; cases ran
+          | ok response childAfter =>
+            rw [single] at ran
+            cases response with
+            | error => cases ran
+            | ok handle =>
+              let opened : State := {before.tick with
+                disk := before.disk.setSegment c.active childAfter.image handle.recovered.cursor}
+              dsimp only at ran
+              have phase := (SingleFile.openExisting_scanPhase _ _ _ _ rfl single).2
+              simp only [resume, id_eq, scanActiveModel_eq handle phase, pure_bind] at ran
+              simp only [Bind.bind, ExceptT.bind, ExceptT.mk, EStateM.bind] at ran
+              cases finished : (Segmented.finishReopen callbacks c sealed handle.recovered.batches) opened with
+              | error => simp only [opened] at finished; rw [finished] at ran; cases ran
+              | ok response reached =>
+                simp only [opened] at finished
+                rw [finished] at ran
                 cases response with
-                | error => cases ran
-                | ok value => cases value; cases ran
-              | ok next =>
-                cases ran
-                obtain ⟨control, frame⟩ := finishReopen_frame (nativeRootEffects root r reports).collection finished
-                rw [control]
-                exact ⟨before, sealed, childAfter, selected, single,
-                  (congrFun frame c.active).trans (Disk.setSegment_here ..)⟩
-      · simp only [acquire, acquireActiveModel, child, named, ↓reduceIte] at ran
-        cases ran
+                | error =>
+                  have readyPhase := SingleFile.openExisting_scanPhase _ _ _ _ rfl single
+                  have released := projectedChildClose_acquired c.active closeError handle reached readyPhase.1 readyPhase.2
+                  obtain ⟨response, closed⟩ := released.2.2
+                  simp only [ExceptT.bindCont, Pure.pure, EStateM.pure] at ran
+                  rw [closed] at ran
+                  cases response with
+                  | error => cases ran
+                  | ok value => cases value; cases ran
+                | ok next =>
+                  cases ran
+                  obtain ⟨control, frame⟩ := finishReopen_frame (nativeRootEffects root r reports).collection finished
+                  rw [control]
+                  exact ⟨before, sealed, childAfter, selected, single,
+                    (congrFun frame c.active).trans (Disk.setSegment_here ..)⟩
+        · simp only [acquire, acquireActiveModel, validatedChild, validation, ExceptT.run, child, named, ↓reduceIte] at ran
+          cases ran
 
 /-- Append consumes the returned child phase and the segment image on the
 same disk that the complete reopen schedule left after collection. -/
@@ -1033,8 +1394,8 @@ private theorem appendAfterScopedReopen (root : FilePath) (r : RootReports)
     SingleFile.AppendGuarantee session.control.policy old batch result := by
   obtain ⟨before, sealed, childAfter, prefixResult, opened, image⟩ :=
     reopenScopedModel_delivered root r openReports closeError transferred
-  obtain ⟨_, _, _, childPrior⟩ := reopenPrefix_active (nativeRootEffects root r openReports)
-    (nativeOpenChild_effects root openReports) prior prefixResult
+  obtain ⟨_, _, _, _, childPrior⟩ := reopenPrefix_active (nativeRootEffects root r openReports)
+    (nativeValidatedChildEffects root r openReports) prior prefixResult
   have disk := reopenScopedModel_refines root r openReports closeError s prior
   rw [transferred] at disk
   have append := childPrior.nativeAppendAfterOpen _ _ _ rfl opened reports room size

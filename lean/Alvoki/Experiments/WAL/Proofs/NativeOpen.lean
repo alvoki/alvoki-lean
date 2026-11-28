@@ -476,6 +476,79 @@ theorem scan_opened (ready : Opened OpenTarget (AppendFiles OpenTarget)) (s : Op
   rw [storedPhase_eq, installed]
   rfl
 
+/-- A successful install records the exact scan phase, independently of
+the data invariant used to establish recovery correctness. -/
+private theorem installWith_scanPhase (dir : FilePath) (policy : Policy) (r : OpenReports)
+    (lockTarget : OpenTarget) (s : OpenImage)
+    (ran : (installWith (openEffects policy r) (workerEffect r) appendFiles dir lockTarget).run s =
+      .ok (.ok ready) after) :
+    ready.lock = lockTarget ∧
+    ready.phase = .active ready.lock (appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches := by
+  unfold installWith at ran
+  rw [runBind] at ran
+  cases opened : (openFilesWith (openEffects policy r) dir).run s with
+  | error => rw [opened] at ran; cases ran
+  | ok response next =>
+    rw [opened] at ran
+    cases response with
+    | error => cases ran
+    | ok files =>
+      dsimp only at ran
+      rw [runBind] at ran
+      cases recovered : (workerEffect r files.policy files.reader files.writer files.markers).run next with
+      | error => rw [recovered] at ran; cases ran
+      | ok response reached =>
+        rw [recovered] at ran
+        cases response with
+        | error => cases ran
+        | ok recovered =>
+          dsimp only at ran
+          rw [runBind] at ran
+          cases settled : (settleWith (openEffects policy r) dir files.stamp).run reached with
+          | error => rw [settled] at ran; cases ran
+          | ok response _ =>
+            rw [settled] at ran
+            cases response with
+            | error => cases ran
+            | ok _ => cases ran; exact ⟨rfl, rfl⟩
+
+theorem openExisting_scanPhase (dir : FilePath) (policy : Policy) (r : OpenReports) (s : OpenImage) (free : s.held = false)
+    (ran : openExistingModel dir policy r s = .ok (.ok ready) after) :
+    ready.lock = .lock ∧
+    ready.phase = .active ready.lock (appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches := by
+  unfold openExistingModel openAttempt openExistingWith at ran
+  rw [runBind] at ran
+  cases acquired : (acquireWith (openEffects policy r) dir).run (settleImage r.beforeWorker s) with
+  | error => rw [acquired] at ran; cases ran
+  | ok response next =>
+    rw [acquired] at ran
+    cases response with
+    | error => cases ran
+    | ok lockTarget =>
+      have acquiredFacts := acquired_result (policy := policy) dir r (settleImage r.beforeWorker s) free
+      have lockEq := acquiredFacts.1 _ _ acquired
+      obtain ⟨rfl, _⟩ := lockEq
+      simp only [runBind, attempt_run]
+        at ran
+      cases installed :
+        (installWith (openEffects policy r) (workerEffect r) appendFiles dir .lock).run next with
+      | error => rw [installed] at ran; cases ran
+      | ok response reached =>
+        rw [installed] at ran
+        cases response with
+        | error =>
+          simp only [runBind, run_throw] at ran
+          cases unlocked : ((openEffects policy r).unlock .lock).run reached with
+          | error => rw [unlocked] at ran; cases ran
+          | ok result _ =>
+            rw [unlocked] at ran
+            cases result <;> cases ran
+        | ok child =>
+          cases ran
+          exact installWith_scanPhase dir policy r .lock next installed
+
 private def storePhase (phase : Phase OpenTarget (AppendFiles OpenTarget)) : OpenM Unit :=
   fun state => finish none () {state with closed := match phase with | .closed => true | _ => false}
 
@@ -513,6 +586,18 @@ theorem close_opened (policy : Policy) (r : OpenReports) (ready : Opened OpenTar
       .ok (.error "WAL closed") after := by
   simp only [closeModel, storedPhase_eq, installed, closeWith, lock, runBind, clear_run, unlock_run]
   cases h : r.unlockError <;> simp_all [finish, postState] <;> rfl
+
+/-- The sealed reader observes this close report after scanning a ready child. -/
+theorem close_opened_report (ready : Opened OpenTarget (AppendFiles OpenTarget))
+    (r : OpenReports) (s : OpenImage)
+    (lock : ready.lock = .lock)
+    (installed : ready.phase = .active ready.lock (appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches) :
+    closeModel ready.policy r (storedPhase ready) s =
+      .ok (if r.unlockError then .error "primitive error" else .ok ())
+        {s with closed := true, held := false} := by
+  simp only [closeModel, storedPhase_eq, installed, closeWith, lock, runBind, clear_run, unlock_run]
+  cases r.unlockError <;> simp [finish]
 
 /-- An uncertain append retains the original private lock in the poisoned
 phase. The public close schedule still clears that phase and releases it. -/

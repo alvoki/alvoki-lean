@@ -129,6 +129,10 @@ private def invalidControl (dir : FilePath) : IO Unit := do
   IO.FS.writeBinFile path ok
   IO.FS.writeFile (dir / "segment-0" / "policy") "v3 log"
   failed (Native.openExisting dir) "accepted a child using a different WAL policy"
+  IO.FS.writeFile (dir / "segment-0" / "policy") "v3 boundary"
+  let h ← Native.openExisting dir
+  check h 0 [[7]]
+  Native.close h
 
 private def freshOnly (dir : FilePath) : IO Unit := do
   IO.FS.writeFile (dir / "unrelated") "keep"

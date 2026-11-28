@@ -63,6 +63,8 @@ open WalRecoverySlice
 #check_axioms SingleFile.openLocations
 #check_axioms SingleFile.openExisting_refines
 #check_axioms SingleFile.openExisting_healthy
+#check_axioms SingleFile.openExisting_scanPhase
+#check_axioms SingleFile.close_opened_report
 #check_axioms SingleFile.openExisting_worker
 #check_axioms SingleFile.storedPhase_eq
 #check_axioms SingleFile.scan_opened

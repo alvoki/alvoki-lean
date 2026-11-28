@@ -134,6 +134,7 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.nativeAppendAfterTransfer
 #check_axioms Model.installScopedModel_healthy
 #check_axioms Model.publicOpenModel_refines
+#check_axioms Model.sealedChildReport
 #check_axioms Model.publicOpenModel_append
 #check_axioms Model.publicOpenModel_healthy
 #check_axioms Model.repeatOpenAfterFailedDiscard

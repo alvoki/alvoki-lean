@@ -292,14 +292,14 @@ theorem reopenPrefix_active {k req callbacks healthyRoot healthyCall}
     (effects : OpenChildEffects callbacks.openSegment healthyCall)
     {s t : State} (prior : Recoverable k req s.disk) {c : Control} {sealed : Array Bytes}
     (prefixResult : (Segmented.reopenPrefix callbacks).run s = .ok (.ok (c, sealed)) t) :
-    c.active ∈ t.disk.liveNames ∧
+    t.disk.liveControl = some c ∧ c.active ∈ t.disk.liveNames ∧
       ∃ known pending, Child.Recoverable c.policy known pending (t.disk.segment c.active) := by
   obtain ⟨original, found, h, p, readable, allowed⟩ := prior.live
   have proof := reopen_prefix_source root effects s prior found readable allowed readable.layout (fun _ _ => rfl)
   rw [prefixResult] at proof
   have same : c = original := congrArg Prod.fst proof.2
   subst c
-  exact ⟨(proof.1.selected.layout.names original.active original.selectsActive).1, _, _, proof.1.selected.active⟩
+  exact ⟨proof.1.live, (proof.1.selected.layout.names original.active original.selectsActive).1, _, _, proof.1.selected.active⟩
 
 private theorem reopen_source {k req} {callbacks healthyRoot} (root : OpenRootEffects callbacks healthyRoot) {healthyCall : Prop}
     (effects : OpenChildEffects callbacks.openSegment healthyCall) (s : State) (prior : Recoverable k req s.disk) :
