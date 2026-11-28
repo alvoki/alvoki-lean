@@ -98,6 +98,7 @@ open WalRecoverySlice
 #check_axioms SingleFile.compact_install_reached
 #check_axioms SingleFile.openCompactModel_projects
 #check_axioms SingleFile.openCompactModel_refines
+#check_axioms SingleFile.closeCompactModel_projects
 #check_axioms boundedData_needsRepair
 #check_axioms Persistence.Dirty.logOnly_liveFits
 LEAN

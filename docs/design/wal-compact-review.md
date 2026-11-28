@@ -59,7 +59,10 @@ subsequent opens agree on the survivor.
   exposes the selected ghost history, exact compact reader, writer and
   marker bindings, cursor and equivalent fold on success. Failures
   preserve recoverability and release ownership in the model. The fold
-  consumes the one selected decode.
+  consumes the one selected decode. `Recoverable.compactReopenTwice`
+  connects the next compact open to the reached compact close image.
+  Both successful opens fold the same selected history, even with
+  unrelated accumulators.
 - `recoverCompactWith_delivers` runs the shared compact segmented
   recovery schedule. From local acquisition, cursor/fold, close,
   collection and registration reports, it returns the exact active
@@ -135,4 +138,13 @@ Each case has seven runs after a warm-up.
 
 All four wall-time ranges overlap. Current RSS is 18.66–18.71 MiB
 across the medians. These measurements are a same-host smoke comparison.
+Run these cases in the pinned harness with the baseline and candidate
+release binaries in turn.
+
+```sh
+python3 benchmarks/storage/run.py --cpu 0 --data-dir /dev/shm --output /tmp/compact-wal-review \
+  --case wal-log-reopen-8192-cap128 --case wal-boundary-reopen-8192-cap128 \
+  --case wal-log-scan-8192-cap128 --case wal-boundary-scan-8192-cap128
+```
+
 [Existing benchmark infrastructure](https://github.com/alvoki/alvoki-lean/tree/perf/storage-baseline/benchmarks/storage)

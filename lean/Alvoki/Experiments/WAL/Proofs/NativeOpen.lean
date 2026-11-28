@@ -794,11 +794,11 @@ theorem openExisting_scanPhase (dir : FilePath) (policy : Policy) (r : OpenRepor
           cases ran
           exact installWith_scanPhase dir policy r .lock next installed
 
-private def storePhase (phase : Phase OpenTarget (AppendFiles OpenTarget)) : OpenM Unit :=
+private def storePhase (phase : Phase OpenTarget payload history) : OpenM Unit :=
   fun state => finish none () {state with closed := match phase with | .closed => true | _ => false}
 
 private theorem clear_run (s : OpenImage) :
-    (storePhase .closed).run s = .ok (.ok ()) {s with closed := true} := rfl
+    (storePhase (.closed : Phase OpenTarget (AppendFiles OpenTarget))).run s = .ok (.ok ()) {s with closed := true} := rfl
 
 def closeModel (policy : Policy) (r : OpenReports)
     (phase : Phase OpenTarget (AppendFiles OpenTarget)) (s : OpenImage) :=
@@ -895,7 +895,7 @@ theorem compact_install_reached (dir : System.FilePath) (policy : Policy) (r : O
   simp only [storeCompactWith, compactPhase, lock, reader, writer, slots, cursor]
   rfl
 
-private def mapOpenResult (f : α → β) : OpenResult α → OpenResult β
+def mapOpenResult (f : α → β) : OpenResult α → OpenResult β
   | .ok response after => .ok (response.map f) after
   | .error token after => .error token after
 
@@ -926,7 +926,7 @@ private theorem openAttemptWith_pure (dir : System.FilePath) (policy : Policy) (
 private def modelCompactPhase :=
   compactPhase (handle := OpenTarget)
 
-private def modelCompactResult (seed : α) (step : α → Nat → Bytes → α)
+def modelCompactResult (seed : α) (step : α → Nat → Bytes → α)
     (ready : Opened OpenTarget (AppendFiles OpenTarget)) :=
   finishCompactWith (m := Id) modelCompactPhase seed step ready
 
@@ -949,6 +949,21 @@ theorem openCompactModel_projects (dir : System.FilePath) (policy : Policy) (r :
   · cases openAttempt dir policy r (settleImage r.beforeWorker s) <;> rfl
   · intro ready state
     rfl
+
+def closeCompactModel (policy : Policy) (r : OpenReports)
+    (phase : Phase OpenTarget (CompactFiles OpenTarget) Unit) (s : OpenImage) :=
+  (closeWith phase storePhase (openEffects policy r).unlock).run s
+
+/-- Both installed descriptions call the same clearing and unlock
+schedule. The extra compact reader is released with that phase. -/
+theorem closeCompactModel_projects (ready : Opened OpenTarget (AppendFiles OpenTarget))
+    (r : OpenReports) (s : OpenImage)
+    (installed : ready.phase = .active ready.lock (appendFiles ready.writer ready.reader ready.markers)
+      ready.recovered.cursor ready.recovered.batches) :
+    closeCompactModel ready.policy r (compactPhase ready) s =
+      closeModel ready.policy r (storedPhase ready) s := by
+  simp only [closeCompactModel, closeModel, compactPhase, storedPhase_eq, installed]
+  rfl
 
 /-- Compact recovery preserves the reached retry image on every error or
 process stop. Success transfers the selected fold and exact phase. -/

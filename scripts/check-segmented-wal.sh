@@ -84,6 +84,7 @@ open WalRecoverySlice.Segmented
 #check_axioms Child.Recoverable.nativeOpen
 #check_axioms Child.Recoverable.nativeAppendAfterOpen
 #check_axioms Child.Recoverable.nativeReopenTwice
+#check_axioms Child.Recoverable.compactReopenTwice
 #check_axioms Child.nativeRetryAfterAppend
 #check_axioms Child.Installed.nativeRetryAfterRejected
 #check_axioms reopensSettledSegment
