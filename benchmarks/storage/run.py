@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 ROOT = Path(__file__).resolve().parents[2]
 NATIVE_FIELDS = ("scope", "operation", "items", "elapsed_ns", "cpu_ns",
-                 "small_allocations", "peak_rss_kib")
+                 "small_allocations", "peak_rss_kib", "resident_rss_kib")
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,10 @@ def matrix(suite, quick):
                 continue
             yield Case(f"wal-{policy}-reopen-{items}-cap{capacity}",
                        ("wal", "reopen", "{path}", policy, capacity, items, 0), fixture=True)
+        size = 128 if quick else 8192
+        for op in ("scan", "reopen-fold"):
+            yield Case(f"wal-{policy}-{op}-{size}-cap128",
+                       ("wal", op, "{path}", policy, 128, size, 0), fixture=True)
     yield Case("wal-decode-cpu", ("codec", 8 if quick else 1024))
     rows, queries = (1025, 128) if quick else (65537, 4096)
     for operation in ("lookup", "scan", "build", "build-sync"):

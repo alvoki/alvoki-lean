@@ -2,6 +2,7 @@ namespace StorageBench
 
 @[extern "alvoki_bench_cpu_ns"] private opaque cpuNanos : IO UInt64
 @[extern "alvoki_bench_peak_rss"] private opaque peakRss : IO UInt64
+@[extern "alvoki_bench_resident_rss"] private opaque residentRss : IO UInt64
 
 @[extern "alvoki_bench_begin_sync_timing"] private opaque beginSyncTiming : IO Unit
 @[extern "alvoki_bench_end_sync_timing"] private opaque endSyncTiming : IO Unit
@@ -25,6 +26,7 @@ structure Measurement where
   cpu : UInt64
   allocations : Nat
   rss : UInt64
+  resident : UInt64
 
 def measure (action : IO α) : IO (α × Measurement) := do
   let trace := (← IO.getEnv "ALVOKI_BENCH_TRACE") == some "1"
@@ -40,10 +42,10 @@ def measure (action : IO α) : IO (α × Measurement) := do
   let cpu := (← cpuNanos) - cpu
   if syncTiming then endSyncTiming
   if trace then IO.eprintln "STORAGE_BENCH_END"
-  return (result, ⟨elapsed, cpu, allocations, ← peakRss⟩)
+  return (result, ⟨elapsed, cpu, allocations, ← peakRss, ← residentRss⟩)
 
 def Measurement.report (m : Measurement) (operation : String) (items : Nat) : IO Unit :=
-  IO.println s!"batch,{operation},{items},{m.elapsed},{m.cpu},{m.allocations},{m.rss}"
+  IO.println s!"batch,{operation},{items},{m.elapsed},{m.cpu},{m.allocations},{m.rss},{m.resident}"
 
 structure Sample where
   operation : String
@@ -60,6 +62,6 @@ structure Sample where
 
 def reportSamples (samples : Array Sample) : IO Unit := do
   for sample in samples do
-    IO.println s!"call,{sample.operation},1,{sample.elapsed},,,"
+    IO.println s!"call,{sample.operation},1,{sample.elapsed},,,,"
 
 end StorageBench

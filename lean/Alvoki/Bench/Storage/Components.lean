@@ -50,6 +50,26 @@ private def wal (mode : String) (path : FilePath) (policy : Policy)
       checkHistory batches handle
       measurement.report "reopen" count
     finally Segmented.Native.close handle
+  | "reopen-fold" | "scan" =>
+    let checkBatch := fun (seen : Nat × Bool) pos batch =>
+      (seen.1 + 1, seen.2 && pos == seen.1 + 1 && batches[pos - 1]? == some batch)
+    let verify := fun (bounds : Segmented.Bounds) (seen : Nat × Bool) =>
+      check (bounds == ⟨0, count⟩ && seen == (count, true)) "incorrect WAL fold"
+    if mode == "scan" then
+      let handle ← Segmented.Native.openExisting path
+      try
+        let ((bounds, seen), measurement) ← measure
+          (Segmented.Native.scanFold handle (0, true) checkBatch)
+        verify bounds seen
+        measurement.report mode count
+      finally Segmented.Native.close handle
+    else
+      let ((handle, bounds, seen), measurement) ← measure
+        (Segmented.Native.openExistingFold path (0, true) checkBatch)
+      try
+        verify bounds seen
+        measurement.report mode count
+      finally Segmented.Native.close handle
   | _ => throw (IO.userError s!"unknown WAL mode: {mode}")
 
 -- A compute-only control on exactly the same complete 32-byte frames.
