@@ -81,7 +81,12 @@ theorem recovery_progress
     (evidence : NativeBridge.CallbackEvidence ops (selected ∘ Prod.snd) tns)
     (wal : WalRecovery.Interpretation ops (selected ∘ Prod.snd))
     (durable : Durable (selected before) history)
-    (manifest : (ops).manifest.reopen (Phase.opening, before) = .ok version middle)
+    (blob : ManifestComposition.Interpretation (ops).manifest (selected ∘ Prod.snd))
+    (readActive : (blob.openReports (Phase.opening, before)).readActive = true)
+    (openDirectory : (blob.openReports (Phase.opening, before)).openDirectory = true)
+    (syncDirectory : (blob.openReports (Phase.opening, before)).syncDirectory = .ok)
+    (middleInstalled : middle = blob.install (Phase.opening, before)
+      (blob.image (Phase.opening, before)).barrier)
     {owned : WalRecoverySlice.Segmented.Model.RootBinding wal.directory wal.lock}
     (binding : wal.binding middle = .ok owned)
     (rootOK : WalRecoverySlice.Segmented.Model.HealthyRoot (wal.reports middle))
@@ -94,12 +99,15 @@ theorem recovery_progress
     (catalog : namespaceState.Represents middle.2 (selected middle.2).tables)
     (openKeeps : ∀ checked view, (ops).reopenWal middle = .ok view checked →
       (tns).Keeps middle checked (selected middle.2).tables)
-    (tablePrimitives : ∀ state id rows, id ∈ version.tables →
+    (tablePrimitives : ∀ state id rows, id ∈ (selected before).version.tables →
       (tns).Bound state id rows → NativeTableReads.HealthySource tns state id (reads.world state)) :
     ∃ session after, recover ops (Phase.opening, before) = .ok session after ∧
       Installed session (selected after.2) history := by
   obtain ⟨checked, opened, _⟩ :=
     wal.reopenHealthy middle binding rootOK childrenOK closeOK unlockOK representable
+  have healthyManifest := blob.reopenHealthy (Phase.opening, before) readActive openDirectory syncDirectory
+  have manifest : (ops).manifest.reopen (Phase.opening, before) = .ok (selected before).version middle :=
+    middleInstalled.symm ▸ healthyManifest.1
   have manifestEffect := evidence.effects.reopenManifest (Phase.opening, before)
   rw [manifest] at manifestEffect
   have walEffect := evidence.effects.reopenWal middle
@@ -111,7 +119,7 @@ theorem recovery_progress
     have same : selected middle.2 = selected before := manifestEffect.2
     rw [same] at kept
     exact kept
-  have healthy (ids : List UInt64) (included : ∀ id, id ∈ ids → id ∈ version.tables)
+  have healthy (ids : List UInt64) (included : ∀ id, id ∈ ids → id ∈ (selected before).version.tables)
       (state : Phase W × S) (same : selected state.2 = selected before)
       (catalog : (tns).Represents state (selected before).tables) :
       ∃ after, checkTables (ops).tables ids state = .ok () after := by
@@ -119,7 +127,7 @@ theorem recovery_progress
     | nil => exact ⟨state, rfl⟩
     | cons id ids ih =>
       have member := included id (by simp)
-      obtain ⟨rows, bound⟩ := durable.boundTable id (manifestEffect.1 ▸ member)
+      obtain ⟨rows, bound⟩ := durable.boundTable id member
       have source := catalog id rows bound
       obtain ⟨next, first, keeps⟩ :=
         reads.checkHealthy source (tablePrimitives state id rows member source)
@@ -132,7 +140,7 @@ theorem recovery_progress
         ih (fun key member => included key (List.mem_cons_of_mem _ member))
           next (nextSelected.trans same) kept
       exact ⟨after, by simp [checkTables, Bind.bind, EStateM.bind, first, rest]⟩
-  obtain ⟨after, tables⟩ := healthy version.tables (fun _ member => member) checked
+  obtain ⟨after, tables⟩ := healthy (selected before).version.tables (fun _ member => member) checked
     selectedChecked boundCatalog
   obtain ⟨session, ran, ready⟩ := recover_progress (s := (Phase.opening, before)) evidence.effects durable manifest opened tables
   exact ⟨session, after, ran, ready⟩

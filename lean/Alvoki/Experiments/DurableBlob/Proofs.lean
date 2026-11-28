@@ -285,6 +285,16 @@ theorem publishUncertainAdmits (directory : FilePath) (reports : Reports)
     rw [result] at effect
     exact ⟨.uncertain, effect⟩
 
+/-- A successful read and directory barrier return the live value and
+pin that binding for the next crash or reopen. -/
+theorem reopenHealthy (directory : FilePath) (reports : Reports) (before : Image)
+    (read : reports.readActive = true) (opened : reports.openDirectory = true)
+    (synced : reports.syncDirectory = .ok) :
+    (backend directory reports).reopen before = .ok before.active before.barrier := by
+  rw [reopen_eq]
+  simp [Reports.directoryEffect, read, opened, synced, Files.backend, model, perform,
+    Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
+
 /-- Reopen never changes the live binding. A successful reply settles it. -/
 theorem reopenBinding (directory : FilePath) (reports : Reports) (before : Image) :
     match (backend directory reports).reopen before with

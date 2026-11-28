@@ -217,6 +217,24 @@ theorem Interpretation.reopenEffect {ops : Backend (StorageM σ) Version} (i : I
     rw [i.imageInstalled s after ⟨_, valid, canonical⟩, canonical, L0Manifest.decode_encode valid] at version
     exact selectedFields (i.walFrame s after) (Option.some.inj version.symm) (i.tableFrame s after)
 
+/-- A healthy blob reopen supplies the typed callback result and the
+settled image installed by the actual manifest schedule. -/
+theorem Interpretation.reopenHealthy {ops : Backend (StorageM σ) Version}
+    (i : Interpretation ops selected) (s : σ)
+    (read : (i.openReports s).readActive = true)
+    (opened : (i.openReports s).openDirectory = true)
+    (synced : (i.openReports s).syncDirectory = .ok) :
+    ops.reopen s = .ok (selected s).version (i.install s (i.image s).barrier) ∧
+      (i.image (i.install s (i.image s).barrier)).Stable (L0Manifest.encode (selected s).version) := by
+  obtain ⟨valid, encoding⟩ := i.projection s
+  have raw := LinuxEffects.reopenHealthy i.directory (i.openReports s) (i.image s) read opened synced
+  obtain ⟨reported, stable⟩ := reopenSelected i.directory (i.openReports s) raw encoding valid
+  refine ⟨?_, ?_⟩
+  · refine (congrArg (fun b : Backend (StorageM σ) Version => b.reopen s) i.schedule).trans ?_
+    simp [callbacks, reported]
+  · rw [i.imageInstalled _ _ ⟨_, valid, stable.1⟩]
+    exact stable
+
 theorem Interpretation.publishEffect {ops : Backend (StorageM σ) Version} (i : Interpretation ops selected) (s : σ)
     (proposal : Version) (valid : proposal.Valid) :
     match ops.publish proposal s with

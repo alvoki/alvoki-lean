@@ -160,8 +160,9 @@ phase for publication or cleanup leaves the catalog projection unchanged.
 The empty initialization witness starts the client trace, and the lifecycle
 consumes the reached catalog postconditions of write, flush, recover and
 get. On a returned WAL open error it carries the WAL producer's root and
-child release facts for the same disk left by recovery. Healthy recovery uses the WAL progress theorem, a successful manifest
-open and the reached table catalog. Each required check takes its inode
+child release facts for the same disk left by recovery. Healthy recovery derives the typed manifest open and settled image from
+healthy blob read, directory open and directory sync reports. It then uses
+the WAL progress theorem and the reached table catalog. Each required check takes its inode
 and image from that catalog and derives callback success from local
 healthy stat, open and read reports.
 
@@ -243,7 +244,7 @@ observations.
 | Descriptor drop and outer lock release | Runtime last-reference behavior and unlock effects. L0 must prove the outer cleanup calls release on the reached ownership state | `Lifecycle.recovery_offline` and the outer native scope |
 | Concrete dispatch uses the native read interpreter on its reached carrier | L0 native callback setup. The interpreter itself computes the lookup result and keeps the reported world, so an independent result equality is gone | `CallbackEvidence.lookupFromCatalog` |
 | Durable catalog insertion and preservation of unrelated physical bindings | Filesystem create, file sync and directory sync effects. L0 must represent the reached writer and prove local table, manifest and WAL namespace frames | `TableCreationEvidence.catalogInserted`, `catalogAfter` and the lifecycle postconditions |
-| Healthy recovery state and primitive reports | L0 must supply the reached manifest-open result and catalog frame across WAL open. The filesystem supplies healthy table primitives. `scopedCheck` now yields the table callback result | `Lifecycle.recovery_progress` |
+| Healthy recovery state and primitive reports | The filesystem supplies healthy manifest and table primitives. The manifest interpreter derives the typed open, and `scopedCheck` yields the table callback result. L0 still supplies the catalog frame across WAL open and connects actual Linux reports to the interpreter | `Lifecycle.recovery_progress` |
 | Restart selection, reply delivery and loss | Filesystem survivor choice and runtime/client observations. L0 must connect the resulting image and observations to the interpreter | `recoverReachedFlush` and `Execution.Run.flushObserved` |
 | Repeated public operation steps on actual native states | L0 must compose the lifecycle theorems with the concrete operation dispatch and effect interpretation | `Execution.Run.refines` |
 | Ready view, recoverability after restart and segmented append | WAL producers for append, rotation, CONTROL and uncertainty selection | `WalRecovery.Interpretation` and the append law |

@@ -66,6 +66,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms WalRecovery.Interpretation.reopenHealthy
 #check_axioms WalRecovery.Interpretation.scanEffect
 #check_axioms DurableBlob.LinuxEffects.reopenBinding
+#check_axioms DurableBlob.LinuxEffects.reopenHealthy
 #check_axioms DurableBlob.LinuxEffects.publishActive
 #check_axioms ManifestComposition.reopen
 #check_axioms ManifestComposition.publish
@@ -74,6 +75,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.publishSelected
 #check_axioms ManifestComposition.retryAfterPublication
 #check_axioms ManifestComposition.Interpretation.reopenEffect
+#check_axioms ManifestComposition.Interpretation.reopenHealthy
 #check_axioms ManifestComposition.Interpretation.publishEffect
 #check_axioms CallbackEvidence.effects
 #check_axioms CallbackEvidence.get
