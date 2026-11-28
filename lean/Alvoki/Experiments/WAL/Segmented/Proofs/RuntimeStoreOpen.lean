@@ -82,14 +82,14 @@ and freshly allocated empty child slot. The worker consumes those resources;
 every failed episode still carries the slot needed by the outer unwinder. -/
 theorem openExisting_registered_diskPost (ops : OpenIO heap dir disk known Q) (start : Waiting known disk Q w) :
     IOReturns (openExisting dir) w
-      (fun h t => ∃ reg, Origin dir h reg w t ∧ heap.Registered h reg t ∧
+      (fun h t => ∃ reg, Origin dir h reg w t ∧ heap.Registered h reg t ∧ LocksFrom reg ∧
         Installed reg.session (disk t) ∧ reg.session.view = known ∧ Q t)
       (Waiting known disk Q) := by
   let openIO := ops.acquire
   apply openExisting_registered_of_worker heap dir disk known Q
     (StoreAt heap openIO.canonical openIO.directory openIO.locked (Waiting known disk Q)) openIO.Lease
     (acquireStore_io heap dir openIO.canonical (openIO.resolve w start) openIO.openDir openIO.stat
-      openIO.opened openIO.openLock openIO.tryLock openIO.fresh) _ ops.install ops.take ops.unlock
+      openIO.opened openIO.openLock openIO.tryLock openIO.fresh) (fun _ _ => acquireStore_rootLockAt heap dir) _ ops.install ops.take ops.unlock
   intro s u entry
   let Qs := fun t => openIO.directory s.directory t ∧ openIO.locked s.lock t ∧
     heap.holds s.active none t ∧ Q t
@@ -99,7 +99,7 @@ theorem openExisting_registered_diskPost (ops : OpenIO heap dir disk known Q) (s
   cases ran : s.recoverChild u with
   | ok pair t =>
     rw [ran] at step
-    exact ⟨step.2.1, step.2.2, step.1.2.2.2⟩
+    exact ⟨step.1, step.2.2.1, step.2.2.2, step.2.1.2.2.2⟩
   | error e t =>
     rw [ran] at step
     exact ⟨step.1.2.2.1, ⟨entry.path, step.1.1, step.1.2.1⟩, step.2, step.1.2.2.2⟩

@@ -179,8 +179,10 @@ its root unlock on the reached world after taking the slot. -/
 theorem openExisting_registered_of_worker (heap : PhaseMemory) (dir : FilePath)
     (disk : W → Disk) (known : Contract.View) (Q : W → Prop) (owned lease : Store → W → Prop)
     (acquire : IOReturns (acquireStore dir) w owned (fun t => Recoverable known none (disk t) ∧ Q t))
+    (rootLock : ∀ s u, acquireStore dir w = .ok s u → RootLockAt s.root s.lock)
     (worker : ∀ s u, owned s u → IOReturns s.recoverChild u
-      (fun out t => Installed out.1 (disk t) ∧ out.1.view = known ∧ Q t)
+      (fun out t => (∃ fd, ChildLockAt (segmentPath s.root out.1.control.active) out.2 fd) ∧
+        Installed out.1 (disk t) ∧ out.1.view = known ∧ Q t)
       (fun t => heap.holds s.active none t ∧ lease s t ∧ Recoverable known none (disk t) ∧ Q t))
     (install : ∀ session, InstallFrame (fun t => Installed session (disk t) ∧ Q t))
     (take : ∀ (s : Store) t, StoreUnwinding dir s t → heap.holds s.active none t → lease s t →
@@ -190,7 +192,7 @@ theorem openExisting_registered_of_worker (heap : PhaseMemory) (dir : FilePath)
       IOReturns s.lock.unlock u (fun _ t => Recoverable known none (disk t) ∧ Q t)
         (fun t => Recoverable known none (disk t) ∧ Q t)) :
     IOReturns (openExisting dir) w
-      (fun h t => ∃ reg, Origin dir h reg w t ∧ heap.Registered h reg t ∧
+      (fun h t => ∃ reg, Origin dir h reg w t ∧ heap.Registered h reg t ∧ LocksFrom reg ∧
         Installed reg.session (disk t) ∧ reg.session.view = known ∧ Q t)
       (fun t => Recoverable known none (disk t) ∧ Q t) := by
   unfold IOReturns
@@ -198,11 +200,11 @@ theorem openExisting_registered_of_worker (heap : PhaseMemory) (dir : FilePath)
   | ok h t =>
     obtain ⟨session, origin, _⟩ := openExisting_ready heap dir opened
     obtain ⟨s, u, child, v, raw, recovery, stateEq, mutexEq, rfl⟩ := origin
-    obtain ⟨installed, eq, keep⟩ := IOReturns.atOk (worker s u (IOReturns.atOk acquire raw)) recovery
+    obtain ⟨childLock, installed, eq, keep⟩ := IOReturns.atOk (worker s u (IOReturns.atOk acquire raw)) recovery
     let F := install session
     have final := F.mutex _ (F.phase s session _ (F.attach s.active session.control.active child _ ⟨installed, keep⟩))
     let registration : Registration := ⟨session, s, child⟩
-    refine ⟨registration, ?_, ?_, final.1, eq, final.2⟩
+    refine ⟨registration, ?_, ?_, ⟨rootLock s u raw, childLock⟩, final.1, eq, final.2⟩
     · exact ⟨u, v, raw, recovery, stateEq, mutexEq, rfl⟩
     · unfold PhaseMemory.Registered
       rw [stateEq]
@@ -234,20 +236,21 @@ def AfterClose (before after : Disk) : Prop :=
 registered handle. Scanning consumes that binding; closing need only retain
 file contents, since the closed descriptor's cursor is no longer live. -/
 structure ChildAccess (s : Store) (disk : W → Disk) (Q : W → Prop) where
-  owns : SingleFile.Handle → List Bytes → W → Prop
+  owns : Nat → SingleFile.Handle → List Bytes → W → Prop
+  source : ∀ id h bs u, owns id h bs u → ∃ fd, ChildLockAt (segmentPath s.root id) h fd
   acquire : ∀ p id bs u, Q u → id ∈ (disk u).liveNames →
     Child.Recoverable p bs none ((disk u).segment id) →
     IOReturns (s.acquireChild p id) u
-      (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ owns h bs t ∧
+      (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ owns id h bs t ∧
         Child.Installed p ((disk t).segment id) ((disk t).cursor id) bs ∧
         (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
       (fun t => Q t ∧ ChildChange id (disk u) (disk t) ∧
         Child.Recoverable p bs none ((disk t).segment id) ∧
         (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
-  scan : ∀ h bs u, owns h bs u → Q u → IOReturns (SingleFile.scan h) u
-    (fun bytes t => bytes = bs ∧ owns h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
-    (fun t => owns h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
-  close : ∀ h bs u, owns h bs u → Q u → IOReturns (SingleFile.close h) u
+  scan : ∀ id h bs u, owns id h bs u → Q u → IOReturns (SingleFile.scan h) u
+    (fun bytes t => bytes = bs ∧ owns id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
+    (fun t => owns id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
+  close : ∀ id h bs u, owns id h bs u → Q u → IOReturns (SingleFile.close h) u
     (fun _ t => Q t ∧ AfterClose (disk u) (disk t))
     (fun t => Q t ∧ AfterClose (disk u) (disk t))
 
@@ -344,7 +347,7 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
   let bs := segmentHistory c.capacity id history
   let Frame := fun t => Q t ∧ OpenLayout c history (disk t)
   let Failure := fun t => Q t ∧ Recoverable (historyView c history) none (disk t)
-  let held := fun h t => ops.owns h bs t ∧ Frame t
+  let held := fun h t => ops.owns id h bs t ∧ Frame t
   have selected : c.selects id := ⟨lo, Nat.le_of_lt lt⟩
   have settled := o.readable.layout.sealed id selected lt
   have raw := ops.acquire c.policy id bs u keep (o.readable.layout.names id selected).1
@@ -357,7 +360,7 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
     · rintro t ⟨q, change, _, physical⟩
       exact ⟨q, (o.child change settled (physical settled)).retry⟩
   · rintro h v ⟨owned, q, prior⟩
-    apply mapIO (ops.scan h bs v owned q)
+    apply mapIO (ops.scan id h bs v owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
       exact ⟨rfl, owns, qt, prior.writebacks same⟩
     · rintro t ⟨owns, qt, same⟩
@@ -365,13 +368,13 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
   · rintro h v ⟨owned, q, prior⟩
     have after {t} (post : Q t ∧ AfterClose (disk v) (disk t)) : Frame t ∧ Failure t :=
       ⟨⟨post.1, prior.cursors post.2⟩, ⟨post.1, (prior.cursors post.2).retry⟩⟩
-    exact mapIO (ops.close h bs v owned q) (fun _ _ post => after post) (fun _ post => (after post).2)
+    exact mapIO (ops.close id h bs v owned q) (fun _ _ post => after post) (fun _ post => (after post).2)
 
 /-- The final collection may mutate retired files and names. Its leaf frames
 protect the installed active child, its cursor, and the still-selected layout. -/
 def ActiveFrame (children : ChildAccess s disk Q) (c : Control) (history : List Bytes)
     (h : SingleFile.Handle) (w : W) : Prop :=
-  children.owns h (segmentHistory c.capacity c.active history) w ∧ Q w ∧ Installed (sessionOf c history) (disk w)
+  children.owns c.active h (segmentHistory c.capacity c.active history) w ∧ Q w ∧ Installed (sessionOf c history) (disk w)
 
 structure StoreOperations (s : Store) (disk : W → Disk) (Q : W → Prop)
     (child : Type) (access : child → ChildAccess s disk Q) where
@@ -401,7 +404,8 @@ private theorem decode_bounds {raw : ByteArray} (parsed : ControlCodec.decode ra
 theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
     (start : Q w) (prior : Recoverable known none (disk w)) :
     IOReturns s.recoverChild w
-      (fun out t => Q t ∧ Installed out.1 (disk t) ∧ out.1.view = known)
+      (fun out t => (∃ fd, ChildLockAt (segmentPath s.root out.1.control.active) out.2 fd) ∧
+        Q t ∧ Installed out.1 (disk t) ∧ out.1.view = known)
       (fun t => Q t ∧ Recoverable known none (disk t)) := by
   obtain ⟨c, found, choice⟩ := prior.live
   obtain ⟨history, readable, rfl⟩ := choice.known
@@ -423,8 +427,8 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
       (reached.layout.names id selected).1⟩) (fun _ _ => rfl), bound, bound⟩
   apply mapIO (s.recoverChild_post c history P0 P held bad ?source ?retry0 ?retry ?sync ?sealed ?acquire ?scan ?close ?collect readable.layout.upper)
   case success =>
-    rintro ⟨session, child⟩ t ⟨rfl, _, q, installed⟩
-    exact ⟨q, installed, rfl⟩
+    rintro ⟨session, child⟩ t ⟨rfl, owned, q, installed⟩
+    exact ⟨ops.children.source c.active child _ t owned, q, installed, rfl⟩
   case failure => exact fun _ h => h
   case source =>
     exact src.mapPost (fun _ _ result => ⟨result.2, result.1⟩) (fun _ result => ⟨result.1, result.2.recoverable prior⟩)
@@ -449,7 +453,7 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
       exact ⟨q', (entry.activeFail change kept).retry⟩
   case scan =>
     rintro h u ⟨owned, q, installed⟩
-    apply mapIO (ops.children.scan h bs u owned q)
+    apply mapIO (ops.children.scan c.active h bs u owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
       exact ⟨rfl, owns, qt, same.installed installed⟩
     · rintro t ⟨owns, qt, same⟩
@@ -458,7 +462,7 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
     rintro h u ⟨owned, q, installed⟩
     have after {t} (r : Q t ∧ AfterClose (disk u) (disk t)) : bad t :=
       ⟨r.1, Recoverable.cursors (installed.offline (.inl rfl)) r.2⟩
-    exact mapIO (ops.children.close h bs u owned q) (fun _ _ post => after post) (fun _ post => after post)
+    exact mapIO (ops.children.close c.active h bs u owned q) (fun _ _ post => after post) (fun _ post => after post)
   case collect =>
     exact fun h u entry => CollectionIO.collect s c (ops.cleanup c history h) (ops.cleanupSync c history h) entry
 

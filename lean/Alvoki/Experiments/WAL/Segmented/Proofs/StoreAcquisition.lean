@@ -101,4 +101,46 @@ theorem acquireStore_io (heap : PhaseMemory) (dir canonical : FilePath)
   simp only [IOReturns, Bind.bind, instMonadEIO._aux_13, EST.bind, run, Pure.pure, instMonadEIO._aux_5, EST.pure]
   exact ⟨rfl, dirAfter, lockAfter, allocated, after⟩
 
+/-- The runtime lock stored in any successful acquisition is the description
+returned by the canonical WAL lock pathname, and that same description
+granted the lock on the immediately following world. -/
+theorem acquireStore_rootLockAt (heap : PhaseMemory) (dir : FilePath)
+    (returned : acquireStore dir w = .ok s finish) : RootLockAt s.root s.lock := by
+  cases resolved : IO.FS.realPath dir w with
+  | error e atPath =>
+    simp [acquireStore, acquireStoreWith, openRootDirectoryWith, Bind.bind, instMonadEIO._aux_13,
+      EST.bind, resolved] at returned
+  | ok root t =>
+    let opened := fun (_ : IO.FS.Handle) fd u =>
+      ∃ begin, IO.FS.Handle.mk (root / "lock") .append begin = .ok fd u
+    have result := acquireStore_io heap dir root
+      (directory := fun _ _ => True) (lock := fun fd _ => RootLockAt root fd) (P := fun _ => True)
+      (w := w) (by simp [IOReturns, resolved]) (by
+        intro u _
+        unfold IOReturns
+        cases IO.FS.Handle.mk root .read u <;> simp)
+      (by
+        intro d u _ _
+        unfold IOReturns
+        cases (root / "lock").symlinkMetadata u <;> simp)
+      opened (by
+        intro d u _ _
+        unfold IOReturns
+        cases run : IO.FS.Handle.mk (root / "lock") .append u with
+        | ok fd t => exact ⟨u, run⟩
+        | error => trivial)
+      (by
+        rintro d fd u ⟨begin, file⟩
+        unfold IOReturns
+        cases granted : fd.tryLock true u with
+        | error => trivial
+        | ok yes v =>
+          cases yes with
+          | false => trivial
+          | true => exact ⟨trivial, ⟨begin, u, v, file, granted⟩, trivial⟩)
+      (fun d fd u _ held _ => ⟨trivial, held, trivial⟩)
+    rw [IOReturns, returned] at result
+    rw [result.path]
+    exact result.owns
+
 end WalRecoverySlice.Segmented.Native
