@@ -201,4 +201,52 @@ theorem reportedWriteTwice (call : AppendCall change) (unlock : Option String)
   have selected := r.refines run (same.symm ▸ pending)
   exact ⟨same.symm ▸ hr, same.symm ▸ hc, same.symm ▸ pending, selected⟩
 
+
+/-- On a successful append the registered active slot holds the returned
+child, including a transferred successor after rotation. On the reported-error
+branch appendCloseState instead accounts for unwinding the successor. -/
+def acknowledgedState (before : Model.AppendCloseState) (after : Model.State × SingleFile.AppendPhase)
+    (phase : WalRecoverySlice.Segmented.Native.Phase Nat) : Model.AppendCloseState :=
+  {before with state := after.1, child := after.2, phase, childHeld := after.1.activeEntry.isSome}
+
+/-- The WAL returned a position but the client did not receive it. Recovery
+can select only the appended history, even across failed attempts or close errors. -/
+theorem lostAcknowledgementTwice (call : AppendCall change) (unlock : Option String)
+    (wal : WalRecoverySlice.Segmented.Session) (before : Model.AppendCloseState)
+    (rootHeld : before.rootHeld = true) (ready : Model.AppendReady wal (before.state, before.child))
+    (registered : before.state.activeEntry = some wal.control.active)
+    (room : wal.view.tail < Contract.maxPosition) (linux : System.Platform.isWindows = false)
+    (returned : call.run wal before = .ok (.ok reply) (after, phase))
+    (r : Reopens directory lock call.root (closedState after.1).state)
+    (run : Execution.Run events (some session) image) (bound : wal.view = image.view) :
+    let close := (Model.publicAppendClose wal.control.policy call.close unlock).run
+      (acknowledgedState before after phase)
+    reply = image.view.tail + 1 ∧ closeWorld close = closedState after.1 ∧
+      r.finalWal.view = image.view.append (encode change) ∧ ReopenedTwice r events change image := by
+  have observed := Model.publicNativeAppend_position call.root call.held call.removal call.effects call.create
+    call.close wal call.reports (before.state, before.child) ready registered (encode_size change) room linux
+  change (match call.run wal before with
+    | .ok (.ok _) (_, _) => _ | .ok (.error _) (_, _) => _ | .error _ (_, _) => _) at observed
+  rw [returned] at observed
+  obtain ⟨next, phaseEq, acquired, slot, ack, _, position, _⟩ := observed
+  have nextView : next.view = image.view.append (encode change) := by
+    cases ack with
+    | ack step => simpa [Contract.Request.apply, room, ← bound] using step.symm
+  let live := acknowledgedState before after phase
+  have custody : live.ChildCustody := Model.AppendReady.closeCustody acquired slot (by simp [live, acknowledgedState, slot])
+  have closed := Model.publicAppendClose_releases wal.control.policy call.close unlock live
+    (by simp [live, acknowledgedState, phaseEq]) rootHeld custody
+  have released : closeWorld ((Model.publicAppendClose wal.control.policy call.close unlock).run live) = closedState after.1 := by
+    rw [closed]
+    by_cases child : (live.state.activeEntry.isSome && call.close.unlockError) = true
+    · simp only [child, ite_true]; rfl
+    · rw [ite_eq_right child]; cases unlock <;> rfl
+  have pinned : Recoverable next.view none (closedState after.1).state.disk := acquired.installed.offline (.inl rfl)
+  have pending : Recoverable image.view (some (.append (encode change))) (closedState after.1).state.disk :=
+    acquired.installed.offline (.inr (by simp [Contract.Request.apply, ← bound, room, nextView]))
+  have repeated := r.refines run pending
+  have single := (reopenAfterWrite r.first (r.retries.recoverable pinned) r.opened).1
+  have first : r.firstWal.view = next.view := single.elim id (by simp)
+  exact ⟨bound ▸ position, released, repeated.pinned.trans (first.trans nextView), repeated⟩
+
 end ExperimentalL0.WalProducerHandoff
