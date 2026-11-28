@@ -30,6 +30,36 @@ theorem SelectedDisk.installed (rep : SelectedDisk model actual) (installed : In
   have names := ready.layout.names i chosen
   exact ⟨(files i chosen).1 names.1, (files i chosen).2.1 names.2⟩
 
+/-- The exact same stored child phase is usable with the physical disk,
+including after writebacks to previously retired segments. -/
+theorem SelectedDisk.appendReady (rep : SelectedDisk state.1.disk actual)
+    (ready : Model.AppendReady session state) :
+    Model.AppendReady session ({state.1 with disk := actual}, state.2) := by
+  obtain ⟨saved, steps, live, durable, get⟩ := rep
+  obtain ⟨history, shape, layout, left, right, phase⟩ := ready
+  have sameSource (i : Nat) (selected : session.control.selects i) :
+      saved.segment i = state.1.disk.segment i := by
+    rcases Nat.eq_or_lt_of_le selected.2 with eq | lt
+    · rw [eq]
+      exact steps.settled layout.active.toSettled
+    · exact steps.settled (layout.layout.sealed i selected lt)
+  have cursor (i : Nat) : saved.cursor i = state.1.disk.cursor i := by
+    clear live durable get sameSource
+    induction steps <;> first | rfl | assumption
+  have usedLive := steps.live.trans left
+  obtain ⟨files, pos⟩ := get session.control (.inl usedLive)
+  have names (i : Nat) (sel : session.control.selects i) :
+      i ∈ saved.liveNames ∧ i ∈ saved.durableNames := by
+    have old := layout.layout.names i sel
+    clear live durable usedLive files pos sameSource cursor get
+    induction steps <;> first | exact old | assumption
+  have valid := layout.frame (after := actual) (fun i sel =>
+      ⟨(files i sel).1 (names i sel).1, (files i sel).2.1 (names i sel).2⟩)
+    (fun i sel => (files i sel).2.2.trans (sameSource i sel)) (pos.trans (cursor _))
+  refine ⟨history, shape, valid, live.trans usedLive, durable.trans (steps.durable.trans right), ?_⟩
+  change state.2 = .active _ _ (actual.cursor _) _
+  rw [pos, cursor, phase]
+
 theorem SelectedDisk.recoverable (rep : SelectedDisk model actual)
     (prior : Recoverable known request model) : Recoverable known request actual := by
   obtain ⟨saved, steps, live, durable, get⟩ := rep
