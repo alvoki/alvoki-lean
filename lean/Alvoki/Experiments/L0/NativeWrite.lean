@@ -123,47 +123,109 @@ def guardWorld (ref : Ref) (wal : Wal) (start : W) : W :=
 def issueWorld (ref : Ref) (wal : Wal) (start : W) : W :=
   ((ref.get : BaseIO _) (guardWorld ref wal start)).state
 
+private theorem reserveCore {P : Phase Wal → W → Prop}
+    (online : P (.online wal s) start) (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (readAt : ∀ {w} {stage : Phase Wal}, P stage w → stage.wal = some wal →
+      ∃ t, (ref.get : IO (Phase Wal)) w = .ok stage t ∧ P stage t)
+    (owned : ∀ {stage w}, P stage w → Owned (physical w) root lock ref)
+    (physicalPhase : ∀ {stage w}, P stage w → (physical w).phase = stage)
+    (swapKeeps : ∀ {w t}, P (.online wal s) w →
+      (ref.swap (.updating wal) : IO _) w = .ok (.online wal s) t →
+      NativeRead.FrameTo physical root wal image.tables w t (.updating wal) → P (.updating wal) t)
+    : ∃ entered hidden, (ref.get : IO (Phase Wal)) start = .ok (.online wal s) entered ∧
+      (ref.swap (.updating wal) : IO _) entered = .ok (.online wal s) hidden ∧ P (.updating wal) hidden := by
+  obtain ⟨entered, read, online'⟩ := readAt online rfl
+  obtain ⟨hidden, swapped, step⟩ := phase.swap entered (owned online') wal (.updating wal)
+  have updating := swapKeeps online' (physicalPhase online' ▸ swapped) step
+  exact ⟨entered, hidden, read, physicalPhase online' ▸ swapped, updating⟩
+
+private theorem scanCore {image : Selected} {P : Phase Wal → W → Prop} (updating : P (.updating wal) hidden) (heap : PhaseMemory)
+    (readAt : ∀ {w} {stage : Phase Wal}, P stage w → stage.wal = some wal →
+      ∃ t, (ref.get : IO (Phase Wal)) w = .ok stage t ∧ P stage t)
+    (ready : ∀ {w}, P (.updating wal) w → ∃ reg, heap.Registered wal reg w ∧ reg.session.view = image.view)
+    (scanKeeps : ∀ {w}, P (.updating wal) w → P (.updating wal) (scanWorld wal w))
+    : ∃ scanStart, (ref.get : IO (Phase Wal)) hidden = .ok (.updating wal) scanStart ∧
+      borrow ref WalRecoverySlice.Segmented.Native.scan hidden = .ok image.view (scanWorld wal scanStart) ∧
+      P (.updating wal) (scanWorld wal scanStart) := by
+  obtain ⟨scanStart, borrowScan, scanning⟩ := readAt updating rfl
+  obtain ⟨reg, regReady, view⟩ := ready scanning
+  have ran := (WalRecoverySlice.Segmented.Native.scan_ready_world heap regReady.ready).1
+  have scanned := borrow_run _ borrowScan |>.trans (view ▸ ran)
+  have afterScan := scanKeeps scanning
+  exact ⟨scanStart, borrowScan, scanned, afterScan⟩
+
+private theorem sessionRead {physical : W → Footprint inode}
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (entry : SessionAt physical root lock ref wal s image history w stage) (ownsWal : stage.wal = some wal) :
+    ∃ t, (ref.get : IO (Phase Wal)) w = .ok stage t ∧ SessionAt physical root lock ref wal s image history t stage := by
+  obtain ⟨t, read, step⟩ := phase.refRead wal w entry.owned (entry.phase.symm ▸ ownsWal)
+  exact ⟨t, entry.phase ▸ read, entry.phase ▸ entry.advance step⟩
+
+theorem reserve {physical : W → Footprint inode}
+    (online : Online physical root lock ref wal s image history start)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image) :
+    ∃ entered hidden, (ref.get : IO (Phase Wal)) start = .ok (.online wal s) entered ∧
+      (ref.swap (.updating wal) : IO _) entered = .ok (.online wal s) hidden ∧
+      SessionAt physical root lock ref wal s image history hidden (.updating wal) :=
+  reserveCore (P := fun stage w => SessionAt physical root lock ref wal s image history w stage)
+    online phase (fun h => sessionRead phase h) (fun h => h.owned) (fun h => h.phase) (fun h _ step => h.advance step)
+
+theorem scan {physical : W → Footprint inode}
+    (entry : SessionAt physical root lock ref wal s image history hidden (.updating wal))
+    (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (prim : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
+      NativeRecoverAt.ScanPrimitives physical root wal image.tables w) :
+    ∃ t, Native.checked (Native.callbackComponents root ref).scan hidden = .ok image.view t ∧
+      SessionAt physical root lock ref wal s image history t (.updating wal) := by
+  obtain ⟨t, _, scanned, kept⟩ := scanCore (P := fun stage w => SessionAt physical root lock ref wal s image history w stage)
+    entry heap (fun h => sessionRead phase h) (fun h => by
+      obtain ⟨reg, slot, _, _, view⟩ := h.child
+      exact ⟨reg, (cached _ h.owned wal reg).mp slot, view⟩) (fun h =>
+        h.phase ▸ h.advance (WalRecoverySlice.Segmented.Native.scanWorld_frame (prim _ h) Frame.refl))
+  refine ⟨_, ?_, kept⟩
+  unfold Native.callbackComponents Cell.components Native.storageCallbacks
+  rw [checked_borrow]
+  exact scanned
+
 /-- The position guard keeps its pre-append disk. Otherwise the public
 operation calls append once, using precisely the registration and world
 that survived both phase borrows and the cached scan. -/
-theorem dispatchAt {physical : W → Footprint inode}
-    (online : Online physical root lock ref wal s image history start)
-    (binding : Native.Handle.AtRoot handle root ref)
-    (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
-    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
-    (scan : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
-      NativeRecoverAt.ScanPrimitives physical root wal image.tables w)
+theorem dispatchCore {physical : W → Footprint inode} {P : Phase Wal → W → Prop}
+    (online : P (.online wal s) start) (binding : Native.Handle.AtRoot handle root ref)
+    (heap : PhaseMemory) (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (owned : ∀ {stage w}, P stage w → Owned (physical w) root lock ref)
+    (physicalPhase : ∀ {stage w}, P stage w → (physical w).phase = stage)
+    (readKeeps : ∀ {stage w t}, P stage w → (ref.get : IO (Phase Wal)) w = .ok stage t →
+      Frame physical root wal image.tables w t → P stage t)
+    (swapKeeps : ∀ {w t}, P (.online wal s) w →
+      (ref.swap (.updating wal) : IO _) w = .ok (.online wal s) t →
+      NativeRead.FrameTo physical root wal image.tables w t (.updating wal) → P (.updating wal) t)
+    (ready : ∀ {w}, P (.updating wal) w → ∃ reg, heap.Registered wal reg w ∧ reg.session.view = image.view)
+    (scanKeeps : ∀ {w}, P (.updating wal) w → P (.updating wal) (scanWorld wal w))
     (change : Change) :
     if image.view.tail + 1 < UInt64.size then
       let issued := issueWorld ref wal start
-      SessionAt physical root lock ref wal s image history issued (.updating wal) ∧
+      P (.updating wal) issued ∧
         Native.mutation handle change start = afterWrite ref
           (match WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
            | .ok _ t => .ok {s with mem := insert s.mem change} t
            | .error e t => .error e t)
     else
       let rejected := guardWorld ref wal start
-      SessionAt physical root lock ref wal s image history rejected (.updating wal) ∧
+      P (.updating wal) rejected ∧
         Native.mutation handle change start = afterWrite ref (.error (IO.userError "absolute WAL position exhausted") rejected) := by
-  have readAt {w stage} (entry : SessionAt physical root lock ref wal s image history w stage)
+  have readAt {w stage} (entry : P stage w)
       (ownsWal : stage.wal = some wal) :
       ∃ t, (ref.get : IO (Phase Wal)) w = .ok stage t ∧
-        SessionAt physical root lock ref wal s image history t stage := by
-    obtain ⟨t, ran, frame⟩ := phase.refRead wal w entry.owned (entry.phase.symm ▸ ownsWal)
-    exact ⟨t, entry.phase ▸ ran, entry.phase ▸ entry.advance frame⟩
-  obtain ⟨entered, read, online'⟩ := readAt online rfl
-  obtain ⟨hidden, swapped, step⟩ := phase.swap entered online'.owned wal (.updating wal)
-  have updating := online'.advance step
+        P stage t := by
+    obtain ⟨t, ran, frame⟩ := phase.refRead wal w (owned entry) ((physicalPhase entry).symm ▸ ownsWal)
+    exact ⟨t, physicalPhase entry ▸ ran, readKeeps entry (physicalPhase entry ▸ ran) frame⟩
+  obtain ⟨entered, hidden, read, swapped, updating⟩ := reserveCore online phase readAt owned physicalPhase swapKeeps
   have run := update_started ref (fun session => Native.checked (write (Native.callbackComponents root ref) session change)) read swapped
   rw [← Native.mutation_atRoot binding change] at run
   rw [write_atRoot] at run
-  obtain ⟨scanStart, borrowScan, scanning⟩ := readAt updating rfl
-  obtain ⟨reg, slot, _, _, view⟩ := scanning.child
-  have regReady := (cached _ scanning.owned wal reg).mp slot
-  have ran := (WalRecoverySlice.Segmented.Native.scan_ready_world heap regReady.ready).1
-  have scanned := borrow_run _ borrowScan |>.trans (view ▸ ran)
-  have scannedFrame := WalRecoverySlice.Segmented.Native.scanWorld_frame (scan _ scanning) Frame.refl
-  have afterScan := scanning.phase ▸ scanning.advance scannedFrame
+  obtain ⟨scanStart, borrowScan, scanned, afterScan⟩ := scanCore updating heap readAt ready scanKeeps
   split
   · rename_i fits
     obtain ⟨issued, borrowAppend, ready⟩ := readAt afterScan rfl
@@ -194,6 +256,35 @@ theorem dispatchAt {physical : W → Footprint inode}
     apply congrArg (afterWrite ref)
     simp [Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, full]
     rfl
+
+theorem dispatchAt {physical : W → Footprint inode}
+    (online : Online physical root lock ref wal s image history start)
+    (binding : Native.Handle.AtRoot handle root ref)
+    (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (scan : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
+      NativeRecoverAt.ScanPrimitives physical root wal image.tables w)
+    (change : Change) :
+    if image.view.tail + 1 < UInt64.size then
+      let issued := issueWorld ref wal start
+      SessionAt physical root lock ref wal s image history issued (.updating wal) ∧
+        Native.mutation handle change start = afterWrite ref
+          (match WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
+           | .ok _ t => .ok {s with mem := insert s.mem change} t
+           | .error e t => .error e t)
+    else
+      let rejected := guardWorld ref wal start
+      SessionAt physical root lock ref wal s image history rejected (.updating wal) ∧
+        Native.mutation handle change start = afterWrite ref (.error (IO.userError "absolute WAL position exhausted") rejected) := by
+  refine dispatchCore (P := fun stage w => SessionAt physical root lock ref wal s image history w stage) online binding heap phase (fun h => h.owned) (fun h => h.phase) ?_ ?_ ?_ ?_ change
+  · intro stage w t held _ step
+    exact held.phase ▸ held.advance step
+  · exact fun held _ step => held.advance step
+  · intro w held
+    obtain ⟨reg, slot, _, _, view⟩ := held.child
+    exact ⟨reg, (cached _ held.owned wal reg).mp slot, view⟩
+  · intro w held
+    exact held.phase ▸ held.advance (WalRecoverySlice.Segmented.Native.scanWorld_frame (scan _ held) Frame.refl)
 
 /-- The position guard keeps its pre-append disk. Otherwise the public
 operation calls append once, using precisely the registration and world
