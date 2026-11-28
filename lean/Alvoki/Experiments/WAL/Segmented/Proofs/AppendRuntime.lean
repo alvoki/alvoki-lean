@@ -30,17 +30,21 @@ def installedWorld (cell : IO.Ref (Phase Store)) (store : Store) (session : Sess
 /-- The only memory boundaries outside the segmented worker. File, root and
 child obligations occur inside LocalInPlace and LocalRotation. -/
 structure Memory (mem : ChildMemory disk) (heap : PhaseMemory) (Q : W → Prop) (reg : Registration)
-    (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (w : W) where
+    (cell : IO.Ref (Phase Store)) (mutex : Std.BaseMutex) (batch : Bytes) (w : W) where
   lock : MemoryEdge mem Q w (mutex.lock w).state
   read : MemoryEdge mem Q (mutex.lock w).state ((cell.get : BaseIO _) (mutex.lock w).state).state
   poison : MemoryEdge mem Q ((cell.get : BaseIO _) (mutex.lock w).state).state (issuedWorld cell mutex reg.store w)
   slotSet : ∀ slot t phase, heap.separate cell reg.store.active → heap.holds reg.store.active slot t →
     heap.holds reg.store.active slot ((cell.set phase : BaseIO _) t).state
-  install : ∀ next t, Q t → heap.holds cell (.poisoned reg.store) t →
+  install : ∀ next t, reg.store.appendSession reg.session batch (issuedWorld cell mutex reg.store w) = .ok next t → Q t → heap.holds cell (.poisoned reg.store) t →
     MemoryEdge mem Q t (installedWorld cell reg.store next t)
-  unlock : ∀ t phase, Q t → heap.holds cell phase t → MemoryEdge mem Q t (mutex.unlock t).state
+  unlockError : ∀ e t, reg.store.appendSession reg.session batch (issuedWorld cell mutex reg.store w) = .error e t →
+    Q t → heap.holds cell (.poisoned reg.store) t → MemoryEdge mem Q t (mutex.unlock t).state
+  unlockReady : ∀ next t, reg.store.appendSession reg.session batch (issuedWorld cell mutex reg.store w) = .ok next t →
+    let v := installedWorld cell reg.store next t
+    Q v → heap.holds cell (.ready reg.store next) v → MemoryEdge mem Q v (mutex.unlock v).state
 
-theorem Memory.entry {mem : ChildMemory disk} (m : Memory mem heap Q reg cell mutex w) :
+theorem Memory.entry {mem : ChildMemory disk} (m : Memory mem heap Q reg cell mutex batch w) :
     MemoryEdge mem Q w (issuedWorld cell mutex reg.store w) := (m.lock.trans m.read).trans m.poison
 
 structure LocalIO (mem : ChildMemory disk) (heap : PhaseMemory) (Q : W → Prop) (wal : Handle)
@@ -48,7 +52,7 @@ structure LocalIO (mem : ChildMemory disk) (heap : PhaseMemory) (Q : W → Prop)
   cell : IO.Ref (Phase Store)
   mutex : Std.BaseMutex
   parts : wal.Parts cell mutex
-  memory : Memory mem heap Q reg cell mutex w
+  memory : Memory mem heap Q reg cell mutex batch w
   reports : Reports batch
   inside : ∀ phase, let c := inputContext mem heap Q cell reg
     let begin := issuedWorld cell mutex reg.store w
@@ -118,13 +122,13 @@ theorem LocalIO.append {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg
   cases actual : Native.append wal batch w with
   | ok pos endWorld =>
     rw [actual] at body
-    obtain ⟨next,t,u,rfl,⟨child,base,auth,bound⟩,nextEq,reusable,slotAt,ack,posEq,absolute⟩ := body
+    obtain ⟨next,t,u,rfl,worker,⟨child,base,auth,bound⟩,nextEq,reusable,slotAt,ack,posEq,absolute⟩ := body
     let reg' : Registration := ⟨next,reg.store,child⟩
     let readyAt := installedWorld op.cell reg.store next t
     obtain ⟨q,physical,poison,stored⟩ := base
-    have set := memIO.install next t q poison
+    have set := memIO.install next t worker q poison
     have fresh := heap.set op.cell (.ready reg.store next) t
-    have unlocked := memIO.unlock readyAt _ (set.frame q) fresh
+    have unlocked := memIO.unlockReady next t worker (set.frame q) fresh
     let finish := readyWorld op.cell op.mutex reg.store next t
     have edges := set.trans unlocked
     have sameId : (nextSession reg.session batch).control.active = next.control.active := nextEq ▸ rfl
@@ -146,8 +150,8 @@ theorem LocalIO.append {mem : ChildMemory disk} (op : LocalIO mem heap Q wal reg
     exact ⟨reg',rfl,nextEq,⟨root,registered,b,u.2,alive,finalReady⟩,edges.frame q,ack,posEq,absolute⟩
   | error e endWorld =>
     rw [actual] at body
-    obtain ⟨t,u,rfl,⟨slot,⟨q,physical,poison,stored⟩,locks⟩,_,recover⟩ := body
-    have edge := memIO.unlock t _ q poison
+    obtain ⟨t,u,rfl,⟨err,worker⟩,⟨slot,⟨q,physical,poison,stored⟩,locks⟩,_,recover⟩ := body
+    have edge := memIO.unlockError err t worker q poison
     exact ⟨edge.frame q, edge.writes.recoverable (physical.recoverable recover),
       slot,root,locks,op.cell,op.mutex,op.parts,regFacts.1,.inl (heap.unlock _ poison),heap.unlock _ stored⟩
 
@@ -169,7 +173,8 @@ theorem LocalIO.rejected {mem : ChildMemory disk} (op : LocalIO mem heap Q wal r
   have poison : heap.holds op.cell (.poisoned reg.store) begin := heap.set _ _ _
   have child : heap.holds reg.store.active (some (reg.session.control.active,reg.child)) begin :=
     op.memory.slotSet _ _ _ aligned.1 (heap.readFrame op.cell (heap.lock op.mutex slot))
-  have edges := op.memory.entry.trans (op.memory.unlock begin _ (op.memory.entry.frame framed) poison)
+  obtain ⟨err,rejected⟩ := rejected_worker reg.store reg.session batch begin invalid
+  have edges := op.memory.entry.trans (op.memory.unlockError err begin rejected (op.memory.entry.frame framed) poison)
   have prior : Recoverable reg.session.view (some (.append batch)) (disk w) := ready.installed.offline (.inl rfl)
   exact ⟨_,_,ran,edges.frame framed,edges.writes.recoverable prior,root,⟨a.fd,a.source.openedChild⟩,
     op.cell,op.mutex,op.parts,aligned.1,.inl (heap.unlock _ poison),heap.unlock _ child⟩
