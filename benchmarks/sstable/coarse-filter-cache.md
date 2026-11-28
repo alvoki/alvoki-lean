@@ -132,16 +132,20 @@ consistent lookup-latency winner between the two representations.
 
 The kernel checks the serialized mask roundtrip, exact row-slice
 binding and equivalence of packed-region bit tests to the ordinary
-Bloom query. `load_binding` starts with the existing recursive
-`Handle.Observes` for the actual companion image and retains the
-reference and exact serialized row reached by lower-bound routing.
-`Resident.latest_preserves` carries that binding and the byte budget
-through replacement. `Session.probe_resident_correct` then uses the
-bound cached value to return the correct primary lookup result. In its
-negative branch the executable action is pure and retains the session.
-`load_locate_error` preserves the error and reached state. Native
-fixtures exercise no companion reads on a hit of an admitted mask,
-correct tombstone lookup, rejection of a different table ID, and
+Bloom query. `load_checked` starts with the existing recursive
+`Handle.Observes` for the companion image and retains the physical
+reference, exact serialized row and decoded mask reached by lower-bound
+routing. `openSession_latest_observes` initializes the session invariant
+from the two checked source images and the wire contract.
+`Session.Observes.probe` composes cold admission, base fallback and
+resident lookup with the primary image. Each successful probe returns
+the primary lookup for the same rows and preserves both source handles,
+the session invariant and the byte budget. An interval mismatch is returned as an error.
+The resident negative path is pure and retains the session. Separate
+state-model theorems preserve the returned error and reached state of
+a failed cold load or a failed primary lookup on any path that calls it.
+Native fixtures exercise zero companion reads on a hit of an admitted
+mask, correct tombstone lookup, rejection of a different table ID, and
 propagation of injected positional-read and corruption errors.
 [Kernel proofs](../../lean/Alvoki/Checks/Benchmarks/CoarseFilterProofs.lean)
 

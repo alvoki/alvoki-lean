@@ -219,6 +219,46 @@ theorem RegionBinding.accepts (binding : RegionBinding rows mask) (ordered : Ord
     rw [key] at greater
     exact False.elim (Std.not_lt_of_ge upperBound greater)
 
+/-- Admission came from the same companion handle, with the packet location,
+the selected serialized entry, and the primary rows still available to the proof. -/
+structure CachedRegion [Monad m] [MonadExceptOf String m] (filters : Handle m) (format : Representation)
+    (rows : List Entry) (mask : CheckedMask) : Prop where
+  region : RegionBinding rows mask
+  packet : ∃ query data index entry,
+    filters.locate query = pure (some (mask.ref, data, index)) ∧
+    data.readRow index = .ok entry ∧
+    decodeRegion format rows.length mask.ref entry = .ok mask
+
+theorem load_checked {filters : Handle (EStateM String σ)} (observed : filters.Observes image filterRows)
+    (orderedFilters : Ordered filterRows) (orderedRows : Ordered rows)
+    (regions : ∀ entry ∈ filterRows, WireRegion rows entry) (limit : rows.length ≤ maxFileSize)
+    (format : Representation) (query : ByteArray) :
+    load filters format rows.length query = pure none ∨
+      (∃ mask, load filters format rows.length query = pure (some mask) ∧
+        mask.covers query = true ∧ RegionBinding rows mask ∧
+        (∃ data index entry, filters.locate query = pure (some (mask.ref, data, index)) ∧
+          data.readRow index = .ok entry ∧
+          decodeRegion format rows.length mask.ref entry = .ok mask)) ∨
+      load filters format rows.length query = throw "key routed outside its coarse filter interval" := by
+  obtain ⟨i, lowerBound⟩ := Unified.exists_lowerBound orderedFilters query
+  by_cases inside : i < filterRows.length
+  · obtain ⟨ref, data, route, _, read⟩ := observed.locate lowerBound inside
+    obtain ⟨decoded, parsed, boundRef, binding⟩ :=
+      (regions filterRows[i] (by simp)).admits orderedRows limit format ref
+    cases covered : decoded.covers query
+    · refine .inr (.inr ?_)
+      simp only [load, route, pure_bind, read, parsed, liftDecode, covered, Bool.false_eq_true, ↓reduceIte]
+      rfl
+    · refine .inr (.inl ⟨decoded, ?_, covered, binding, ?_⟩)
+      · simp [load, route, read, parsed, liftDecode, covered]
+      · exact ⟨data, i - ref.firstRow, filterRows[i], by rw [boundRef]; exact route,
+          read, by rw [boundRef]; exact parsed⟩
+  · have atEnd : i = filterRows.length := by have := lowerBound.1; omega
+    subst i
+    have route : filters.locate query = pure none := by
+      simp [Handle.locate, observed.root.noKey lowerBound]
+    exact .inl (by simp [load, route])
+
 /-- A checked load from the immutable companion image locates the exact
 serialized entry in the exact data packet used to admit the mask. -/
 theorem load_binding {filters : Handle (EStateM String σ)}
@@ -228,26 +268,13 @@ theorem load_binding {filters : Handle (EStateM String σ)}
     (success : load filters format rows.length query start = .ok (some mask) reached) :
     ∃ ref data index entry, filters.locate query = pure (some (ref, data, index)) ∧
       data.readRow index = .ok entry ∧ mask.ref = ref ∧ RegionBinding rows mask := by
-  obtain ⟨i, lowerBound⟩ := Unified.exists_lowerBound orderedFilters query
-  by_cases inside : i < filterRows.length
-  · obtain ⟨ref, data, route, _, read⟩ := observed.locate lowerBound inside
-    obtain ⟨decoded, parsed, boundRef, binding⟩ :=
-      (regions filterRows[i] (by simp)).admits orderedRows limit format ref
-    have schedule : load filters format rows.length query =
-        if decoded.covers query then pure (some decoded)
-        else throw "key routed outside its coarse filter interval" := by
-      simp only [load, route, pure_bind, read, parsed, liftDecode]
-      split <;> rfl
-    rw [schedule] at success
-    split at success
-    · cases success
-      exact ⟨ref, data, i - ref.firstRow, filterRows[i], route, read, boundRef, binding⟩
-    · cases success
-  · have atEnd : i = filterRows.length := by have := lowerBound.1; omega
-    subst i
-    have route : filters.locate query = pure none := by
-      simp [Handle.locate, observed.root.noKey lowerBound]
-    simp [load, route] at success
+  rcases load_checked observed orderedFilters orderedRows regions limit format query with empty | selected | gap
+  · simp [empty, Pure.pure, EStateM.pure] at success
+  · obtain ⟨admitted, loaded, _, bound, data, index, entry, found, read, _⟩ := selected
+    simp only [loaded, Pure.pure, EStateM.pure] at success
+    cases success
+    exact ⟨_, data, index, entry, found, read, rfl, bound⟩
+  · rw [gap] at success
     cases success
 
 theorem load_locate_error {filters : Handle (EStateM String σ)}
@@ -278,12 +305,12 @@ theorem Session.probe_resident_negative [Monad m] [LawfulMonad m] [MonadExceptOf
 
 /-- Replacing the latest mask keeps the byte budget and each retained mask's
 binding to the same primary rows. The load theorem supplies the incoming binding. -/
-theorem Resident.latest_preserves (resident : Resident) (limit : Nat) (incoming : CheckedMask)
+theorem Resident.latest_preserves {valid : CheckedMask → Prop} (resident : Resident) (limit : Nat) (incoming : CheckedMask)
     (fits : resident.bytes ≤ limit)
-    (old : ∀ mask ∈ resident.masks, RegionBinding rows mask)
-    (fresh : RegionBinding rows incoming) :
+    (old : ∀ mask ∈ resident.masks, valid mask)
+    (fresh : valid incoming) :
     let state := resident.latest limit incoming
-    state.bytes ≤ limit ∧ ∀ mask ∈ state.masks, RegionBinding rows mask := by
+    state.bytes ≤ limit ∧ ∀ mask ∈ state.masks, valid mask := by
   unfold Resident.latest
   split
   · rename_i admitted
@@ -305,5 +332,134 @@ theorem Session.probe_resident_correct [Monad m] [LawfulMonad m] [MonadExceptOf 
     rw [excludes, Session.probe_resident_negative cached bit]
   · have value : session.base.lookup key = pure (Contents.lookup rows key) := primary.lookup key
     simp [Session.probe, cached, bit, value]
+
+/-- Both checked handles retain their exact source image. Every resident
+mask is bound to a decoded row at a physical companion reference. -/
+structure Session.Observes (session : Session (EStateM String σ)) (baseImage filterImage : ByteArray)
+    (rows filterRows : List Entry) : Prop where
+  primary : session.base.Observes baseImage rows
+  companion : session.filters.Observes filterImage filterRows
+  identity : session.filters.layout = layout session.base.layout.tableId
+  orderedRows : Ordered rows
+  orderedFilters : Ordered filterRows
+  rowLimit : rows.length ≤ maxFileSize
+  regions : ∀ entry ∈ filterRows, WireRegion rows entry
+  budget : session.resident.bytes ≤ session.policy.budget
+  cache : ∀ mask ∈ session.resident.masks, CachedRegion session.filters session.representation rows mask
+
+/-- The checked pair opens with no resident entries. This theorem uses both
+source-image capabilities and the producer's conditional wire contract. -/
+theorem openSession_latest_observes {base filters : Handle (EStateM String σ)}
+    (primary : base.Observes baseImage rows) (companion : filters.Observes filterImage filterRows)
+    (identity : filters.layout = layout base.layout.tableId)
+    (orderedRows : Ordered rows) (orderedFilters : Ordered filterRows)
+    (limit : rows.length ≤ maxFileSize) (regions : ∀ entry ∈ filterRows, WireRegion rows entry)
+    (format : Representation) (budget : Nat) :
+    ∃ session, openSession base filters format (.latest budget) = pure session ∧
+      session.Observes baseImage filterImage rows filterRows := by
+  refine ⟨?session, ?opened, ?state⟩
+  case opened =>
+    simp [openSession, identity]
+    rfl
+  case state =>
+    exact ⟨primary, companion, identity, orderedRows, orderedFilters, limit, regions,
+      Nat.zero_le budget, by simp⟩
+
+/-- Covers a cache hit, admission after a cold load, a normal base fallback,
+and propagation of a selected partition whose interval excludes the key. -/
+theorem Session.Observes.probe {session : Session (EStateM String σ)}
+    (observed : session.Observes baseImage filterImage rows filterRows) (key : ByteArray) :
+    (∃ result next, session.probe key = pure (result, next) ∧ result.value = Contents.lookup rows key ∧
+      next.base = session.base ∧ next.filters = session.filters ∧
+      next.Observes baseImage filterImage rows filterRows) ∨
+    session.probe key = throw "key routed outside its coarse filter interval" := by
+  have primary := observed.primary.represents observed.orderedRows
+  have baseLookup : session.base.lookup key = pure (Contents.lookup rows key) := primary.lookup key
+  cases cached : session.resident.masks.find? (·.covers key) with
+  | some mask =>
+    have done := session.probe_resident_correct primary (fun mask mem => (observed.cache mask mem).region) cached
+    exact .inl ⟨_, session, done, rfl, rfl, rfl, observed⟩
+  | none =>
+    rcases load_checked observed.companion observed.orderedFilters observed.orderedRows
+        observed.regions observed.rowLimit session.representation key with empty | selected | gap
+    · refine .inl ⟨⟨Contents.lookup rows key, false, none⟩, session, ?_, rfl, rfl, rfl, observed⟩
+      simp [Session.probe, cached, observed.primary.count, empty, baseLookup]
+    · obtain ⟨mask, loaded, covers, region, packet⟩ := selected
+      obtain ⟨data, index, entry, found, read, decoded⟩ := packet
+      have fresh : CachedRegion session.filters session.representation rows mask :=
+        ⟨region, key, data, index, entry, found, read, decoded⟩
+      let resident := match session.policy with
+        | .latest limit => session.resident.latest limit mask
+        | .eager _ => session.resident
+      have valid : resident.bytes ≤ session.policy.budget ∧
+          ∀ item ∈ resident.masks, CachedRegion session.filters session.representation rows item := by
+        cases policy : session.policy with
+        | latest limit =>
+          have fits : session.resident.bytes ≤ limit := by simpa [policy, Policy.budget] using observed.budget
+          simpa [resident, policy, Policy.budget] using session.resident.latest_preserves limit mask fits observed.cache fresh
+        | eager budget =>
+          simpa [resident, policy] using And.intro observed.budget observed.cache
+      cases bit : mask.view.maybe key
+      · refine .inl ⟨⟨none, false, some false⟩, ?next, ?ran, ?model, ?base, ?companion, ?state⟩
+        case ran =>
+          simp [Session.probe, cached, observed.primary.count, loaded, bit]
+          rfl
+        case model => exact (region.excludes observed.orderedRows covers bit).symm
+        case base => rfl
+        case companion => rfl
+        case state =>
+          exact ⟨observed.primary, observed.companion, observed.identity,
+            observed.orderedRows, observed.orderedFilters, observed.rowLimit, observed.regions,
+            valid.1, valid.2⟩
+      · refine .inl ⟨⟨Contents.lookup rows key, false, some true⟩, ?next, ?ran, rfl, ?base, ?companion, ?state⟩
+        case ran =>
+          simp [Session.probe, cached, observed.primary.count, loaded, bit, baseLookup]
+        case base => rfl
+        case companion => rfl
+        case state =>
+          exact ⟨observed.primary, observed.companion, observed.identity,
+            observed.orderedRows, observed.orderedFilters, observed.rowLimit, observed.regions,
+            valid.1, valid.2⟩
+    · refine .inr ?_
+      simp only [Session.probe, cached, observed.primary.count, gap]
+      rfl
+
+/-- A cold load's failure is returned with its original error and state. -/
+theorem Session.probe_load_error {session : Session (EStateM String σ)}
+    (cold : session.resident.masks.find? (·.covers key) = none)
+    (failed : load session.filters session.representation session.base.rowCount key start =
+      .error error reached) :
+    session.probe key start = .error error reached := by
+  simp [Session.probe, cold, Bind.bind, EStateM.bind, failed]
+
+theorem Session.probe_locate_error {session : Session (EStateM String σ)}
+    (cold : session.resident.masks.find? (·.covers key) = none)
+    (failed : session.filters.locate key start = .error error reached) :
+    session.probe key start = .error error reached :=
+  session.probe_load_error cold (load_locate_error failed)
+
+theorem Session.probe_lookup_fallback_error {session : Session (EStateM String σ)}
+    (cold : session.resident.masks.find? (·.covers key) = none)
+    (empty : load session.filters session.representation session.base.rowCount key start =
+      .ok none afterLoad)
+    (failed : session.base.lookup key afterLoad = .error error reached) :
+    session.probe key start = .error error reached := by
+  simp [Session.probe, cold, Bind.bind, EStateM.bind, empty, failed]
+
+theorem Session.probe_lookup_cold_error {session : Session (EStateM String σ)}
+    (cold : session.resident.masks.find? (·.covers key) = none)
+    (loaded : load session.filters session.representation session.base.rowCount key start =
+      .ok (some mask) afterLoad)
+    (positive : mask.view.maybe key = true)
+    (failed : session.base.lookup key afterLoad = .error error reached) :
+    session.probe key start = .error error reached := by
+  simp [Session.probe, cold, Bind.bind, EStateM.bind, loaded, positive, failed]
+
+theorem Session.probe_lookup_resident_error {session : Session (EStateM String σ)}
+    (cached : session.resident.masks.find? (·.covers key) = some mask)
+    (positive : mask.view.maybe key = true)
+    (failed : session.base.lookup key start = .error error reached) :
+    session.probe key start = .error error reached := by
+  simp [Session.probe, cached, positive, Bind.bind, EStateM.bind, Pure.pure, EStateM.pure, failed]
 
 end ImmutableSSTable.Recursive.CoarseFilter
