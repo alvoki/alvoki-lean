@@ -262,14 +262,15 @@ private def acquire (dir : FilePath) : IO IO.FS.Handle := checked (acquireWith n
 private def install (dir : FilePath) (lock : IO.FS.Handle) : IO Handle :=
   checked (installWith nativeOpen recoverNative appendFiles dir lock) >>= installReady
 
-/-- Fold the validated batches with their one-based local positions. -/
-def foldBatches (batches : List Bytes) (seed : α) (step : α → Nat → Bytes → α) : α := Id.run do
-  let mut acc := seed
-  let mut position := 1
-  for batch in batches do
-    acc := step acc position batch
-    position := position + 1
-  return acc
+/-- Fold validated batches strictly after the given base position. -/
+def foldBatchesFrom (step : α → Nat → Bytes → α) (base : Nat) (seed : α) : List Bytes → α
+  | [] => seed
+  | batch :: rest =>
+    let pos := base + 1
+    foldBatchesFrom step pos (step seed pos batch) rest
+
+def foldBatches (batches : List Bytes) (seed : α) (step : α → Nat → Bytes → α) : α :=
+  foldBatchesFrom step 0 seed batches
 
 private def openLoaded (dir : FilePath)
     (finish : Opened IO.FS.Handle (AppendFiles IO.FS.Handle) → IO α) : IO α :=
@@ -279,8 +280,12 @@ private def openLoaded (dir : FilePath)
 
 /-- Open a previously initialized directory with exclusive ownership.
 The recovery worker settles the selected image before the handle is returned. -/
+def openExistingPosition (dir : FilePath) : IO (Handle × Cursor) :=
+  openLoaded dir fun ready => do
+    return (← installReady ready, ready.recovered.cursor)
+
 def openExisting (dir : FilePath) : IO Handle :=
-  openLoaded dir installReady
+  return (← openExistingPosition dir).1
 
 /-- Fold the recovered segment without retaining its batch list in the handle.
 The step is pure and its result is exposed only after successful recovery. -/

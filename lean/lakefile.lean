@@ -70,3 +70,9 @@ lean_lib StorageBenchSupport where
 
 lean_exe storageBench where
   root := `Alvoki.Bench.Storage.Components
+
+lean_lib CompactWalReplayModel where
+  roots := #[`Alvoki.Experiments.L0.Basic]
+
+lean_exe compactWalReplayCheck where
+  root := `Alvoki.Checks.Tests.CompactWalReplay

@@ -101,6 +101,26 @@ private def scanFailure (dir : FilePath) (policy : Policy) : IO Unit := do
     throw (IO.userError "recovery fold changed the installed history")
   SingleFile.close h
 
+private def boundedRecovery (dir : FilePath) (policy : Policy) : IO Unit := do
+  let h ← SingleFile.create dir policy
+  SingleFile.append h [7]
+  SingleFile.close h
+  let path := dir / "segment"
+  let confirmed ← IO.FS.readBinFile path
+  let oversized := confirmed ++ ⟨Array.replicate 70000 0⟩
+  IO.FS.writeBinFile path oversized
+  if policy == .boundary then
+    let (h, _, seen) ← SingleFile.openExistingFold dir [] (fun acc _ batch => batch :: acc)
+    unless seen == [[7]] && (← IO.FS.readBinFile path) == confirmed do
+      throw (IO.userError "bounded reader did not repair suffix beyond its buffer")
+    SingleFile.close h
+  else
+    let failed ← (SingleFile.openExisting dir).toBaseIO
+    unless failed matches .error (.userError "damaged header") do
+      throw (IO.userError "oversized log-only corruption was treated as a torn tail")
+    unless (← IO.FS.readBinFile path) == oversized do
+      throw (IO.userError "bounded reader changed a rejected segment")
+
 private def handleRegressions (dir : FilePath) (policy : Policy) : IO Unit := do
   let h ← SingleFile.create dir policy
   let failed ← (SingleFile.append h (List.replicate 33 42)).toBaseIO
@@ -268,6 +288,7 @@ def main (args : List String) : IO Unit := do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.fixture dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.handleRegressions dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.scanFailure dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.boundedRecovery dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.lateOpenFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy

@@ -10,6 +10,7 @@ export LC_ALL=C
 cd lean
 lake build
 lake exe crc32cCheck
+lake exe compactWalReplayCheck
 lake build Alvoki.Checks.Audit.AxiomPolicy
 lake env leanchecker Alvoki.Codec.CRC32C
 lake env lean --stdin <<'LEAN'

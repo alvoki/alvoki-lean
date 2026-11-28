@@ -55,6 +55,114 @@ theorem ReadOutcome.healthy
   | error _ _ => exact False.elim (h.2 progress)
   | ok _ _ => obtain ⟨rfl, rfl⟩ := h; rfl
 
+open SingleFile (foldBatchesFrom foldBatches)
+
+private theorem fold_append (step : α → Nat → Bytes → α) (base : Nat) (seed : α)
+    (left right : List Bytes) :
+    foldBatchesFrom step base seed (left ++ right) =
+      foldBatchesFrom step (base + left.length) (foldBatchesFrom step base seed left) right := by
+  induction left generalizing base seed with
+  | nil => simp [foldBatchesFrom]
+  | cons batch rest ih =>
+    simp only [List.cons_append, foldBatchesFrom, List.length_cons, ih]
+    congr 1
+    omega
+
+private theorem fold_offset (step : α → Nat → Bytes → α) (offset base : Nat)
+    (seed : α) (batches : List Bytes) :
+    foldBatchesFrom (fun acc pos batch => step acc (offset + pos) batch) base seed batches =
+      foldBatchesFrom step (offset + base) seed batches := by
+  induction batches generalizing base seed with
+  | nil => rfl
+  | cons batch rest ih => rw [foldBatchesFrom, foldBatchesFrom, ih, Nat.add_assoc]
+
+private def after (cut : Nat) (step : α → Nat → Bytes → α) (acc : α)
+    (position : Nat) (batch : Bytes) : α :=
+  if cut < position then step acc position batch else acc
+
+def foldChild (c : Control) (history : List Bytes) (step : α → Nat → Bytes → α)
+    (id : Nat) (seed : α) : α :=
+  foldBatches (segmentHistory c.capacity id history) seed (retainedStep c id step)
+
+private theorem foldChild_eq (c : Control) (history : List Bytes)
+    (step : α → Nat → Bytes → α) (id : Nat) (seed : α) :
+    foldChild c history step id seed = foldBatchesFrom (after c.discarded step)
+      (id * c.capacity) seed (segmentHistory c.capacity id history) := by
+  have stepEq : retainedStep c id step = fun acc pos batch =>
+      after c.discarded step acc (id * c.capacity + pos) batch := by
+    funext acc pos batch
+    rfl
+  rw [foldChild, foldBatches, stepEq, fold_offset, Nat.add_zero]
+
+private theorem fold_window (c : Control) (history : List Bytes)
+    (step : α → Nat → Bytes → α) (first count : Nat) (seed : α)
+    (full : (first + count) * c.capacity ≤ history.length) :
+    foldSealedWith (m := Id) (foldChild c history step) first count seed =
+      foldBatchesFrom (after c.discarded step) (first * c.capacity) seed
+        (segmentWindow c.capacity first count history) := by
+  induction count generalizing first seed with
+  | zero => rfl
+  | succ n ih =>
+    have enough : (first + 1) * c.capacity ≤ history.length :=
+      Nat.le_trans (Nat.mul_le_mul_right c.capacity (by omega)) full
+    have rest : (first + 1 + n) * c.capacity ≤ history.length := by
+      rwa [show first + 1 + n = first + (n + 1) by omega]
+    change foldSealedWith (m := Id) (foldChild c history step) (first + 1) n
+      (foldChild c history step first seed) = _
+    rw [ih _ _ rest, segmentWindow, fold_append, segmentHistory_full enough,
+      foldChild_eq, Nat.add_mul, Nat.one_mul]
+
+private theorem fold_drop (cut base : Nat) (step : α → Nat → Bytes → α)
+    (seed : α) (batches : List Bytes) :
+    foldBatchesFrom (after cut step) base seed batches =
+      foldBatchesFrom step (max cut base) seed (batches.drop (cut - base)) := by
+  induction batches generalizing base seed with
+  | nil => simp [foldBatchesFrom]
+  | cons batch rest ih =>
+    rw [foldBatchesFrom, ih]
+    by_cases includeBatch : cut < base + 1
+    · have leBase : cut ≤ base := by omega
+      simp [after, includeBatch, Nat.max_eq_right leBase, Nat.sub_eq_zero_of_le leBase,
+        Nat.max_eq_right (by omega : cut ≤ base + 1), Nat.sub_eq_zero_of_le (by omega : cut ≤ base + 1),
+        foldBatchesFrom]
+    · have advance : cut - base = (cut - (base + 1)) + 1 := by omega
+      simp [after, includeBatch, advance, Nat.max_eq_left (by omega : base ≤ cut),
+        Nat.max_eq_left (by omega : base + 1 ≤ cut)]
+
+/-- Compose the native schedule's pure result over the exact selected child
+histories. The consumer sees precisely the retained suffix with absolute IDs. -/
+theorem scanReadyWith_selected (session : CompactSession) (history : List Bytes)
+    (seed : α) (step : α → Nat → Bytes → α)
+    (lower : session.control.active * session.control.capacity ≤ history.length)
+    (upper : history.length ≤ (session.control.active + 1) * session.control.capacity) :
+    scanReadyWith (m := Id) session seed (foldChild session.control history step)
+      (foldChild session.control history step session.control.active) =
+        (session.bounds, foldBatchesFrom step session.control.discarded seed
+          (history.drop session.control.discarded)) := by
+  let c := session.control
+  change c.active * c.capacity ≤ history.length at lower
+  change history.length ≤ (c.active + 1) * c.capacity at upper
+  have first : c.firstNeeded ≤ c.active := Nat.min_le_left ..
+  have exactSpan : c.firstNeeded + (c.active - c.firstNeeded) = c.active := by omega
+  have fullSpan : (c.firstNeeded + (c.active - c.firstNeeded)) * c.capacity ≤ history.length := by
+    rwa [exactSpan]
+  have width : (segmentWindow c.capacity c.firstNeeded (c.active - c.firstNeeded) history).length =
+      (c.active - c.firstNeeded) * c.capacity := by
+    rw [segmentWindow_eq, List.length_take, List.length_drop, Nat.min_eq_left]
+    have sum : c.firstNeeded * c.capacity + (c.active - c.firstNeeded) * c.capacity =
+        c.active * c.capacity := by rw [← Nat.add_mul, exactSpan]
+    omega
+  have join : c.firstNeeded * c.capacity + (c.active - c.firstNeeded) * c.capacity =
+      c.active * c.capacity := by rw [← Nat.add_mul, exactSpan]
+  have retained : c.firstNeeded * c.capacity ≤ c.discarded :=
+    Nat.le_trans (Nat.mul_le_mul_right c.capacity (Nat.min_le_right ..)) (Nat.div_mul_le_self ..)
+  change (session.bounds, foldChild c history step c.active
+      (foldSealedWith (m := Id) (foldChild c history step) c.firstNeeded
+        (c.active - c.firstNeeded) seed)) = _
+  rw [fold_window _ _ _ _ _ _ fullSpan, foldChild_eq]
+  rw [← join, ← width, ← fold_append, fold_drop,
+    Nat.max_eq_left retained, selectedHistory_eq c history upper]
+
 theorem compactBounds_eq {session : Session} {disk : Model.Disk}
     (ready : Installed session disk) :
     (⟨session.control, session.activeCount⟩ : CompactSession).bounds =

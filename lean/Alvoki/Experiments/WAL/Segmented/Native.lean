@@ -318,15 +318,19 @@ private def acquireStore (dir : FilePath) : IO Store :=
     throw (invalid "segmented WAL directory is not empty")
   return .ready owned (← create)
 
-private def retainedStep (c : Control) (id : Nat) (step : α → Nat → Bytes → α)
+def retainedStep (c : Control) (id : Nat) (step : α → Nat → Bytes → α)
     (acc : α) (localPos : Nat) (batch : Bytes) : α :=
   let pos := id * c.capacity + localPos
   if c.discarded < pos then step acc pos batch else acc
 
 private def Store.openChildFold (s : Store) (c : Control) (id : Nat)
-    (seed : α) (step : α → Nat → Bytes → α) : IO (SingleFile.Handle × Cursor × α) := do
+    (seed : α) (step : Option (α → Nat → Bytes → α)) : IO (SingleFile.Handle × Cursor × α) := do
   let path ← s.checkedChildPath c.policy id
-  SingleFile.openExistingFold path seed (retainedStep c id step)
+  match step with
+  | some consume => SingleFile.openExistingFold path seed (retainedStep c id consume)
+  | none =>
+    let (handle, cursor) ← SingleFile.openExistingPosition path
+    return (handle, cursor, seed)
 
 /-- Visit the contiguous sealed IDs before borrowing the installed active child. -/
 def foldSealedWith [Monad m] (read : Nat → α → m α) (first : Nat) :
@@ -342,7 +346,7 @@ def scanReadyWith [Monad m] (session : CompactSession) (seed : α)
   let acc ← foldSealedWith readSealed c.firstNeeded (c.active - c.firstNeeded) seed
   return (session.bounds, ← readActive acc)
 
-private def Store.recoverFold (s : Store) (seed : α) (step : α → Nat → Bytes → α) :
+private def Store.recoverFold (s : Store) (seed : α) (step : Option (α → Nat → Bytes → α)) :
     IO (CompactSession × α) := do
   let c ← checked (selectControl s.callbacks)
   let readSealed id acc := do
@@ -361,7 +365,7 @@ private def Store.recoverFold (s : Store) (seed : α) (step : α → Nat → Byt
       return (session, next)
 
 private def install (dir : FilePath) (fresh : Option (Policy × Nat))
-    (seed : α) (step : α → Nat → Bytes → α) : IO (Handle × Bounds × α) := do
+    (seed : α) (step : Option (α → Nat → Bytes → α)) : IO (Handle × Bounds × α) := do
   let load (store : Store) : IO (Phase Store CompactSession × Bounds × α) := do
     match fresh with
     | some (policy, cap) =>
@@ -378,16 +382,16 @@ private def install (dir : FilePath) (fresh : Option (Policy × Nat))
   return (⟨state, mutex⟩, bounds, result)
 
 def create (dir : FilePath) (policy : Policy) (capacity : Nat) : IO Handle := do
-  let (handle, _, _) ← install dir (some (policy, capacity)) () (fun _ _ _ => ())
+  let (handle, _, _) ← install dir (some (policy, capacity)) () none
   return handle
 
 /-- Only a settled, registered child is transferred with the fold result. -/
 def openExistingFold (dir : FilePath) (seed : α) (step : α → Nat → Bytes → α) :
     IO (Handle × Bounds × α) :=
-  install dir none seed step
+  install dir none seed (some step)
 
 def openExisting (dir : FilePath) : IO Handle := do
-  let (handle, _, _) ← openExistingFold dir () (fun _ _ _ => ())
+  let (handle, _, _) ← install dir none () none
   return handle
 
 private def Handle.locked (h : Handle) (action : IO α) : IO α := do

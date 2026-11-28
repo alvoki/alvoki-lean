@@ -198,5 +198,6 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.nativeChild_selected
 #check_axioms Native.compactBounds_eq
 #check_axioms Native.scanReadyWith_read
+#check_axioms Native.scanReadyWith_selected
 #check_axioms Native.ReadOutcome.healthy
 LEAN
