@@ -124,18 +124,29 @@ The public single-file recovery schedule supplies the child
 `Recoverable` and `Installed` facts and the cached scan result from local
 primitive effects. Segmented reopen binds that child to its root session.
 The single-file append producer consumes its stored writer and marker
-descriptions. Native rotation and CONTROL
-publication remain segmented responsibilities.
+descriptions. Native segmented append, rotation and bootstrap still need
+their own producers.
 [Single-file premise audit](../Proofs/README.md#public-native-recovery)
 
-For CONTROL, consider reusing DurableBlob's write, sync, rename and
-directory-barrier semantics with the existing control codec and the
-original writer used by PR #5. Check that the CONTROL projection of
-the WAL disk model admits DurableBlob's publication outcomes and that
-the root barrier also settles the successor's directory entry.
-Keep segment creation, prefix release and collection under the
-existing WAL invariants. Coordinate the adapter change with the L0
-branch when taking up that work.
+[Native CONTROL publication](Proofs/NativeControl.lean) uses the shared
+DurableBlob schedule to pass the original staged writer directly to fsync.
+The proof derives the existing `PublishCut` on the reached WAL image.
+One successful root barrier settles both CONTROL and child names. The
+result can feed the existing discard recovery continuation, including a
+failed recovery followed by two successful opens. Collection in that
+continuation uses the existing model effects.
+
+The primitive premises are checked private staging under the root lock,
+an exact successful write and flush, fsync on the returned writer, rename
+with the reported live and durable effects, and fsync on the held root.
+The model's staged fields record logical proposals. A failed clear or
+write may leave different private `CONTROL.next` bytes, including no file.
+A failed staging step cannot reach rename, and a retry clears and rewrites
+the stage. Staging failures normalize to before or after a complete
+proposal with no effect on visible CONTROL or selected child names.
+Primitive error messages are abstracted to the modeled error outcome.
+Power loss uses the existing durable-image projection. Bootstrap and
+rotation still owe representability and successor-child authority.
 
 [Native reopen proofs](Proofs/NativeReopen.lean) compose the single-file
 producer with the shared root operations. The root directory descriptor

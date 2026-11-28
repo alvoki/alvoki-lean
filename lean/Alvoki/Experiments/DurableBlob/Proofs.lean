@@ -74,7 +74,7 @@ private theorem publish_outcome (report : Operation → Report) (image : Image)
   obtain ⟨active, survivors⟩ := stable
   cases rw : report .writeStaged <;> cases rs : report .syncStaged <;>
     cases rr : report .renameStaged <;> cases rd : report .syncDirectory <;>
-    simp [Files.backend, model, perform,
+    simp [Files.backend, publishWith, model, perform,
       rw, rs, rr, rd, Image.recordWrite, Image.syncWriter, Image.replace, Bind.bind, Pure.pure, EStateM.bind, Image.barrier, Image.Stable, Image.Admits,
       active, survivors, Permitted]
 
@@ -84,7 +84,7 @@ private theorem reopen_outcome (report : Operation → Report) (readOK : Bool)
     | .ok value after => Permitted old pending value ∧ after.Stable value
     | .error _ after => after.Admits old pending := by
   cases readOK <;> cases hr : report .syncDirectory <;>
-    simp [Files.backend, model, perform, hr, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure,
+    simp [Files.backend, publishWith, model, perform, hr, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure,
       Image.barrier, Image.Stable] <;>
     first | exact admitted | exact admitted.1 | simpa [Image.Admits, Image.barrier] using admitted.1
 
@@ -184,7 +184,7 @@ private theorem reopen_eq (directory : FilePath) (reports : Reports) (before : I
       (model (fun _ => reports.directoryEffect) reports.readActive).backend.reopen before := by
   cases r : reports.readActive <;> cases o : reports.openDirectory <;>
     cases d : reports.syncDirectory <;>
-      simp [r, o, d, backend, Primitives.backend, primitives, Primitives.files, Files.backend, checked,
+      simp [r, o, d, backend, Primitives.backend, primitives, Primitives.files, Files.backend, publishWith, checked,
         Reports.directoryEffect, model, perform, Bind.bind, Pure.pure, EStateM.bind, EStateM.pure]
 
 private theorem directory_eq (directory : FilePath) (reports : Reports) (before : Image) :
@@ -209,7 +209,7 @@ private theorem publish_eq (directory : FilePath) (reports : Reports) (before : 
     (bytes : ByteArray) :
     (backend directory reports).publish bytes before =
       (model reports.publication true).backend.publish bytes before := by
-  simp only [backend, Primitives.backend, Files.backend, Bind.bind, EStateM.bind, stage_eq, model]
+  simp only [backend, Primitives.backend, Files.backend, publishWith, Bind.bind, EStateM.bind, stage_eq, model]
   cases perform (reports.publication .writeStaged) (Image.recordWrite bytes) before with
   | error => rfl
   | ok _ staged =>

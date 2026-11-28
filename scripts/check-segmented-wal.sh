@@ -9,12 +9,15 @@ prefix=$(lean --print-prefix)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 export LEAN_PATH="$scratch${LEAN_PATH:+:$LEAN_PATH}"
+blob=Alvoki/Experiments/DurableBlob
 wal=Alvoki/Experiments/WAL
 seg="$wal/Segmented"
-mkdir -p "$scratch/$wal/Proofs" "$scratch/$seg/Proofs" "$scratch/Alvoki/Checks/Audit"
+mkdir -p "$scratch/$blob" "$scratch/$wal/Proofs" "$scratch/$seg/Proofs" "$scratch/Alvoki/Checks/Audit"
 lean -o "$scratch/$wal/Recovery.olean" -c "$scratch/recovery.c" "$wal/Recovery.lean"
 lean -o "$scratch/$wal/SingleFile.olean" -c "$scratch/single.c" "$wal/SingleFile.lean"
 lean -o "$scratch/$seg/Contract.olean" -c "$scratch/contract.c" "$seg/Contract.lean"
+lean -o "$scratch/$blob/Contract.olean" -c "$scratch/blob_contract.c" "$blob/Contract.lean"
+lean -o "$scratch/$blob/Protocol.olean" -c "$scratch/blob_protocol.c" "$blob/Protocol.lean"
 lean -o "$scratch/$seg/Protocol.olean" -c "$scratch/protocol.c" "$seg/Protocol.lean"
 lean -o "$scratch/$seg/ControlCodec.olean" -c "$scratch/control_codec.c" "$seg/ControlCodec.lean"
 lean -o "$scratch/$seg/Native.olean" -c "$scratch/native.c" "$seg/Native.lean"
@@ -25,6 +28,7 @@ leanchecker Alvoki.Experiments.WAL.Segmented.Native
 lean --run "$seg/Tests.lean"
 lean -c "$scratch/native_tests.c" "$seg/NativeTests.lean"
 cc -O1 -fPIC -I"$prefix/include" "$scratch/recovery.c" "$scratch/single.c" \
+  "$scratch/blob_contract.c" "$scratch/blob_protocol.c" \
   "$scratch/contract.c" "$scratch/protocol.c" "$scratch/control_codec.c" "$scratch/native.c" "$scratch/native_tests.c" \
   native/fsync.c native/read_dir_checked.c -L"$prefix/lib/lean" -Wl,-rpath,"$prefix/lib/lean" -lleanshared \
   -o "$scratch/native_tests"
@@ -36,7 +40,7 @@ lean -o "$scratch/$wal/Writeback.olean" "$wal/Writeback.lean"
 for proof in Marker Scan ScanRepair Append Persistence Client ProcessExit Retry DirtyRetry DirtyAppend TornAppend Execution AppendWriteback ReopenWriteback ScheduledExecution NativeRecovery NativeOpen NativeAppend; do
   lean -o "$scratch/$wal/Proofs/$proof.olean" "$wal/Proofs/$proof.lean"
 done
-for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen; do
+for proof in ControlCodec Layout Model SegmentRecovery ScheduledAppend Child Publication Collect Invariant Artifacts Writeback Bootstrap Rotation Append Reopen Retention Discard Execution NativeReopen NativeControl; do
   lean -o "$scratch/$seg/Proofs/$proof.olean" "$seg/Proofs/$proof.lean"
   leanchecker "Alvoki.Experiments.WAL.Segmented.Proofs.$proof"
 done
@@ -62,6 +66,7 @@ import Alvoki.Experiments.WAL.Segmented.Proofs.Retention
 import Alvoki.Experiments.WAL.Segmented.Proofs.Discard
 import Alvoki.Experiments.WAL.Segmented.Proofs.Execution
 import Alvoki.Experiments.WAL.Segmented.Proofs.NativeReopen
+import Alvoki.Experiments.WAL.Segmented.Proofs.NativeControl
 open WalRecoverySlice.Segmented
 #check_axioms Recoverable.withUnselectedArtifact
 #check_axioms ControlCodec.decode_encode
@@ -134,6 +139,11 @@ open WalRecoverySlice.Segmented
 #check_axioms Model.nativeAppendAfterTransfer
 #check_axioms Model.installScopedModel_healthy
 #check_axioms Model.publicOpenModel_refines
+#check_axioms Model.nativeControl_cuts
+#check_axioms Model.nativeControl_healthy
+#check_axioms Model.nativeControl_rejected
+#check_axioms Model.nativeDiscard_recoverable
+#check_axioms Model.repeatOpenAfterNativeFailedDiscard
 #check_axioms Model.sealedChildReport
 #check_axioms Model.publicOpenModel_append
 #check_axioms Model.publicOpenModel_healthy
