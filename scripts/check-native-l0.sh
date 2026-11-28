@@ -175,6 +175,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeAppendCut.Restarted.uncertain
 #check_axioms InterruptedMutation.Prefix.beforeAppend
 #check_axioms InterruptedMutation.Worker.interrupted
+#check_axioms InterruptedMutation.Worker.beforeReopens
+#check_axioms InterruptedMutation.Worker.afterSuccessReopens
 #check_axioms MutationExitCut.suffix_state
 #check_axioms MutationExitCut.afterReturn
 #check_axioms MutationExitCut.rejected
@@ -192,6 +194,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms WalRecoverySlice.Segmented.Native.AppendIO.append_rejected
 #check_axioms WalRecoverySlice.Segmented.Native.AppendIO.LocalRotation.assemble
 #check_axioms WalRecoverySlice.Segmented.Native.ControlCutIO.survivor
+#check_axioms WalRecoverySlice.Segmented.Native.ControlCutIO.Prefix.operand
 #check_axioms HealthyMutation.withOpen
 #check_axioms HealthyReads.withOpen
 #check_axioms HealthyRootAcquisition.walClose
