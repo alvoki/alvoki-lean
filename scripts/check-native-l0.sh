@@ -100,6 +100,8 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms Lifecycle.Proof.write_keepsPhase
 #check_axioms Lifecycle.Proof.flush_keepsPhase
 #check_axioms Lifecycle.Proof.get_keepsPhase
+#check_axioms Lifecycle.initialCatalog
+#check_axioms Lifecycle.recovery_progress
 #check_axioms Lifecycle.recovery_online
 #check_axioms Lifecycle.recovery_offline
 #check_axioms Lifecycle.write_online
@@ -135,6 +137,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms ManifestComposition.recoverPublication
 #check_axioms ManifestComposition.reopenAfterRestart
 #check_axioms TableNamespace.lookup
+#check_axioms TableNamespace.scopedLookup
 #check_axioms CallbackEvidence.lookupFromCatalog
 #check_axioms TableNamespace.Represents.frame
 #check_axioms recoverKeepsCatalog

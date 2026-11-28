@@ -143,6 +143,12 @@ frames. The caller supplies the invariant at the reached entry state. Recovery a
 handoff with `buildFileWith_open_represents`. Checked open validates metadata.
 Row validation occurs on demand.
 
+Native check and lookup call the shared `nativeTableAt` adapter. The
+lookup proof consumes the reached-world stat and scoped action reports, and reads
+on the selected inode to derive this exact operation's result. The callback
+interpretation still supplies the link from its reported result to that
+native operation.
+
 The native boundary still supplies correspondence from IO to the shared
 writer and reader schedules, including allocation, cursor effects, the
 reached file and directory barriers, path-to-inode selection and immutability
@@ -150,6 +156,15 @@ during the read scope. `fstat` and `pread` report effects on that description.
 The scope holds the descriptor until the reader returns, and closes it on
 success or error. WAL and manifest namespace frames stay separate from
 the table directory.
+
+The lifecycle proof keeps the namespace on the storage carrier. Changing
+phase for publication or cleanup leaves the catalog projection unchanged.
+The empty initialization witness starts the client trace, and the lifecycle
+consumes the reached catalog postconditions of write, flush, recover and
+get. On a returned WAL open error it carries the WAL producer's root and
+child release facts for the same disk left by recovery. Healthy recovery
+uses the WAL progress theorem together with successful manifest and
+required table checks.
 
 Bootstrap, WAL release, orphan collection, snapshots, concurrency,
 compaction and automatic flush are separate work.

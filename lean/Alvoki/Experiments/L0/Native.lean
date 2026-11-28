@@ -36,19 +36,10 @@ private def checked (operation : FileM α) : IO α := do
   | .ok result => return result
   | .error error => throw (IO.userError error)
 
-/-- The stat and open refer to the same stable path under root ownership.
-`IO.FS.withFile` drops its handle at the end of the call. Neither table
-operation retains it, so the runtime can close it on success or error. -/
-private def withTable (dir : FilePath) (id : UInt64)
-    (use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α) : FileM α :=
-  withTableAt (fun path => liftM path.symlinkMetadata)
-    (fun path action => ExceptT.mk (IO.FS.withFile path .read fun handle => (action handle).run))
-    dir id (fun handle => nativeTableAction handle id use)
-
 private def tables (dir : FilePath) : Tables FileM where
   create := createTable dir
-  check id := withTable dir id (fun _ => pure ())
-  lookup id key := withTable dir id (·.lookup key)
+  check id := nativeTableAt dir id (fun _ => pure ())
+  lookup id key := nativeTableAt dir id (·.lookup key)
 
 private def phaseCell (phase : IO.Ref (Phase Wal)) : Cell IO Wal where
   read := phase.get

@@ -41,4 +41,19 @@ def nativeTableAction (handle : IO.FS.Handle) (expectedId : UInt64)
     ExceptT String IO α :=
   ExceptT.mk (liftM (withTableSource (ImmutableSSTable.handleSource handle) expectedId use).toBaseIO)
 
+def nativeTableStat (path : FilePath) : ExceptT String IO IO.FS.Metadata :=
+  liftM path.symlinkMetadata
+
+def nativeTableReadScope (path : FilePath)
+    (action : IO.FS.Handle → ExceptT String IO α) : ExceptT String IO α :=
+  ExceptT.mk (IO.FS.withFile path .read fun handle => (action handle).run)
+
+/-- The same protected path is used for stat and acquisition. The scope
+owns the descriptor until the typed action returns. -/
+def nativeTableAt (dir : FilePath) (id : UInt64)
+    (use : ImmutableSSTable.TypedTable (EIO String) UInt64 Mutation → EIO String α) :
+    ExceptT String IO α :=
+  withTableAt nativeTableStat nativeTableReadScope dir id
+    (fun handle => nativeTableAction handle id use)
+
 end ExperimentalL0

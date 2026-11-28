@@ -224,7 +224,15 @@ structure CallbackEvidence (ops : Components (StorageM σ)) (selected : σ → S
           (∀ identity bytes, inodeAt handle = some identity →
             namespaceState.contents s identity = some bytes →
             nativeReadPrimitives.ReadsExactly handle bytes) ∧
-          withTableSource (handleSource handle) id (·.lookup key) = pure result
+          ∃ (start checked entered acted done : Void IO.RealWorld) (metadata : IO.FS.Metadata) (value : Option Mutation),
+            (nativeTableStat (tablePath namespaceState.directory id)).run start =
+              .ok (.ok metadata) checked ∧ isTableFile metadata = true ∧
+            (nativeTableAction handle id (·.lookup key)).run entered = .ok (.ok value) acted ∧
+            (nativeTableReadScope (tablePath namespaceState.directory id)
+              (fun held => nativeTableAction held id (·.lookup key))).run checked =
+                .ok (.ok value) done ∧
+            (nativeTableAt namespaceState.directory id (·.lookup key)).run start =
+              .ok (.ok result) done
     | .error _ after => selected after = selected s ∧ namespaceState.Keeps s after (selected s).tables
 
 private theorem selected_eq {a b : Selected}
@@ -243,12 +251,12 @@ theorem CallbackEvidence.lookupFromCatalog {ops : Components (StorageM σ)}
     cases ran : ops.tables.lookup tableId key s with
     | ok value after =>
       rw [ran] at read
-      obtain ⟨frame, keeps, handle, inodeAt, picked, primitives, returned⟩ := read
-      have expected := TableNamespace.lookup (catalog tableId rows bound) handle
-        inodeAt picked primitives key
-      obtain ⟨world⟩ := (inferInstance : Nonempty (Void IO.RealWorld))
-      have equal := returned.symm.trans expected
-      exact ⟨EST.Out.ok.inj (congrFun equal world) |>.1, frame, frame.symm ▸ catalog.frame keeps⟩
+      obtain ⟨frame, keeps, handle, inodeAt, picked, primitives,
+        start, checked, entered, acted, done, metadata, value, stat, regular, action, scope, returned⟩ := read
+      have expected := TableNamespace.scopedLookup (catalog tableId rows bound) handle key
+        stat regular action scope inodeAt picked primitives
+      have same := Except.ok.inj (EST.Out.ok.inj (returned.symm.trans expected)).1
+      exact ⟨same, frame, frame.symm ▸ catalog.frame keeps⟩
     | error error after =>
       rw [ran] at read
       exact ⟨read.1, read.1.symm ▸ catalog.frame read.2⟩
