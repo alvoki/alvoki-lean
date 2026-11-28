@@ -20,7 +20,7 @@ private theorem Opening.recoverable {c h p active d known req} (o : Opening c h 
 
 /-- A choice in the active child extends the global history by precisely the
 same pending batch. Every sealed segment keeps its original byte interval. -/
-private theorem resolve_active {c h p disk decoded} (r : Readable c h p disk)
+theorem resolve_active {c h p disk decoded} (r : Readable c h p disk)
     (choice : WalRecoverySlice.Contract.Permitted (segmentHistory c.capacity c.active h) p decoded)
     (bounded : ∀ b ∈ decoded, b.length ≤ 32) :
     ∃ final, WalRecoverySlice.Contract.Permitted h p final ∧

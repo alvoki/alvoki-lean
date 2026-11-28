@@ -24,8 +24,8 @@ private theorem Writebacks.named (writes : Writebacks before after) :
   induction writes <;> first | rfl | assumption
 
 private theorem Writebacks.segment {id : Nat} (writes : Writebacks before after)
-    (prior : Child.Recoverable p bs none (before.segment id)) :
-    Child.Recoverable p bs none (after.segment id) := by
+    (prior : Child.Recoverable p bs pending (before.segment id)) :
+    Child.Recoverable p bs pending (after.segment id) := by
   induction writes with
   | nil => exact prior
   | next _ slot file ih =>
@@ -42,16 +42,16 @@ structure ChildAt (disk : W → Disk) (Q : W → Prop) (id : Nat) (start : Disk)
   image : (disk w).segment id = model.image
 
 def ChildOpened (owns : SingleFile.Handle → List Bytes → W → Prop) (disk : W → Disk)
-    (Q : W → Prop) (id : Nat) (p : Policy) (bs : List Bytes) (before : Disk)
+    (Q : W → Prop) (id : Nat) (p : Policy) (bs : List Bytes) (pending : Option Bytes) (before : Disk)
     (h : SingleFile.Handle) (t : W) : Prop :=
-  Q t ∧ ChildChange id before (disk t) ∧ owns h bs t ∧
-    Child.Installed p ((disk t).segment id) ((disk t).cursor id) bs ∧
-    (Child.Settled p (before.segment id) bs → (disk t).segment id = before.segment id)
+  Q t ∧ ChildChange id before (disk t) ∧ ∃ actual, WalRecoverySlice.Contract.Permitted bs pending actual ∧
+    owns h actual t ∧ Child.Installed p ((disk t).segment id) ((disk t).cursor id) actual ∧
+    (pending = none → Child.Settled p (before.segment id) bs → (disk t).segment id = before.segment id)
 
 def ChildFailed (disk : W → Disk) (Q : W → Prop) (id : Nat) (p : Policy)
-    (bs : List Bytes) (before : Disk) (t : W) : Prop :=
-  Q t ∧ ChildChange id before (disk t) ∧ Child.Recoverable p bs none ((disk t).segment id) ∧
-    (Child.Settled p (before.segment id) bs → (disk t).segment id = before.segment id)
+    (bs : List Bytes) (pending : Option Bytes) (before : Disk) (t : W) : Prop :=
+  Q t ∧ ChildChange id before (disk t) ∧ Child.Recoverable p bs pending ((disk t).segment id) ∧
+    (pending = none → Child.Settled p (before.segment id) bs → (disk t).segment id = before.segment id)
 
 private theorem model_keeps_settled (r : OpenReports) (dir : FilePath) (initial : OpenImage) (free : initial.held = false) (prior : Child.Recoverable p bs none initial.image)
     (entry : Child.Settled p initial.image bs) :
@@ -69,32 +69,31 @@ private theorem model_keeps_settled (r : OpenReports) (dir : FilePath) (initial 
 The current cursor comes from the stored active phase of this returned handle. -/
 theorem ChildAt.opened {id : Nat} (physical : ChildAt disk Q id before t after)
     (initial : OpenImage) (same : before.segment id = initial.image) (free : initial.held = false)
-    (r : OpenReports) (prior : Child.Recoverable p bs none (before.segment id))
+    (r : OpenReports) (prior : Child.Recoverable p bs pending (before.segment id))
     (report : SingleFile.openExistingModel dir p r initial = .ok (.ok ready) after)
     (owned : owns h ready.recovered.batches t) (cursor : (disk t).cursor id = ready.recovered.cursor) :
-    ChildOpened owns disk Q id p bs before h t := by
+    ChildOpened owns disk Q id p bs pending before h t := by
   have data := same ▸ prior
   have facts := data.nativeOpen dir r initial free
   rw [report] at facts
   obtain ⟨_, _, _, permit, installed, _⟩ := facts.2
-  have bytes : ready.recovered.batches = bs := by simpa [WalRecoverySlice.Contract.Permitted] using permit
-  refine ⟨physical.frame, physical.changed, bytes ▸ owned, ?_, ?_⟩
-  · rw [physical.image, cursor, ← bytes]; exact installed
-  · intro clean
+  refine ⟨physical.frame, physical.changed, _, permit, owned, ?_, ?_⟩
+  · rw [physical.image, cursor]; exact installed
+  · rintro rfl clean
     have stable := model_keeps_settled r dir initial free data (same ▸ clean)
     rw [report] at stable
     exact physical.image.trans (stable.trans same.symm)
 
 theorem ChildAt.failed {id : Nat} (physical : ChildAt disk Q id before t (SingleFile.postState result))
     (initial : OpenImage) (same : before.segment id = initial.image) (free : initial.held = false)
-    (r : OpenReports) (prior : Child.Recoverable p bs none (before.segment id))
+    (r : OpenReports) (prior : Child.Recoverable p bs pending (before.segment id))
     (report : SingleFile.openExistingModel dir p r initial = result) :
-    ChildFailed disk Q id p bs before t := by
+    ChildFailed disk Q id p bs pending before t := by
   have data := same ▸ prior
   have facts := data.nativeOpen dir r initial free
   rw [report] at facts
   refine ⟨physical.frame, physical.changed, physical.image.symm ▸ facts.1, ?_⟩
-  intro clean
+  rintro rfl clean
   have stable := model_keeps_settled r dir initial free data (same ▸ clean)
   rw [report] at stable
   exact physical.image.trans (stable.trans same.symm)
@@ -119,30 +118,30 @@ private theorem ioMap {a : IO α} {ok : α → W → Prop} {fail : W → Prop}
 
 theorem ValidationIO.acquire {id : Nat} (check : ValidationIO s disk Q)
     (start : Q w) (named : id ∈ (disk w).liveNames)
-    (prior : Child.Recoverable p bs none ((disk w).segment id))
+    (prior : Child.Recoverable p bs pending ((disk w).segment id))
     (enter : ∀ u, Q u → id ∈ (disk u).liveNames →
       check.policyBytes id u = (policyStamp p).toUTF8 →
-      Child.Recoverable p bs none ((disk u).segment id) →
+      Child.Recoverable p bs pending ((disk u).segment id) →
       IOReturns (SingleFile.openExisting (segmentPath s.root id)) u
-        (ChildOpened owns disk Q id p bs (disk u)) (ChildFailed disk Q id p bs (disk u))) :
-    IOReturns (s.acquireChild p id) w (ChildOpened owns disk Q id p bs (disk w))
-      (ChildFailed disk Q id p bs (disk w)) := by
+        (ChildOpened owns disk Q id p bs pending (disk u)) (ChildFailed disk Q id p bs pending (disk u))) :
+    IOReturns (s.acquireChild p id) w (ChildOpened owns disk Q id p bs pending (disk w))
+      (ChildFailed disk Q id p bs pending (disk w)) := by
   apply s.acquireChild_post p id (P := fun t => Q t ∧ Writebacks (disk w) (disk t)) ⟨start, .nil⟩
     (check.stat (disk w)) (check.list (disk w) id) (check.file (disk w) id)
   · rintro u ⟨held, writes⟩ stamp
     apply ioMap (enter u held (by rw [Writebacks.named writes]; exact named) stamp (Writebacks.segment writes prior))
-    · rintro h t ⟨q, change, owns, inst, exact⟩
-      refine ⟨q, change.prepend writes, owns, inst, ?_⟩
-      intro clean
-      have eq := writes.settled clean
-      exact (exact (eq.symm ▸ clean)).trans eq
-    · rintro t ⟨q, change, retry, exact⟩
+    · rintro h t ⟨q, change, actual, permit, owns, inst, keep⟩
+      refine ⟨q, change.prepend writes, actual, permit, owns, inst, ?_⟩
+      intro fixed clean
+      have eq :=  writes.settled clean
+      exact (keep fixed (eq.symm ▸ clean)).trans eq
+    · rintro t ⟨q, change, retry, keep⟩
       refine ⟨q, change.prepend writes, retry, ?_⟩
-      intro clean
-      have eq := writes.settled clean
-      exact (exact (eq.symm ▸ clean)).trans eq
+      intro fixed clean
+      have eq :=  writes.settled clean
+      exact (keep fixed (eq.symm ▸ clean)).trans eq
   · rintro t ⟨q, writes⟩
-    exact ⟨q, Writebacks.change writes, Writebacks.segment writes prior, fun clean => writes.settled clean⟩
+    exact ⟨q, Writebacks.change writes, Writebacks.segment writes prior, fun _ clean => writes.settled clean⟩
 
 open SingleFile.ConcreteRecovery (ModelOpened ActualOpened Ref OpenedTogether OpenSteps WorkerSteps Runtime)
 
@@ -203,9 +202,9 @@ structure ChildAttempt (s : Store) (disk : W → Disk) (Q : W → Prop) (mem : C
     (mem.bound id) runtime w {image := (disk w).segment id} (ChildAt disk Q id (disk w))
 
 theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q mem id p w)
-    (prior : Child.Recoverable p bs none ((disk w).segment id)) :
+    (prior : Child.Recoverable p bs pending ((disk w).segment id)) :
     IOReturns (SingleFile.openExisting (segmentPath s.root id)) w
-      (ChildOpened (mem.Owns s.root id) disk Q id p bs (disk w)) (ChildFailed disk Q id p bs (disk w)) := by
+      (ChildOpened (mem.Owns s.root id) disk Q id p bs pending (disk w)) (ChildFailed disk Q id p bs pending (disk w)) := by
   let initial : OpenImage := {image := (disk w).segment id}
   let dir := segmentPath s.root id
   let reports := attempt.reports
@@ -322,7 +321,7 @@ structure ChildPrimitives (s : Store) (disk : W → Disk) (Q : W → Prop) where
 def ChildPrimitives.access (primitives : ChildPrimitives s disk Q) : ChildAccess s disk Q where
   owns := primitives.memory.Owns s.root
   source _ _ _ _ held := ChildMemory.Owns.source held
-  acquire p id _ _ q named prior := primitives.validation.acquire q named prior
+  select p id _ _ _ q named prior := primitives.validation.acquire q named prior
     (fun u valid present policy retry => (primitives.attempt id p u valid present policy).openExisting retry)
   scan _ _ _ _ owned := primitives.phase.scan owned
   close _ _ _ _ owned := primitives.phase.close owned

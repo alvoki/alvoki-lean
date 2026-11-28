@@ -23,7 +23,9 @@ theorem childOpen {id : Nat} (a : ChildAttempt store disk Q mem id policy w)
   | ok h t =>
     have safety := a.openExisting prior
     rw [IOReturns, run] at safety
-    exact ⟨h, t, rfl, safety.2.2.1, safety.1⟩
+    obtain ⟨frame, _, actual, permit, owned, _⟩ := safety
+    have same : actual = bs := by simpa [WalRecoverySlice.Contract.Permitted] using permit
+    exact ⟨h, t, rfl, same ▸ owned, frame⟩
 
 theorem childScan {id : Nat} (io : ChildUseIO mem Q) (owned : mem.Owns root id h bs w) (entry : Q w) :
     ∃ t, SingleFile.scan h w = .ok bs t ∧ Q t := by

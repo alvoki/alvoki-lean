@@ -83,22 +83,24 @@ private theorem readSealed_post (s : Store) (c : Control) (history : List Bytes)
 is retained across collection and returned on success. Failure after acquiring
 it runs its close on the precise world left by scan or collection. -/
 theorem Store.recoverChild_post (s : Store) (c : Control) (history : List Bytes)
-    (P0 P : W → Prop) (held : SingleFile.Handle → W → Prop) (bad : W → Prop)
+    (P0 P : W → Prop) (held : List Bytes → SingleFile.Handle → W → Prop) (bad : W → Prop)
     (source : Returns s.callbacks.readControl w (fun observed t => observed = c ∧ P0 t) bad)
     (retry0 : ∀ t, P0 t → bad t) (retry : ∀ t, P t → bad t)
     (sync : ∀ t, P0 t → Returns s.callbacks.syncRoot t (fun _ u => P u) bad)
     (sealed : ∀ id, c.firstNeeded ≤ id → id < c.active → ∀ u, P u →
       IOReturns (s.readSealedChild c.policy id) u
         (fun bs t => bs = segmentHistory c.capacity id history ∧ P t) bad)
-    (acquire : ∀ u, P u → IOReturns (s.acquireChild c.policy c.active) u held bad)
-    (scan : ∀ h u, held h u → IOReturns (SingleFile.scan h) u
-      (fun bs t => bs = segmentHistory c.capacity c.active history ∧ held h t) (held h))
-    (close : ∀ h u, held h u → IOReturns (SingleFile.close h) u (fun _ t => bad t) bad)
-    (collect : ∀ h u, held h u → Returns (Segmented.collect s.callbacks c) u
-      (fun _ t => held h t) (held h))
-    (upper : history.length ≤ (c.active + 1) * c.capacity) :
+    (acquire : ∀ u, P u → IOReturns (s.acquireChild c.policy c.active) u (fun h t => ∃ final, held final h t) bad)
+    (scan : ∀ final h u, held final h u → IOReturns (SingleFile.scan h) u
+      (fun bs t => bs = segmentHistory c.capacity c.active final ∧ held final h t) (held final h))
+    (close : ∀ final h u, held final h u → IOReturns (SingleFile.close h) u (fun _ t => bad t) bad)
+    (collect : ∀ final h u, held final h u → Returns (Segmented.collect s.callbacks c) u
+      (fun _ t => held final h t) (held final h))
+    (layout : ∀ final h t, held final h t → final.length ≤ (c.active + 1) * c.capacity ∧
+      segmentWindow c.capacity c.firstNeeded (c.active-c.firstNeeded) history =
+      segmentWindow c.capacity c.firstNeeded (c.active-c.firstNeeded) final) :
     IOReturns s.recoverChild w
-      (fun out t => out.1 = sessionOf c history ∧ held out.2 t) bad := by
+      (fun out t => ∃ final, out.1 = sessionOf c final ∧ held final out.2 t) bad := by
   unfold Store.recoverChild
   apply checked_post
   unfold reopenWith reopenPrefix
@@ -121,26 +123,28 @@ theorem Store.recoverChild_post (s : Store) (c : Control) (history : List Bytes)
           have le : observed.firstNeeded ≤ observed.active := Nat.min_le_left ..
           exact sealed id lo (by omega)
   · rintro ⟨observed, rows⟩ u ⟨rfl, rowsEq, frame⟩
-    dsimp only at rowsEq upper
+    dsimp only at rowsEq
     apply Returns.liftIO
     unfold withActiveChild
     apply IOReturns.bind (acquire u frame)
-    intro h v owned
-    apply cleanup_post (needsClose := held h) _ (close h)
-    apply IOReturns.bind (scan h v owned)
+    rintro h v ⟨final, owned⟩
+    obtain ⟨upper, earlier⟩ := layout final h v owned
+    rw [earlier] at rowsEq
+    apply cleanup_post (needsClose := held final h) _ (close final h)
+    apply IOReturns.bind (scan final h v owned)
     rintro bytes a ⟨rfl, scanned⟩
     apply checked_post
     unfold finishReopen
-    apply Returns.bind (middle := fun session t => session = sessionOf observed history ∧ held h t)
+    apply Returns.bind (middle := fun session t => session = sessionOf observed final ∧ held final h t)
     · dsimp only
       split
       · exact scanned
       · split
         · exact scanned
-        · apply Returns.bind (collect h a scanned)
+        · apply Returns.bind (collect final h a scanned)
           intro _ b collected
-          exact ⟨by simp [sessionOf, rowsEq, selectedHistory_eq observed history upper, historyView], collected⟩
-    · exact fun session _ frame => ⟨frame.1, frame.2⟩
+          exact ⟨by simp [sessionOf, rowsEq, selectedHistory_eq observed final upper, historyView], collected⟩
+    · exact fun session _ frame => ⟨final, frame.1, frame.2⟩
 
 /-- The two phase allocations and the active-slot write only change memory.
 These frames are quantified over the actual allocated objects and worlds. -/
@@ -238,15 +242,16 @@ file contents, since the closed descriptor's cursor is no longer live. -/
 structure ChildAccess (s : Store) (disk : W → Disk) (Q : W → Prop) where
   owns : Nat → SingleFile.Handle → List Bytes → W → Prop
   source : ∀ id h bs u, owns id h bs u → ∃ fd, ChildLockAt (segmentPath s.root id) h fd
-  acquire : ∀ p id bs u, Q u → id ∈ (disk u).liveNames →
-    Child.Recoverable p bs none ((disk u).segment id) →
+  select : ∀ p id bs pending u, Q u → id ∈ (disk u).liveNames →
+    Child.Recoverable p bs pending ((disk u).segment id) →
     IOReturns (s.acquireChild p id) u
-      (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ owns id h bs t ∧
-        Child.Installed p ((disk t).segment id) ((disk t).cursor id) bs ∧
-        (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
+      (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ ∃ actual,
+        WalRecoverySlice.Contract.Permitted bs pending actual ∧ owns id h actual t ∧
+        Child.Installed p ((disk t).segment id) ((disk t).cursor id) actual ∧
+        (pending = none → Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
       (fun t => Q t ∧ ChildChange id (disk u) (disk t) ∧
-        Child.Recoverable p bs none ((disk t).segment id) ∧
-        (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
+        Child.Recoverable p bs pending ((disk t).segment id) ∧
+        (pending = none → Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
   scan : ∀ id h bs u, owns id h bs u → Q u → IOReturns (SingleFile.scan h) u
     (fun bytes t => bytes = bs ∧ owns id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
     (fun t => owns id h bs t ∧ Q t ∧ Writebacks (disk u) (disk t))
@@ -254,23 +259,34 @@ structure ChildAccess (s : Store) (disk : W → Disk) (Q : W → Prop) where
     (fun _ t => Q t ∧ AfterClose (disk u) (disk t))
     (fun t => Q t ∧ AfterClose (disk u) (disk t))
 
-private structure OpenLayout (c : Control) (history : List Bytes) (d : Disk) : Prop where
-  readable : Readable c history none d
+theorem ChildAccess.acquire (op : ChildAccess s disk Q) (p : Policy) (id : Nat) (bs : List Bytes) (u : W)
+    (held : Q u) (named : id ∈ (disk u).liveNames) (clean : Child.Recoverable p bs none ((disk u).segment id)) :
+    IOReturns (s.acquireChild p id) u
+      (fun h t => Q t ∧ ChildChange id (disk u) (disk t) ∧ op.owns id h bs t ∧
+        Child.Installed p ((disk t).segment id) ((disk t).cursor id) bs ∧
+        (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id))
+      (fun t => Q t ∧ ChildChange id (disk u) (disk t) ∧ Child.Recoverable p bs none ((disk t).segment id) ∧
+        (Child.Settled p ((disk u).segment id) bs → (disk t).segment id = (disk u).segment id)) := by
+  have out := op.select p id bs none u held named clean
+  simpa [WalRecoverySlice.Contract.Permitted] using out
+
+private structure OpenLayout (c : Control) (history : List Bytes) (pending : Option Bytes) (d : Disk) : Prop where
+  readable : Readable c history pending d
   live : d.liveControl = some c
   durable : d.durableControl = some c
 
-private theorem OpenLayout.retry (o : OpenLayout c history d) :
-    Recoverable (historyView c history) none d := by
-  have choice : RecoveryChoice (historyView c history) none c d :=
-    ⟨history, none, o.readable, by intro result ok; simp [WalRecoverySlice.Contract.Permitted] at ok; subst result; exact .inl rfl⟩
+private theorem OpenLayout.retry (o : OpenLayout c history pending d)
+    (permit : ∀ actual, WalRecoverySlice.Contract.Permitted history pending actual →
+      PermittedView known req (historyView c actual)) : Recoverable known req d := by
+  have choice : RecoveryChoice known req c d := ⟨history, pending, o.readable, permit⟩
   exact ⟨⟨c, o.live, choice⟩, ⟨c, o.durable, choice⟩⟩
 
-private theorem OpenLayout.writebacks (o : OpenLayout c history before) (steps : Writebacks before after) :
-    OpenLayout c history after := ⟨steps.readable o.readable, steps.live.trans o.live, steps.durable.trans o.durable⟩
+private theorem OpenLayout.writebacks (o : OpenLayout c history pending before) (steps : Writebacks before after) :
+    OpenLayout c history pending after := ⟨steps.readable o.readable, steps.live.trans o.live, steps.durable.trans o.durable⟩
 
-private theorem OpenLayout.child {id : Nat} (o : OpenLayout c history before) (delta : ChildChange id before after)
+private theorem OpenLayout.child {id : Nat} (o : OpenLayout c history pending before) (delta : ChildChange id before after)
     (clean : Child.Settled p (before.segment id) bs)
-    (unchanged : after.segment id = before.segment id) : OpenLayout c history after := by
+    (unchanged : after.segment id = before.segment id) : OpenLayout c history pending after := by
   obtain ⟨saved, writes, delta⟩ := delta
   have middle := o.writebacks writes
   have names : ∀ i, c.selects i → i ∈ after.liveNames ∧ i ∈ after.durableNames := by
@@ -284,7 +300,7 @@ private theorem OpenLayout.child {id : Nat} (o : OpenLayout c history before) (d
   exact ⟨middle.readable.frame names (fun i _ => same i), (congrArg Disk.liveControl delta).trans middle.live,
     (congrArg Disk.durableControl delta).trans middle.durable⟩
 
-private theorem OpenLayout.activeLayout (o : OpenLayout c history before)
+private theorem OpenLayout.activeLayout (o : OpenLayout c history pending before)
     (delta : ChildChange c.active before after) :
     Layout c history after ∧ after.liveControl = some c ∧ after.durableControl = some c := by
   obtain ⟨saved, writes, delta⟩ := delta
@@ -297,20 +313,14 @@ private theorem OpenLayout.activeLayout (o : OpenLayout c history before)
              congrArg (fun d : Disk => d.segment i) delta
          _ = _ := Disk.setSegment_other _ _ _ (Nat.ne_of_lt sealed)
 
-private theorem OpenLayout.activeFail (o : OpenLayout c history before)
+private theorem OpenLayout.activeFail (o : OpenLayout c history pending before)
     (delta : ChildChange c.active before after)
-    (retained : Child.Recoverable c.policy (segmentHistory c.capacity c.active history) none (after.segment c.active)) :
-    OpenLayout c history after :=
+    (retained : Child.Recoverable c.policy (segmentHistory c.capacity c.active history) pending (after.segment c.active)) :
+    OpenLayout c history pending after :=
   ⟨⟨(o.activeLayout delta).1, o.readable.room, retained⟩, (o.activeLayout delta).2.1, (o.activeLayout delta).2.2⟩
 
-private theorem OpenLayout.activeReady (o : OpenLayout c history before)
-    (delta : ChildChange c.active before after)
-    (installed : Child.Installed c.policy (after.segment c.active) (after.cursor c.active)
-      (segmentHistory c.capacity c.active history)) : Installed (sessionOf c history) after :=
-  ⟨history, rfl, ⟨(o.activeLayout delta).1, installed⟩, (o.activeLayout delta).2⟩
-
-private theorem OpenLayout.cursors (o : OpenLayout c history before)
-    (eq : AfterClose before after) : OpenLayout c history after := by
+private theorem OpenLayout.cursors (o : OpenLayout c history pending before)
+    (eq : AfterClose before after) : OpenLayout c history pending after := by
   obtain ⟨_, steps, eq⟩ := eq
   have o := o.writebacks steps
   exact ⟨o.readable.frame (by rw [eq]; exact o.readable.layout.names)
@@ -340,13 +350,14 @@ private theorem mapIO {a : IO α} {ok : α → W → Prop} {fail : W → Prop}
   | error e t => rw [r] at h; exact failure t h
 
 private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
-    (o : OpenLayout c history (disk u)) (keep : Q u) (lo : c.firstNeeded ≤ id) (lt : id < c.active) :
+    (permit : ∀ actual, WalRecoverySlice.Contract.Permitted history pending actual → PermittedView known req (historyView c actual))
+    (o : OpenLayout c history pending (disk u)) (keep : Q u) (lo : c.firstNeeded ≤ id) (lt : id < c.active) :
     IOReturns (s.readSealedChild c.policy id) u
-      (fun rows t => rows = segmentHistory c.capacity id history ∧ Q t ∧ OpenLayout c history (disk t))
-      (fun t => Q t ∧ Recoverable (historyView c history) none (disk t)) := by
+      (fun rows t => rows = segmentHistory c.capacity id history ∧ Q t ∧ OpenLayout c history pending (disk t))
+      (fun t => Q t ∧ Recoverable known req (disk t)) := by
   let bs := segmentHistory c.capacity id history
-  let Frame := fun t => Q t ∧ OpenLayout c history (disk t)
-  let Failure := fun t => Q t ∧ Recoverable (historyView c history) none (disk t)
+  let Frame := fun t => Q t ∧ OpenLayout c history pending (disk t)
+  let Failure := fun t => Q t ∧ Recoverable known req (disk t)
   let held := fun h t => ops.owns id h bs t ∧ Frame t
   have selected : c.selects id := ⟨lo, Nat.le_of_lt lt⟩
   have settled := o.readable.layout.sealed id selected lt
@@ -358,7 +369,7 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
     · rintro h t ⟨q, change, owned, _, physical⟩
       exact ⟨owned, q, o.child change settled (physical settled)⟩
     · rintro t ⟨q, change, _, physical⟩
-      exact ⟨q, (o.child change settled (physical settled)).retry⟩
+      exact ⟨q, (o.child change settled (physical settled)).retry permit⟩
   · rintro h v ⟨owned, q, prior⟩
     apply mapIO (ops.scan id h bs v owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
@@ -367,7 +378,7 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
       exact ⟨owns, qt, prior.writebacks same⟩
   · rintro h v ⟨owned, q, prior⟩
     have after {t} (post : Q t ∧ AfterClose (disk v) (disk t)) : Frame t ∧ Failure t :=
-      ⟨⟨post.1, prior.cursors post.2⟩, ⟨post.1, (prior.cursors post.2).retry⟩⟩
+      ⟨⟨post.1, prior.cursors post.2⟩, ⟨post.1, (prior.cursors post.2).retry permit⟩⟩
     exact mapIO (ops.close id h bs v owned q) (fun _ _ post => after post) (fun _ post => (after post).2)
 
 /-- The final collection may mutate retired files and names. Its leaf frames
@@ -401,18 +412,30 @@ private theorem decode_bounds {raw : ByteArray} (parsed : ControlCodec.decode ra
   · split at parsed <;> simp_all <;> obtain ⟨⟨bounds, _⟩, rfl⟩ := parsed <;> exact bounds
   · contradiction
 
-theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
-    (start : Q w) (prior : Recoverable known none (disk w)) :
+private theorem segmentWindow_same (h : ∀ id, id < active → segmentHistory cap id a = segmentHistory cap id b)
+    (first count : Nat) (limit : first + count ≤ active) :
+    segmentWindow cap first count a = segmentWindow cap first count b := by
+  induction count generalizing first with
+  | zero => rfl
+  | succ n ih => simp only [segmentWindow, h first (by omega), ih (first+1) (by omega)]
+
+/-- The active child resolves its own pending batch. Its actual returned
+batches determine the history used for collection and for the public scan. -/
+theorem StoreIO.recoverChild_selected (ops : StoreIO s disk Q)
+    (start : Q w) (prior : Recoverable known req (disk w)) :
     IOReturns s.recoverChild w
       (fun out t => (∃ fd, ChildLockAt (segmentPath s.root out.1.control.active) out.2 fd) ∧
-        Q t ∧ Installed out.1 (disk t) ∧ out.1.view = known)
-      (fun t => Q t ∧ Recoverable known none (disk t)) := by
-  obtain ⟨c, found, choice⟩ := prior.live
-  obtain ⟨history, readable, rfl⟩ := choice.known
+        Q t ∧ Installed out.1 (disk t) ∧ PermittedView known req out.1.view ∧
+        ∃ bs, ops.children.owns out.1.control.active out.2 bs t ∧ bs.length = out.1.activeCount)
+      (fun t => Q t ∧ Recoverable known req (disk t)) := by
+  obtain ⟨c, found, history, pending, readable, permit⟩ := prior.live
   let P0 := fun t => Q t ∧ Writebacks (disk w) (disk t)
-  let P := fun t => Q t ∧ OpenLayout c history (disk t)
-  let bad := fun t => Q t ∧ Recoverable (historyView c history) none (disk t)
-  let held := ActiveFrame ops.children c history
+  let P := fun t => Q t ∧ OpenLayout c history pending (disk t)
+  let bad := fun t => Q t ∧ Recoverable known req (disk t)
+  let held := fun final h t => PermittedView known req (historyView c final) ∧
+    final.length ≤ (c.active+1)*c.capacity ∧
+    (∀ id, id < c.active → segmentHistory c.capacity id history = segmentHistory c.capacity id final) ∧
+    ActiveFrame ops.children c final h t
   let bs := segmentHistory c.capacity c.active history
   have control : ∀ t, P0 t → ControlCodec.decode (ops.controlBytes t) = some c := by
     rintro t ⟨q, same⟩
@@ -420,20 +443,20 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
   have bounds := decode_bounds (control w ⟨start, .nil⟩)
   have src := s.readControl_fromFile (ops.metadata w start) (ops.file (disk w))
     (fun t pt => ControlCodec.canonical_of_decode (control t pt)) bounds.1 bounds.2
-  have barrier {t} (steps : Writebacks (disk w) (disk t)) : OpenLayout c history (disk t).syncRoot :=
+  have barrier {t} (steps : Writebacks (disk w) (disk t)) : OpenLayout c history pending (disk t).syncRoot :=
     let reached := steps.readable readable
     let bound := steps.live.trans found
     ⟨reached.frame (fun id selected => ⟨(reached.layout.names id selected).1,
       (reached.layout.names id selected).1⟩) (fun _ _ => rfl), bound, bound⟩
-  apply mapIO (s.recoverChild_post c history P0 P held bad ?source ?retry0 ?retry ?sync ?sealed ?acquire ?scan ?close ?collect readable.layout.upper)
+  apply mapIO (s.recoverChild_post c history P0 P held bad ?source ?retry0 ?retry ?sync ?sealed ?acquire ?scan ?close ?collect ?layout)
   case success =>
-    rintro ⟨session, child⟩ t ⟨rfl, owned, q, installed⟩
-    exact ⟨ops.children.source c.active child _ t owned, q, installed, rfl⟩
+    rintro ⟨_, child⟩ t ⟨final, rfl, allowed, _, _, owned, q, installed⟩
+    exact ⟨ops.children.source c.active child _ t owned, q, installed, allowed, _, owned, rfl⟩
   case failure => exact fun _ h => h
   case source =>
     exact src.mapPost (fun _ _ result => ⟨result.2, result.1⟩) (fun _ result => ⟨result.1, result.2.recoverable prior⟩)
   case retry0 => exact fun _ result => ⟨result.1, result.2.recoverable prior⟩
-  case retry => exact fun _ result => ⟨result.1, result.2.retry⟩
+  case retry => exact fun _ result => ⟨result.1, result.2.retry permit⟩
   case sync =>
     rintro t ⟨q, same⟩
     apply Returns.mapPost (s.syncRoot_io (ops.sync t q))
@@ -441,29 +464,53 @@ theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
       exact ⟨q', (barrier same).writebacks steps⟩
     · rintro u ⟨q', steps | steps⟩
       · exact ⟨q', (same.trans steps).recoverable prior⟩
-      · exact ⟨q', ((barrier same).writebacks steps).retry⟩
-  case sealed => exact fun id lo lt u post => ops.children.readSealed post.2 post.1 lo lt
+      · exact ⟨q', ((barrier same).writebacks steps).retry permit⟩
+  case sealed => exact fun id lo lt u post => ops.children.readSealed permit post.2 post.1 lo lt
   case acquire =>
     rintro u ⟨q, entry⟩
-    apply mapIO (ops.children.acquire c.policy c.active bs u q
+    apply mapIO (ops.children.select c.policy c.active bs pending u q
       (entry.readable.layout.names _ c.selectsActive).1 entry.readable.active)
-    · rintro h v ⟨q', change, owned, installed, _⟩
-      exact ⟨owned, q', entry.activeReady change installed⟩
+    · rintro h v ⟨q', change, actual, choice, owned, installed, _⟩
+      have bounded (b) (member : b ∈ actual) : b.length ≤ 32 := by
+        apply entry.readable.active.dirty.bounded b
+        rcases choice with rfl | rfl
+        · exact List.mem_append_left _ member
+        · exact member
+      obtain ⟨final, good, slice, earlier, extend⟩ := Model.resolve_active entry.readable choice bounded
+      obtain ⟨layout, live, durable⟩ := entry.activeLayout change
+      have finalLayout := extend _ layout
+      refine ⟨final, permit final good, finalLayout.upper, fun id lt => (earlier id lt).symm, ?_, q', ?_⟩
+      · exact slice.symm ▸ owned
+      · exact ⟨final, rfl, ⟨finalLayout, slice.symm ▸ installed⟩, live, durable⟩
     · rintro v ⟨q', change, kept, _⟩
-      exact ⟨q', (entry.activeFail change kept).retry⟩
+      exact ⟨q', (entry.activeFail change kept).retry permit⟩
   case scan =>
-    rintro h u ⟨owned, q, installed⟩
-    apply mapIO (ops.children.scan c.active h bs u owned q)
+    rintro final h u ⟨choice, upper, before, owned, q, installed⟩
+    apply mapIO (ops.children.scan c.active h _ u owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
-      exact ⟨rfl, owns, qt, same.installed installed⟩
+      exact ⟨rfl, choice, upper, before, owns, qt, same.installed installed⟩
     · rintro t ⟨owns, qt, same⟩
-      exact ⟨owns, qt, same.installed installed⟩
+      exact ⟨choice, upper, before, owns, qt, same.installed installed⟩
   case close =>
-    rintro h u ⟨owned, q, installed⟩
+    rintro final h u ⟨choice, upper, before, owned, q, installed⟩
     have after {t} (r : Q t ∧ AfterClose (disk u) (disk t)) : bad t :=
-      ⟨r.1, Recoverable.cursors (installed.offline (.inl rfl)) r.2⟩
-    exact mapIO (ops.children.close c.active h bs u owned q) (fun _ _ post => after post) (fun _ post => after post)
+      ⟨r.1, Recoverable.cursors (installed.offline choice) r.2⟩
+    exact mapIO (ops.children.close c.active h _ u owned q) (fun _ _ post => after post) (fun _ post => after post)
   case collect =>
-    exact fun h u entry => CollectionIO.collect s c (ops.cleanup c history h) (ops.cleanupSync c history h) entry
+    rintro final h u ⟨choice, upper, before, active⟩
+    exact (CollectionIO.collect s c (ops.cleanup c final h) (ops.cleanupSync c final h) active).mapPost
+      (fun _ _ next => ⟨choice, upper, before, next⟩) (fun _ next => ⟨choice, upper, before, next⟩)
+  case layout =>
+    rintro final h u ⟨_, upper, before, _⟩
+    exact ⟨upper, segmentWindow_same before _ _ (by have := Nat.min_le_left c.active (c.discarded / c.capacity); unfold Control.firstNeeded; omega)⟩
+
+theorem StoreIO.recoverChild_disk (ops : StoreIO s disk Q)
+    (start : Q w) (prior : Recoverable known none (disk w)) :
+    IOReturns s.recoverChild w
+      (fun out t => (∃ fd, ChildLockAt (segmentPath s.root out.1.control.active) out.2 fd) ∧
+        Q t ∧ Installed out.1 (disk t) ∧ out.1.view = known)
+      (fun t => Q t ∧ Recoverable known none (disk t)) := by
+  exact mapIO (ops.recoverChild_selected start prior) (fun _ _ v => ⟨v.1, v.2.1, v.2.2.1,
+    by simpa [PermittedView] using v.2.2.2.1⟩) (fun _ h => h)
 
 end WalRecoverySlice.Segmented.Native
