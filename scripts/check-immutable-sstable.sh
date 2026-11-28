@@ -7,44 +7,23 @@ if [[ -n ${ALVOKI_TOOLCHAINS:-} || -d ../../work/toolchains/elan ]]; then
   export ELAN_HOME="$(cd "${ALVOKI_TOOLCHAINS:-../../work/toolchains}/elan" && pwd)"
   export PATH="$ELAN_HOME/bin:$PATH"
 fi
-prefix=$(lean --print-prefix)
-out=$(mktemp -d)
-trap 'rm -rf "$out"' EXIT
-export LEAN_PATH="$out"
-lake build crc32cArchive >&2
-table=Alvoki/Experiments/SSTable
-sources=()
-compile() {
-  local module=$1
-  mkdir -p "$out/$(dirname "$module")"
-  lean -o "$out/$module.olean" -c "$out/$module.c" "$module.lean"
-  leanchecker "${module//\//.}"
-  sources+=("$out/$module.c")
-}
-compile Alvoki/Codec/Block
-compile Alvoki/Codec/CRC32C
-for module in Contract Search Core Native \
-    UnifiedFormat UnifiedIntegrity UnifiedBuilder UnifiedReader UnifiedNative UnifiedFixtures; do
-  compile "$table/$module"
+table=Alvoki.Experiments.SSTable
+modules=(
+  Alvoki.Codec.{Block,CRC32C,WordChecksum,ByteWords}
+  Alvoki.Kernel.BlockContracts
+  "$table".{Contract,Search,Core,Native,Representation}
+  "$table".{UnifiedFormat,UnifiedIntegrity,UnifiedBuilder,UnifiedReader,UnifiedNative,UnifiedFixtures}
+  "$table".Proofs.{Reader,Search,Typed,UnifiedMetadata,UnifiedData,UnifiedImage,UnifiedSearch}
+  "$table".Proofs.{UnifiedGroups,UnifiedReads,UnifiedOpen,UnifiedBuilder,UnifiedEndToEnd}
+  "$table".Proofs.{UnifiedNativeReader,UnifiedReadErrors,NativeWrite,UnifiedNativeEndToEnd}
+  Alvoki.Checks.Tests.SSTableProducer
+  Alvoki.Checks.Audit.AxiomPolicy
+)
+lake build "${modules[@]}"
+for module in "${modules[@]}"; do
+  lake env leanchecker "$module"
 done
-compile_proof() {
-  local module=$1
-  mkdir -p "$out/$(dirname "$module")"
-  lean -o "$out/$module.olean" "$module.lean"
-  leanchecker "${module//\//.}"
-}
-compile_proof Alvoki/Kernel/BlockContracts
-compile_proof Alvoki/Codec/WordChecksum
-compile_proof Alvoki/Codec/ByteWords
-compile_proof "$table/Representation"
-for module in Reader Search Typed UnifiedMetadata UnifiedData UnifiedImage UnifiedSearch \
-    UnifiedGroups UnifiedReads UnifiedOpen UnifiedBuilder UnifiedEndToEnd \
-    UnifiedNativeReader UnifiedReadErrors NativeWrite UnifiedNativeEndToEnd; do
-  compile_proof "$table/Proofs/$module"
-done
-compile_proof Alvoki/Checks/Tests/SSTableProducer
-compile_proof Alvoki/Checks/Audit/AxiomPolicy
-lean --stdin <<'LEAN'
+lake env lean --stdin <<'LEAN'
 import Alvoki.Checks.Audit.AxiomPolicy
 import Alvoki.Experiments.SSTable.Proofs.UnifiedNativeEndToEnd
 import Alvoki.Experiments.SSTable.Proofs.UnifiedReadErrors
@@ -100,7 +79,4 @@ open ImmutableSSTable
 #check_axioms TypedTable.next_value_decode_error
 #check_axioms TypedTable.represents_of_bytes
 LEAN
-cc -O2 -DNDEBUG -fPIC -I"$prefix/include" "${sources[@]}" native/sstable.c native/fsync.c \
-  ".lake/build/native/libalvoki_crc32c.a" -lstdc++ -L"$prefix/lib/lean" \
-  -Wl,-rpath,"$prefix/lib/lean" -lleanshared -o "$out/test-unified-sstable"
-"$out/test-unified-sstable" "$@"
+lake exe immutableSSTableCheck "$@"

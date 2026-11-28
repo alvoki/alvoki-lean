@@ -7,7 +7,9 @@ taskset -c 0 bash scripts/check-immutable-sstable.sh --bench
 Run from the repository root on Linux x86-64 with the pinned Lean toolchain,
 GCC and G++. Choose a CPU in your affinity mask. The runner builds the pinned
 [Google CRC32C backend](checksums.md). Every ALVSST05 case uses this backend
-with lazy verification and the same two-level index.
+with lazy verification and the same two-level index. The current runner
+builds the fixture with Lake in release mode (`-O3 -DNDEBUG` for generated
+Lean C). The recorded trials below used the previous GCC `-O2 -DNDEBUG` build.
 
 Each file holds 65,537 ordered rows. Fixed fields contain 8 bytes. Variable
 keys contain 8–15 bytes and variable values 8–23 bytes, using deterministic
