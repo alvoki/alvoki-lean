@@ -161,6 +161,19 @@ def put (handle : Handle) (key value : UInt64) : IO Unit :=
 def delete (handle : Handle) (key : UInt64) : IO Unit :=
   update handle (fun session => write handle.ops session (key, .delete))
 
+/-- The public operation selected by a client mutation. -/
+abbrev mutation (handle : Handle) (change : Change) : IO Unit :=
+  match change.2 with
+  | .put value => put handle change.1 value
+  | .delete => delete handle change.1
+
+theorem mutation_atRoot (binding : Handle.AtRoot handle root ref) (change : Change) :
+    mutation handle change = (phaseCell ref).update (IO.userError "L0 requires reopen")
+      (fun s => checked (write (callbackComponents root ref) s change)) WalRecoverySlice.Segmented.Native.close := by
+  cases binding
+  rcases change with ⟨key, value⟩
+  cases value <;> rfl
+
 def flush (handle : Handle) : IO Unit :=
   update handle (ExperimentalL0.flush handle.ops)
 

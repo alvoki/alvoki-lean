@@ -96,7 +96,7 @@ structure Callbacks (m : Type → Type) (W : Type) where
   manifest : DurableBlob.Backend m L0Manifest.Version
   tables : Tables m
 
-private def Cell.borrowWal [Monad m] [MonadExceptOf ε m] (cell : Cell m W)
+def Cell.borrowWal [Monad m] [MonadExceptOf ε m] (cell : Cell m W)
     (invalid : ε) (use : W → m α) : m α := do
   let some handle := (← cell.read).wal | throw invalid
   use handle
@@ -177,6 +177,35 @@ def Cell.update [Monad m] [MonadExceptOf ε m] (cell : Cell m W) (invalid : ε)
   | .error error =>
     let _ ← attempt (ε := ε) (cell.close closeWal)
     throw error
+
+/-- The online branch begins on the world produced by the phase swap.
+On failure, close consumes the failed world's phase and preserves its
+primary error even when releasing the WAL reports another error. -/
+theorem Cell.update_online_io (cell : Cell IO W) (invalid : IO.Error)
+    (operation : Session → IO Session) (closeWal : W → IO Unit)
+    (read : cell.read start = .ok (.online wal session) entered)
+    (swap : cell.swap (.updating wal) entered = .ok previous hidden) :
+    cell.update invalid operation closeWal start =
+      let completed := (operation session >>= cell.publish invalid).toBaseIO hidden
+      match completed.val with
+      | .ok _ => .ok () completed.state
+      | .error e => .error e ((cell.close closeWal).toBaseIO completed.state).state := by
+  cases ran : operation session hidden with
+  | error e t =>
+    cases closed : cell.close closeWal t <;>
+      simp [Cell.update, Phase.beginUpdate, read, swap, ran, closed, attempt, Bind.bind,
+        instMonadEIO._aux_13, EST.bind, EIO.toBaseIO, MonadExceptOf.tryCatch,
+        instMonadExceptOfEIO._aux_3, EST.tryCatch, Pure.pure, instMonadEIO._aux_5, EST.pure] <;> rfl
+  | ok next t =>
+    cases published : cell.publish invalid next t with
+    | ok => simp [Cell.update, Phase.beginUpdate, read, swap, ran, published, attempt,
+        Bind.bind, instMonadEIO._aux_13, EST.bind, EIO.toBaseIO, MonadExceptOf.tryCatch,
+        instMonadExceptOfEIO._aux_3, EST.tryCatch, Pure.pure, instMonadEIO._aux_5, EST.pure]
+    | error e u =>
+      cases closed : cell.close closeWal u <;>
+        simp [Cell.update, Phase.beginUpdate, read, swap, ran, published, closed, attempt,
+          Bind.bind, instMonadEIO._aux_13, EST.bind, EIO.toBaseIO, MonadExceptOf.tryCatch,
+          instMonadExceptOfEIO._aux_3, EST.tryCatch, Pure.pure, instMonadEIO._aux_5, EST.pure] <;> rfl
 
 namespace Proof
 
