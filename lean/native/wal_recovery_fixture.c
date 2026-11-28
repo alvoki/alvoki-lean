@@ -76,3 +76,45 @@ struct dirent *__wrap_readdir(DIR *directory) {
         listing_failure_countdown = 1;
     return entry;
 }
+
+/* ReadFault in WalRecoveryFiles. All four stop on the second chunk. */
+enum read_fault { INTERIOR_EIO, EOF_EIO, SHORT_WITHOUT_EOF, INTERIOR_DENIED };
+static enum read_fault fault;
+static struct stat read_target;
+static unsigned chunks_until_short;
+static FILE *read_error_stream;
+
+lean_object *alvoki_test_short_segment_read(b_lean_obj_arg path, uint8_t mode) {
+    if (stat(lean_string_cstr(path), &read_target) != 0)
+        return lean_io_result_mk_error(lean_decode_io_error(errno, NULL));
+    chunks_until_short = 2;
+    fault = (enum read_fault)mode;
+    return lean_io_result_mk_ok(lean_box(0));
+}
+
+size_t __real_fread(void *bytes, size_t size, size_t count, FILE *stream);
+int __real_ferror(FILE *stream);
+
+size_t __wrap_fread(void *bytes, size_t size, size_t count, FILE *stream) {
+    if (chunks_until_short && size == 1 && count == 1024) {
+        struct stat info;
+        if (fstat(fileno(stream), &info) == 0 && info.st_dev == read_target.st_dev &&
+            info.st_ino == read_target.st_ino && --chunks_until_short == 0) {
+            size_t n = __real_fread(bytes, 1, fault == EOF_EIO ? count : 19, stream);
+            if (fault != SHORT_WITHOUT_EOF) {
+                read_error_stream = stream;
+                errno = fault == INTERIOR_DENIED ? EACCES : EIO;
+            }
+            return n;
+        }
+    }
+    return __real_fread(bytes, size, count, stream);
+}
+
+int __wrap_ferror(FILE *stream) {
+    if (stream == read_error_stream) {
+        read_error_stream = NULL;
+        return 1;
+    }
+    return __real_ferror(stream);
+}

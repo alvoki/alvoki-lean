@@ -59,10 +59,13 @@ def markerHandle [Monad m] [MonadExceptOf String m]
     (policy : Policy) : m Decoded :=
   reopen (recoveryOps io data markers) policy
 
+@[extern "alvoki_wal_read_chunk"]
+opaque Internal.checkedChunk (h : @& IO.FS.Handle) (count : USize) : IO ByteArray
+
 /-- The 1024-byte loop used by Lean's handle reader, with an unfoldable
 equation so an interrupted second or later read has its own operand. -/
 def Internal.readChunks (h : IO.FS.Handle) (acc : ByteArray) : IO ByteArray := do
-  let bytes ← h.read 1024
+  let bytes ← Internal.checkedChunk h 1024
   if bytes.isEmpty then return acc
   readChunks h (acc ++ bytes)
 partial_fixpoint
