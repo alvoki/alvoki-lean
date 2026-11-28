@@ -29,14 +29,17 @@ int fsync(int fd) {
     }
     int result = real_fsync(fd);
     const char *cut = getenv("ALVOKI_L0_CUT");
-    if (result == 0 && cut && strcmp(cut, "table") == 0) {
+    if (result == 0 && cut && (!getenv("ALVOKI_L0_AFTER_CONTROL") || atomic_load(&published_successor))) {
         char link[64], path[4096];
         snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
         ssize_t length = readlink(link, path, sizeof(path) - 1);
         if (length >= 0) {
             path[length] = '\0';
             const char *name = strrchr(path, '/');
-            if (name && strcmp(name, "/tables") == 0)
+            if (name && ((strcmp(cut, "table") == 0 && strcmp(name, "/tables") == 0) ||
+                         (strcmp(cut, "data") == 0 && strcmp(name, "/segment") == 0) ||
+                         (strcmp(cut, "marker") == 0 &&
+                          (strcmp(name, "/commit.0") == 0 || strcmp(name, "/commit.1") == 0))))
                 _exit(73);
         }
     }

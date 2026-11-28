@@ -84,7 +84,7 @@ private def interruption (executable library cut : String) : IO Unit :=
         "retry reused the orphan's ID"
 
 /-- Simulate acknowledgement loss at the caller after the public scope has
-closed. The other two modes stop or fail inside the issued WAL operation. -/
+closed. The syscall cuts occur before the public scope can return. -/
 private def appendChild (root : FilePath) (mode : String) (rotate : Bool) : IO Unit := do
   Native.withOpen root fun db => do
     let mutation := if rotate then Native.delete db 42 else Native.put db 42 99
@@ -95,7 +95,9 @@ private def appendChild (root : FilePath) (mode : String) (rotate : Bool) : IO U
       expectError mutation
       expectError (Native.get db 42)
     else
-      if mode == "control" then Std.Async.System.setEnvVar "ALVOKI_L0_CUT" "control"
+      if mode == "control" || mode == "data" || mode == "marker" then
+        if rotate && mode != "control" then Std.Async.System.setEnvVar "ALVOKI_L0_AFTER_CONTROL" "1"
+        Std.Async.System.setEnvVar "ALVOKI_L0_CUT" mode
       mutation
   if mode == "lost" then IO.Process.exit 74
   IO.println "returned"
@@ -112,11 +114,11 @@ private def appendRetry (executable library mode : String) (rotate : Bool) : IO 
       args := #["append", root.toString, mode, if rotate then "rotate" else "active"]
       env := #[("LD_PRELOAD", some library)]
     }
-    let expectedExit := if mode == "control" then 73 else if mode == "lost" then 74 else 0
+    let expectedExit := if ["control", "data", "marker"].contains mode then 73 else if mode == "lost" then 74 else 0
     check (proc.exitCode == expectedExit) s!"append {mode}, rotation={rotate}: {proc.stderr}"
     check (proc.stdout == (if mode == "error" || mode == "published-error" then "returned\n" else ""))
       "unexpected completion acknowledgement"
-    let expected := if mode == "lost" then (if rotate then none else some 99) else some 11
+    let expected := if mode == "lost" || mode == "marker" then (if rotate then none else some 99) else some 11
     for _ in [0, 1] do
       Native.withOpen root fun db => do
         check ((← Native.get db 42) == expected) "reopen selected the wrong mutation"
@@ -215,7 +217,7 @@ def main (args : List String) : IO Unit := do
     }
     check (proc.exitCode == 0) s!"one-shot table read fixture failed: {proc.stderr}"
     for rotate in [false, true] do
-      for mode in ["lost", "error"] do appendRetry executable.toString library mode rotate
+      for mode in ["lost", "error", "data", "marker"] do appendRetry executable.toString library mode rotate
     appendRetry executable.toString library "control" true
     appendRetry executable.toString library "published-error" true
     interruption executable.toString library "table"
