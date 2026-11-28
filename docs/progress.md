@@ -16,7 +16,12 @@ including the joint CONTROL and child-name root barrier. Its discard
 continuation preserves the permitted view through a failed publication,
 a failed reopen, and two successful opens. Native rotation and append
 still need to preserve and return the exact successor child authority.
-Bootstrap and mutations must supply CONTROL representability.
+The native append schedule now carries that successor through a scoped
+continuation. Non-rotating append consumes the recovered child phase and
+produces the acknowledged session or the recoverable reached image.
+Complete the producer for fresh child creation and connect it to the
+rotation proof and subsequent recovery. Bootstrap and mutations must
+supply CONTROL representability.
 [Segmented WAL guide](../lean/Alvoki/Experiments/WAL/Segmented/README.md)
 · [WAL fault assumptions](design/wal-recovery.md)
 

@@ -8,32 +8,24 @@ open Model (Disk State DiskPost)
 
 /-- Lift the reached active-file image into the directory invariant. Earlier
     sealed files keep their exact bytes and both control names keep their binding. -/
-theorem appendActive_refines (effects : Model.Effects) (c : Control) (history : List Bytes)
+theorem appendActive_refinesWith (c : Control) (history : List Bytes)
     (p : Bytes) (s : State) (ready : ReadyLayout c history s.disk)
     (live : s.disk.liveControl = some c) (durable : s.disk.durableControl = some c)
     (room : history.length < (c.active + 1) * c.capacity) (size : p.length ≤ 32)
-    (positionRoom : (historyView c history).tail < Contract.maxPosition) :
+    (positionRoom : (historyView c history).tail < Contract.maxPosition)
+    (run : Model.Result Unit)
+    (frame : ∃ image cursor, (Model.reached run).disk = s.disk.setSegment c.active image cursor)
+    (child : Child.Recoverable c.policy (segmentHistory c.capacity c.active history) (some p)
+      ((Model.reached run).disk.segment c.active) ∧
+      (Model.returned run = some () → Child.Installed c.policy ((Model.reached run).disk.segment c.active)
+        ((Model.reached run).disk.cursor c.active)
+        (segmentHistory c.capacity c.active history ++ [p]))) :
     DiskPost (fun _ after => ReadyLayout c (history ++ [p]) after ∧
       after.liveControl = some c ∧ after.durableControl = some c)
-      (Recoverable (historyView c history) (some (.append p)))
-      (((Model.ops effects).appendSegment c.policy c.active p).run s) := by
-  let run := ((Model.ops effects).appendSegment c.policy c.active p).run s
+      (Recoverable (historyView c history) (some (.append p))) run := by
   let after := (Model.reached run).disk
-  let leaf := segmentHistory c.capacity c.active history
-  have named := (ready.layout.names _ c.selectsActive).1
-  have fits : leaf.length < 255 := by
-    have capacity := ready.layout.capacityFits
-    have upper := ready.layout.upper
-    have lower := ready.layout.lower
-    have len := segmentHistory_active_length upper
-    change (segmentHistory c.capacity c.active history).length < 255
-    rw [len]
-    rw [Nat.add_mul, Nat.one_mul] at room
-    omega
-  have bounded := segmentHistory_bounded ready.layout c.active
-  have child := Model.appendSegment_dirty effects named ready.active bounded fits size
   obtain ⟨dirty, success⟩ := child
-  obtain ⟨image, cursor, hframe⟩ := Model.appendSegment_frame effects c.policy p named
+  obtain ⟨image, cursor, hframe⟩ := frame
   change after = _ at hframe
   have layout : Layout c history after := ready.layout.frame
     (fun id selected => by rw [hframe]; exact ready.layout.names id selected)
@@ -63,6 +55,27 @@ theorem appendActive_refines (effects : Model.Effects) (c : Control) (history : 
       have good := ack (by simp [h, Model.returned])
       exact (by simpa [DiskPost, after, h, Model.reached] using And.intro good authority)
 
+theorem appendActive_refines (effects : Model.Effects) (c : Control) (history : List Bytes)
+    (p : Bytes) (s : State) (ready : ReadyLayout c history s.disk)
+    (live : s.disk.liveControl = some c) (durable : s.disk.durableControl = some c)
+    (room : history.length < (c.active + 1) * c.capacity) (size : p.length ≤ 32)
+    (positionRoom : (historyView c history).tail < Contract.maxPosition) :
+    DiskPost (fun _ after => ReadyLayout c (history ++ [p]) after ∧
+      after.liveControl = some c ∧ after.durableControl = some c)
+      (Recoverable (historyView c history) (some (.append p)))
+      (((Model.ops effects).appendSegment c.policy c.active p).run s) := by
+  have named := (ready.layout.names _ c.selectsActive).1
+  have fits : (segmentHistory c.capacity c.active history).length < 255 := by
+    have capacity := ready.layout.capacityFits
+    have upper := ready.layout.upper
+    have lower := ready.layout.lower
+    rw [segmentHistory_active_length upper]
+    rw [Nat.add_mul, Nat.one_mul] at room
+    omega
+  exact appendActive_refinesWith c history p s ready live durable room size positionRoom _
+    (Model.appendSegment_frame effects c.policy p named)
+    (Model.appendSegment_dirty effects named ready.active (segmentHistory_bounded ready.layout c.active) fits size)
+
 /-- Refinement of one public source call, including the guard, optional
     rotation, active append and exactly the session returned to the caller. -/
 theorem append_refines (effects : Model.Effects) (session : Session) (p : Bytes)
@@ -78,12 +91,12 @@ theorem append_refines (effects : Model.Effects) (session : Session) (p : Bytes)
     have choice := ready.choice (known := historyView c history) (request := some (.append p)) (.inl rfl)
     exact ⟨⟨c, live, choice⟩, ⟨c, durable, choice⟩⟩
   by_cases tooBig : p.length > 32
-  · simp only [Segmented.append, tooBig, ↓reduceIte]
+  · simp only [Segmented.append, checkAppend, tooBig, ↓reduceIte]
     exact unchanged
   by_cases full : Contract.maxPosition ≤ (historyView c history).tail
-  · simp only [Segmented.append, sessionOf, tooBig, full, ↓reduceIte]
+  · simp only [Segmented.append, checkAppend, sessionOf, tooBig, full, ↓reduceIte]
     exact unchanged
-  · simp only [Segmented.append, sessionOf, tooBig, full, ↓reduceIte]
+  · simp only [Segmented.append, checkAppend, sessionOf, tooBig, full, ↓reduceIte]
     apply Model.bindPost (rotateIfFull_refines effects c history p state ready live durable)
     intro pair t mid
     obtain ⟨entry, boundLive, boundDurable, count, view, room⟩ := mid
@@ -107,9 +120,9 @@ theorem append_exhausted (effects : Model.Effects) (session : Session) (p : Byte
     (Segmented.append (Model.ops effects) session p).run state =
       .ok (.error (if p.length > 32 then "batch out of bounds" else "segmented WAL position exhausted")) state := by
   by_cases oversized : p.length > 32
-  · simp only [Segmented.append, oversized, ↓reduceIte]
+  · simp only [Segmented.append, checkAppend, oversized, ↓reduceIte]
     rfl
-  · simp only [Segmented.append, oversized, exhausted, ↓reduceIte]
+  · simp only [Segmented.append, checkAppend, oversized, exhausted, ↓reduceIte]
     rfl
 
 /-- The position projected from an acknowledged source append is the next

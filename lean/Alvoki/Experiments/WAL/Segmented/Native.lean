@@ -115,13 +115,16 @@ private def Store.closeChild (s : Store) : IO Unit :=
 private def Store.release (s : Store) : IO Unit := do
   releaseWith (error := IO.Error) s.closeChild s.lock.unlock
 
-private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
-  s.closeChild
+private def Store.prepareChild (s : Store) (p : Policy) (id : Nat) : IO SingleFile.Handle := do
   -- Only an unpublished successor can already occupy this ID after an interrupted rotation.
   removeSegment s.root id
   let dir := segmentPath s.root id
   IO.FS.createDir dir
-  let child ← SingleFile.create dir p
+  SingleFile.create dir p
+
+private def Store.prepare (s : Store) (p : Policy) (id : Nat) : IO Unit := do
+  s.closeChild
+  let child ← s.prepareChild p id
   s.active.set (some (id, child))
 
 def requiredChildNames (p : Policy) : List String :=
@@ -335,23 +338,61 @@ private def Handle.locked (h : Handle) (action : IO α) : IO α := do
   h.mutex.lock
   try action finally h.mutex.unlock
 
-private def update (h : Handle) (action : Ops FileM → Session → FileM Session) : IO Session := h.locked do
-  match ← h.state.get with
+/-- Poison the public phase before running any mutation. The successful
+phase and reply are derived from the same returned session. -/
+@[inline] def updateWith [Monad m] [MonadExceptOf error m]
+    (invalid : String → error)
+    (get : m (Phase store)) (set : Phase store → m Unit)
+    (action : store → Session → m Session) : m Session := do
+  match ← get with
   | .ready store session =>
-    h.state.set (.poisoned store)
-    let next ← checked (action store.callbacks session)
-    h.state.set (.ready store next)
+    set (.poisoned store)
+    let next ← action store session
+    set (.ready store next)
     return next
-  | .poisoned _ => throw <| IO.userError "segmented WAL requires reopen"
-  | .closed => throw <| IO.userError "segmented WAL closed"
+  | .poisoned _ => throw (invalid "segmented WAL requires reopen")
+  | .closed => throw (invalid "segmented WAL closed")
+
+private def update (h : Handle) (action : Store → Session → FileM Session) : IO Session :=
+  h.locked <| updateWith (m := IO) IO.userError (do h.state.get)
+    (fun phase => do h.state.set phase) (fun store session => checked (action store session))
+
+/-- Acquire and consume a successor in one scope. The old child is released
+before preparation. The successor goes into the store only on success. -/
+@[inline] def appendOwnedWith [Monad m] [MonadExceptOf error m]
+    (session : Session) (batch : Bytes) (check : m Unit) (invalid : String → error)
+    (getActive : m (Option (Nat × child))) (closeOld : m Unit)
+    (prepare : Policy → Nat → m child) (close : child → m Unit)
+    (syncRoot : m Unit) (publish : Control → m Unit)
+    (write : child → Bytes → m Unit) (install : (Nat × child) → m Unit) : m Session := do
+  check
+  let current := session.control
+  if session.activeCount = current.capacity then
+    let next := {current with active := current.active + 1}
+    closeOld
+    withActiveChild (error := error) (prepare next.policy next.active) close fun child => do
+      syncRoot
+      publish next
+      write child batch
+      install (next.active, child)
+      pure ⟨next, 1, session.view.append batch⟩
+  else
+    let some (id, child) ← getActive | throw (invalid "no active segment")
+    unless id == current.active do throw (invalid "incorrect active segment")
+    write child batch
+    pure ⟨current, session.activeCount + 1, session.view.append batch⟩
 
 /-- Return the absolute, one-based position only after the append schedule succeeds. -/
 def append (h : Handle) (batch : Bytes) : IO Nat := do
-  let next ← update h (fun ops s => Segmented.append ops s batch)
+  let next ← update h fun store session =>
+    liftM <| appendOwnedWith (error := IO.Error) session batch (checked (checkAppend session batch))
+      IO.userError store.active.get store.closeChild store.prepareChild SingleFile.close
+      (checked store.callbacks.syncRoot) (fun control => checked (store.callbacks.publishControl control))
+      SingleFile.append (fun entry => store.active.set (some entry))
   return next.tailPosition
 
 def discardThrough (h : Handle) (k : Nat) : IO Unit := do
-  let _ ← update h (fun ops s => Segmented.discardThrough ops s k)
+  let _ ← update h (fun store s => Segmented.discardThrough store.callbacks s k)
   pure ()
 
 def scanWith [Monad m] [MonadExceptOf String m] (phase : Phase store) : m Contract.View :=

@@ -1494,6 +1494,76 @@ private theorem installScopedModel_run (owned : RootBinding directory lock) (r :
     | error => rfl
     | ok pair => cases pair; rfl
 
+/-- The exact phase issued by the child producer is positioned after the
+active suffix of the installed segmented history. -/
+theorem installScopedModel_appendPhase (owned : RootBinding directory lock) (r : RootReports)
+    (openReports : Nat → Nat → SingleFile.OpenReports) (closeError : Option String)
+    {s t : State} (prior : Recoverable known request s.disk) {session : Session}
+    {store : ReopenedStore directory lock}
+    (installed : (installScopedModel owned r openReports closeError).run s =
+      .ok (.ok (.ready store session)) t) :
+    ∃ history, session = sessionOf session.control history ∧
+      ReadyLayout session.control history t.disk ∧ t.disk.liveControl = some session.control ∧
+      t.disk.durableControl = some session.control ∧ store.binding = owned ∧
+      store.activeId = session.control.active ∧
+      SingleFile.storedPhase store.activeChild =
+        .active .lock (SingleFile.appendBindings session.control.policy)
+          (t.disk.cursor store.activeId) (segmentHistory session.control.capacity store.activeId history) := by
+  rw [installScopedModel_run] at installed
+  cases ran : (reopenScopedModel owned.root r openReports closeError).run s with
+  | error => rw [ran] at installed; cases installed
+  | ok response after =>
+    rw [ran] at installed
+    cases response with
+    | error => cases installed
+    | ok pair =>
+      obtain ⟨next, ready⟩ := pair
+      cases installed
+      obtain ⟨before, sealed, childAfter, prefixResult, opened, image⟩ :=
+        reopenScopedModel_delivered owned.root r openReports closeError ran
+      obtain ⟨_, _, _, _, childPrior⟩ := reopenPrefix_active (nativeRootEffects owned.root r openReports)
+        (nativeValidatedChildEffects owned.root r openReports) prior prefixResult
+      have child := SingleFile.openExisting_refines (Native.segmentPath owned.root session.control.active) session.control.policy (openReports before.step session.control.active)
+        {image := before.disk.segment session.control.active} rfl childPrior.dirty childPrior.markers
+      rw [opened] at child
+      have phase := SingleFile.openedAppendPhase child
+      obtain ⟨_, _, _, _, _, _, _, _, permitted, _, childReady, _, _⟩ := child.2.2
+      have bounds : ∀ b ∈ ready.recovered.batches, b.length ≤ 32 := by
+        intro b mem
+        apply childPrior.dirty.bounded b
+        rcases permitted with same | same
+        · exact List.mem_append_left _ (same ▸ mem)
+        · exact same ▸ mem
+      have fits : ready.recovered.batches.length ≤ 255 := by
+        rcases permitted with same | same
+        · rw [same]
+          have := childPrior.dirty.fits
+          simp only [List.length_append] at this
+          omega
+        · rw [same]
+          exact childPrior.dirty.fits
+      have disk := reopenScopedModel_refines owned.root r openReports closeError s prior
+      rw [ran] at disk
+      obtain ⟨history, shape, layout, live, durable⟩ := disk.1
+      let suffix := segmentHistory session.control.capacity session.control.active history
+      have suffixFits : suffix.length ≤ 255 := by
+        dsimp only [suffix]
+        rw [segmentHistory_active_length layout.layout.upper]
+        have high := layout.layout.upper
+        have cap := layout.layout.capacityFits
+        rw [Nat.add_mul, Nat.one_mul] at high
+        omega
+      have other := (Persistence.ready_powerLoss_reopen layout.active.ready
+        (segmentHistory_bounded layout.layout session.control.active) suffixFits).1
+      have issued := (Persistence.ready_powerLoss_reopen childReady bounds fits).1
+      dsimp only at other issued
+      rw [image, issued] at other
+      have same : ready.recovered.batches = suffix := by
+        injection other with result
+        exact congrArg Decoded.batches (Except.ok.inj result)
+      refine ⟨history, shape, layout, live, durable, rfl, rfl, ?_⟩
+      simp only [phase, same, layout.active.position, suffix]
+
 /-- The append consumer uses the active reference installed by the same
 schedule that produced the public session. -/
 theorem nativeAppendAfterTransfer (owned : RootBinding directory lock) (r : RootReports)

@@ -256,6 +256,16 @@ def openExisting (dir : FilePath) : IO Handle :=
     (fun action => (checked action).toBaseIO)
     (fun err => liftM (throw err : IO _)) recoverNative appendFiles (fun ready => installReady ready) dir
 
+/-- Initialize the durable contents before the single-file installation
+schedule acquires its reader, writer and marker descriptions. -/
+@[inline] def initializeFilesWith [Monad m] (writeDurable : FilePath → ByteArray → m Unit)
+    (dir : FilePath) (policy : Policy) : m Unit := do
+  writeDurable (dir / "policy") (if policy == .boundary then "v3 boundary" else "v3 log").toUTF8
+  writeDurable (dir / "segment") ByteArray.empty
+  if policy == .boundary then
+    writeDurable (dir / "commit.0") (encodeBytes (encodeMarker 0 0))
+    writeDurable (dir / "commit.1") ByteArray.empty
+
 /-- Initialize an empty caller-owned directory. Existing files are never replaced;
 an interrupted initialization is not automatically retried. -/
 def create (dir : FilePath) (policy : Policy) : IO Handle := do
@@ -264,11 +274,7 @@ def create (dir : FilePath) (policy : Policy) : IO Handle := do
     let entries ← readDirChecked dir
     if entries.any (fun entry => entry.fileName != "lock") then
       throw <| IO.userError "WAL directory is not empty"
-    writeAndSync (dir / "policy") (if policy == .boundary then "v3 boundary" else "v3 log").toUTF8
-    writeAndSync (dir / "segment") ByteArray.empty
-    if policy == .boundary then
-      writeAndSync (dir / "commit.0") (encodeBytes (encodeMarker 0 0))
-      writeAndSync (dir / "commit.1") ByteArray.empty
+    initializeFilesWith writeAndSync dir policy
     install dir lock
   catch e =>
     lock.unlock
