@@ -23,16 +23,20 @@ def Custody (heap : PhaseMemory) (wal : Handle) (store : Store)
       (heap.holds cell (.poisoned store) w ∨ ∃ s, heap.holds cell (.ready store s) w) ∧
       heap.holds store.active slot w
 
-theorem Custody.ofRegistered {heap : PhaseMemory} {reg : Registration}
-    (ready : heap.Registered wal reg w) (locks : LocksFrom reg) :
+theorem Custody.fromSlot {heap : PhaseMemory} {reg : Registration}
+    (ready : heap.Registered wal reg w) (root : RootLockAt reg.store.root reg.store.lock)
+    (slot : SlotLocks reg.store (some (reg.session.control.active, reg.child))) :
     Custody heap wal reg.store (some (reg.session.control.active, reg.child)) w := by
   obtain ⟨cell, mutex, parts⟩ := wal.parts
-  obtain ⟨fd, a, b, opened, granted⟩ := locks.2
-  have slot : SlotLocks reg.store (some (reg.session.control.active, reg.child)) :=
-    ⟨fd, a, b, granted, .inl opened⟩
-  refine ⟨locks.1, slot, cell, mutex, parts, ?_, .inr ⟨reg.session, ?_⟩, ready.2.2⟩
+  refine ⟨root, slot, cell, mutex, parts, ?_, .inr ⟨reg.session, ?_⟩, ready.2.2⟩
   all_goals obtain ⟨rfl, rfl⟩ := parts
   · exact ready.1
   · exact ready.2.1
+
+theorem Custody.ofRegistered {heap : PhaseMemory} {reg : Registration}
+    (ready : heap.Registered wal reg w) (locks : LocksFrom reg) :
+    Custody heap wal reg.store (some (reg.session.control.active, reg.child)) w := by
+  obtain ⟨fd, a, b, opened, granted⟩ := locks.2
+  exact Custody.fromSlot ready locks.1 ⟨fd, a, b, granted, .inl opened⟩
 
 end WalRecoverySlice.Segmented.Native.AppendIO

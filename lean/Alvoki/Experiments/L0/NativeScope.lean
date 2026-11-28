@@ -72,6 +72,16 @@ theorem read_io (ref : Ref) (w : W) :
     change EST.Out.ok val t = .ok (ST.Prim.Ref.get ref w).val (ST.Prim.Ref.get ref w).state
     rw [h]
 
+theorem close_run (ref : Ref) (w : W) :
+    let taken := (ref.swap .offline : BaseIO (Phase Wal)) w
+    (Native.phaseCell ref).close WalRecoverySlice.Segmented.Native.close w =
+      match taken.val.wal with
+      | none => .ok () taken.state
+      | some child => WalRecoverySlice.Segmented.Native.close child taken.state := by
+    intro taken
+    simp only [Cell.close, Native.phaseCell, Bind.bind, instMonadEIO._aux_13, EST.bind, swap_io]
+    cases choice : taken.val.wal <;> simp [taken] at choice ⊢ <;> rfl
+
 /-- The postcondition required at the start of cleanup. The swap consumes
 the exact phase cell before looking up its child. Unlock starts at the world
 left by that child's close, even if the close reports an error. -/
@@ -91,14 +101,8 @@ theorem release (h : Release ref lock w ok err) :
       w (fun _ u => ok u) err := by
   apply Post.finish
   let taken := (ref.swap .offline : BaseIO (Phase Wal)) w
-  have consume : (Native.phaseCell ref).close WalRecoverySlice.Segmented.Native.close w =
-      match taken.val.wal with
-      | none => .ok () taken.state
-      | some child => WalRecoverySlice.Segmented.Native.close child taken.state := by
-    simp only [Cell.close, Native.phaseCell, Bind.bind, instMonadEIO._aux_13, EST.bind, swap_io]
-    cases choice : taken.val.wal <;> simp [taken] at choice ⊢ <;> rfl
   unfold Post
-  rw [consume]
+  rw [close_run]
   change (match taken.val.wal with | none => _ | some _ => _) at h
   cases choice : taken.val.wal with
   | none =>
