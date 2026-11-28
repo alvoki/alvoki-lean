@@ -40,6 +40,23 @@ theorem At.trace {a : IO α} {b : M σ β} (h : At a b w s ok fail) :
   case error.ok x t y u => cases y <;> first | contradiction | exact h
   all_goals contradiction
 
+def Reported (a : IO α) (b : M σ β) (w : W) (s : σ) (t : W) (u : σ) : Prop :=
+  ∃ e msg, a w = .error e t ∧ b.run s = .ok (.error msg) u
+
+def Returned (a : IO α) (b : M σ β) (w : W) (s : σ) (x : α) (y : β) (t : W) (u : σ) : Prop :=
+  a w = .ok x t ∧ b.run s = .ok (.ok y) u
+
+theorem At.record {a : IO α} {b : M σ β} (h : At a b w s ok fail) :
+    At a b w s (fun x y t u => ok x y t u ∧ Returned a b w s x y t u)
+      (fun t u => fail t u ∧ Reported a b w s t u) := by
+  unfold At at *
+  cases ha : a w <;> cases hb : b.run s <;> rw [ha, hb] at h
+  case ok.ok x t y u =>
+    cases y <;> first | contradiction | exact ⟨h, ha, hb⟩
+  case error.ok e t y u =>
+    cases y <;> first | contradiction | exact ⟨h, _, _, ha, hb⟩
+  all_goals contradiction
+
 theorem At.map {a : IO α} {b : M σ β} {ok ok' : α → β → W → σ → Prop}
     {failed failed' : W → σ → Prop} (step : At a b w s ok failed)
     (success : ∀ x y t u, ok x y t u → ok' x y t u)

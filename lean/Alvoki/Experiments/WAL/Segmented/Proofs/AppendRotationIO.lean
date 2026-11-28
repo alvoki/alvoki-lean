@@ -40,21 +40,59 @@ def Context.rootFrame (c : Context disk) (h : SingleFile.Handle) (phase : Single
     (t : W) (u : State) : Prop :=
   c.Candidate h t (u,phase) ∧ phaseAt phase c.session.control.policy c.nextId u.disk
 
+inductive Point where | cleared | prepared | synced | published | written | unwind
+
+/-- Each stage consumes the return and corresponding model world of the
+preceding operation from this particular invocation. Private proposals,
+clock indices and old child identities cannot be exchanged between runs. -/
+inductive Prefix (c : Context disk) (r : Reports batch) (origin : W) (initial : Work) :
+    Point → Option SingleFile.Handle → W → Work → Prop where
+  | close : Returned c.store.closeChild (Model.closeActive c.session.control.active c.session.control.policy r.close)
+      origin initial () () t u → Prefix c r origin initial .cleared none t u
+  | create : Prefix c r origin initial .cleared none t u →
+      Returned (c.store.prepareChild c.session.control.policy c.nextId)
+        (Model.acquireSuccessor c.store.root r.removal r.effects r.create c.session.control.policy c.nextId)
+        t u h (.acquired c.nextId) v n → Prefix c r origin initial .prepared (some h) v n
+  | sync : Prefix c r origin initial .prepared (some h) t u →
+      Returned (checked c.store.callbacks.syncRoot)
+        (Model.liftRootAction (Model.nativeControlOps c.store.root r.directory r.effects).syncRoot)
+        t u () () v n → Prefix c r origin initial .synced (some h) v n
+  | syncError : Prefix c r origin initial .prepared (some h) t u →
+      Reported (checked c.store.callbacks.syncRoot)
+        (Model.liftRootAction (Model.nativeControlOps c.store.root r.directory r.effects).syncRoot) t u v n →
+      Prefix c r origin initial .unwind (some h) v n
+  | publish : Prefix c r origin initial .synced (some h) t u →
+      Returned (checked (c.store.callbacks.publishControl (successor c.session)))
+        (Model.liftRootAction (Segmented.publish (Model.nativeControlOps c.store.root r.directory r.effects)
+          (successor c.session))) t u () () v n → Prefix c r origin initial .published (some h) v n
+  | publishError : Prefix c r origin initial .synced (some h) t u →
+      Reported (checked (c.store.callbacks.publishControl (successor c.session)))
+        (Model.liftRootAction (Segmented.publish (Model.nativeControlOps c.store.root r.directory r.effects)
+          (successor c.session))) t u v n → Prefix c r origin initial .unwind (some h) v n
+  | write : Prefix c r origin initial .published (some h) t u →
+      Returned (SingleFile.append h batch)
+        (Model.writeAs c.session (r.append c.session.control.policy) (.acquired c.nextId) (.acquired c.nextId) batch)
+        t u () () v n → Prefix c r origin initial .written (some h) v n
+  | writeError : Prefix c r origin initial .published (some h) t u →
+      Reported (SingleFile.append h batch)
+        (Model.writeAs c.session (r.append c.session.control.policy) (.acquired c.nextId) (.acquired c.nextId) batch)
+        t u v n → Prefix c r origin initial .unwind (some h) v n
+
 structure LocalRotation (c : Context disk) (r : Reports batch) (h : SingleFile.Handle) (w : W) (s : Work) where
   detach : Detach c r h w s
-  prepare : ∀ t (u : Work), c.Base none t u.1.disk →
+  prepare : ∀ t (u : Work), Prefix c r w s .cleared none t u → c.Base none t u.1.disk →
     PrepareIO.Successor c.store c.session.control.policy c.nextId r.removal r.effects r.create t u.1
       (fun v n => c.Base none v n.disk) (fun child phase v => c.Bound c.nextId child v phase)
-  root : ∀ child t u, c.ReadyFile none c.nextId child t u →
+  root : ∀ child t u, Prefix c r w s .prepared (some child) t u → c.ReadyFile none c.nextId child t u →
     At (syncHandle c.store.directory) (ControlIO.rootSync r.effects) t u.1
       (fun _ _ => c.rootFrame child u.2) (c.rootFrame child u.2)
-  control : ∀ child t u, c.ReadyFile none c.nextId child t u →
+  control : ∀ child t u, Prefix c r w s .synced (some child) t u → c.ReadyFile none c.nextId child t u →
     ControlIO.Primitives c.store (successor c.session) r.effects t u.1 (c.rootFrame child u.2)
-  write : ∀ child t u, c.ReadyFile none c.nextId child t u → WriteSteps c none c.nextId child r t u
-  install : ∀ child t u, c.Candidate child t u → (∃ files cursor history, u.2 = .active .lock files cursor history) →
+  write : ∀ child t u, Prefix c r w s .published (some child) t u → c.ReadyFile none c.nextId child t u → WriteSteps c none c.nextId child r t u
+  install : ∀ child t u, Prefix c r w s .written (some child) t u → c.Candidate child t u → (∃ files cursor history, u.2 = .active .lock files cursor history) →
     let v := ((c.store.active.set (some (c.nextId,child)) : BaseIO _) t).state
     c.Base (some (c.nextId,child)) v u.1.disk ∧ c.Bound c.nextId child v u.2
-  release : ∀ child t u, c.Candidate child t u → Unwind c child t u
+  release : ∀ child t u, Prefix c r w s .unwind (some child) t u → c.Candidate child t u → Unwind c child t u
 
 private theorem prepare_matches (c : Context disk) (r : Reports batch) (s : Work)
     (linux : System.Platform.isWindows = false)
@@ -84,44 +122,48 @@ def LocalRotation.assemble {r : Reports batch} (io : LocalRotation c r old w s)
     (full : c.session.activeCount = c.session.control.capacity) (linux : System.Platform.isWindows = false) :
     Rotation c.store c.session r w s (c.Done batch) c.Failed := by
   let id := c.nextId
-  refine ⟨fun t st => c.Base none t st.1.disk, c.ReadyFile none id, c.ReadyFile none id,
-    c.ReadyFile none id, fun h t st => c.Candidate h t st ∧ ActivePhase st, c.Candidate,
+  refine ⟨fun t st => Prefix c r w s .cleared none t st ∧ c.Base none t st.1.disk,
+    fun h t st => Prefix c r w s .prepared (some h) t st ∧ c.ReadyFile none id h t st,
+    fun h t st => Prefix c r w s .synced (some h) t st ∧ c.ReadyFile none id h t st,
+    fun h t st => Prefix c r w s .published (some h) t st ∧ c.ReadyFile none id h t st,
+    fun h t st => Prefix c r w s .written (some h) t st ∧ c.Candidate h t st ∧ ActivePhase st,
+    fun h t st => Prefix c r w s .unwind (some h) t st ∧ c.Candidate h t st,
     ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · have take := c.heap.swap none held.1.2.2.2
     apply (close_old c.store s w c.session.control.policy r.close take io.detach.close
       (livePhase_of_bound c held.2.1) (done := fun t st => c.Base none t st.1.disk)
-      (bad := fun t st => c.Base none t st.1.disk) io.detach.unlock).map
-    · exact fun _ _ _ _ x => x
-    · exact fun _ st x => c.base_empty st x
-  · intro t st frame
-    have acquired := (io.prepare t st frame).acquire st.2
+      (bad := fun t st => c.Base none t st.1.disk) io.detach.unlock).record.map
+    · rintro ⟨⟩ ⟨⟩ _ _ ⟨x, ran⟩; exact ⟨.close ran, x⟩
+    · exact fun _ st x => c.base_empty st x.1
+  · rintro t st ⟨earlier,frame⟩
+    have acquired := (io.prepare t st earlier frame).acquire st.2
     apply acquired.trace.map
-    · rintro h tag v after ⟨⟨source, bound, stayed⟩, _, run⟩
-      exact ⟨source, stayed, bound, prepare_matches c r st linux run⟩
+    · rintro h tag v after ⟨⟨rfl, bound, stayed⟩, returned, run⟩
+      exact ⟨rfl, .create earlier ⟨returned, run⟩, stayed, bound, prepare_matches c r st linux run⟩
     · exact fun v after x => c.base_empty after x.2
-  · intro child t u held
-    have run := (ControlIO.syncRoot c.store r.directory (io.root child t u held)).liftRoot u.2
-    apply run.map
-    · rintro _ _ v st ⟨⟨frame, matched⟩, same⟩
-      exact ⟨frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩
-    · rintro v st ⟨⟨frame, _⟩, same⟩
-      exact ⟨frame.1, same ▸ frame.2⟩
-  · intro child t u held
-    have run := (ControlIO.publish (io.control child t u held) r.directory active discarded).liftRoot u.2
-    apply run.map
-    · rintro _ _ v st ⟨⟨frame, matched⟩, same⟩
-      exact ⟨frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩
-    · rintro v st ⟨⟨frame, _⟩, same⟩
-      exact ⟨frame.1, same ▸ frame.2⟩
-  · intro child t st held
-    have write := (io.write child t st held).run held (.acquired id) rfl
-    apply write.trace.map
-    · rintro _ ⟨⟩ v u ⟨frame, _, ran⟩
-      exact ⟨frame, wrote_active c id st ran frame.2⟩
-    · exact fun _ _ x => x
-  · rintro child t st ⟨candidate, active⟩
+  · rintro child t u ⟨earlier,held⟩
+    have run := (ControlIO.syncRoot c.store r.directory (io.root child t u earlier held)).liftRoot u.2
+    apply run.record.map
+    · rintro ⟨⟩ ⟨⟩ v st ⟨⟨⟨frame, matched⟩, same⟩, ret⟩
+      exact ⟨.sync earlier ret, frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩
+    · rintro v st ⟨⟨⟨frame, _⟩, same⟩, ret⟩
+      exact ⟨.syncError earlier ret, frame.1, same ▸ frame.2⟩
+  · rintro child t u ⟨earlier,held⟩
+    have run := (ControlIO.publish (io.control child t u earlier held) r.directory active discarded).liftRoot u.2
+    apply run.record.map
+    · rintro ⟨⟩ ⟨⟩ v st ⟨⟨⟨frame, matched⟩, same⟩, ret⟩
+      exact ⟨.publish earlier ret, frame.1, same ▸ frame.2, by change phaseAt st.2 _ _ st.1.disk; rw [same]; exact matched⟩
+    · rintro v st ⟨⟨⟨frame, _⟩, same⟩, ret⟩
+      exact ⟨.publishError earlier ret, frame.1, same ▸ frame.2⟩
+  · rintro child t st ⟨earlier, held⟩
+    have write := (io.write child t st earlier held).run held (.acquired id) rfl
+    apply write.record.map
+    · rintro ⟨⟩ ⟨⟩ v u ⟨frame, ran⟩
+      exact ⟨.write earlier ran, frame, wrote_active c id st ran.2 frame.2⟩
+    · exact fun _ _ x => ⟨.writeError earlier x.2, x.1⟩
+  · rintro child t st ⟨earlier, candidate, active⟩
     obtain ⟨files,pos,bs,phase⟩ := active
-    have frame := io.install child t st candidate ⟨files,pos,bs,phase⟩
+    have frame := io.install child t st earlier candidate ⟨files,pos,bs,phase⟩
     apply (slot_register (P := fun v u => c.Base (some (id,child)) v u.1.disk ∧ c.Bound id child v u.2)
       (bad := fun _ _ => False) c.store st t phase frame).map
     · intro _ _ v u x
@@ -129,8 +171,8 @@ def LocalRotation.assemble {r : Reports batch} (io : LocalRotation c r old w s)
       simp only [nextSession, full, ↓reduceIte]
       exact ⟨child,x⟩
     · exact fun _ _ x => x.elim
-  · intro child t st candidate
-    let op := io.release child t st candidate
+  · rintro child t st ⟨earlier,candidate⟩
+    let op := io.release child t st earlier candidate
     exact close_unregistered st id c.session.control.policy r.close (livePhase_of_bound c candidate.2)
       op.close (c.base_empty (closedWork st) op.unlock)
 
