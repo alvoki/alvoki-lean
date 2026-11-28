@@ -28,31 +28,37 @@ structure AcquireIO (dir : FilePath) (P : W → Prop) where
 abbrev Waiting (known : Contract.View) (disk : W → Disk) (Q : W → Prop) (w : W) :=
   Recoverable known none (disk w) ∧ Q w
 
+/-- Inputs for an actual public open, grouped by their corresponding
+runtime or filesystem primitives. The worker starts with the specific
+directory, exclusive lock and typed empty slot produced by acquisition. -/
+structure OpenIO (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk)
+    (known : Contract.View) (Q : W → Prop) where
+  acquire : AcquireIO dir (Waiting known disk Q)
+  worker : ∀ s : Store, s.root = acquire.canonical →
+    StoreIO s disk (fun t => acquire.directory s.directory t ∧ acquire.locked s.lock t ∧
+      heap.holds s.active none t ∧ Q t)
+  install : ∀ c, InstallFrame (fun t => Installed c (disk t) ∧ Q t)
+  take : ∀ (s : Store) t, Waiting known disk Q t →
+    Waiting known disk Q ((s.active.swap none : BaseIO _) t).state
+  unlock : ∀ (s : Store), Keeps (Waiting known disk Q) s.lock.unlock
+
 /-- Actual store acquisition produces the canonical path, held lock, directory,
 and freshly allocated empty child slot. The worker consumes those resources;
 every failed episode still carries the slot needed by the outer unwinder. -/
-theorem openExisting_diskPost (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk)
-    (known : Contract.View) (Q : W → Prop) (start : Waiting known disk Q w)
-    (openIO : AcquireIO dir (Waiting known disk Q))
-    (worker : ∀ s : Store, s.root = openIO.canonical →
-      StoreIO s disk (fun t => openIO.directory s.directory t ∧ openIO.locked s.lock t ∧
-        heap.holds s.active none t ∧ Q t))
-    (install : ∀ c, InstallFrame (fun t => Installed c (disk t) ∧ Q t))
-    (take : ∀ (s : Store) t, Waiting known disk Q t →
-      Waiting known disk Q ((s.active.swap none : BaseIO _) t).state)
-    (unlock : ∀ (s : Store), Keeps (Waiting known disk Q) s.lock.unlock) :
+theorem openExisting_diskPost (ops : OpenIO heap dir disk known Q) (start : Waiting known disk Q w) :
     IOReturns (openExisting dir) w
       (fun h t => ∃ c, heap.Ready h c t ∧ Installed c (disk t) ∧ c.view = known ∧ Q t)
       (Waiting known disk Q) := by
+  let openIO := ops.acquire
   apply openExisting_diskPost_of_worker heap dir disk known Q
     (StoreAt heap openIO.canonical openIO.directory openIO.locked (Waiting known disk Q))
     (acquireStore_io heap dir openIO.canonical (openIO.resolve w start) openIO.openDir openIO.stat
-      openIO.opened openIO.openLock openIO.tryLock openIO.fresh) _ install take unlock
+      openIO.opened openIO.openLock openIO.tryLock openIO.fresh) _ ops.install ops.take ops.unlock
   intro s u entry
   let Qs := fun t => openIO.directory s.directory t ∧ openIO.locked s.lock t ∧
     heap.holds s.active none t ∧ Q t
   have owned : Qs u := ⟨entry.directoryBound, entry.owns, entry.empty, entry.frame.2⟩
-  have step := (worker s entry.path).recoverChild_disk owned entry.frame.1
+  have step := (ops.worker s entry.path).recoverChild_disk owned entry.frame.1
   unfold IOReturns at *
   cases ran : s.recoverChild u with
   | ok pair t =>

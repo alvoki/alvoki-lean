@@ -3,6 +3,7 @@ import Alvoki.Experiments.L0.NativeRecovery
 import Alvoki.Experiments.L0.NativeTableCheck
 import Alvoki.Experiments.L0.NativeScope
 import Alvoki.Experiments.WAL.Segmented.Proofs.Writeback
+import Alvoki.Experiments.WAL.Segmented.Proofs.RuntimeStoreOpen
 
 namespace ExperimentalL0.NativeRecoverAt
 
@@ -281,6 +282,30 @@ theorem recoverAt_of_open (d : Durable image history)
     apply (tables d attached (tablePrim wal w attached)).mapPost
     · exact fun _ _ after => ⟨wal, after⟩
     · exact fun _ after => .inr ⟨wal, after⟩
+
+/-- A native recovery started on the selected files produces the replayed
+session and the still-attached physical child that the outer phase publish
+uses. The WAL producer supplies its actual CONTROL read, root barrier,
+child access and retired-file collection under the acquired store. -/
+theorem recoverAt (d : Durable image history)
+    (opening : Opening physical root lock ref image start)
+    (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
+    (manifestPrim : NativeManifest.Primitives (root / "manifest")
+      (ManifestFrame physical root image.tables start) (fun w => (physical w).manifest))
+    (heap : WalRecoverySlice.Segmented.Native.PhaseMemory) (cache : Cached heap physical root lock ref)
+    (walIO : WalRecoverySlice.Segmented.Native.OpenIO heap (root / "wal") (fun w => (physical w).disk)
+      image.view (Held physical root lock ref image .opening))
+    (phase : PhasePrimitives physical root lock ref image)
+    (scanPrim : ∀ wal w, Attached physical root lock ref image wal w →
+      ScanPrimitives physical root wal image.tables w)
+    (tablePrim : ∀ wal w, Attached physical root lock ref image wal w →
+      NativeRead.Primitives (tableNamespace physical root) life (NativeRead.Frame physical root wal image.tables w)) :
+    NativeScope.Post (Native.recoverAt root ref) start
+      (fun session t => Installed session image history ∧ ∃ wal, Attached physical root lock ref image wal t)
+      (fun _ t => Failed physical root lock ref image t) :=
+  recoverAt_of_open d opening bytes manifestPrim heap cache
+    (fun _ ⟨held, disk⟩ => WalRecoverySlice.Segmented.Native.openExisting_diskPost walIO ⟨disk, held⟩)
+    phase scanPrim tablePrim
 
 /-- The first failed manifest stat is propagated with its exact error and
 world. Neither WAL acquisition nor any table check runs on this branch. -/
