@@ -327,6 +327,26 @@ caller’s manifest and table resources by WAL primitives. Root unlock and
 last-reference release are separate observations. A failed `fdopen` on
 Lean 4.36 can leak a raw descriptor before a Lean handle exists.
 
+## Mutation interruption boundary
+
+The [public WAL cut](InterruptedWorker.lean) starts from the acquired
+mutation callback. Phase and mutex observations before the first child
+write preserve the known view. An interruption inside a child or CONTROL
+operation admits the survivors of the exact batch. After successful
+worker return, the extended view is settled even if installation of the
+next phase or delivery of the reply gets interrupted. The [cleanup
+cut](MutationExitCut.lean) follows the actual phase swaps, child close,
+WAL close and root unlock. Each case supplies `Retry` and the existing
+two public read scopes on the rebooted world.
+
+The filesystem supplies the local byte, directory and survivor effects.
+For the WAL worker, each completed primitive preserves the represented
+table bindings and the stable manifest up to the last issued syscall.
+The crash contract at that syscall supplies the surviving WAL disk and
+the table and manifest projections at reboot. Volatile-operation frames
+assume exclusive ownership of the root and isolation of its protected
+files.
+
 ## Process interruption checks
 
 For append, the fixture stops the process immediately after data fsync
