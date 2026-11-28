@@ -156,20 +156,37 @@ private theorem IOReturns.atOk {a : IO α} (h : IOReturns a w ok fail) (run : a 
 private theorem IOReturns.atError {a : IO α} (h : IOReturns a w ok fail)
     (run : a w = .error e t) : fail t := by simpa only [IOReturns, run] using h
 
+/-- A recovery exception on the very store returned by this public acquisition. -/
+def StoreUnwinding (dir : FilePath) (s : Store) (stopped : W) : Prop :=
+  ∃ start acquired e, acquireStore dir start = .ok s acquired ∧ s.recoverChild acquired = .error e stopped
+
+/-- The unwinder took the empty slot and now executes this store's lock release. -/
+def StoreUnlockAt (dir : FilePath) (s : Store) (t : W) : Prop :=
+  ∃ stopped, StoreUnwinding dir s stopped ∧ (s.active.swap none : IO _) stopped = .ok none t
+
+theorem openExisting_unwind_error (dir : FilePath) (s : Store)
+    (acquire : acquireStore dir start = .ok s acquired)
+    (fail : s.recoverChild acquired = .error primary stopped)
+    (take : (s.active.swap none : IO _) stopped = .ok none taken)
+    (unlock : s.lock.unlock taken = .error secondary finish) :
+    openExisting dir start = .error primary finish := by
+  rw [openExisting_run, acquire]
+  simp only [fail, s.release_empty take, unlock, returnedWorld]
+
 /-- Move the recovery post through registration, phase installation, and
 startup unwind. On the error path the slot is still empty; the store invokes
 its root unlock on the reached world after taking the slot. -/
 theorem openExisting_diskPost_of_worker (heap : PhaseMemory) (dir : FilePath)
-    (disk : W → Disk) (known : Contract.View) (Q : W → Prop) (owned : Store → W → Prop)
+    (disk : W → Disk) (known : Contract.View) (Q : W → Prop) (owned lease : Store → W → Prop)
     (acquire : IOReturns (acquireStore dir) w owned (fun t => Recoverable known none (disk t) ∧ Q t))
     (worker : ∀ s u, owned s u → IOReturns s.recoverChild u
       (fun out t => Installed out.1 (disk t) ∧ out.1.view = known ∧ Q t)
-      (fun t => heap.holds s.active none t ∧ Recoverable known none (disk t) ∧ Q t))
+      (fun t => heap.holds s.active none t ∧ lease s t ∧ Recoverable known none (disk t) ∧ Q t))
     (install : ∀ session, InstallFrame (fun t => Installed session (disk t) ∧ Q t))
-    (take : ∀ (s : Store) t, Recoverable known none (disk t) ∧ Q t →
-      let next := ((s.active.swap none : BaseIO _) t).state
-      Recoverable known none (disk next) ∧ Q next)
-    (unlock : ∀ (s : Store) u, Recoverable known none (disk u) ∧ Q u →
+    (take : ∀ (s : Store) t, StoreUnwinding dir s t → heap.holds s.active none t → lease s t →
+      Recoverable known none (disk t) ∧ Q t → let next := ((s.active.swap none : BaseIO _) t).state
+      lease s next ∧ Recoverable known none (disk next) ∧ Q next)
+    (unlock : ∀ (s : Store) u, StoreUnlockAt dir s u → lease s u → Recoverable known none (disk u) ∧ Q u →
       IOReturns s.lock.unlock u (fun _ t => Recoverable known none (disk t) ∧ Q t)
         (fun t => Recoverable known none (disk t) ∧ Q t)) :
     IOReturns (openExisting dir) w
@@ -187,14 +204,16 @@ theorem openExisting_diskPost_of_worker (heap : PhaseMemory) (dir : FilePath)
   | error e t =>
     rcases openExisting_failure dir opened with early | ⟨s, u, v, raw, err, rfl⟩
     · exact IOReturns.atError acquire early
-    · obtain ⟨empty, offline⟩ := IOReturns.atError (worker s u (IOReturns.atOk acquire raw)) err
+    · obtain ⟨empty, held, offline⟩ := IOReturns.atError (worker s u (IOReturns.atOk acquire raw)) err
       let slot := (s.active.swap none : BaseIO _) v
       have isEmpty : slot.val = none := heap.swap none empty
       have taken : (s.active.swap none : IO _) v = .ok none slot.state := by
         change EST.Out.ok slot.val slot.state = EST.Out.ok none slot.state
         rw [isEmpty]
       rw [s.release_empty taken]
-      have freed := unlock s slot.state (take s v offline)
+      have path : StoreUnwinding dir s v := ⟨w, u, e, raw, err⟩
+      obtain ⟨stillHeld, kept⟩ := take s v path empty held offline
+      have freed := unlock s slot.state ⟨v, path, taken⟩ stillHeld kept
       cases released : s.lock.unlock slot.state <;> rw [IOReturns, released] at freed <;> exact freed
 
 /-- Only the opened segment's image and cursor can be changed by a child reopen. -/

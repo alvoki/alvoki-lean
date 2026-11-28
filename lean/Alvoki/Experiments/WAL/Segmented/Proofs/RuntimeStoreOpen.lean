@@ -28,6 +28,11 @@ structure AcquireIO (dir : FilePath) (P : W → Prop) where
 abbrev Waiting (known : Contract.View) (disk : W → Disk) (Q : W → Prop) (w : W) :=
   Recoverable known none (disk w) ∧ Q w
 
+/-- Both descriptor bindings belong to the WAL's acquired canonical directory.
+The lock predicate can track the identity of an enclosing, separately held lock. -/
+def AcquireIO.Lease (io : AcquireIO dir P) (s : Store) (w : W) : Prop :=
+  s.root = io.canonical ∧ io.directory s.directory w ∧ io.locked s.lock w
+
 /-- Inputs for an actual public open, grouped by their corresponding
 runtime or filesystem primitives. The worker starts with the specific
 directory, exclusive lock and typed empty slot produced by acquisition. -/
@@ -38,9 +43,11 @@ structure OpenOperations (heap : PhaseMemory) (dir : FilePath) (disk : W → Dis
     workerInputs s (fun t => acquire.directory s.directory t ∧ acquire.locked s.lock t ∧
       heap.holds s.active none t ∧ Q t)
   install : ∀ c, InstallFrame (fun t => Installed c (disk t) ∧ Q t)
-  take : ∀ (s : Store) t, Waiting known disk Q t →
-    Waiting known disk Q ((s.active.swap none : BaseIO _) t).state
-  unlock : ∀ (s : Store), Keeps (Waiting known disk Q) s.lock.unlock
+  take : ∀ (s : Store) t, StoreUnwinding dir s t → heap.holds s.active none t → acquire.Lease s t →
+    Waiting known disk Q t → let next := ((s.active.swap none : BaseIO _) t).state
+    acquire.Lease s next ∧ Waiting known disk Q next
+  unlock : ∀ (s : Store) u, StoreUnlockAt dir s u → acquire.Lease s u → Waiting known disk Q u →
+    IOReturns s.lock.unlock u (fun _ t => Waiting known disk Q t) (Waiting known disk Q)
 
 abbrev OpenIO (heap : PhaseMemory) (dir : FilePath) (disk : W → Disk) (known : Contract.View) (Q : W → Prop) :=
   OpenOperations heap dir disk known Q (fun s P => StoreIO s disk P)
@@ -79,7 +86,7 @@ theorem openExisting_diskPost (ops : OpenIO heap dir disk known Q) (start : Wait
       (Waiting known disk Q) := by
   let openIO := ops.acquire
   apply openExisting_diskPost_of_worker heap dir disk known Q
-    (StoreAt heap openIO.canonical openIO.directory openIO.locked (Waiting known disk Q))
+    (StoreAt heap openIO.canonical openIO.directory openIO.locked (Waiting known disk Q)) openIO.Lease
     (acquireStore_io heap dir openIO.canonical (openIO.resolve w start) openIO.openDir openIO.stat
       openIO.opened openIO.openLock openIO.tryLock openIO.fresh) _ ops.install ops.take ops.unlock
   intro s u entry
@@ -94,6 +101,6 @@ theorem openExisting_diskPost (ops : OpenIO heap dir disk known Q) (start : Wait
     exact ⟨step.2.1, step.2.2, step.1.2.2.2⟩
   | error e t =>
     rw [ran] at step
-    exact ⟨step.1.2.2.1, step.2, step.1.2.2.2⟩
+    exact ⟨step.1.2.2.1, ⟨entry.path, step.1.1, step.1.2.1⟩, step.2, step.1.2.2.2⟩
 
 end WalRecoverySlice.Segmented.Native
