@@ -53,12 +53,16 @@ structure OwnedOperand (disk : W → Disk) (store : Store) (c : Control) (operan
 
 structure CutRuntime (disk : W → Disk) (store : Store) (session : Session) (stop : Stop) where
   volatile : VolatileIO disk stop
-  prepare : ∀ origin, Reached disk store session .cleared origin → PrepareCutIO.Primitives store session.control origin disk stop
-  create : ∀ w, Reached disk store session .cleared w → ∀ origin,
+  prepare : ∀ origin, Reached disk store session .cleared origin → Installed session (disk origin) →
+    PrepareCutIO.Primitives store session.control origin disk stop
+  create : ∀ w, Reached disk store session .cleared w → Installed session (disk w) → ∀ origin,
     PrepareCutIO.Prefix (PrepareCutIO.successorDir store session.control) w .create origin →
     CreateCutIO.Primitives store session.control origin disk stop
-  beforePublish : ∀ w, Reached disk store session .prepared w → ∀ d, stop (syncHandle store.directory) w d → PrepareCutIO.Frame session.control (disk w) d
-  control : ∀ origin, Reached disk store session .synced origin → ControlCutIO.Primitives store session.control origin disk stop
+  beforePublish : ∀ w, Reached disk store session .prepared w → Installed session (disk w) →
+    PrepareIO.PreparedFile disk (successor session).active w → ∀ d, stop (syncHandle store.directory) w d → PrepareCutIO.Frame session.control (disk w) d
+  control : ∀ origin, Reached disk store session .synced origin → Installed session (disk origin) →
+    PrepareIO.PreparedFile disk (successor session).active origin → (successor session).active ∈ (disk origin).durableNames →
+    ControlCutIO.Primitives store session.control origin disk stop
   child : ∀ {h batch w d} (r : ChildCutIO.Receipt (fun a => stop a) h batch w d) c,
     (disk w).liveControl = some c → (disk w).durableControl = some c → OwnedOperand disk store c r.operand → ChildCutIO.Primitives disk c r
   finished : ∀ {h batch w d} (r : ChildCutIO.Complete stop h batch w d) c,
@@ -153,19 +157,19 @@ theorem recoverBody {disk : W → Disk} {mem : ChildMemory disk}
       obtain ⟨hist,shape,layout,l,dur⟩ := installed
       have frame : PrepareCutIO.Frame reg.session.control (disk t) after := by
         rcases interrupted with ⟨p,u,_,a,visited,site,stopped⟩ | ⟨v,leaf,u,entered,issued,stopped⟩
-        · exact PrepareCutIO.interrupted (prim.prepare t (visit path)) visited site stopped
-        · exact CreateCutIO.interrupted (prim.prepare t (visit path)) entered (prim.create t (visit path) v entered) issued stopped
+        · exact PrepareCutIO.interrupted (prim.prepare t (visit path) ⟨hist,shape,layout,l,dur⟩) visited site stopped
+        · exact CreateCutIO.interrupted (prim.prepare t (visit path) ⟨hist,shape,layout,l,dur⟩) entered (prim.create t (visit path) ⟨hist,shape,layout,l,dur⟩ v entered) issued stopped
       exact congrArg Session.view shape ▸ allowPending (frame.survivor layout l dur).2.2.1 _
     · rintro child t st ⟨path,entry,file⟩ after stopped
       have model := path.layout ready size room full linux
       obtain ⟨hist,shape,layout,l,dur⟩ := entry.1.2.1.installed model.1
-      exact congrArg Session.view shape ▸ allowPending ((prim.beforePublish t (visit path) after stopped).survivor layout l dur).2.2.1 _
+      exact congrArg Session.view shape ▸ allowPending ((prim.beforePublish t (visit path) ⟨hist,shape,layout,l,dur⟩ file after stopped).survivor layout l dur).2.2.1 _
     · rintro child t st ⟨path,entry,file,named⟩ after ⟨p,u,_,a,k,visited,site,stopped⟩
       have model := path.layout ready size room full linux
       obtain ⟨hist,shape,layout,l,dur⟩ := entry.1.2.1.installed model.1
       have count := (congrArg Session.activeCount shape).symm.trans full
       obtain ⟨names,empty⟩ := file.namedChild named reg.session.control.policy
-      have facts := ControlCutIO.survivor (prim.control t (visit path)) visited site stopped ⟨l,dur⟩ layout count names empty
+      have facts := ControlCutIO.survivor (prim.control t (visit path) ⟨hist,shape,layout,l,dur⟩ file named) visited site stopped ⟨l,dur⟩ layout count names empty
       exact congrArg Session.view shape ▸ allowPending facts.2.1 _
     · rintro child t st ⟨path,entry,file,named⟩ after stopped
       obtain ⟨hist,view,layout,l,dur,empty,spare,shape⟩ := path.layout ready size room full linux
