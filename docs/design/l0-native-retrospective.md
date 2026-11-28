@@ -1,6 +1,16 @@
 # What it took to connect native L0 to its client contract
 
+**Independent audit correction.** The required PhaseMemory has no inhabitant. The native theorems that assume it are vacuous, including the healthy examples described below. The [counterexample, design and validation gates](l0-phase-memory-audit.md) supersede the earlier native acceptance assessment.
+
 This is an implementation retrospective for the read, mutation and flush milestones. The [review inventory](l0-native-review.md) gives the producer graph. The [acceptance boundary](l0-native-acceptance.md) identifies the quantifiers and external assumptions. An independent reviewer can start from the public theorems in those two documents before reading this account.
+
+## What the independent audits overturned
+
+At `14fffca4` I needed to preserve one active child slot across allocation of its phase cell and mutex. I generalized the heap over every Lean payload type. That made it easy to frame unlike cells. It also promised exact read-back of arbitrary functions or actions observing the same world that represented the heap. The published live BaseIO Bool example shows why adding ownership to that general promise cannot repair it. No subsequent whole-program success proof ever had an inhabitant for this shared heap.
+
+Our “non-vacuity” checks kept the heap as a parameter and proved success after adding healthy primitive reports. Lean correctly checked a conditional theorem. The kernel and axiom checks verified the proof and its axiom dependencies; neither supplied the missing parameter. The Linux fixtures really ran, but made no connection between their execution and an instance of these quantified laws. I should have required a constructed joint instance and a reachable state before accepting the first open-then-scan proof. Deleting a broad callback assumption was progress in proof structure; it did not establish that the remaining environment existed.
+
+For the next review, retain the small, compiled diagonal controls, a closed joint interpreter with occupied cells, and a clobbering mutant that passes its own read-back test but fails a disjoint frame. At the native boundary capture the actual allocation or descriptor, its last use, and the successor that next consumes it. These are separate columns in the [initial premise inventory](l0-phase-memory-audit.md#initial-versioned-premise-inventory). A green fixture cannot overrule a contradictory contract; an abstract identity cannot keep a file description open past close. Revisit any public claim when its joint witness or library/runtime version changes. [Independent premise methodology](https://github.com/alvoki/alvoki-lean/blob/1f1a390ca814043b39c14c5648c360e8cfa563c2/docs/reviews/native-l0-335bbff0/methodology.md)
 
 ## The problem that survived every change of proof architecture
 

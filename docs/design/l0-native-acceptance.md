@@ -1,5 +1,7 @@
 # Acceptance boundary for native L0
 
+**Independent audit correction.** The required PhaseMemory has no inhabitant. The native theorems that assume it are vacuous, including the healthy examples described below. The [counterexample, design and validation gates](l0-phase-memory-audit.md) supersede the earlier native acceptance assessment.
+
 An audit can begin with the theorem in the second column and trace its data back to a primitive report or a producer in the same run. The [review inventory](l0-native-review.md) maps those producers to their files.
 
 | Question | Start here | Quantifier and boundary |

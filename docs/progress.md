@@ -1,5 +1,7 @@
 # Current handoff
 
+Native L0 correctness acceptance is suspended. The [phase-memory audit](design/l0-phase-memory-audit.md) reproduces the contradiction on both milestones and gives the proposed model and runtime validation gates. The later sections describe the historical proof composition.
+
 The segmented WAL milestone was reviewed and merged in PR #26 at
 `a375c871879e51558be60661d86f73b9cbaa904c`. PR #5 includes the
 tested integration handoff `791940352e0068a9e303236c8b50b22d638fa139`.
