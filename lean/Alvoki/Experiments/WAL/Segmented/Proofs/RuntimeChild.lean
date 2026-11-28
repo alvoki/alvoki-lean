@@ -212,4 +212,77 @@ theorem ChildAttempt.openExisting {id : Nat} (attempt : ChildAttempt s disk Q me
     | ok => contradiction
   all_goals contradiction
 
+/-- The read laws apply only to the live cell and mutex. A terminal
+reference write can forget the cursor; subsequent unlocks frame that state. -/
+structure ChildUseIO (mem : ChildMemory disk) (Q : W → Prop) : Prop where
+  lock : ∀ u ref m phase, Q u → mem.mutex u m → mem.cell u ref phase →
+    let t := (m.lock u).state
+    Q t ∧ Writebacks (disk u) (disk t) ∧ mem.mutex t m ∧ mem.cell t ref phase
+  read : ∀ u ref m phase, Q u → mem.mutex u m → mem.cell u ref phase →
+    let read := (ref.get : BaseIO _) u
+    read.val = phase ∧ Q read.state ∧ Writebacks (disk u) (disk read.state) ∧
+      mem.mutex read.state m ∧ mem.cell read.state ref phase
+  unlock : ∀ u ref m phase, Q u → mem.mutex u m → mem.cell u ref phase →
+    let t := (m.unlock u).state
+    Q t ∧ Writebacks (disk u) (disk t) ∧ mem.mutex t m ∧ mem.cell t ref phase
+  closed : ∀ start u ref phase, Q u → mem.cell u ref phase → Writebacks start (disk u) →
+    let t := ((ref.set .closed : BaseIO Unit) u).state
+    Q t ∧ AfterClose start (disk t)
+  fileUnlock : ∀ start id fd u, mem.bound id fd .lock → Q u ∧ AfterClose start (disk u) →
+    IOReturns fd.unlock u (fun _ t => Q t ∧ AfterClose start (disk t)) (fun t => Q t ∧ AfterClose start (disk t))
+  leave : ∀ start (m : Std.BaseMutex) u, Q u ∧ AfterClose start (disk u) →
+    Q (m.unlock u).state ∧ AfterClose start (disk (m.unlock u).state)
+
+theorem ChildUseIO.scan {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns h bs w) (entry : Q w) :
+    IOReturns (SingleFile.scan h) w
+      (fun bytes t => bytes = bs ∧ mem.Owns h bs t ∧ Q t ∧ Writebacks (disk w) (disk t))
+      (fun t => mem.Owns h bs t ∧ Q t ∧ Writebacks (disk w) (disk t)) := by
+  obtain ⟨id, p, ready, a, ref, m, rfl, pair, bound, cell, mutex⟩ := owned
+  obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ entry mutex cell
+  obtain ⟨got, q1, b1, m1, r1⟩ := io.read _ _ _ _ q0 m0 r0
+  have run := SingleFile.scan_active_run bound w (got.trans pair.phase)
+  obtain ⟨q2, b2, m2, r2⟩ := io.unlock _ _ _ _ q1 m1 r1
+  unfold IOReturns
+  rw [run, pair.batches]
+  exact ⟨rfl, ⟨id, p, ready, a, ref, m, rfl, pair, bound, r2, m2⟩, q2, (b0.trans b1).trans b2⟩
+
+theorem ChildUseIO.close {disk : W → Disk} {mem : ChildMemory disk} (io : ChildUseIO mem Q) (owned : mem.Owns h bs w) (entry : Q w) :
+    IOReturns (SingleFile.close h) w (fun _ t => Q t ∧ AfterClose (disk w) (disk t))
+      (fun t => Q t ∧ AfterClose (disk w) (disk t)) := by
+  obtain ⟨id, p, ready, a, ref, m, _, pair, bound, cell, mutex⟩ := owned
+  have binds : h.Binds ref m := by subst h; exact ⟨rfl, rfl⟩
+  obtain ⟨q0, b0, m0, r0⟩ := io.lock _ _ _ _ entry mutex cell
+  obtain ⟨got, q1, b1, _, r1⟩ := io.read _ _ _ _ q0 m0 r0
+  have framed := io.closed (disk w) _ _ _ q1 r1 (b0.trans b1)
+  have released := io.fileUnlock _ id a.lock _ pair.lock framed
+  let locked := (m.lock w).state
+  let read := (ref.get : BaseIO _) locked
+  let stopped := ((ref.set .closed : BaseIO Unit) read.state).state
+  change IOReturns a.lock.unlock stopped _ _ at released
+  unfold IOReturns
+  rw [SingleFile.close_run binds]
+  change read.val = a.phase at got
+  dsimp only
+  dsimp only [read, locked] at got
+  rw [got, pair.phase]
+  dsimp only
+  cases run : a.lock.unlock stopped <;> rw [IOReturns, run] at released <;> exact io.leave _ m _ released
+
+/-- The segmented proof consumes these local child primitives. Validation
+chooses the actual pathname, open installs its own phase, and scan or close
+consume the exact active reference and mutex on that returned handle. -/
+structure ChildPrimitives (s : Store) (disk : W → Disk) (Q : W → Prop) where
+  validation : ValidationIO s disk Q
+  memory : ChildMemory disk
+  phase : ChildUseIO memory Q
+  attempt : ∀ id p u, Q u → id ∈ (disk u).liveNames →
+    validation.policyBytes id u = (policyStamp p).toUTF8 → ChildAttempt s disk Q memory id p u
+
+def ChildPrimitives.access (primitives : ChildPrimitives s disk Q) : ChildAccess s disk Q where
+  owns := primitives.memory.Owns
+  acquire p id _ _ q named prior := primitives.validation.acquire q named prior
+    (fun u valid present policy retry => (primitives.attempt id p u valid present policy).openExisting retry)
+  scan _ _ _ owned := primitives.phase.scan owned
+  close _ _ _ owned := primitives.phase.close owned
+
 end WalRecoverySlice.Segmented.Native
