@@ -1,4 +1,5 @@
-import Alvoki.Experiments.L0.NativeWrite
+import Alvoki.Experiments.L0.NativeWriteRelease
+import Alvoki.Experiments.WAL.Segmented.Proofs.AppendIngress
 import Alvoki.Experiments.L0.PendingReadScope
 
 namespace ExperimentalL0.NativeMutationScope
@@ -42,5 +43,80 @@ theorem Retry.written (run : Execution.Run events (some session) image)
   have delivered := run.written (fun h installed => Installed.append (history := h) installed change)
   have lost := run.uncertainAtView (change := change) (.inr rfl)
   exact ⟨.known delivered.stop files, .known lost.stop files⟩
+
+
+open NativeReadScope (Grant)
+open NativeReadRelease (Closed)
+open WalRecoverySlice.Segmented.Native (PhaseMemory ChildMemory Registration)
+open WalRecoverySlice.Segmented.Native.AppendIO (Active)
+
+/-- The client can lose the acknowledgement after the native append and
+phase publication completed. Both observations describe the same disk. -/
+structure Written (physical : W → Footprint inode) (heap : PhaseMemory) (root : System.FilePath)
+    (events : List Event) (image : Selected) (change : Change) (w : W) : Prop where
+  delivered : Retry physical root ((events ++ [.written change]) ++ [.stop]) (image.append (encode change)) none w
+  lost : Retry physical root ((events ++ [.writeUncertain change]) ++ [.stop]) (image.append (encode change)) none w
+  storage : ∃ lock ref wal reg issued appended, ∃ mem : ChildMemory (fun t => (physical t).disk),
+    WalRecoverySlice.Segmented.Native.append wal (encode change) issued = .ok (image.view.tail + 1) appended ∧
+    Active mem heap wal reg appended ∧ reg.session.view = image.view.append (encode change) ∧
+    Closed physical root lock ref (image.append (encode change)) w
+
+inductive Failure (physical : W → Footprint inode) (heap : PhaseMemory) (root : System.FilePath)
+    (before : List Event) (image : Selected) (change : Change) (e : IO.Error) (w : W) : Prop where
+  | unopened : Retry physical root (before ++ [.openFailed]) image none w →
+      Failure physical heap root before image change e w
+  | rejected : ¬ image.view.tail + 1 < UInt64.size →
+      Closed physical root lock ref image w →
+      Retry physical root (((before ++ [.reopened]) ++ [.writeUncertain change]) ++ [.stop]) image none w →
+      Failure physical heap root before image change e w
+  | reported : WalRecoverySlice.Segmented.Native.append wal (encode change) issued = .error e appended →
+      Closed physical root lock ref image w (some (.append (encode change))) →
+      Retry physical root (((before ++ [.reopened]) ++ [.writeUncertain change]) ++ [.stop]) image
+        (some (.append (encode change))) w → Failure physical heap root before image change e w
+  | cleanup : Written physical heap root (before ++ [.reopened]) image change w →
+      Failure physical heap root before image change e w
+
+private theorem failedBody {physical : W → Footprint inode}
+    (grant : Grant root lock ref)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (laws : NativeWriteRelease.Laws heap pending physical root lock ref image)
+    (held : NativeWriteRelease.Held pending physical root lock ref image (.updating wal) t)
+    (owned : NativeWriteRelease.WalCustody heap wal store slot t)
+    (error : IO.Error)
+    (ran : Native.mutation handle change entered = NativeWrite.afterWrite ref (.error error t))
+    (finish : ∀ u, Closed physical root lock ref image u pending → err error u) :
+    NativeScope.Callback ref lock (Native.mutation handle change) entered ok err := by
+  obtain ⟨_, result, out⟩ := NativeWriteRelease.afterError laws grant phase held owned error
+  unfold NativeScope.Callback NativeScope.Post
+  rw [ran, result]
+  exact NativeWriteRelease.outerOffline wal laws.toRootUnlock grant phase out finish (fun _ => finish)
+
+private theorem successfulBody {physical : W → Footprint inode}
+    {mem : ChildMemory (fun t => (physical t).disk)} {reg : Registration}
+    (grant : Grant root lock ref)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref (image.append (encode change)))
+    (cached : NativeRecoverAt.Cached heap physical root lock ref)
+    (laws : NativeWriteRelease.Laws heap none physical root lock ref (image.append (encode change)))
+    (run : Execution.Run (before ++ [.reopened]) (some session) image)
+    (held : NativeRecoverAt.Held physical root lock ref (image.append (encode change)) (.updating wal) appended)
+    (active : Active mem heap wal reg appended) (view : reg.session.view = image.view.append (encode change))
+    (report : WalRecoverySlice.Segmented.Native.append wal (encode change) issued = .ok (image.view.tail + 1) appended)
+    (ran : Native.mutation handle change entered =
+      NativeWrite.afterWrite ref (.ok {session with mem := insert session.mem change} appended)) :
+    NativeScope.Callback ref lock (Native.mutation handle change) entered
+      (fun _ => Written physical heap root (before ++ [.reopened]) image change)
+      (Failure physical heap root before image change) := by
+  have custody := active.custody
+  have facts := active
+  obtain ⟨_, ready, _, _, _, model⟩ := facts
+  have disk := model.installed.offline (request := none) (.inl view)
+  obtain ⟨u, published, online, _, custody⟩ := NativeWriteRelease.afterSuccess phase cached held disk ready custody _
+  unfold NativeScope.Callback NativeScope.Post
+  rw [ran, published]
+  have stopped t (closed : Closed physical root lock ref (image.append (encode change)) t) :
+      Written physical heap root (before ++ [.reopened]) image change t := by
+    obtain ⟨sent, lost⟩ := Retry.written run closed.files
+    exact ⟨sent, lost, lock, ref, wal, reg, issued, appended, mem, report, active, view, closed⟩
+  exact NativeWriteRelease.outerAttached laws grant phase online custody stopped (fun _ t c => .cleanup (stopped t c))
 
 end ExperimentalL0.NativeMutationScope
