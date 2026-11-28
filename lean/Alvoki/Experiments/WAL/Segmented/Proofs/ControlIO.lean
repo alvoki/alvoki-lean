@@ -45,7 +45,7 @@ private theorem ioTrace {a : IO α} (h : IOReturns a w ok fail) :
   · rename_i ran; rw [ran]; exact ⟨rfl, h⟩
   · exact h
 
-private theorem trace {a : IO α} {b : Model.M β} (h : At a b w s ok fail) :
+theorem trace {a : IO α} {b : Model.M β} (h : At a b w s ok fail) :
     At a b w s (fun x y t u => ok x y t u ∧ a w = .ok x t ∧ b.run s = .ok (.ok y) u) fail := by
   unfold At at *
   cases ha : a w <;> cases hb : b.run s <;> simp only [ha, hb] at h ⊢
