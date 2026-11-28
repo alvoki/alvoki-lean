@@ -93,18 +93,27 @@ structure WalRoot (dir : FilePath) (w : W) where
 open WalRecoverySlice.Segmented.Native (ChildMemory Registration Origin LocksFrom)
 abbrev storeEntry (p : WalRoot dir w) := (IO.mkRef (none : Option (Nat × WalRecoverySlice.SingleFile.Handle)) p.heldWorld).state
 
+theorem WalRoot.openBatches {bs : List WalRecoverySlice.Bytes} (p : WalRoot dir w) (heap : PhaseMemory) (fits : bs.length ≤ 1)
+    (worker : ∀ s, WalRecoverySlice.Segmented.Native.acquireStore dir w = .ok s (storeEntry p) →
+      s.root = p.canonical → s.directory = p.directory → s.lock = p.lock →
+      WalRecoverySlice.Segmented.Native.HealthyEmpty.Worker s disk Q mem (storeEntry p) bs) :
+    ∃ wal t reg, WalRecoverySlice.Segmented.Native.openExisting dir w = .ok wal t ∧
+      reg.session = WalRecoverySlice.Segmented.Native.HealthyEmpty.sessionFor bs ∧
+      Origin dir wal reg w t ∧ heap.Registered wal reg t ∧ LocksFrom reg := by
+  obtain ⟨s, grant, root, directory, lock, _⟩ :=
+    HealthyRootAcquisition.walStore dir p.canonical p.resolve p.openDir p.stat p.valid p.openLock p.held
+  apply (worker s grant root directory lock).openExisting fits heap grant
+  rw [root, lock]
+  exact ⟨p.statWorld, p.lockWorld, p.heldWorld, p.openLock, p.held⟩
+
 theorem WalRoot.open (p : WalRoot dir w) (heap : PhaseMemory)
     (worker : ∀ s, WalRecoverySlice.Segmented.Native.acquireStore dir w = .ok s (storeEntry p) →
       s.root = p.canonical → s.directory = p.directory → s.lock = p.lock →
       WalRecoverySlice.Segmented.Native.HealthyEmpty.Worker s disk Q mem (storeEntry p)) :
     ∃ wal t reg, WalRecoverySlice.Segmented.Native.openExisting dir w = .ok wal t ∧
       reg.session = WalRecoverySlice.Segmented.Native.HealthyEmpty.session ∧
-      Origin dir wal reg w t ∧ heap.Registered wal reg t ∧ LocksFrom reg := by
-  obtain ⟨s, grant, root, directory, lock, _⟩ :=
-    HealthyRootAcquisition.walStore dir p.canonical p.resolve p.openDir p.stat p.valid p.openLock p.held
-  apply (worker s grant root directory lock).openExisting heap grant
-  rw [root, lock]
-  exact ⟨p.statWorld, p.lockWorld, p.heldWorld, p.openLock, p.held⟩
+      Origin dir wal reg w t ∧ heap.Registered wal reg t ∧ LocksFrom reg :=
+  p.openBatches heap (bs := []) (by decide) worker
 
 /-- Positive reports for root validation and the exclusive L0 lock. -/
 structure Entry (path root : FilePath) (w : W) where

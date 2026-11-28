@@ -38,7 +38,30 @@ theorem childScan {id : Nat} (io : ChildUseIO mem Q) (owned : mem.Owns root p id
   exact ⟨_, pair.batches ▸ run, q2⟩
 
 def control : Control := ⟨.logOnly, 1, 0, 0⟩
-def session : Session := ⟨control, 0, ⟨0, []⟩⟩
+def sessionFor (bs : List Bytes) : Session := ⟨control, bs.length, ⟨0, bs⟩⟩
+abbrev session := sessionFor []
+
+/-- The selected CONTROL record and the already recovered physical disk determine the
+child's input batches. A settled client view admits no unresolved extra batch. -/
+theorem selectedChild (disk : Recoverable (sessionFor bs).view none d)
+    (selected : d.liveControl = some control) :
+    Child.Recoverable .logOnly bs none (d.segment 0) ∧ bs.length ≤ 1 := by
+  obtain ⟨c,chosen,h,p,readable,allows⟩ := disk.live
+  rw [selected] at chosen
+  cases chosen
+  have fixed (xs : List Bytes) (choice : WalRecoverySlice.Contract.Permitted h p xs) : xs = bs := by
+    have same := allows xs choice
+    simpa [PermittedView,historyView,control,sessionFor] using same
+  have original := fixed h (.inl rfl)
+  have resolved := fixed (h ++ p.toList) (.inr rfl)
+  subst h
+  have noPending : p = none := by
+    cases p with
+    | none => rfl
+    | some batch => simpa using congrArg List.length resolved
+  subst p
+  have fits : bs.length ≤ 1 := by simpa [control] using readable.layout.upper
+  exact ⟨by simpa [control,segmentHistory,List.take_of_length_le fits] using readable.active, fits⟩
 
 theorem lift_ok {a : IO α} (ran : a w = .ok x t) :
     (liftM a : F α).run w = .ok (.ok x) t := by
@@ -90,15 +113,15 @@ theorem acquireChecked (s : Store)
   simp [size]
   rfl
 
-theorem recoverChild (s : Store)
+theorem recoverChild (s : Store) {bs : List Bytes} (fits : bs.length ≤ 1)
     (ctrl : s.callbacks.readControl.run w = .ok (.ok control) t)
     (sync : syncHandle s.directory t = .ok () u)
     (acquire : s.acquireChild .logOnly 0 u = .ok h v)
-    (scan : SingleFile.scan h v = .ok [] x)
+    (scan : SingleFile.scan h v = .ok bs x)
     (list : entries s.root x = .ok items y)
     (names : listedIds (·.fileName) items = .ok [0])
     (settle : syncHandle s.directory y = .ok () z) :
-    s.recoverChild w = .ok (session, h) z := by
+    s.recoverChild w = .ok (sessionFor bs, h) z := by
   have prefixRun : (reopenPrefix s.callbacks).run w = .ok (.ok (control, #[])) u := by
     unfold reopenPrefix
     apply bind_ok ctrl
@@ -119,9 +142,11 @@ theorem recoverChild (s : Store)
     apply bind_ok listed
     apply bind_ok (by rfl : (removeRetired s.callbacks control.firstNeeded [0]).run y = .ok (.ok ()) y)
     exact lift_ok settle
-  have finish : (finishReopen s.callbacks control #[] []).run x = .ok (.ok session) z := by
+  have finish : (finishReopen s.callbacks control #[] bs).run x = .ok (.ok (sessionFor bs)) z := by
     unfold finishReopen
-    change (collect s.callbacks control >>= fun _ => pure session).run x = _
+    simp only [control, Nat.not_lt.mpr fits, ite_false, Nat.not_lt_zero, Nat.zero_mul, Nat.zero_sub,
+      List.nil_append, List.drop_zero]
+    change (collect s.callbacks control >>= fun _ => pure (sessionFor bs)).run x = _
     exact bind_ok collected rfl
   unfold Store.recoverChild
   apply checked_ok
@@ -130,8 +155,8 @@ theorem recoverChild (s : Store)
   apply lift_ok
   unfold withActiveChild
   apply io_bind_ok acquire
-  have resume : (checked ((finishReopen s.callbacks control #[] [] >>= fun session =>
-      pure (session, h)) : F _) x) = .ok (session, h) z := checked_ok (bind_ok finish rfl)
+  have resume : (checked ((finishReopen s.callbacks control #[] bs >>= fun session =>
+      pure (session, h)) : F _) x) = .ok (sessionFor bs, h) z := checked_ok (bind_ok finish rfl)
   have body := io_bind_ok (f := fun batches => checked ((finishReopen s.callbacks control #[] batches >>= fun sess => pure (sess, h)) : F _)) scan resume
   unfold cleanupOnError
   simp [tryCatchThe, MonadExceptOf.tryCatch, instMonadExceptOfEIO._aux_3, EST.tryCatch, body]
@@ -204,7 +229,7 @@ structure Inspected (s : Store) (start after : W) where
 
 /-- Primitive success reports for CONTROL and the selected, settled child.
 After that child's proved read, collection consumes its actual exit world. -/
-structure Worker (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMemory disk) (w : W) where
+structure Worker (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMemory disk) (w : W) (bs : List Bytes := []) where
   md : IO.FS.Metadata
   controlStat : W
   controlRead : W
@@ -224,14 +249,14 @@ structure Worker (s : Store) (disk : W → Disk) (P : W → Prop) (mem : ChildMe
   stamp : FileBytes (segmentPath s.root 0 / "policy") policyStat (policyStamp .logOnly).toUTF8 policyRead
   child : ChildAttempt s disk P mem 0 .logOnly policyRead
   healthy : child.reports = {}
-  prior : Child.Recoverable .logOnly [] none ((disk policyRead).segment 0)
+  prior : Child.Recoverable .logOnly bs none ((disk policyRead).segment 0)
   useChild : ChildUseIO mem P
   collect : ∀ h t u, SingleFile.openExisting (segmentPath s.root 0) policyRead = .ok h t →
-    SingleFile.scan h t = .ok [] u →
+    SingleFile.scan h t = .ok bs u →
     ∃ items v z, entries s.root u = .ok items v ∧ listedIds (·.fileName) items = .ok [0] ∧
       syncHandle s.directory v = .ok () z
 
-theorem Worker.run (p : Worker s disk P mem w) : ∃ h u, s.recoverChild w = .ok (session, h) u ∧
+theorem Worker.run (p : Worker s disk P mem w bs) (fits : bs.length ≤ 1) : ∃ h u, s.recoverChild w = .ok (sessionFor bs, h) u ∧
       ∃ fd, ChildLockAt (segmentPath s.root 0) h fd := by
   have controlRun := readControl s p.stat p.regular p.bounded p.bytes.run
   have names := inspect _ p.names.stat p.names.directory p.names.list p.names.members
@@ -239,17 +264,17 @@ theorem Worker.run (p : Worker s disk P mem w) : ∃ h u, s.recoverChild w = .ok
   have acquired := acquireChecked s names p.names.includes p.sizeStat p.size p.stamp.string openChild
   obtain ⟨u, scanned, _⟩ := childScan p.useChild owned frame
   obtain ⟨_, _, z, list, ids, sync⟩ := p.collect h t u openChild scanned
-  exact ⟨h, z, recoverChild s controlRun p.sync acquired scanned list ids sync, owned.source⟩
+  exact ⟨h, z, recoverChild s fits controlRun p.sync acquired scanned list ids sync, owned.source⟩
 
 /-- Install the actual recovered child and allocate the phase reference and
 mutex. The resulting public handle is ready for its very first operation. -/
-theorem Worker.openExisting (p : Worker s disk P mem w) (heap : PhaseMemory)
+theorem Worker.openExisting (p : Worker s disk P mem w bs) (fits : bs.length ≤ 1) (heap : PhaseMemory)
     (grant : acquireStore dir start = .ok s w) (root : RootLockAt s.root s.lock) :
-    ∃ h t reg, Native.openExisting dir start = .ok h t ∧ reg.session = session ∧
+    ∃ h t reg, Native.openExisting dir start = .ok h t ∧ reg.session = sessionFor bs ∧
       Origin dir h reg start t ∧ heap.Registered h reg t ∧ LocksFrom reg := by
-  obtain ⟨child, recovered, ran, fd, childLock⟩ := p.run
+  obtain ⟨child, recovered, ran, fd, childLock⟩ := p.run fits
   simp only [Native.openExisting_run, grant, ran]
-  let reg : Registration := ⟨session, s, child⟩
+  let reg : Registration := ⟨sessionFor bs, s, child⟩
   refine ⟨_, _, reg, rfl, rfl, ?_, ?_, root, fd, childLock⟩
   · exact ⟨w, recovered, grant, ran, rfl, rfl, rfl⟩
   · exact ⟨heap.fresh _ (heap.set _ _ _), heap.newMutex (heap.allocate _ _),
