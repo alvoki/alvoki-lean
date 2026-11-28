@@ -8,6 +8,11 @@ The [client contract](../../lean/Alvoki/Experiments/L0/Client.lean) and
 [`Execution.Run.refines`](../../lean/Alvoki/Experiments/L0/Execution.lean)
 also apply when the reply is lost.
 
+The [acceptance boundary](l0-native-acceptance.md) distinguishes the public
+safety theorems, conditional progress and the runtime assumptions. The
+[implementation retrospective](l0-native-retrospective.md) records what
+changed the proof design and where its cost still grows.
+
 ## Review units in dependency order
 
 | Unit | Producer and external boundary | Consumer on this branch |
