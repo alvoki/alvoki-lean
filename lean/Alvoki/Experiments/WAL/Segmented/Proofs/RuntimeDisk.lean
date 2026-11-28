@@ -181,31 +181,32 @@ theorem openExisting_unwind_error (dir : FilePath) (s : Store)
 startup unwind. On the error path the slot is still empty; the store invokes
 its root unlock on the reached world after taking the slot. -/
 theorem openExisting_registered_of_worker (heap : PhaseMemory) (dir : FilePath)
-    (disk : W → Disk) (known : Contract.View) (Q : W → Prop) (owned lease : Store → W → Prop)
-    (acquire : IOReturns (acquireStore dir) w owned (fun t => Recoverable known none (disk t) ∧ Q t))
+    (disk : W → Disk) (known : Contract.View) (req : Option Contract.Request) (Q : W → Prop)
+    (C : Store → Session → SingleFile.Handle → W → Prop) (owned lease : Store → W → Prop)
+    (acquire : IOReturns (acquireStore dir) w owned (fun t => Recoverable known req (disk t) ∧ Q t))
     (rootLock : ∀ s u, acquireStore dir w = .ok s u → RootLockAt s.root s.lock)
     (worker : ∀ s u, owned s u → IOReturns s.recoverChild u
       (fun out t => (∃ fd, ChildLockAt (segmentPath s.root out.1.control.active) out.2 fd) ∧
-        Installed out.1 (disk t) ∧ out.1.view = known ∧ Q t)
-      (fun t => heap.holds s.active none t ∧ lease s t ∧ Recoverable known none (disk t) ∧ Q t))
-    (install : ∀ session, InstallFrame (fun t => Installed session (disk t) ∧ Q t))
+        C s out.1 out.2 t ∧ PermittedView known req out.1.view ∧ Q t)
+      (fun t => heap.holds s.active none t ∧ lease s t ∧ Recoverable known req (disk t) ∧ Q t))
+    (install : ∀ s session h, InstallFrame (fun t => C s session h t ∧ Q t))
     (take : ∀ (s : Store) t, StoreUnwinding dir s t → heap.holds s.active none t → lease s t →
-      Recoverable known none (disk t) ∧ Q t → let next := ((s.active.swap none : BaseIO _) t).state
-      lease s next ∧ Recoverable known none (disk next) ∧ Q next)
-    (unlock : ∀ (s : Store) u, StoreUnlockAt dir s u → lease s u → Recoverable known none (disk u) ∧ Q u →
-      IOReturns s.lock.unlock u (fun _ t => Recoverable known none (disk t) ∧ Q t)
-        (fun t => Recoverable known none (disk t) ∧ Q t)) :
+      Recoverable known req (disk t) ∧ Q t → let next := ((s.active.swap none : BaseIO _) t).state
+      lease s next ∧ Recoverable known req (disk next) ∧ Q next)
+    (unlock : ∀ (s : Store) u, StoreUnlockAt dir s u → lease s u → Recoverable known req (disk u) ∧ Q u →
+      IOReturns s.lock.unlock u (fun _ t => Recoverable known req (disk t) ∧ Q t)
+        (fun t => Recoverable known req (disk t) ∧ Q t)) :
     IOReturns (openExisting dir) w
       (fun h t => ∃ reg, Origin dir h reg w t ∧ heap.Registered h reg t ∧ LocksFrom reg ∧
-        Installed reg.session (disk t) ∧ reg.session.view = known ∧ Q t)
-      (fun t => Recoverable known none (disk t) ∧ Q t) := by
+        C reg.store reg.session reg.child t ∧ PermittedView known req reg.session.view ∧ Q t)
+      (fun t => Recoverable known req (disk t) ∧ Q t) := by
   unfold IOReturns
   cases opened : openExisting dir w with
   | ok h t =>
     obtain ⟨session, origin, _⟩ := openExisting_ready heap dir opened
     obtain ⟨s, u, child, v, raw, recovery, stateEq, mutexEq, rfl⟩ := origin
     obtain ⟨childLock, installed, eq, keep⟩ := IOReturns.atOk (worker s u (IOReturns.atOk acquire raw)) recovery
-    let F := install session
+    let F := install s session child
     have final := F.mutex _ (F.phase s session _ (F.attach s.active session.control.active child _ ⟨installed, keep⟩))
     let registration : Registration := ⟨session, s, child⟩
     refine ⟨registration, ?_, ?_, ⟨rootLock s u raw, childLock⟩, final.1, eq, final.2⟩
@@ -381,11 +382,25 @@ private theorem ChildAccess.readSealed {id : Nat} (ops : ChildAccess s disk Q)
       ⟨⟨post.1, prior.cursors post.2⟩, ⟨post.1, (prior.cursors post.2).retry permit⟩⟩
     exact mapIO (ops.close id h bs v owned q) (fun _ _ post => after post) (fun _ post => (after post).2)
 
+/-- Concrete custody after the active child was recovered. The same history
+supplies the selected files, active bytes, cursor, and owned child phase. -/
+def RecoveredChild (disk : W → Disk) (owns : Nat → SingleFile.Handle → List Bytes → W → Prop)
+    (session : Session) (h : SingleFile.Handle) (t : W) : Prop :=
+  ∃ history, session = sessionOf session.control history ∧
+    owns session.control.active h (segmentHistory session.control.capacity session.control.active history) t ∧
+    ReadyLayout session.control history (disk t) ∧
+    (disk t).liveControl = some session.control ∧ (disk t).durableControl = some session.control
+
+theorem RecoveredChild.installed (child : RecoveredChild disk owns session h t) : Installed session (disk t) :=
+  let ⟨hist, eq, _, ready, live, durable⟩ := child
+  ⟨hist, eq, ready, live, durable⟩
+
 /-- The final collection may mutate retired files and names. Its leaf frames
 protect the installed active child, its cursor, and the still-selected layout. -/
 def ActiveFrame (children : ChildAccess s disk Q) (c : Control) (history : List Bytes)
     (h : SingleFile.Handle) (w : W) : Prop :=
-  children.owns c.active h (segmentHistory c.capacity c.active history) w ∧ Q w ∧ Installed (sessionOf c history) (disk w)
+  children.owns c.active h (segmentHistory c.capacity c.active history) w ∧ Q w ∧ ReadyLayout c history (disk w) ∧
+    (disk w).liveControl = some c ∧ (disk w).durableControl = some c
 
 structure StoreOperations (s : Store) (disk : W → Disk) (Q : W → Prop)
     (child : Type) (access : child → ChildAccess s disk Q) where
@@ -426,7 +441,7 @@ theorem StoreIO.recoverChild_selected (ops : StoreIO s disk Q)
     IOReturns s.recoverChild w
       (fun out t => (∃ fd, ChildLockAt (segmentPath s.root out.1.control.active) out.2 fd) ∧
         Q t ∧ Installed out.1 (disk t) ∧ PermittedView known req out.1.view ∧
-        ∃ bs, ops.children.owns out.1.control.active out.2 bs t ∧ bs.length = out.1.activeCount)
+        RecoveredChild disk ops.children.owns out.1 out.2 t)
       (fun t => Q t ∧ Recoverable known req (disk t)) := by
   obtain ⟨c, found, history, pending, readable, permit⟩ := prior.live
   let P0 := fun t => Q t ∧ Writebacks (disk w) (disk t)
@@ -451,7 +466,7 @@ theorem StoreIO.recoverChild_selected (ops : StoreIO s disk Q)
   apply mapIO (s.recoverChild_post c history P0 P held bad ?source ?retry0 ?retry ?sync ?sealed ?acquire ?scan ?close ?collect ?layout)
   case success =>
     rintro ⟨_, child⟩ t ⟨final, rfl, allowed, _, _, owned, q, installed⟩
-    exact ⟨ops.children.source c.active child _ t owned, q, installed, allowed, _, owned, rfl⟩
+    exact ⟨ops.children.source c.active child _ t owned, q, ⟨final, rfl, installed⟩, allowed, _, rfl, owned, installed⟩
   case failure => exact fun _ h => h
   case source =>
     exact src.mapPost (fun _ _ result => ⟨result.2, result.1⟩) (fun _ result => ⟨result.1, result.2.recoverable prior⟩)
@@ -481,20 +496,20 @@ theorem StoreIO.recoverChild_selected (ops : StoreIO s disk Q)
       have finalLayout := extend _ layout
       refine ⟨final, permit final good, finalLayout.upper, fun id lt => (earlier id lt).symm, ?_, q', ?_⟩
       · exact slice.symm ▸ owned
-      · exact ⟨final, rfl, ⟨finalLayout, slice.symm ▸ installed⟩, live, durable⟩
+      · exact ⟨⟨finalLayout, slice.symm ▸ installed⟩, live, durable⟩
     · rintro v ⟨q', change, kept, _⟩
       exact ⟨q', (entry.activeFail change kept).retry permit⟩
   case scan =>
     rintro final h u ⟨choice, upper, before, owned, q, installed⟩
     apply mapIO (ops.children.scan c.active h _ u owned q)
     · rintro bytes t ⟨rfl, owns, qt, same⟩
-      exact ⟨rfl, choice, upper, before, owns, qt, same.installed installed⟩
+      exact ⟨rfl, choice, upper, before, owns, qt, same.readyLayout installed.1, same.live.trans installed.2.1, same.durable.trans installed.2.2⟩
     · rintro t ⟨owns, qt, same⟩
-      exact ⟨choice, upper, before, owns, qt, same.installed installed⟩
+      exact ⟨choice, upper, before, owns, qt, same.readyLayout installed.1, same.live.trans installed.2.1, same.durable.trans installed.2.2⟩
   case close =>
     rintro final h u ⟨choice, upper, before, owned, q, installed⟩
     have after {t} (r : Q t ∧ AfterClose (disk u) (disk t)) : bad t :=
-      ⟨r.1, Recoverable.cursors (installed.offline choice) r.2⟩
+      ⟨r.1, Recoverable.cursors ((show Installed (sessionOf c final) (disk u) from ⟨final, rfl, installed⟩).offline choice) r.2⟩
     exact mapIO (ops.children.close c.active h _ u owned q) (fun _ _ post => after post) (fun _ post => after post)
   case collect =>
     rintro final h u ⟨choice, upper, before, active⟩

@@ -46,14 +46,12 @@ theorem Writebacks.trans {finish : Disk} (a : Writebacks start middle) (b : Writ
 
 /-- Selected files of an installed WAL child are clean after open. Whole-file
 writeback on any other segment may change its durable bytes. -/
-theorem Writebacks.installed (steps : Writebacks before after)
-    (held : Installed child before) :
-    Installed child after := by
+theorem Writebacks.readyLayout (steps : Writebacks before after) (held : ReadyLayout c history before) :
+    ReadyLayout c history after := by
   induction steps with
   | nil => exact held
-  | @next middle _ id file ih =>
-    obtain ⟨history, canonical, ready, live, durable⟩ := ih
-    refine ⟨history, canonical, ready.frame ready.layout.names ?_ rfl, live, durable⟩
+  | @next middle _ id file ready =>
+    refine ready.frame (after := middle.writeback id file) ready.layout.names ?_ rfl
     intro i selects
     by_cases hit : i = id
     · have le := selects.2
@@ -63,6 +61,13 @@ theorem Writebacks.installed (steps : Writebacks before after)
       · simpa [Disk.writeback, hit] using
           (ready.layout.sealed i selects lt).writeback file
     · simp [Disk.writeback, hit]
+
+theorem Writebacks.installed (steps : Writebacks before after)
+    (held : Installed child before) : Installed child after := by
+  obtain ⟨hist, eq, ready, live, durable⟩ := held
+  refine ⟨hist, eq, steps.readyLayout ready, ?_, ?_⟩
+  · induction steps <;> assumption
+  · induction steps <;> assumption
 
 theorem Writebacks.live (steps : Writebacks before after) : after.liveControl = before.liveControl := by
   induction steps <;> first | rfl | assumption
