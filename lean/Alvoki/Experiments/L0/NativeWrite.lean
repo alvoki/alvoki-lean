@@ -54,4 +54,94 @@ theorem write_atRoot (root : System.FilePath) (ref : Ref) (s : Session) (change 
   funext view
   split <;> simp only [checked_bind, checked_borrow, checked_pure, checked_throw]
 
+open NativeRead (Footprint Owned SessionAt Online Frame)
+open WalRecoverySlice.Segmented.Native (PhaseMemory scanWorld)
+
+/-- The outcome of publication or error cleanup for the already-issued
+public mutation. On error the inner close still runs at its reached world. -/
+def afterWrite (ref : Ref) (written : EST.Out IO.Error IO.RealWorld Session) :
+    EST.Out IO.Error IO.RealWorld Unit :=
+  let closed := (Native.phaseCell ref).close WalRecoverySlice.Segmented.Native.close
+  let failed := fun e w => EST.Out.error e (closed.toBaseIO w).state
+  match written with
+  | .error e t => failed e t
+  | .ok next t =>
+    match (Native.phaseCell ref).publish (IO.userError "L0 requires reopen") next t with
+    | .ok () u => .ok () u
+    | .error e u => failed e u
+
+private theorem mutation_started (binding : Native.Handle.AtRoot handle root ref) (change : Change)
+    (read : (ref.get : IO (Phase Wal)) start = .ok (.online wal s) entered)
+    (swapped : (ref.swap (.updating wal) : IO (Phase Wal)) entered = .ok previous hidden) :
+    Native.mutation handle change start =
+      afterWrite ref (Native.checked (write (Native.callbackComponents root ref) s change) hidden) := by
+  rw [Native.mutation_atRoot binding,
+    Cell.update_online_io (Native.phaseCell ref) _ _ _ read swapped]
+  let op := Native.checked (write (Native.callbackComponents root ref) s change)
+  cases ran : op hidden with
+  | error e t =>
+    simp [op] at ran
+    simp [afterWrite, Bind.bind, instMonadEIO._aux_13, EST.bind, EIO.toBaseIO, ran]
+  | ok v t =>
+    cases pub : (Native.phaseCell ref).publish (IO.userError "L0 requires reopen") v t <;>
+      simp [op] at ran <;>
+      simp [afterWrite, Bind.bind, instMonadEIO._aux_13, EST.bind, EIO.toBaseIO, ran, pub]
+
+private theorem borrow_run (f : Wal → IO α)
+    (read : (ref.get : IO (Phase Wal)) w = .ok (.updating wal) t) :
+    borrow ref f w = f wal t := by
+  simp [borrow, Bind.bind, instMonadEIO._aux_13, EST.bind, read, Phase.wal]
+
+/-- The position guard keeps its pre-append disk. Otherwise the public
+operation calls append once, using precisely the registration and world
+that survived both phase borrows and the cached scan. -/
+theorem dispatch {physical : W → Footprint inode}
+    (online : Online physical root lock ref wal s image history start)
+    (binding : Native.Handle.AtRoot handle root ref)
+    (heap : PhaseMemory) (cached : NativeRecoverAt.Cached heap physical root lock ref)
+    (phase : NativeRecoverAt.PhasePrimitives physical root lock ref image)
+    (scan : ∀ w, SessionAt physical root lock ref wal s image history w (.updating wal) →
+      NativeRecoverAt.ScanPrimitives physical root wal image.tables w)
+    (change : Change) :
+    if image.view.tail + 1 < UInt64.size then
+      ∃ issued, SessionAt physical root lock ref wal s image history issued (.updating wal) ∧
+        Native.mutation handle change start = afterWrite ref
+          (match WalRecoverySlice.Segmented.Native.append wal (encode change) issued with
+           | .ok _ t => .ok {s with mem := insert s.mem change} t
+           | .error e t => .error e t)
+    else
+      ∃ rejected, SessionAt physical root lock ref wal s image history rejected (.updating wal) ∧
+        Native.mutation handle change start = afterWrite ref (.error (IO.userError "absolute WAL position exhausted") rejected) := by
+  have readAt {w stage} (entry : SessionAt physical root lock ref wal s image history w stage)
+      (ownsWal : stage.wal = some wal) :
+      ∃ t, (ref.get : IO (Phase Wal)) w = .ok stage t ∧
+        SessionAt physical root lock ref wal s image history t stage := by
+    obtain ⟨t, ran, frame⟩ := phase.refRead wal w entry.owned (entry.phase.symm ▸ ownsWal)
+    exact ⟨t, entry.phase ▸ ran, entry.phase ▸ entry.advance frame⟩
+  obtain ⟨entered, read, online'⟩ := readAt online rfl
+  obtain ⟨hidden, swapped, step⟩ := phase.swap entered online'.owned wal (.updating wal)
+  have updating := online'.advance step
+  have run := mutation_started binding change read swapped
+  rw [write_atRoot] at run
+  obtain ⟨scanStart, borrowScan, scanning⟩ := readAt updating rfl
+  obtain ⟨reg, slot, _, _, view⟩ := scanning.child
+  have regReady := (cached _ scanning.owned wal reg).mp slot
+  have ran := (WalRecoverySlice.Segmented.Native.scan_ready_world heap regReady.ready).1
+  have scanned := borrow_run _ borrowScan |>.trans (view ▸ ran)
+  have scannedFrame := WalRecoverySlice.Segmented.Native.scanWorld_frame (scan _ scanning) Frame.refl
+  have afterScan := scanning.phase ▸ scanning.advance scannedFrame
+  split
+  · rename_i fits
+    obtain ⟨issued, borrowAppend, ready⟩ := readAt afterScan rfl
+    refine ⟨issued, ready, run.trans ?_⟩
+    apply congrArg (afterWrite ref)
+    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, fits]
+    simp only [borrow, Bind.bind, instMonadEIO._aux_13, EST.bind, borrowAppend, Phase.wal]
+    cases WalRecoverySlice.Segmented.Native.append wal (encode change) issued <;> rfl
+  · rename_i full
+    refine ⟨_, afterScan, run.trans ?_⟩
+    apply congrArg (afterWrite ref)
+    simp [Bind.bind, instMonadEIO._aux_13, EST.bind, scanned, full]
+    rfl
+
 end ExperimentalL0.NativeWrite
