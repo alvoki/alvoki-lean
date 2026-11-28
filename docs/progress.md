@@ -36,7 +36,13 @@ reopens on the reached worlds. It derives the write authority from the
 child installed by the public opener. The first recovery with a pending
 request pins its choice at WAL acquisition. The next open consumes that
 choice even if the earlier read or cleanup returned an error. The L0 guide
-records the division between reusable WAL producers and public L0 proofs. Milestone 3 follows table creation, directory sync and manifest
+records the division between reusable WAL producers and public L0 proofs.
+[Worker interruptions](../lean/Alvoki/Experiments/L0/InterruptedWorker.lean)
+and [cleanup interruptions](../lean/Alvoki/Experiments/L0/MutationExitCut.lean)
+derive the retry input for process exit and power loss from the issued
+operation and the surviving files. The [progress check](../lean/Alvoki/Experiments/L0/HealthyMutation.lean)
+derives success on a healthy initialized root and follows the same
+committed write when the final unlock reports an error. Milestone 3 follows table creation, directory sync and manifest
 publication through the admissible interruption prefixes into survivor
 selection and a recovered read. Both deliver their observations to
 `Client.Step`, `Client.Allows` and `Execution.Run.refines`. PR #30 at

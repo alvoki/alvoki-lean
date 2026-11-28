@@ -49,7 +49,7 @@ for module in NativeManifest NativeRead NativeReadClient NativeRecovery NativeTa
   compile "$l0/$module" proof
 done
 compile Alvoki/Experiments/WAL/Segmented/Proofs/RuntimeChild proof
-for module in NativeMutation HealthyMutation InterruptedWorker; do
+for module in NativeMutation HealthyMutation InterruptedWorker MutationExitCut; do
   compile "$l0/$module" proof
 done
 for module in PreparedFile ControlCutIO PrepareCutIO ChildCutIO CutSchedule; do
@@ -63,7 +63,7 @@ l0_proofs=(
   NativeManifest NativeRead NativeReadClient NativeRecovery NativeTableCheck PublicationCut
   WithOpenReads HealthyReads HealthyClose HealthyRootAcquisition AppendRecovery NativeWrite
   NativeWriteRelease NativeMutation HealthyMutation NativeMutationScope NativeMutationReopens
-  NativeAppendCut InterruptedMutation InterruptedWorker NativeRecoverSelected PendingReadScope
+  NativeAppendCut InterruptedMutation InterruptedWorker MutationExitCut NativeRecoverSelected PendingReadScope
   NativeScope NativeReadScope NativeReadRelease NativeRecoverAt NativeCleanup NativePublish
 )
 for module in "${l0_proofs[@]}"; do
@@ -81,7 +81,7 @@ component_proofs=(
   WAL.Segmented.Proofs.CutSchedule WAL.Segmented.Proofs.ChildCutIO WAL.Proofs.ConcreteAppendCut
   WAL.Segmented.Proofs.CreateCutIO WAL.Segmented.Proofs.AppendPrefixLayout
   WAL.Segmented.Proofs.ChildHeapCut WAL.Segmented.Proofs.AppendCutBody
-  WAL.Segmented.Proofs.CutRuntime
+  WAL.Segmented.Proofs.CutRuntime WAL.Segmented.Proofs.PublicAppendCut
 )
 for module in "${component_proofs[@]}"; do
   leanchecker "Alvoki.Experiments.$module"
@@ -101,6 +101,7 @@ import Alvoki.Experiments.L0.NativeManifest
 import Alvoki.Experiments.L0.NativeRecovery
 import Alvoki.Experiments.L0.NativeMutation
 import Alvoki.Experiments.L0.InterruptedWorker
+import Alvoki.Experiments.L0.MutationExitCut
 import Alvoki.Experiments.WAL.Segmented.Proofs.ChildCutIO
 import Alvoki.Experiments.WAL.Segmented.Proofs.PreparedFile
 import Alvoki.Experiments.WAL.Segmented.Proofs.ControlCutIO
@@ -174,6 +175,11 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeAppendCut.Restarted.uncertain
 #check_axioms InterruptedMutation.Prefix.beforeAppend
 #check_axioms InterruptedMutation.Worker.interrupted
+#check_axioms MutationExitCut.suffix_state
+#check_axioms MutationExitCut.afterReturn
+#check_axioms MutationExitCut.rejected
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.recoverPublic
+#check_axioms WalRecoverySlice.Segmented.Native.AppendCut.recoverAfterSuccess
 #check_axioms WalRecoverySlice.Segmented.Native.AppendCut.recoverBody
 #check_axioms WalRecoverySlice.Segmented.Native.CreateCutIO.program_run
 #check_axioms WalRecoverySlice.Segmented.Native.PrepareCutIO.Prefix.continuation
