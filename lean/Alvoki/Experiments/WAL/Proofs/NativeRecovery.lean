@@ -64,9 +64,12 @@ private inductive RecoveryHandle where
   | marker (slot : Nat)
 
 private def recoveryEffects (effects : Effects) : RecoveryIO M RecoveryHandle where
-  readFromStart
+  readData
     | .data => (ops effects).readData
+    | .marker _ => throw "not a data descriptor"
+  readMarker
     | .marker slot => (ops effects).readMarker slot
+    | .data => throw "not a marker descriptor"
   truncateAt
     | .data => (ops effects).truncate
     | .marker _ => fun _ => throw "not a data descriptor"

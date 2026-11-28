@@ -97,7 +97,7 @@ private theorem activeResult (reports : ∀ cursor, AppendReports policy cursor 
       | .ok (.ok next) after => .ok (.ok ()) ⟨after, .active heldLock files next (known ++ [batch])⟩
       | .ok (.error err) after => .ok (.error err) ⟨after, .poisoned heldLock⟩
       | .error token after => .error token ⟨after, .poisoned heldLock⟩ := by
-  unfold appendModel appendWith runAppend
+  unfold appendModel appendWith appendStateWith runAppend
   cases h : (appendWorker files (reports cursor)).run image with
   | ok response _ =>
     simp only [ExceptT.run] at h

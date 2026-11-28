@@ -77,6 +77,30 @@ private def fixture (dir : FilePath) (policy : Policy) : IO Unit := do
     unless r matches .error (.userError "damaged batch") do throw <| IO.userError "opened with damaged published bytes"
     unless (← IO.FS.readBinFile path) == damaged do throw <| IO.userError "destructive failed open"
 
+@[extern "alvoki_test_fail_installed_read"]
+private opaque failInstalledRead (_ : Unit) : IO Unit
+
+private def scanFailure (dir : FilePath) (policy : Policy) : IO Unit := do
+  let h ← SingleFile.create dir policy
+  SingleFile.append h [4]
+  let before ← SingleFile.position h
+  let bytes ← IO.FS.readBinFile (dir / "segment")
+  failInstalledRead ()
+  let failed ← (SingleFile.scan h).toBaseIO
+  unless failed matches .error (.hardwareFault _ _) do
+    throw (IO.userError "expected read-only scan I/O error")
+  unless (← SingleFile.position h) == before && (← IO.FS.readBinFile (dir / "segment")) == bytes do
+    throw (IO.userError "failed scan changed cursor or data")
+  let duplicate ← (SingleFile.openExisting dir).toBaseIO
+  unless duplicate matches .error _ do throw (IO.userError "failed scan released custody")
+  SingleFile.append h [9]
+  SingleFile.close h
+  let (h, cursor, seen) ← SingleFile.openExistingFold dir []
+    (fun acc index batch => (index, batch) :: acc)
+  unless cursor.nextSeq == 3 && seen == [(2, [9]), (1, [4])] do
+    throw (IO.userError "recovery fold changed the installed history")
+  SingleFile.close h
+
 private def handleRegressions (dir : FilePath) (policy : Policy) : IO Unit := do
   let h ← SingleFile.create dir policy
   let failed ← (SingleFile.append h (List.replicate 33 42)).toBaseIO
@@ -243,6 +267,7 @@ def main (args : List String) : IO Unit := do
   for policy in [WalRecoverySlice.Policy.logOnly, .boundary] do
     IO.FS.withTempDir fun dir => WalRecoveryFiles.fixture dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.handleRegressions dir policy
+    IO.FS.withTempDir fun dir => WalRecoveryFiles.scanFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.truncateToZero dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.lateOpenFailure dir policy
     IO.FS.withTempDir fun dir => WalRecoveryFiles.refuseOldPolicy dir policy
