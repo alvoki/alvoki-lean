@@ -30,7 +30,7 @@ structure ManifestFrame (physical : W → Footprint inode) (root : FilePath)
   lock : (physical t).rootLock = (physical s).rootLock
   ref : (physical t).phaseRef = (physical s).phaseRef
   phase : (physical t).phase = (physical s).phase
-  disk : NativeRead.Writebacks (physical s).disk (physical t).disk
+  disk : WalRecoverySlice.Segmented.Writebacks (physical s).disk (physical t).disk
   tablesKept : (tableNamespace physical root).Keeps s t tables
 
 theorem ManifestFrame.refl : ManifestFrame physical root tables w w :=
@@ -41,7 +41,7 @@ theorem Opening.frame (start : Opening physical root lock ref image s)
     Opening physical root lock ref image t := by
   refine ⟨⟨step.lock.trans start.owned.1, step.ref.trans start.owned.2⟩,
     step.phase.trans start.phase, start.catalog.frame step.tablesKept, ?_⟩
-  have keep {a b} (w : NativeRead.Writebacks a b)
+  have keep {a b} (w : WalRecoverySlice.Segmented.Writebacks a b)
       (h : WalRecoverySlice.Segmented.Recoverable image.view none a) :
       WalRecoverySlice.Segmented.Recoverable image.view none b := by
     induction w with

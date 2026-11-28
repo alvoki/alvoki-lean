@@ -93,7 +93,7 @@ open ExperimentalL0 ExperimentalL0.NativeBridge
 #check_axioms NativeRead.checkTables_balanced
 #check_axioms NativeRead.checkTables_healthy
 #check_axioms NativeRead.firstSizeError
-#check_axioms NativeRead.Writebacks.installed
+#check_axioms WalRecoverySlice.Segmented.Writebacks.installed
 #check_axioms NativeRead.Online.frame
 #check_axioms NativeRead.onlineGet
 #check_axioms NativeRead.onlineGetTwice

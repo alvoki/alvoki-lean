@@ -458,11 +458,7 @@ def Owned (atWorld : Footprint inode) (root : System.FilePath) (lock : IO.FS.Han
 
 open WalRecoverySlice.Segmented (Model.Disk)
 
-abbrev Writebacks := WalRecoverySlice.Segmented.Writebacks
-
-namespace Writebacks
-export WalRecoverySlice.Segmented.Writebacks (nil next trans installed)
-end Writebacks
+open WalRecoverySlice.Segmented (Writebacks)
 
 structure FrameTo (physical : W → Footprint inode) (root : System.FilePath)
     (wal : Wal) (tables : Catalog) (before after : W) (next : Phase Wal) : Prop where
