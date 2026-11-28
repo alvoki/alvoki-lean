@@ -103,6 +103,25 @@ theorem table_lookup_success {source : Source (EIO String)} {id : UInt64}
   rw [exactRead] at refRun
   exact (EStateM.Result.ok.inj refRun).1.symm
 
+open Unified in
+theorem table_lookup_scoped {id : UInt64} {source : Source (EIO String)} (safe : ScopedRead P source bytes)
+    (built : Image Alvoki.CRC32C.extend (tableLayout id)
+      (rows.map (Entry.encode keyCodec mutationCodec)) bytes) (key : UInt64) :
+    ReadPost P (· = lookupRows rows key) (withTableSource source id (·.lookup key)) := by
+  letI := lawfulEIO
+  have served : (ReadSafety.reference bytes).Serves bytes := ⟨rfl, fun _ _ _ _ => rfl⟩
+  obtain ⟨table, represented, opened⟩ := withTableSource_built built served
+  have ref : withTableSource (ReadSafety.reference bytes) id (·.lookup key) =
+      pure (lookupRows rows key) := by rw [opened, typed_lookup_spec represented]
+  intro w valid
+  have observed := checkedTypedLookup_scoped (crc := Alvoki.CRC32C.extend) (tableId := id)
+    safe keyCodec mutationCodec key w valid
+  simp only [withTableSource, openTableChecked, bind_assoc, pure_bind] at ref ⊢
+  rw [ref] at observed
+  split <;> rename_i ran <;> rw [ran] at observed
+  · exact observed
+  · exact ⟨observed.1, (EStateM.Result.ok.inj observed.2).1.symm⟩
+
 end ExperimentalL0
 
 namespace ExperimentalL0
