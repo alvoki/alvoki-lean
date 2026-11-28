@@ -486,14 +486,21 @@ theorem openExisting_ready (heap : PhaseMemory) (dir : FilePath)
         s, child, heap.fresh _ (heap.set _ _ _), heap.newMutex (heap.allocate _ _),
         heap.newMutex (heap.allocateFrame _ (heap.set _ _ _))⟩
 
-theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
-    ∃ t, scan handle w = .ok session.view t ∧ heap.Ready handle session t := by
+/-- Exact reached world of a ready scan, without exporting mutable handle projections. -/
+def scanWorld (handle : Handle) (w : Void IO.RealWorld) : Void IO.RealWorld :=
+  let locked := (handle.mutex.lock w).state
+  let got := ((handle.state.get : BaseIO (Phase Store)) locked).state
+  (handle.mutex.unlock got).state
+
+theorem scan_ready_world (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    scan handle w = .ok session.view (scanWorld handle w) ∧
+      heap.Ready handle session (scanWorld handle w) := by
   obtain ⟨store, child, disjoint, owns, ownsChild⟩ := ready
   let locked := handle.mutex.lock w
   let got := (handle.state.get : BaseIO (Phase Store)) locked.state
   let released := handle.mutex.unlock got.state
   obtain ⟨value, stillHeld⟩ := heap.read (heap.lock handle.mutex owns)
-  refine ⟨released.state, ?_, store, child, disjoint, heap.unlock _ stillHeld,
+  refine ⟨?_, store, child, disjoint, heap.unlock _ stillHeld,
     heap.unlock _ (heap.readFrame _ (heap.lock _ ownsChild))⟩
   change got.val = .ready store session at value
   have raw : (handle.state.get : IO (Phase Store)) locked.state =
@@ -510,6 +517,16 @@ theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready 
   have cached : checked (scanWith (.ready store session)) got.state = .ok session.view got.state := rfl
   simp only [cached, unlockRun]
   rfl
+
+theorem scan_readyAt (heap : PhaseMemory) {handle : Handle} (ready : heap.Ready handle session w) :
+    ∃ t, scan handle w = .ok session.view t ∧ heap.Ready handle session t :=
+  ⟨_, scan_ready_world heap ready⟩
+
+theorem scanWorld_frame (handle : Handle) {P : Void IO.RealWorld → Prop}
+    (lock : ∀ (m : Std.BaseMutex) t, P t → P (m.lock t).state)
+    (read : ∀ (r : IO.Ref (Phase Store)) t, P t → P ((r.get : BaseIO _) t).state)
+    (unlock : ∀ (m : Std.BaseMutex) t, P t → P (m.unlock t).state) (start : P w) :
+    P (scanWorld handle w) := unlock _ _ (read _ _ (lock _ _ start))
 
 /-- A reported failure comes from acquisition or the inner recovery on the
 acquired store. The outer release may change the world but keeps the error. -/
