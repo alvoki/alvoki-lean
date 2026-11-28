@@ -233,4 +233,23 @@ theorem root_released (c : RootCall) (life : RootLifetime)
     ¬ life.liveAtReturn (c.exit resolved opened) lock :=
   life.lastDrop (c.exit resolved opened) (life.acquire _ _ _ _ opened)
 
+/-- Disposal for the actual public invocation. Before a Lean handle exists
+there is no labelled root exit. Every successful constructor identifies the
+exact descriptor and scope, irrespective of subsequent primitive reports. -/
+def RootCall.Released (c : RootCall) (life : RootLifetime) : Prop :=
+  match resolved : Native.validatedRoot c.path c.start with
+  | .error _ _ => True
+  | .ok root checked =>
+    match opened : IO.FS.Handle.mk (root / "l0.lock") .append checked with
+    | .error _ _ => True
+    | .ok lock _entered => ¬ life.liveAtReturn (c.exit resolved opened) lock
+
+theorem RootCall.released (c : RootCall) (life : RootLifetime) : c.Released life := by
+  unfold RootCall.Released
+  split
+  · trivial
+  · split
+    · trivial
+    · exact root_released c life _ _
+
 end ExperimentalL0.NativeReadRelease

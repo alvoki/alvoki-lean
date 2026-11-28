@@ -262,10 +262,10 @@ theorem withOpen {physical : W → Footprint inode} {Q : W → Prop}
     (unlock : ∀ wal v endWal, WalRecoverySlice.Segmented.Native.openExisting (root / "wal") u = .ok wal v →
       WalRecoverySlice.Segmented.Native.close wal (offline p.fresh.val wal v).state = .ok () endWal →
       ∃ stop, p.lock.unlock endWal = .ok () stop)
-    (first second : UInt64) :
+    (first second : UInt64) (rootLife : NativeReadRelease.RootLifetime) :
     ∃ stop, Native.withOpen path (fun h => (readMany h [first, second] : IO (List Reply))) start =
         .ok [.ok none, .ok none] stop ∧
-      WithOpenReads.Finished physical root image life events [first, second] [.ok none, .ok none] stop := by
+      WithOpenReads.Finished physical root image life events ⟨path, [first, second], start⟩ rootLife [.ok none, .ok none] stop := by
   let use := fun h => (readMany h [first, second] : IO (List Reply))
   obtain ⟨h, binding, outer⟩ := p.reached use
   obtain ⟨wal, v, reg, opened, sessionEq, origin, held, locks⟩ := grant.open heap worker
@@ -276,7 +276,7 @@ theorem withOpen {physical : W → Footprint inode} {Q : W → Prop}
   obtain ⟨stop, unlocked⟩ := unlock wal v endWal opened ended
   have completed := outer.trans (scopeRun ops binding recovered ended unlocked first second)
   refine ⟨stop, completed, ?_⟩
-  have safety := WithOpenReads.withOpen entry files heap runtime prior [first, second]
+  have safety := WithOpenReads.withOpen entry files heap runtime prior [first, second] rootLife
   rw [NativeScope.Post, completed] at safety
   exact safety
 
