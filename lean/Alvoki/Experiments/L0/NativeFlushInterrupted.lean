@@ -141,15 +141,17 @@ theorem afterStoreCut {p : Prefix path root start} (inScope : Ingress p physical
       NativeFlushStore.Runtime physical root p.lock p.ref p.wal image p.session media manifest manifestStop (storeWorld p))
     (cutAt : Cut stop (afterStore p.ref p.lock p.session (result p image)) (returnedWorld (result p image)) cut)
     (frames : ∀ tables, Media physical root image p.session (returnedWorld (result p image)) tables →
+      media.stable.Represents (returnedWorld (result p image)) tables →
       Frames (Edge physical root media tables) stop (afterStore p.ref p.lock p.session (result p image)) (returnedWorld (result p image)))
-    (boot : ∀ tables, Media physical root image p.session (returnedWorld (result p image)) tables →
+    (boot : ∀ tables, Media physical root image p.session cut tables → media.stable.Represents cut tables →
       Boot physical root media tables cut mode after) :
     ((afterStore p.ref p.lock p.session (result p image)).run (returnedWorld (result p image))).state =
       returnedWorld (Native.withOpen path Native.flush start) ∧ Recovered physical path root p.session image events after := by
   obtain ⟨tables, source, stable, wal⟩ := inScope.produced storage
-  have edge := cutAt.accumulate (frames tables source) (fun _ => Edge.same ..) Edge.trans
-  obtain ⟨img, sel, files⟩ := (source.advance edge.toFrame).reboot (stable.frame edge.stable)
-    (edge.disk.recoverable wal) (boot tables source)
+  have edge := cutAt.accumulate (frames tables source stable) (fun _ => Edge.same ..) Edge.trans
+  have kept := source.advance edge.toFrame
+  have durable := stable.frame edge.stable
+  obtain ⟨img, sel, files⟩ := kept.reboot durable (edge.disk.recoverable wal) (boot tables kept durable)
   exact ⟨inScope.exitState, recovered inScope.opened sel files⟩
 
 end ExperimentalL0.NativeFlushInterrupted
