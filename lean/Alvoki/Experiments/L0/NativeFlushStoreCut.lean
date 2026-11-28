@@ -1,3 +1,4 @@
+import Alvoki.Experiments.L0.ObservedIO
 import Alvoki.Experiments.L0.NativeFlushStore
 import Alvoki.Experiments.L0.ManifestPublishSchedule
 import Alvoki.Experiments.L0.TableCreateSchedule
@@ -30,14 +31,7 @@ private theorem TableCut.eliminate {Q : W → Prop} (cut : TableCut stop dir row
 
 /-- Each continuation starts at the actual preceding success. A cut in the table stage
 can precede a failed allocation or a failed writer without any returned table id. -/
-structure Observed (α : Type) where
-  run : IO α
-  cut : W → W → Prop
-
-instance : Monad Observed where
-  pure x := ⟨pure x,fun w t => t = w⟩
-  bind a f := ⟨a.run >>= fun x => (f x).run, fun w t =>
-    a.cut w t ∨ ∃ x u, a.run w = .ok x u ∧ (f x).cut u t⟩
+abbrev Observed := ObservedIO
 
 def tableOp (stop : Stop) (root : FilePath) (rows : Rows) : Observed UInt64 :=
   ⟨NativeFlush.createTable root rows,
