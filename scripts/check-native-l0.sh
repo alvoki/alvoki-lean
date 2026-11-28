@@ -153,6 +153,10 @@ open ExperimentalL0
 #check_axioms NativeManifestPublish.schedule_boundary
 #check_axioms NativeManifestPublish.rename_then_barrier_error
 #check_axioms NativeFlushStore.produce
+#check_axioms NativeFlushStore.producePinned
+#check_axioms NativeFlushStore.anchoredFile
+#check_axioms NativeFlushStore.renamedError
+#check_axioms NativeFlushStore.healthyPinned
 #check_axioms NativeFlush.withOpen
 #check_axioms NativeFlush.healthy
 #check_axioms NativeFlushRestart.finishedPublishedLookup
