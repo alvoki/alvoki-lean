@@ -21,7 +21,7 @@ theorem publishOnline (prepared : SessionAt physical root lock ref wal session i
     (callback : ∀ entered, Online physical root lock ref wal session image history entered →
       NativeScope.Callback ref lock use entered ok err) :
     NativeScope.Publish ref lock use session start ok err := by
-  obtain ⟨t, readAt, frame⟩ := read start prepared.owned
+  obtain ⟨t, readAt, frame⟩ := read start prepared.owned (by rw [prepared.phase]; rfl)
   rw [NativeScope.read_io] at readAt
   obtain ⟨value, reached⟩ := EST.Out.ok.inj readAt
   subst t

@@ -481,7 +481,7 @@ theorem Frame.refl : Frame physical root wal tables w w :=
 theorem Frame.trans (a : Frame physical root wal tables s t) (b : Frame physical root wal tables t u) :
     Frame physical root wal tables s u :=
   ⟨b.lock.trans a.lock, b.ref.trans a.ref, b.phase.trans a.phase, b.child.trans a.child,
-    a.disk.trans b.disk, b.manifest.trans a.manifest, b.survivors.trans a.survivors,
+    Writebacks.trans a.disk b.disk, b.manifest.trans a.manifest, b.survivors.trans a.survivors,
     a.tablesKept.trans b.tablesKept⟩
 
 /-- Recovery publishes precisely this session, having obtained the cached
@@ -509,7 +509,7 @@ theorem SessionAt.advance (ready : SessionAt physical root lock ref wal session 
   obtain ⟨child, cached, childDisk, view⟩ := ready.child
   exact ⟨⟨step.lock.trans ready.owned.1, step.ref.trans ready.owned.2⟩,
     step.phase,
-    ⟨child, step.child.trans cached, step.disk.installed childDisk, view⟩,
+    ⟨child, step.child.trans cached, Writebacks.installed step.disk childDisk, view⟩,
     ⟨step.manifest.trans ready.manifest.1, step.survivors.trans ready.manifest.2⟩,
     ready.catalog.frame step.tablesKept, ready.installed⟩
 
@@ -524,7 +524,7 @@ theorem Online.frame (ready : Online physical root lock ref wal session image hi
 caller demonstrably holds this lock and owns this exact phase reference. -/
 def RefRead (physical : W → Footprint inode) (root : System.FilePath) (lock : IO.FS.Handle)
     (ref : IO.Ref (Phase Wal)) (wal : Wal) (tables : Catalog) : Prop :=
-  ∀ w, Owned (physical w) root lock ref →
+  ∀ w, Owned (physical w) root lock ref → (physical w).phase.wal = some wal →
     ∃ t, (ref.get : IO (Phase Wal)) w = .ok (physical w).phase t ∧
       Frame physical root wal tables w t
 
@@ -541,7 +541,7 @@ theorem onlineGet (ready : Online physical root lock ref wal session image histo
   obtain ⟨released, post⟩ := publicGet ref root binding (tableNamespace physical root) rfl _ reached
     (fun w valid => by
       have online := ready.frame valid
-      obtain ⟨t, ran, keeps⟩ := read w online.owned
+      obtain ⟨t, ran, keeps⟩ := read w online.owned (by rw [online.phase]; rfl)
       exact ⟨t, online.phase ▸ ran, valid.trans keeps⟩)
     (fun _ frame => (ready.frame frame).catalog) ready.installed prim key
   refine ⟨released, ?_⟩

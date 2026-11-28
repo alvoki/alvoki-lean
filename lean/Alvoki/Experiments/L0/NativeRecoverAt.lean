@@ -41,13 +41,7 @@ theorem Opening.frame (start : Opening physical root lock ref image s)
     Opening physical root lock ref image t := by
   refine ⟨⟨step.lock.trans start.owned.1, step.ref.trans start.owned.2⟩,
     step.phase.trans start.phase, start.catalog.frame step.tablesKept, ?_⟩
-  have keep {a b} (w : WalRecoverySlice.Segmented.Writebacks a b)
-      (h : WalRecoverySlice.Segmented.Recoverable image.view none a) :
-      WalRecoverySlice.Segmented.Recoverable image.view none b := by
-    induction w with
-    | nil => exact h
-    | next _ id file ih => exact ih.writeback id file
-  exact keep step.disk start.disk
+  exact WalRecoverySlice.Segmented.Writebacks.recoverable step.disk start.disk
 
 structure Held (physical : W → Footprint inode) (root : FilePath)
     (lock : IO.FS.Handle) (ref : Ref) (image : Selected) (phase : Phase Wal) (w : W) : Prop where
@@ -84,7 +78,7 @@ theorem Held.frame (held : Held physical root lock ref image phase s)
 theorem Child.frame (held : Child physical image wal s)
     (step : NativeRead.Frame physical root wal image.tables s t) : Child physical image wal t := by
   obtain ⟨c, cached, installed, view⟩ := held
-  exact ⟨c, step.child.trans cached, step.disk.installed installed, view⟩
+  exact ⟨c, step.child.trans cached, WalRecoverySlice.Segmented.Writebacks.installed step.disk installed, view⟩
 
 theorem manifest (d : Durable image history) (opening : Opening physical root lock ref image start)
     (bytes : (physical start).manifest.active = L0Manifest.encode image.version)
@@ -145,7 +139,7 @@ theorem Swapped.held (step : Swapped physical root wal image.tables next s t)
 theorem Swapped.keepsChild (step : Swapped physical root wal image.tables next s t)
     (before : Child physical image wal s) : Child physical image wal t := by
   obtain ⟨c, cached, valid, view⟩ := before
-  exact ⟨c, step.child.trans cached, step.disk.installed valid, view⟩
+  exact ⟨c, step.child.trans cached, WalRecoverySlice.Segmented.Writebacks.installed step.disk valid, view⟩
 
 theorem Attached.sessionAt (attached : Attached physical root lock ref image wal w)
     (installed : Installed session image history) :
@@ -199,10 +193,21 @@ structure PhasePrimitives (physical : W → Footprint inode) (root : FilePath)
     (lock : IO.FS.Handle) (ref : Ref) (image : Selected) : Prop where
   read : ∀ w, Owned (physical w) root lock ref → ∃ t,
     (ref.get : IO (Phase Wal)) w = .ok (physical w).phase t ∧
-    ManifestFrame physical root image.tables w t ∧ (physical t).manifest = (physical w).manifest
+    ManifestFrame physical root image.tables w t ∧ (physical t).manifest = (physical w).manifest ∧
+    ∀ wal, (physical w).phase.wal = some wal → (physical t).readyWal wal = (physical w).readyWal wal
   swap : ∀ w, Owned (physical w) root lock ref → ∀ wal next, ∃ t,
     (ref.swap next : IO (Phase Wal)) w = .ok (physical w).phase t ∧
     Swapped physical root wal image.tables next w t
+
+/-- A reference read starts with the owned cell. Once it holds a WAL it
+also preserves that handle's cached session. The opening case requires no
+such handle to exist. -/
+theorem PhasePrimitives.refRead (phase : PhasePrimitives physical root lock ref image) (wal : Wal) :
+    NativeRead.RefRead physical root lock ref wal image.tables := by
+  intro w owned attached
+  obtain ⟨t, ran, frame, manifest, child⟩ := phase.read w owned
+  exact ⟨t, ran, frame.lock, frame.ref, frame.phase, child wal attached, frame.disk,
+    congrArg DurableBlob.Image.active manifest, congrArg DurableBlob.Image.survivors manifest, frame.tablesKept⟩
 
 /-- Recovery attachment and public session publication share the very same
 owned-reference swap contract. -/
@@ -218,7 +223,7 @@ private theorem readOpening (prim : PhasePrimitives physical root lock ref image
     (ready : ManifestReady physical root lock ref image w) :
     Returns (Native.componentCell ref).read w
       (fun phase t => phase = .opening ∧ ManifestReady physical root lock ref image t) failed := by
-  obtain ⟨t, ran, frame, same⟩ := prim.read w ready.1.owned
+  obtain ⟨t, ran, frame, same, _⟩ := prim.read w ready.1.owned
   apply Returns.liftIO
   unfold IOReturns
   rw [ran]

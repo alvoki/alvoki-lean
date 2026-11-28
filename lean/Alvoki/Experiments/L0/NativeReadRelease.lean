@@ -72,7 +72,7 @@ private theorem childTo (laws : Laws heap physical root lock ref image)
   obtain ⟨c, cache, installed, view⟩ := child
   have finalOwned := And.intro (step.lock.trans owned.1) (step.ref.trans owned.2)
   have finalChild : Child physical image wal _ :=
-    ⟨c, step.child.trans cache, step.disk.installed installed, view⟩
+    ⟨c, step.child.trans cache, WalRecoverySlice.Segmented.Writebacks.installed step.disk installed, view⟩
   have files := filesOfChild finalChild (catalog.frame step.tablesKept) (step.manifest.trans manifest)
   refine releaseTo laws value ⟨files, finalOwned.2, step.phase⟩ ?_ succeed fail
   intro h eq

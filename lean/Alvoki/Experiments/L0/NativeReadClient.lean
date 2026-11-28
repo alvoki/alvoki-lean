@@ -150,7 +150,7 @@ theorem caughtSizeError_thenHit {id : UInt64}
   rw [firstReply] at post
   have one : c.Balanced life := all c (by simp [firstCalls, c])
   have actualRelease := one.released stat regular opened
-  obtain ⟨final, phaseRead, keeps⟩ := read after post.2.owned
+  obtain ⟨final, phaseRead, keeps⟩ := read after post.2.owned (by rw [post.2.phase]; rfl)
   have secondReply := memHit ref binding (post.2.phase ▸ phaseRead) hit
   have ran : readTwice handle first second start =
       ⟨(.error (IO.userError e), .ok mutation.value), final⟩ := by

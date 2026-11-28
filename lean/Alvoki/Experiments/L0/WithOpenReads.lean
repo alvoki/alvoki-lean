@@ -19,7 +19,6 @@ structure Runtime (physical : W → Footprint inode) (root : FilePath) (lock : I
   wal : WalRecoverySlice.Segmented.Native.OpenIO heap (root / "wal") (fun w => (physical w).disk)
     image.view (NativeRecoverAt.Held physical root lock ref image .opening)
   phase : NativeRecoverAt.PhasePrimitives physical root lock ref image
-  read : ∀ wal, RefRead physical root lock ref wal image.tables
   scan : ∀ wal w, NativeRecoverAt.Attached physical root lock ref image wal w →
     NativeRecoverAt.ScanPrimitives physical root wal image.tables w
   tables : ∀ wal w, Owned (physical w) root lock ref →
@@ -81,10 +80,10 @@ theorem withOpen (entry : Entry physical path root image) (files : Files physica
       exact r
     obtain ⟨valid, wal, attached⟩ := installed history d
     have reopened := prior.reopened (fun actual D => (installed actual D).1)
-    apply publishOnline (attached.sessionAt valid) (ops.read wal) (ops.phase.refSwap wal)
+    apply publishOnline (attached.sessionAt valid) (ops.phase.refRead wal) (ops.phase.refSwap wal)
     intro entered online
     let result := readMany handle keys entered
-    have read := readMany_run online binding (ops.read wal) (ops.tables wal entered online.owned) Frame.refl reopened keys
+    have read := readMany_run online binding (ops.phase.refRead wal) (ops.tables wal entered online.owned) Frame.refl reopened keys
     obtain ⟨trace, _, reached, released⟩ := read
     have stopped := trace.stop
     have finish (u) (closed : NativeReadRelease.Closed physical root lock ref image u) :
